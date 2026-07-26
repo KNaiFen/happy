@@ -277,7 +277,8 @@ export async function runCodex(opts: {
     // default for plain codex is yolo, and it must not wave through a
     // straggler approval after an abort.
     let currentPermissionModeExplicitlySet = false;
-    let currentModel: string | undefined = opts.model ?? DEFAULT_CODEX_MODEL;
+    const launchModel = opts.model ?? DEFAULT_CODEX_MODEL;
+    let currentModel: string | undefined = launchModel;
     let currentEffort: ReasoningEffort | undefined = opts.effort ?? DEFAULT_CODEX_EFFORT;
     let codexModelCapabilities: CodexModelCapability[] | null = null;
     let currentAppendSystemPrompt: string | undefined = undefined;
@@ -289,7 +290,7 @@ export async function runCodex(opts: {
         // approval handler only trusting explicitly-picked modes.
         currentPermissionMode = initialPermissionMode;
         currentPermissionModeExplicitlySet = false;
-        currentModel = opts.model ?? DEFAULT_CODEX_MODEL;
+        currentModel = launchModel;
         currentEffort = opts.effort ?? DEFAULT_CODEX_EFFORT;
         currentAppendSystemPrompt = undefined;
         logger.debug('[Codex] Reset current mode defaults after abort');
@@ -330,12 +331,12 @@ export async function runCodex(opts: {
             logger.debug(`[Codex] User message received with no permission mode override, using current: ${currentPermissionMode ?? 'default (effective)'}`);
         }
 
-        // Resolve model; explicit null resets to default (undefined)
+        // Resolve model; explicit null resets to the model used to launch this thread.
         let messageModel = currentModel;
         if (message.meta?.hasOwnProperty('model')) {
-            messageModel = message.meta.model || undefined;
+            messageModel = message.meta.model || launchModel;
             currentModel = messageModel;
-            logger.debug(`[Codex] Model updated from user message: ${messageModel || 'reset to default'}`);
+            logger.debug(`[Codex] Model updated from user message: ${messageModel}`);
         } else {
             logger.debug(`[Codex] User message received with no model override, using current: ${currentModel || 'default'}`);
         }

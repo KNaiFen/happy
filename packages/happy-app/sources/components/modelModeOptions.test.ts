@@ -135,6 +135,7 @@ describe('modelModeOptions', () => {
                             description: 'Frontier',
                             thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
                             defaultThinkingLevel: 'low',
+                            isDefault: true,
                         },
                         {
                             code: 'gpt-5.6-luna',
@@ -143,14 +144,25 @@ describe('modelModeOptions', () => {
                             thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
                             defaultThinkingLevel: 'medium',
                         },
+                        {
+                            code: 'gpt-5.5',
+                            value: 'GPT-5.5',
+                            thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
+                            defaultThinkingLevel: 'medium',
+                        },
                     ],
                 },
             },
         } as any;
 
         expect(getAvailableModelsForMachine('codex', metadata, translate).map((model) => model.key)).toEqual([
-            'default', 'gpt-5.6-sol', 'gpt-5.6-luna',
+            'default', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-5.5',
         ]);
+        expect(getAvailableModelsForMachine('codex', metadata, translate)[0]).toMatchObject({
+            key: 'default',
+            thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
+            defaultThinkingLevel: 'medium',
+        });
         expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.6-sol', metadata).map((level) => level.key)).toEqual([
             'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
         ]);
@@ -159,17 +171,48 @@ describe('modelModeOptions', () => {
         ]);
     });
 
+    it('keeps advertised 5.5 and 5.4 catalogs capped at xhigh', () => {
+        const metadata = {
+            agentCapabilities: {
+                codex: {
+                    codexCliVersion: 'codex-cli 0.145.0',
+                    detectedAt: 123,
+                    models: ['gpt-5.5', 'gpt-5.4'].map((code) => ({
+                        code,
+                        value: code,
+                        thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
+                        defaultThinkingLevel: 'medium',
+                    })),
+                },
+            },
+        } as any;
+
+        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.5', metadata).at(-1)?.key).toBe('xhigh');
+        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.4', metadata).at(-1)?.key).toBe('xhigh');
+    });
+
     it('uses session-advertised effort levels and keeps the old CLI fallback', () => {
         const sessionMetadata = {
-            models: [{
-                code: 'gpt-5.6-terra',
-                value: 'GPT-5.6-Terra',
-                thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-                defaultThinkingLevel: 'medium',
-            }],
+            models: [
+                {
+                    code: 'gpt-5.6-terra',
+                    value: 'GPT-5.6-Terra',
+                    thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+                    defaultThinkingLevel: 'medium',
+                    isDefault: true,
+                },
+                {
+                    code: 'gpt-5.5',
+                    value: 'GPT-5.5',
+                    thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
+                    defaultThinkingLevel: 'medium',
+                    isDefault: false,
+                },
+            ],
         } as any;
 
         expect(getEffortLevelsForModel('codex', 'gpt-5.6-terra', sessionMetadata).at(-1)?.key).toBe('ultra');
+        expect(getEffortLevelsForModel('codex', 'default', sessionMetadata).at(-1)?.key).toBe('xhigh');
         expect(getEffortLevelsForModel('codex', 'gpt-5.5', null).at(-1)?.key).toBe('xhigh');
     });
 

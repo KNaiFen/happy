@@ -89,17 +89,24 @@ export function mapMetadataModels(options?: MetadataModelOption[] | null): Model
     }));
 }
 
+function findCodexModel(models: ModelMode[], modelKey: string): ModelMode | undefined {
+    const resolvedKey = modelKey === 'default'
+        ? getCodeAgentDefaults('codex').modelMode
+        : modelKey;
+    return models.find((model) => model.key === resolvedKey);
+}
+
 function createCodexDefaultModelOption(models: ModelMode[]): ModelMode {
-    const advertisedDefault = models.find((model) => model.isDefault);
+    const launchDefault = findCodexModel(models, 'default');
     return {
         key: 'default',
         name: 'default model',
         description: null,
-        ...(advertisedDefault?.thinkingLevels
-            ? { thinkingLevels: advertisedDefault.thinkingLevels }
+        ...(launchDefault?.thinkingLevels
+            ? { thinkingLevels: launchDefault.thinkingLevels }
             : {}),
-        ...(advertisedDefault?.defaultThinkingLevel
-            ? { defaultThinkingLevel: advertisedDefault.defaultThinkingLevel }
+        ...(launchDefault?.defaultThinkingLevel
+            ? { defaultThinkingLevel: launchDefault.defaultThinkingLevel }
             : {}),
     };
 }
@@ -433,9 +440,7 @@ export function getEffortLevelsForModel(
         return getClaudeEffortLevels();
     }
     if (flavor === 'codex') {
-        const advertisedModel = metadata?.models?.find((model) => (
-            model.code === modelKey || (modelKey === 'default' && model.isDefault)
-        ));
+        const advertisedModel = findCodexModel(mapMetadataModels(metadata?.models), modelKey);
         if (advertisedModel?.thinkingLevels) {
             return advertisedModel.thinkingLevels.map((level) => ({ key: level, name: level }));
         }
@@ -450,9 +455,11 @@ export function getEffortLevelsForModelOnMachine(
     metadata: MachineMetadata | null | undefined,
 ): EffortLevel[] {
     if (flavor === 'codex') {
-        const advertisedModel = metadata?.agentCapabilities?.codex?.models
-            .find((model) => model.code === modelKey || (modelKey === 'default' && model.isDefault));
-        if (advertisedModel) {
+        const advertisedModel = findCodexModel(
+            mapMetadataModels(metadata?.agentCapabilities?.codex?.models),
+            modelKey,
+        );
+        if (advertisedModel?.thinkingLevels) {
             return advertisedModel.thinkingLevels.map((level) => ({ key: level, name: level }));
         }
     }
@@ -463,7 +470,7 @@ export function getRigCurrentModelOptionKey(metadata: Metadata | null | undefine
     return getRigSelectedModelKey(metadata);
 }
 
-// Default effort for a model — highest the model allows
+// Prefer the advertised model default, then fall back to Happy's code default.
 export function getDefaultEffortKeyForModel(
     flavor: AgentFlavor,
     modelKey: string,
@@ -471,9 +478,9 @@ export function getDefaultEffortKeyForModel(
 ): string | null {
     const levels = getEffortLevelsForModel(flavor, modelKey, metadata);
     if (levels.length === 0) return null;
-    const advertisedDefault = metadata?.models?.find((model) => (
-        model.code === modelKey || (modelKey === 'default' && model.isDefault)
-    ))?.defaultThinkingLevel;
+    const advertisedDefault = flavor === 'codex'
+        ? findCodexModel(mapMetadataModels(metadata?.models), modelKey)?.defaultThinkingLevel
+        : metadata?.models?.find((model) => model.code === modelKey)?.defaultThinkingLevel;
     if (advertisedDefault && levels.some((level) => level.key === advertisedDefault)) {
         return advertisedDefault;
     }

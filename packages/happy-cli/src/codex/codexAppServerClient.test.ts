@@ -198,6 +198,32 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it('rejects a model catalog that never finishes paginating', async () => {
+        let page = 0;
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                if (msg.method !== 'model/list' || msg.id == null) return;
+                page += 1;
+                pushJsonLine(stdout, {
+                    id: msg.id,
+                    result: {
+                        data: [],
+                        nextCursor: `page-${page}`,
+                    },
+                });
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+
+        await expect(client.listModels()).rejects.toThrow('model/list exceeded 100 pages');
+
+        await client.disconnect();
+    });
+
     it('wraps transport when sandbox is enabled', async () => {
         // Dynamic import to ensure mocks are applied
         const { CodexAppServerClient } = await import('./codexAppServerClient');

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Implemented (unreleased)
 
 ## Date
 
@@ -89,6 +89,8 @@ The local Happy daemon queries the installed Codex app-server and advertises a c
 
 Advanced levels must be presence-gated. An app must not infer support from a Codex model name or Happy CLI version when the machine has not advertised the capability.
 
+The synthetic `default model` option keeps Happy's launch-default semantics. Its effort list is resolved from Happy's configured Codex default (`gpt-5.5`), while the app-server `isDefault` marker remains catalog metadata and does not silently change the model behind that option.
+
 ## Metadata Contract
 
 Add an optional machine-level capability envelope. The names below are proposed and may be adjusted during implementation, but the payload semantics are required.
@@ -100,6 +102,7 @@ type CodexModelCapability = {
     description?: string | null;
     thinkingLevels: string[];
     defaultThinkingLevel: string;
+    isDefault: boolean;
 };
 
 type CodexAgentCapabilities = {
@@ -146,73 +149,73 @@ codex app-server model/list
 
 ### Phase 1: Codex Protocol and Catalog Discovery
 
-- [ ] Update the cherry-picked protocol note from Codex `0.107.0` to the currently supported protocol baseline.
-- [ ] Change `ReasoningEffort` to the forward-compatible string type used by Codex `0.145.0`.
-- [ ] Add the minimal `Model`, `ReasoningEffortOption`, `ModelListParams`, and `ModelListResponse` types needed by Happy.
-- [ ] Add `CodexAppServerClient.listModels()` using the existing JSON-RPC request method.
-- [ ] Handle `model/list` pagination until `nextCursor` is null.
-- [ ] Normalize visible models into the compact capability contract without copying unrelated provider instructions or metadata.
-- [ ] Add a bounded timeout and return no catalog when discovery fails; daemon/session startup must continue.
+- [x] Update the cherry-picked protocol note from Codex `0.107.0` to the currently supported protocol baseline.
+- [x] Change `ReasoningEffort` to the forward-compatible string type used by Codex `0.145.0`.
+- [x] Add the minimal `Model`, `ReasoningEffortOption`, `ModelListParams`, and `ModelListResponse` types needed by Happy.
+- [x] Add `CodexAppServerClient.listModels()` using the existing JSON-RPC request method.
+- [x] Handle `model/list` pagination until `nextCursor` is null.
+- [x] Normalize visible models into the compact capability contract without copying unrelated provider instructions or metadata.
+- [x] Add a bounded timeout and return no catalog when discovery fails; daemon/session startup must continue.
 
 ### Phase 2: Publish Capabilities
 
-- [ ] Extend CLI and app `MachineMetadataSchema` with optional `agentCapabilities.codex`.
-- [ ] Discover the catalog during daemon startup before initial machine registration, with a short timeout.
-- [ ] Cache the catalog for the daemon lifetime to avoid starting an app-server for every picker interaction.
-- [ ] Extend CLI session `Metadata.models` with `thinkingLevels` and `defaultThinkingLevel`.
-- [ ] Query the connected session app-server and publish its catalog through `session.updateMetadata()`.
-- [ ] Preserve the previous metadata catalog if a reconnect-time refresh fails.
+- [x] Extend CLI and app `MachineMetadataSchema` with optional `agentCapabilities.codex`.
+- [x] Discover the catalog during daemon startup before initial machine registration, with a short timeout.
+- [x] Cache the catalog for the daemon lifetime to avoid starting an app-server for every picker interaction.
+- [x] Extend CLI session `Metadata.models` with `thinkingLevels` and `defaultThinkingLevel`.
+- [x] Query the connected session app-server and publish its catalog through `session.updateMetadata()`.
+- [x] Preserve the previous metadata catalog if a reconnect-time refresh fails.
 
 ### Phase 3: Consume Capabilities in the App
 
-- [ ] Add a model mapper that preserves `thinkingLevels` and `defaultThinkingLevel`; the current generic metadata mapper drops these fields.
-- [ ] Make `getEffortLevelsForModel()` prefer the selected model's advertised levels.
-- [ ] Update the new-session screen to use the selected machine's Codex model catalog.
-- [ ] Update HomeDock and agent-default settings to use the same catalog.
-- [ ] Keep `SessionView` driven by the session catalog so archived and reconnecting sessions render consistently.
-- [ ] On model change, reset an unsupported effort to `defaultThinkingLevel`.
-- [ ] If no catalog is advertised, retain the existing hardcoded Codex list ending at `xhigh`.
+- [x] Add a model mapper that preserves `thinkingLevels` and `defaultThinkingLevel`; the current generic metadata mapper drops these fields.
+- [x] Make `getEffortLevelsForModel()` prefer the selected model's advertised levels.
+- [x] Update the new-session screen to use the selected machine's Codex model catalog.
+- [x] Update HomeDock and agent-default settings to use the same catalog.
+- [x] Keep `SessionView` driven by the session catalog so archived and reconnecting sessions render consistently.
+- [x] On model change, reset an unsupported effort to `defaultThinkingLevel`.
+- [x] If no catalog is advertised, retain the existing hardcoded Codex list ending at `xhigh`.
 
 ### Phase 4: Runtime Validation
 
-- [ ] Replace `VALID_REMOTE_EFFORTS` with validation against the selected model's advertised levels.
-- [ ] Revalidate effort whenever a remote message changes the model and effort together.
-- [ ] Use a compatibility fallback containing known protocol values only when catalog discovery is unavailable.
-- [ ] Log rejected combinations with model and effort, without aborting the session process.
-- [ ] Forward valid `max` and `ultra` values unchanged to `turn/start.params.effort`.
-- [ ] Add `happy codex --effort ultra` parsing coverage; do not broaden Claude's separate effort parser.
+- [x] Replace `VALID_REMOTE_EFFORTS` with validation against the selected model's advertised levels.
+- [x] Revalidate effort whenever a remote message changes the model and effort together.
+- [x] Use a compatibility fallback containing known protocol values only when catalog discovery is unavailable.
+- [x] Log rejected combinations with model and effort, without aborting the session process.
+- [x] Forward valid `max` and `ultra` values unchanged to `turn/start.params.effort`.
+- [x] Add `happy codex --effort ultra` parsing coverage; do not broaden Claude's separate effort parser.
 
 ### Phase 5: Documentation and Release
 
-- [ ] Update the Codex app-server integration document with `model/list` and model-aware effort validation.
+- [x] Update the Codex app-server integration document with `model/list` and model-aware effort validation.
 - [ ] Add a changelog entry only when both CLI and app support are ready to ship.
 - [ ] Release the Happy CLI capability publisher first.
 - [ ] Release the app consumer second.
-- [ ] Keep advanced efforts hidden on machines running an older Happy CLI.
+- [x] Keep advanced efforts hidden on machines running an older Happy CLI.
 
 ## Test Plan
 
 ### CLI Unit Tests
 
-- [ ] `listModels()` parses and paginates app-server responses.
-- [ ] Catalog normalization preserves model ID, label, effort order, and default effort.
-- [ ] Catalog discovery failure does not block daemon or session startup.
-- [ ] `handleCodexCommand(['--effort', 'ultra'])` forwards `ultra` to `runCodex()`.
-- [ ] A Sol or Terra turn accepts `ultra` and sends it to the app-server.
-- [ ] A Luna turn rejects `ultra` but accepts `max`.
-- [ ] A 5.5 turn rejects both `max` and `ultra` when the catalog is available.
-- [ ] Simultaneous model and effort changes are validated against the new model.
+- [x] `listModels()` parses and paginates app-server responses.
+- [x] Catalog normalization preserves model ID, label, effort order, and default effort.
+- [x] Catalog discovery failure does not block daemon or session startup.
+- [x] `handleCodexCommand(['--effort', 'ultra'])` forwards `ultra` to `runCodex()`.
+- [x] A Sol or Terra turn accepts `ultra` and sends it to the app-server.
+- [x] A Luna turn rejects `ultra` but accepts `max`.
+- [x] A 5.5 turn rejects both `max` and `ultra` when the catalog is available.
+- [x] Simultaneous model and effort changes are validated against the new model.
 
 ### App Unit Tests
 
-- [ ] Sol and Terra expose `max` and `ultra` from advertised metadata.
-- [ ] Luna exposes `max` but not `ultra`.
-- [ ] 5.5 and 5.4 continue to stop at `xhigh`.
-- [ ] Missing machine capabilities preserve the current fallback list.
-- [ ] Switching from Sol `ultra` to Luna resets effort to Luna's advertised default.
-- [ ] New-session spawn forwards the selected `ultra` value.
-- [ ] Active-session messages preserve `meta.effort = 'ultra'`.
-- [ ] Cross-device metadata parsing preserves unknown future effort strings.
+- [x] Sol and Terra expose `max` and `ultra` from advertised metadata.
+- [x] Luna exposes `max` but not `ultra`.
+- [x] 5.5 and 5.4 continue to stop at `xhigh`.
+- [x] Missing machine capabilities preserve the current fallback list.
+- [x] Switching from Sol `ultra` to Luna resets effort to Luna's advertised default.
+- [x] New-session spawn forwards the selected `ultra` value.
+- [x] Active-session messages preserve `meta.effort = 'ultra'`.
+- [x] Cross-device metadata parsing preserves unknown future effort strings.
 
 ### Verification Commands
 

@@ -790,15 +790,27 @@ export class CodexAppServerClient {
     async listModels(opts?: { timeoutMs?: number; pageSize?: number }): Promise<Model[]> {
         const models: Model[] = [];
         const seenCursors = new Set<string>();
+        const timeoutMs = opts?.timeoutMs ?? CodexAppServerClient.REQUEST_TIMEOUT_MS;
+        const deadline = Date.now() + timeoutMs;
+        const maxPages = 100;
+        let pageCount = 0;
         let cursor: string | null = null;
 
         do {
+            pageCount += 1;
+            if (pageCount > maxPages) {
+                throw new Error(`model/list exceeded ${maxPages} pages`);
+            }
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) {
+                throw new Error(`model/list timed out after ${timeoutMs}ms`);
+            }
             const params: ModelListParams = {
                 cursor,
                 limit: opts?.pageSize ?? 100,
                 includeHidden: false,
             };
-            const result = await this.request('model/list', params, opts?.timeoutMs) as ModelListResponse;
+            const result = await this.request('model/list', params, remainingMs) as ModelListResponse;
             models.push(...result.data);
 
             cursor = result.nextCursor;

@@ -30,9 +30,7 @@ export function resolveCodexEffortForModel(opts: {
             : { effort: undefined, accepted: false };
     }
 
-    const model = opts.models.find((candidate) => (
-        candidate.code === opts.model || (!opts.model && candidate.isDefault)
-    ));
+    const model = opts.models.find((candidate) => candidate.code === opts.model);
     if (!model) {
         return { effort: undefined, accepted: false };
     }

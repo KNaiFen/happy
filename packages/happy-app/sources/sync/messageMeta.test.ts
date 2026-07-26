@@ -29,6 +29,20 @@ describe('resolveMessageModeMeta', () => {
         });
     });
 
+    it('preserves ultra in active Codex session metadata', () => {
+        const meta = resolveMessageModeMeta({
+            permissionMode: 'yolo',
+            modelMode: 'gpt-5.6-sol',
+            effortLevel: 'ultra',
+            metadata: { flavor: 'codex' },
+        } as any);
+
+        expect(meta).toMatchObject({
+            model: 'gpt-5.6-sol',
+            effort: 'ultra',
+        });
+    });
+
     it('sends settings-level overrides when session has no override', () => {
         const meta = resolveMessageModeMeta({
             permissionMode: null,

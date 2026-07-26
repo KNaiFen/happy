@@ -27,8 +27,9 @@ Mobile App → Happy Server → CLI (runCodex.ts) → CodexAppServerClient → c
                                                   Approvals ← item/commandExecution/requestApproval (server→client RPC)
 ```
 
-The client has three responsibilities:
+The client has four responsibilities:
 - **Lifecycle**: `initialize` handshake → `thread/start` → `turn/start` per message → `turn/interrupt` on abort
+- **Model catalog**: paginate `model/list` and publish visible model IDs, labels, reasoning efforts, provider defaults, and the default-model marker
 - **Events**: Route `codex/event/*` notifications to the event handler (same EventMsg types as old MCP)
 - **Approvals**: Respond to server→client RPC requests for command/patch approval
 
@@ -52,6 +53,13 @@ These aren't in any docs. Discovered by trial and error:
 ### Per-turn overrides (no restart needed)
 Each `turn/start` RPC accepts optional `model`, `approvalPolicy`, `sandboxPolicy`. The thread keeps context across policy changes. This eliminated the mode-change restart block and `experimental_resume` dead code.
 
+### Model-aware reasoning effort
+Codex reasoning effort is an open string in current generated bindings, but valid values differ by model. Happy queries `model/list`, follows `nextCursor` until exhausted, and keeps only picker fields. The daemon publishes the catalog in encrypted machine metadata for new-session pickers; each Codex session publishes the same catalog in encrypted session metadata for active and archived views.
+
+Before `turn/start`, `runCodex` validates the requested effort against the selected model. Unsupported combinations are replaced with that model's advertised default and logged without terminating the session. If catalog discovery fails, Happy permits only the legacy compatibility set through `xhigh`; `max` and `ultra` are never inferred from model names. Older Happy CLIs therefore keep advanced levels hidden.
+
+Happy's synthetic `default model` option follows the CLI launch default (`gpt-5.5`), not the app-server provider default. Resetting an active session to `default model` likewise restores the model used to launch that thread, keeping the picker and runtime validation aligned.
+
 ### Turn completion tracking
 `sendTurnAndWait()` creates a Promise resolved when `task_complete` or `turn_aborted` arrives. Safety nets: 10-minute timeout, process exit handler, disconnect handler. This replaced the AbortController hack.
 
@@ -65,6 +73,8 @@ Our internal types use `approved`/`denied`/`abort`. The wire protocol uses `acce
 
 - `codexAppServerClient.ts` — JSON-RPC client, turn tracking, approval handling
 - `codexAppServerTypes.ts` — Cherry-picked types from the protocol
+- `codexModelCapabilities.ts` — Catalog discovery, normalization, and metadata merging
+- `codexEffortValidation.ts` — Per-model effort validation and compatibility fallback
 - `runCodex.ts` — Main loop, event/approval handler wiring
 - `executionPolicy.ts` — Maps permission modes to approval/sandbox policies
 - `sessionProtocolMapper.ts` — Events → session protocol envelopes (shared with old code)
