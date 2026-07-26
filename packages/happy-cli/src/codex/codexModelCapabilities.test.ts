@@ -32,6 +32,7 @@ describe('normalizeCodexModels', () => {
             description: 'Test model',
             thinkingLevels: ['low', 'ultra'],
             defaultThinkingLevel: 'low',
+            isDefault: false,
         }]);
     });
 

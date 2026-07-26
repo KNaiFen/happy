@@ -849,11 +849,16 @@ describe('CodexAppServerClient sandbox integration', () => {
             approvalPolicy: 'never',
             sandbox: 'danger-full-access',
         });
-        await client.sendTurnAndWait('hello');
+        await client.sendTurnAndWait('hello', {
+            model: 'gpt-5.6-sol',
+            effort: 'ultra',
+        });
 
         expect(requests.find((msg) => msg.method === 'turn/start')?.params).toMatchObject({
             threadId: 'thread-text',
             input: [{ type: 'text', text: 'hello' }],
+            model: 'gpt-5.6-sol',
+            effort: 'ultra',
         });
 
         await client.disconnect();

@@ -130,6 +130,7 @@ export const CodexModelCapabilitySchema = z.object({
   description: z.string().nullish(),
   thinkingLevels: z.array(z.string()),
   defaultThinkingLevel: z.string(),
+  isDefault: z.boolean(),
 })
 
 export type CodexModelCapability = z.infer<typeof CodexModelCapabilitySchema>
@@ -215,7 +216,8 @@ export const MessageMetaSchema = z.object({
   customSystemPrompt: z.string().nullable().optional(), // Custom system prompt for this message (null = reset)
   appendSystemPrompt: z.string().nullable().optional(), // Append to system prompt for this message (null = reset)
   allowedTools: z.array(z.string()).nullable().optional(), // Allowed tools for this message (null = reset)
-  disallowedTools: z.array(z.string()).nullable().optional() // Disallowed tools for this message (null = reset)
+  disallowedTools: z.array(z.string()).nullable().optional(), // Disallowed tools for this message (null = reset)
+  effort: z.string().nullable().optional(),
 })
 
 export type MessageMeta = z.infer<typeof MessageMetaSchema>
@@ -311,6 +313,7 @@ export type Metadata = {
     description?: string | null;
     thinkingLevels?: string[];
     defaultThinkingLevel?: string;
+    isDefault?: boolean;
   }>,
   currentModelCode?: string,
   operatingModes?: Array<{ code: string; value: string; description?: string | null }>,

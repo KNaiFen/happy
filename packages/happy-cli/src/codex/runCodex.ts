@@ -23,7 +23,7 @@ import { CodexDisplay } from "@/ui/ink/CodexDisplay";
 import { trimIdent } from "@/utils/trimIdent";
 import { notifyDaemonSessionStarted } from "@/daemon/controlClient";
 import { encodeBase64, decodeBase64 } from '@/api/encryption';
-import type { Session as ApiSession, UserMessage } from '@/api/types';
+import type { CodexModelCapability, Session as ApiSession, UserMessage } from '@/api/types';
 import { registerKillSessionHandler } from "@/claude/registerKillSessionHandler";
 import { connectionState } from '@/utils/serverConnectionErrors';
 import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
@@ -58,6 +58,7 @@ import {
     loadCodexModelCapabilities,
     mergeCodexSessionModels,
 } from './codexModelCapabilities';
+import { resolveCodexEffortForModel } from './codexEffortValidation';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -278,6 +279,7 @@ export async function runCodex(opts: {
     let currentPermissionModeExplicitlySet = false;
     let currentModel: string | undefined = opts.model ?? DEFAULT_CODEX_MODEL;
     let currentEffort: ReasoningEffort | undefined = opts.effort ?? DEFAULT_CODEX_EFFORT;
+    let codexModelCapabilities: CodexModelCapability[] | null = null;
     let currentAppendSystemPrompt: string | undefined = undefined;
 
     const resetCurrentModeDefaults = () => {
@@ -307,10 +309,6 @@ export async function runCodex(opts: {
         'read-only',
         'safe-yolo',
         'yolo',
-    ];
-
-    const VALID_REMOTE_EFFORTS: readonly ReasoningEffort[] = [
-        'none', 'minimal', 'low', 'medium', 'high', 'xhigh',
     ];
 
     const handleUserMessage = createSerialAsyncHandler<UserMessage>(async (message) => {
@@ -352,8 +350,8 @@ export async function runCodex(opts: {
                 messageEffort = undefined;
                 currentEffort = undefined;
                 logger.debug(`[Codex] Effort reset to default`);
-            } else if (typeof incoming === 'string' && (VALID_REMOTE_EFFORTS as readonly string[]).includes(incoming)) {
-                messageEffort = incoming as ReasoningEffort;
+            } else if (typeof incoming === 'string') {
+                messageEffort = incoming;
                 currentEffort = messageEffort;
                 logger.debug(`[Codex] Effort updated from user message: ${messageEffort}`);
             } else {
@@ -872,6 +870,7 @@ export async function runCodex(opts: {
         logger.debug('[codex]: client.connect done');
 
         const discoveredModels = await loadCodexModelCapabilities(client);
+        codexModelCapabilities = discoveredModels;
         if (discoveredModels) {
             session.updateMetadata((currentMetadata) => (
                 mergeCodexSessionModels(currentMetadata, discoveredModels)
@@ -1021,8 +1020,26 @@ export async function runCodex(opts: {
                     continue;
                 }
 
+                const effortResolution = resolveCodexEffortForModel({
+                    effort: message.mode.effort,
+                    model: message.mode.model,
+                    models: codexModelCapabilities,
+                });
+                const turnMode: EnhancedMode = {
+                    ...message.mode,
+                    effort: effortResolution.effort,
+                };
+                if (!effortResolution.accepted) {
+                    logger.warn(
+                        `[Codex] Rejected unsupported effort '${message.mode.effort ?? 'default'}' `
+                        + `for model '${message.mode.model ?? 'default'}'; `
+                        + `using '${effortResolution.effort ?? 'provider default'}'`,
+                    );
+                    currentEffort = effortResolution.effort;
+                }
+
                 const includeAppendSystemPrompt = Boolean(
-                    message.mode.appendSystemPrompt && !appendSystemPromptInjected,
+                    turnMode.appendSystemPrompt && !appendSystemPromptInjected,
                 );
                 const imageInputs = await prepareCodexImageInputItems(message.attachments, {
                     sessionId: session.sessionId,
@@ -1043,7 +1060,7 @@ export async function runCodex(opts: {
                 }
                 const turnPrompt = buildCodexTurnPrompt({
                     message: message.message,
-                    mode: message.mode,
+                    mode: turnMode,
                     includeAppendSystemPrompt,
                     includeTitleInstruction: first,
                 });
@@ -1052,7 +1069,7 @@ export async function runCodex(opts: {
                     model: message.mode.model,
                     approvalPolicy: executionPolicy.approvalPolicy,
                     sandbox: executionPolicy.sandbox,
-                    effort: message.mode.effort,
+                    effort: turnMode.effort,
                     extraInputItems: imageInputs.inputItems,
                 });
                 first = false;

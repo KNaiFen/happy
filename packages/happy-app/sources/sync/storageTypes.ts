@@ -23,6 +23,7 @@ export const MetadataSchema = z.object({
         serviceTiers: z.array(z.string()).optional(),
         thinkingLevels: z.array(z.string()).optional(),
         defaultThinkingLevel: z.string().optional(),
+        isDefault: z.boolean().optional(),
     }).passthrough()).optional(),
     currentModelCode: z.string().optional(),
     operatingModes: z.array(z.object({
@@ -362,6 +363,7 @@ export const MachineMetadataSchema = z.object({
                 description: z.string().nullish(),
                 thinkingLevels: z.array(z.string()),
                 defaultThinkingLevel: z.string(),
+                isDefault: z.boolean().optional(),
             }).passthrough()),
         }).passthrough().optional(),
     }).passthrough().optional(),

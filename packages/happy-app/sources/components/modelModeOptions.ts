@@ -27,6 +27,7 @@ export type ModelMode = ModeOption & {
     serviceTiers?: string[];
     thinkingLevels?: string[];
     defaultThinkingLevel?: string | null;
+    isDefault?: boolean;
     unavailable?: boolean;
 };
 
@@ -47,6 +48,7 @@ type MetadataOption = {
 type MetadataModelOption = MetadataOption & {
     thinkingLevels?: string[];
     defaultThinkingLevel?: string | null;
+    isDefault?: boolean;
 };
 
 const GEMINI_MODEL_FALLBACKS: ModelMode[] = [
@@ -83,7 +85,23 @@ export function mapMetadataModels(options?: MetadataModelOption[] | null): Model
         ...(option.defaultThinkingLevel != null
             ? { defaultThinkingLevel: option.defaultThinkingLevel }
             : {}),
+        ...(option.isDefault !== undefined ? { isDefault: option.isDefault } : {}),
     }));
+}
+
+function createCodexDefaultModelOption(models: ModelMode[]): ModelMode {
+    const advertisedDefault = models.find((model) => model.isDefault);
+    return {
+        key: 'default',
+        name: 'default model',
+        description: null,
+        ...(advertisedDefault?.thinkingLevels
+            ? { thinkingLevels: advertisedDefault.thinkingLevels }
+            : {}),
+        ...(advertisedDefault?.defaultThinkingLevel
+            ? { defaultThinkingLevel: advertisedDefault.defaultThinkingLevel }
+            : {}),
+    };
 }
 
 export function getClaudePermissionModes(translate: Translate): PermissionMode[] {
@@ -274,7 +292,7 @@ export function getAvailableModels(
     const metadataModels = mapMetadataModels(metadata?.models);
     if (metadataModels.length > 0) {
         if (flavor === 'codex' && !metadataModels.some((model) => model.key === 'default')) {
-            return [{ key: 'default', name: 'default model', description: null }, ...metadataModels];
+            return [createCodexDefaultModelOption(metadataModels), ...metadataModels];
         }
         return metadataModels;
     }
@@ -291,7 +309,7 @@ export function getAvailableModelsForMachine(
         : undefined;
     const models = mapMetadataModels(codexModels);
     if (models.length > 0) {
-        return [{ key: 'default', name: 'default model', description: null }, ...models];
+        return [createCodexDefaultModelOption(models), ...models];
     }
     return getHardcodedModelModes(flavor, translate);
 }
@@ -415,7 +433,9 @@ export function getEffortLevelsForModel(
         return getClaudeEffortLevels();
     }
     if (flavor === 'codex') {
-        const advertisedModel = metadata?.models?.find((model) => model.code === modelKey);
+        const advertisedModel = metadata?.models?.find((model) => (
+            model.code === modelKey || (modelKey === 'default' && model.isDefault)
+        ));
         if (advertisedModel?.thinkingLevels) {
             return advertisedModel.thinkingLevels.map((level) => ({ key: level, name: level }));
         }
@@ -431,7 +451,7 @@ export function getEffortLevelsForModelOnMachine(
 ): EffortLevel[] {
     if (flavor === 'codex') {
         const advertisedModel = metadata?.agentCapabilities?.codex?.models
-            .find((model) => model.code === modelKey);
+            .find((model) => model.code === modelKey || (modelKey === 'default' && model.isDefault));
         if (advertisedModel) {
             return advertisedModel.thinkingLevels.map((level) => ({ key: level, name: level }));
         }
@@ -451,7 +471,9 @@ export function getDefaultEffortKeyForModel(
 ): string | null {
     const levels = getEffortLevelsForModel(flavor, modelKey, metadata);
     if (levels.length === 0) return null;
-    const advertisedDefault = metadata?.models?.find((model) => model.code === modelKey)?.defaultThinkingLevel;
+    const advertisedDefault = metadata?.models?.find((model) => (
+        model.code === modelKey || (modelKey === 'default' && model.isDefault)
+    ))?.defaultThinkingLevel;
     if (advertisedDefault && levels.some((level) => level.key === advertisedDefault)) {
         return advertisedDefault;
     }

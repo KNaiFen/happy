@@ -20,6 +20,7 @@ export function normalizeCodexModels(models: Model[]): CodexModelCapability[] {
                 .map((option) => option.reasoningEffort)
                 .filter((effort) => effort.length > 0),
             defaultThinkingLevel: model.defaultReasoningEffort,
+            isDefault: model.isDefault,
         }))
         .filter((model) => (
             model.thinkingLevels.length > 0
