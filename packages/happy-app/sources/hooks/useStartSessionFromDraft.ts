@@ -9,8 +9,8 @@ import { isMachineOnline } from '@/utils/machineUtils';
 import { resolveAbsolutePath } from '@/utils/pathUtils';
 import { createWorktree } from '@/utils/worktree';
 import {
-    getEffortLevelsForModel,
-    getHardcodedModelModes,
+    getAvailableModelsForMachine,
+    getEffortLevelsForModelOnMachine,
     getHardcodedPermissionModes,
 } from '@/components/modelModeOptions';
 import { Modal } from '@/modal';
@@ -55,12 +55,24 @@ export function useStartSessionFromDraft() {
             [draft.permissionMode, defaults.permissionMode],
         );
         const model = resolveOption(
-            getHardcodedModelModes(draft.agentType, t),
+            getAvailableModelsForMachine(draft.agentType, machine.metadata, t),
             [draft.modelMode, defaults.modelMode],
         );
+        const effortLevels = getEffortLevelsForModelOnMachine(
+            draft.agentType,
+            model?.key ?? 'default',
+            machine.metadata,
+        );
+        const requestedEffort = draft.effortLevel ?? defaults.effortLevel;
+        const requestedEffortIsSupported = requestedEffort
+            ? effortLevels.some((level) => level.key === requestedEffort)
+            : false;
         const effort = resolveOption(
-            getEffortLevelsForModel(draft.agentType, model?.key ?? 'default'),
-            [draft.effortLevel, defaults.effortLevel],
+            effortLevels,
+            [
+                requestedEffortIsSupported ? requestedEffort : model?.defaultThinkingLevel,
+                defaults.effortLevel,
+            ],
         );
         if (!permission || !model) {
             Modal.alert(t('common.error'), 'The selected agent configuration is unavailable');

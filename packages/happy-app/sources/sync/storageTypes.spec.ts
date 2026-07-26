@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AgentGoalStatusSchema, AgentStateSchema, MetadataSchema } from './storageTypes';
+import { AgentGoalStatusSchema, AgentStateSchema, MachineMetadataSchema, MetadataSchema } from './storageTypes';
 import { rigMetadataFixture } from './__testdata__/rigMetadata';
 
 describe('MetadataSchema', () => {
@@ -33,6 +33,37 @@ describe('MetadataSchema', () => {
         expect(metadata.models).toHaveLength(2);
         expect(metadata.activity?.subagents.queued).toBe(2);
         expect((metadata as any).futureCapability).toEqual({ supported: true });
+    });
+});
+
+describe('MachineMetadataSchema', () => {
+    it('preserves Codex model capabilities and future machine fields', () => {
+        const metadata = MachineMetadataSchema.parse({
+            host: 'host',
+            platform: 'darwin',
+            happyCliVersion: '1.2.0',
+            happyHomeDir: '/home/.happy',
+            homeDir: '/home',
+            agentCapabilities: {
+                codex: {
+                    codexCliVersion: 'codex-cli 0.145.0',
+                    detectedAt: 123,
+                    models: [{
+                        code: 'gpt-5.6-sol',
+                        value: 'GPT-5.6-Sol',
+                        thinkingLevels: ['low', 'ultra'],
+                        defaultThinkingLevel: 'low',
+                        futureModelField: true,
+                    }],
+                    futureCodexField: true,
+                },
+            },
+            futureMachineField: true,
+        });
+
+        expect(metadata.agentCapabilities?.codex?.models[0]?.thinkingLevels).toEqual(['low', 'ultra']);
+        expect((metadata as any).futureMachineField).toBe(true);
+        expect((metadata.agentCapabilities?.codex as any).futureCodexField).toBe(true);
     });
 });
 

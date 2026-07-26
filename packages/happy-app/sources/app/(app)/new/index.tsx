@@ -49,8 +49,8 @@ import { Modal } from '@/modal';
 import type { Machine, Session } from '@/sync/storageTypes';
 import {
     getHardcodedPermissionModes,
-    getHardcodedModelModes,
-    getEffortLevelsForModel,
+    getAvailableModelsForMachine,
+    getEffortLevelsForModelOnMachine,
     getSupportsWorktree,
     type PermissionMode,
     type ModelMode,
@@ -915,16 +915,16 @@ function NewSessionScreen() {
         [selectedAgent],
     );
     const modelModes = React.useMemo<ModelMode[]>(
-        () => getHardcodedModelModes(selectedAgent, t),
-        [selectedAgent],
+        () => getAvailableModelsForMachine(selectedAgent, selectedMachine?.metadata, t),
+        [selectedAgent, selectedMachine?.metadata],
     );
 
     const currentModel = modelModes[modelIndex] ?? modelModes[0];
     const currentModelKey = currentModel?.key ?? 'default';
 
     const effortLevels = React.useMemo<EffortLevel[]>(
-        () => getEffortLevelsForModel(selectedAgent, currentModelKey),
-        [selectedAgent, currentModelKey],
+        () => getEffortLevelsForModelOnMachine(selectedAgent, currentModelKey, selectedMachine?.metadata),
+        [selectedAgent, currentModelKey, selectedMachine?.metadata],
     );
     const effectiveAgentDefaults = React.useMemo(() => (
         resolveAgentDefaultConfig(agentDefaultOverrides, selectedAgent)
@@ -969,6 +969,12 @@ function NewSessionScreen() {
             effectiveAgentDefaults.effortLevel,
         ]));
     }, [draft.effortLevel, effectiveAgentDefaults.effortLevel, currentModelKey, effortLevels]);
+
+    React.useEffect(() => {
+        if (!draft.effortLevel) return;
+        if (effortLevels.some((level) => level.key === draft.effortLevel)) return;
+        draft.setEffortLevel(currentModel?.defaultThinkingLevel ?? effortLevels[0]?.key ?? null);
+    }, [currentModel?.defaultThinkingLevel, draft.effortLevel, draft.setEffortLevel, effortLevels]);
 
     // The reference keeps the context controls visible while the keyboard is
     // open. Preserve that on mobile and let users collapse them explicitly.

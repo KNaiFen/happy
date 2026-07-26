@@ -352,7 +352,20 @@ export const MachineMetadataSchema = z.object({
         happyAgentAuthenticated: z.boolean(),
         detectedAt: z.number(),
     }).optional(),
-});
+    agentCapabilities: z.object({
+        codex: z.object({
+            codexCliVersion: z.string(),
+            detectedAt: z.number(),
+            models: z.array(z.object({
+                code: z.string(),
+                value: z.string(),
+                description: z.string().nullish(),
+                thinkingLevels: z.array(z.string()),
+                defaultThinkingLevel: z.string(),
+            }).passthrough()),
+        }).passthrough().optional(),
+    }).passthrough().optional(),
+}).passthrough();
 
 export type MachineMetadata = z.infer<typeof MachineMetadataSchema>;
 

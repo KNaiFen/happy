@@ -1,4 +1,4 @@
-import type { Metadata } from '@/sync/storageTypes';
+import type { MachineMetadata, Metadata } from '@/sync/storageTypes';
 import { hackModes } from '@/sync/modeHacks';
 import { getCodeAgentDefaults } from '@/sync/agentDefaults';
 import {
@@ -44,6 +44,11 @@ type MetadataOption = {
     description?: string | null;
 };
 
+type MetadataModelOption = MetadataOption & {
+    thinkingLevels?: string[];
+    defaultThinkingLevel?: string | null;
+};
+
 const GEMINI_MODEL_FALLBACKS: ModelMode[] = [
     { key: 'gemini-3.1-pro-preview', name: 'gemini 3.1 pro', description: 'latest & most capable' },
     { key: 'gemini-3-flash-preview', name: 'gemini 3 flash', description: 'latest & fast' },
@@ -62,6 +67,22 @@ export function mapMetadataOptions(options?: MetadataOption[] | null): ModeOptio
         key: option.code,
         name: option.value,
         description: option.description ?? null,
+    }));
+}
+
+export function mapMetadataModels(options?: MetadataModelOption[] | null): ModelMode[] {
+    if (!options || options.length === 0) {
+        return [];
+    }
+
+    return options.map((option) => ({
+        key: option.code,
+        name: option.value,
+        description: option.description ?? null,
+        ...(option.thinkingLevels ? { thinkingLevels: option.thinkingLevels } : {}),
+        ...(option.defaultThinkingLevel != null
+            ? { defaultThinkingLevel: option.defaultThinkingLevel }
+            : {}),
     }));
 }
 
@@ -250,12 +271,27 @@ export function getAvailableModels(
         }
         return models;
     }
-    const metadataModels = mapMetadataOptions(metadata?.models);
+    const metadataModels = mapMetadataModels(metadata?.models);
     if (metadataModels.length > 0) {
         if (flavor === 'codex' && !metadataModels.some((model) => model.key === 'default')) {
             return [{ key: 'default', name: 'default model', description: null }, ...metadataModels];
         }
         return metadataModels;
+    }
+    return getHardcodedModelModes(flavor, translate);
+}
+
+export function getAvailableModelsForMachine(
+    flavor: AgentFlavor,
+    metadata: MachineMetadata | null | undefined,
+    translate: Translate,
+): ModelMode[] {
+    const codexModels = flavor === 'codex'
+        ? metadata?.agentCapabilities?.codex?.models
+        : undefined;
+    const models = mapMetadataModels(codexModels);
+    if (models.length > 0) {
+        return [{ key: 'default', name: 'default model', description: null }, ...models];
     }
     return getHardcodedModelModes(flavor, translate);
 }
@@ -379,9 +415,28 @@ export function getEffortLevelsForModel(
         return getClaudeEffortLevels();
     }
     if (flavor === 'codex') {
+        const advertisedModel = metadata?.models?.find((model) => model.code === modelKey);
+        if (advertisedModel?.thinkingLevels) {
+            return advertisedModel.thinkingLevels.map((level) => ({ key: level, name: level }));
+        }
         return getCodexEffortLevels();
     }
     return [];
+}
+
+export function getEffortLevelsForModelOnMachine(
+    flavor: AgentFlavor,
+    modelKey: string,
+    metadata: MachineMetadata | null | undefined,
+): EffortLevel[] {
+    if (flavor === 'codex') {
+        const advertisedModel = metadata?.agentCapabilities?.codex?.models
+            .find((model) => model.code === modelKey);
+        if (advertisedModel) {
+            return advertisedModel.thinkingLevels.map((level) => ({ key: level, name: level }));
+        }
+    }
+    return getEffortLevelsForModel(flavor, modelKey);
 }
 
 export function getRigCurrentModelOptionKey(metadata: Metadata | null | undefined): string | null {
@@ -389,9 +444,17 @@ export function getRigCurrentModelOptionKey(metadata: Metadata | null | undefine
 }
 
 // Default effort for a model — highest the model allows
-export function getDefaultEffortKeyForModel(flavor: AgentFlavor, modelKey: string): string | null {
-    const levels = getEffortLevelsForModel(flavor, modelKey);
+export function getDefaultEffortKeyForModel(
+    flavor: AgentFlavor,
+    modelKey: string,
+    metadata?: Metadata | null,
+): string | null {
+    const levels = getEffortLevelsForModel(flavor, modelKey, metadata);
     if (levels.length === 0) return null;
+    const advertisedDefault = metadata?.models?.find((model) => model.code === modelKey)?.defaultThinkingLevel;
+    if (advertisedDefault && levels.some((level) => level.key === advertisedDefault)) {
+        return advertisedDefault;
+    }
     return getCodeAgentDefaults(flavor).effortLevel ?? levels[levels.length - 1].key;
 }
 

@@ -31,8 +31,8 @@ import { resolveAbsolutePath } from '@/utils/pathUtils';
 import { listWorktrees } from '@/utils/worktree';
 import type { Machine, Session } from '@/sync/storageTypes';
 import {
-    getEffortLevelsForModel,
-    getHardcodedModelModes,
+    getAvailableModelsForMachine,
+    getEffortLevelsForModelOnMachine,
     getHardcodedPermissionModes,
     getSupportsWorktree,
     type ModeOption,
@@ -406,7 +406,7 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
-function resolveOption(options: ModeOption[], preferred: Array<string | null | undefined>): ModeOption | null {
+function resolveOption<T extends ModeOption>(options: T[], preferred: Array<string | null | undefined>): T | null {
     for (const key of preferred) {
         const option = options.find((candidate) => candidate.key === key);
         if (option) return option;
@@ -608,16 +608,21 @@ export const HomeDock = React.memo(({
         [agentType],
     );
     const modelOptions = React.useMemo(
-        () => getHardcodedModelModes(agentType, t),
-        [agentType],
+        () => getAvailableModelsForMachine(agentType, selectedMachine?.metadata, t),
+        [agentType, selectedMachine?.metadata],
     );
     const currentPermission = resolveOption(permissionOptions, [permissionMode, defaults.permissionMode]);
     const currentModel = resolveOption(modelOptions, [modelMode, defaults.modelMode]);
     const effortOptions = React.useMemo(
-        () => getEffortLevelsForModel(agentType, currentModel?.key ?? 'default'),
-        [agentType, currentModel?.key],
+        () => getEffortLevelsForModelOnMachine(agentType, currentModel?.key ?? 'default', selectedMachine?.metadata),
+        [agentType, currentModel?.key, selectedMachine?.metadata],
     );
     const currentEffort = resolveOption(effortOptions, [effortLevel, defaults.effortLevel]);
+    React.useEffect(() => {
+        if (!effortLevel) return;
+        if (effortOptions.some((level) => level.key === effortLevel)) return;
+        setEffortLevel(currentModel?.defaultThinkingLevel ?? effortOptions[0]?.key ?? null);
+    }, [currentModel?.defaultThinkingLevel, effortLevel, effortOptions, setEffortLevel]);
     const currentAgent = availableAgents.find((agent) => agent.key === agentType) ?? availableAgents[0] ?? AGENTS[0];
     const canSubmit = !isSubmitting && (
         prompt.trim().length > 0 || (expImageUpload && selectedImages.length > 0)

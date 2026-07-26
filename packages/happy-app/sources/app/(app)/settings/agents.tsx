@@ -5,12 +5,14 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import {
-    getEffortLevelsForModel,
-    getHardcodedModelModes,
+    getAvailableModelsForMachine,
+    getEffortLevelsForModelOnMachine,
     getHardcodedPermissionModes,
     type ModeOption,
 } from '@/components/modelModeOptions';
-import { useSettingMutable } from '@/sync/storage';
+import { useAllMachines, useSettingMutable } from '@/sync/storage';
+import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
+import { isMachineOnline } from '@/utils/machineUtils';
 import {
     agentKeys,
     getCodeAgentDefaults,
@@ -53,14 +55,44 @@ export default function AgentDefaultsSettingsScreen() {
     const { theme } = useUnistyles();
     const [agentDefaultOverrides, setAgentDefaultOverrides] = useSettingMutable('agentDefaultOverrides');
     const [expanded, setExpanded] = React.useState<ExpandedField>(null);
+    const machines = useAllMachines({ includeOffline: true });
+    const selectedMachineId = useNewSessionDraft((state) => state.selectedMachineId);
+    const selectedMachine = React.useMemo(() => (
+        machines.find((machine) => machine.id === selectedMachineId)
+        ?? machines.find(isMachineOnline)
+        ?? machines[0]
+        ?? null
+    ), [machines, selectedMachineId]);
 
     const updateOverride = React.useCallback((
         agent: AgentKey,
         field: AgentDefaultField,
         value: string | null,
     ) => {
-        setAgentDefaultOverrides(setAgentDefaultOverride(agentDefaultOverrides, agent, field, value));
-    }, [agentDefaultOverrides, setAgentDefaultOverrides]);
+        let nextOverrides = setAgentDefaultOverride(agentDefaultOverrides, agent, field, value);
+        if (field === 'modelMode') {
+            const nextDefaults = resolveAgentDefaultConfig(nextOverrides, agent);
+            const effortOptions = getEffortLevelsForModelOnMachine(
+                agent,
+                nextDefaults.modelMode,
+                selectedMachine?.metadata,
+            );
+            const currentEffortSupported = nextDefaults.effortLevel
+                ? effortOptions.some((option) => option.key === nextDefaults.effortLevel)
+                : true;
+            if (!currentEffortSupported) {
+                const model = getAvailableModelsForMachine(agent, selectedMachine?.metadata, t)
+                    .find((option) => option.key === nextDefaults.modelMode);
+                nextOverrides = setAgentDefaultOverride(
+                    nextOverrides,
+                    agent,
+                    'effortLevel',
+                    model?.defaultThinkingLevel ?? effortOptions[0]?.key ?? null,
+                );
+            }
+        }
+        setAgentDefaultOverrides(nextOverrides);
+    }, [agentDefaultOverrides, selectedMachine?.metadata, setAgentDefaultOverrides]);
 
     const renderOption = (
         agent: AgentKey,
@@ -144,8 +176,13 @@ export default function AgentDefaultsSettingsScreen() {
                 const codeDefaults = getCodeAgentDefaults(agent);
                 const effectiveDefaults = resolveAgentDefaultConfig(agentDefaultOverrides, agent);
                 const permissionOptions = getHardcodedPermissionModes(agent, t);
-                const modelOptions = getHardcodedModelModes(agent, t).filter((option) => option.key !== 'default');
-                const effortOptions = getEffortLevelsForModel(agent, effectiveDefaults.modelMode);
+                const modelOptions = getAvailableModelsForMachine(agent, selectedMachine?.metadata, t)
+                    .filter((option) => option.key !== 'default');
+                const effortOptions = getEffortLevelsForModelOnMachine(
+                    agent,
+                    effectiveDefaults.modelMode,
+                    selectedMachine?.metadata,
+                );
                 const fields: FieldConfig[] = [
                     {
                         field: 'permissionMode',

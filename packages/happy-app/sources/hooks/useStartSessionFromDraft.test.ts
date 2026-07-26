@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
     createWorktree: vi.fn(),
     alert: vi.fn(),
     confirm: vi.fn(),
+    modelOptions: [] as Array<{ key: string; name: string; defaultThinkingLevel?: string }>,
+    effortOptions: [] as Array<{ key: string; name: string }>,
 }));
 
 vi.mock('react', () => ({
@@ -72,13 +74,8 @@ vi.mock('@/components/modelModeOptions', () => ({
         { key: 'default', name: 'Default' },
         { key: 'yolo', name: 'YOLO' },
     ],
-    getHardcodedModelModes: () => [
-        { key: 'default', name: 'Default' },
-        { key: 'opus', name: 'Opus' },
-    ],
-    getEffortLevelsForModel: () => [
-        { key: 'medium', name: 'Medium' },
-    ],
+    getAvailableModelsForMachine: () => mocks.modelOptions,
+    getEffortLevelsForModelOnMachine: () => mocks.effortOptions,
 }));
 
 vi.mock('@/modal', () => ({
@@ -121,6 +118,11 @@ describe('useStartSessionFromDraft', () => {
         mocks.refreshSessions.mockResolvedValue(undefined);
         mocks.sendMessage.mockResolvedValue(undefined);
         mocks.confirm.mockResolvedValue(false);
+        mocks.modelOptions = [
+            { key: 'default', name: 'Default' },
+            { key: 'opus', name: 'Opus' },
+        ];
+        mocks.effortOptions = [{ key: 'medium', name: 'Medium' }];
     });
 
     it('creates and opens the session directly from the home draft', async () => {
@@ -181,5 +183,48 @@ describe('useStartSessionFromDraft', () => {
         expect(mocks.draft.setAttachments).not.toHaveBeenCalled();
         expect(mocks.navigateToSession).not.toHaveBeenCalled();
         expect(mocks.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('forwards ultra when the selected Codex model advertises it', async () => {
+        mocks.modelOptions = [{
+            key: 'gpt-5.6-sol',
+            name: 'GPT-5.6-Sol',
+            defaultThinkingLevel: 'low',
+        }];
+        mocks.effortOptions = [
+            { key: 'low', name: 'Low' },
+            { key: 'ultra', name: 'Ultra' },
+        ];
+        mocks.draft = createDraft({ modelMode: 'gpt-5.6-sol', effortLevel: 'ultra' });
+
+        const { startSession } = useStartSessionFromDraft();
+        await expect(startSession()).resolves.toBe(true);
+
+        expect(mocks.machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+            modelMode: 'gpt-5.6-sol',
+            effortLevel: 'ultra',
+        }));
+    });
+
+    it('repairs an unsupported effort with the selected model default', async () => {
+        mocks.modelOptions = [{
+            key: 'gpt-5.6-luna',
+            name: 'GPT-5.6-Luna',
+            defaultThinkingLevel: 'medium',
+        }];
+        mocks.effortOptions = [
+            { key: 'low', name: 'Low' },
+            { key: 'medium', name: 'Medium' },
+            { key: 'max', name: 'Max' },
+        ];
+        mocks.draft = createDraft({ modelMode: 'gpt-5.6-luna', effortLevel: 'ultra' });
+
+        const { startSession } = useStartSessionFromDraft();
+        await expect(startSession()).resolves.toBe(true);
+
+        expect(mocks.machineSpawnNewSession).toHaveBeenCalledWith(expect.objectContaining({
+            modelMode: 'gpt-5.6-luna',
+            effortLevel: 'medium',
+        }));
     });
 });

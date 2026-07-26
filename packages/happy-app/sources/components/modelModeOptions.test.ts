@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     getAgyModelModes,
     getAvailableModels,
+    getAvailableModelsForMachine,
     getAvailablePermissionModes,
     getCodexModelModes,
     getClaudeModelModes,
@@ -9,6 +10,9 @@ import {
     getDefaultEffortKey,
     getDefaultModelKey,
     getDefaultPermissionModeKey,
+    getEffortLevelsForModel,
+    getEffortLevelsForModelOnMachine,
+    mapMetadataModels,
     mapMetadataOptions,
     resolveCurrentOption,
 } from './modelModeOptions';
@@ -25,6 +29,21 @@ describe('modelModeOptions', () => {
             { key: 'm1', name: 'Model One', description: 'Primary model' },
             { key: 'm2', name: 'Model Two', description: null },
         ]);
+    });
+
+    it('preserves model-specific effort metadata', () => {
+        expect(mapMetadataModels([{
+            code: 'gpt-sol',
+            value: 'GPT Sol',
+            thinkingLevels: ['low', 'ultra'],
+            defaultThinkingLevel: 'low',
+        }])).toEqual([{
+            key: 'gpt-sol',
+            name: 'GPT Sol',
+            description: null,
+            thinkingLevels: ['low', 'ultra'],
+            defaultThinkingLevel: 'low',
+        }]);
     });
 
     it('builds claude permission fallbacks with translated names', () => {
@@ -101,6 +120,57 @@ describe('modelModeOptions', () => {
             { key: 'default', name: 'default model', description: null },
             { key: 'gpt-5.4', name: 'gpt-5.4', description: 'Latest' },
         ]);
+    });
+
+    it('uses machine-advertised Codex models and effort levels', () => {
+        const metadata = {
+            agentCapabilities: {
+                codex: {
+                    codexCliVersion: 'codex-cli 0.145.0',
+                    detectedAt: 123,
+                    models: [
+                        {
+                            code: 'gpt-5.6-sol',
+                            value: 'GPT-5.6-Sol',
+                            description: 'Frontier',
+                            thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+                            defaultThinkingLevel: 'low',
+                        },
+                        {
+                            code: 'gpt-5.6-luna',
+                            value: 'GPT-5.6-Luna',
+                            description: 'Efficient',
+                            thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+                            defaultThinkingLevel: 'medium',
+                        },
+                    ],
+                },
+            },
+        } as any;
+
+        expect(getAvailableModelsForMachine('codex', metadata, translate).map((model) => model.key)).toEqual([
+            'default', 'gpt-5.6-sol', 'gpt-5.6-luna',
+        ]);
+        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.6-sol', metadata).map((level) => level.key)).toEqual([
+            'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+        ]);
+        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.6-luna', metadata).map((level) => level.key)).toEqual([
+            'low', 'medium', 'high', 'xhigh', 'max',
+        ]);
+    });
+
+    it('uses session-advertised effort levels and keeps the old CLI fallback', () => {
+        const sessionMetadata = {
+            models: [{
+                code: 'gpt-5.6-terra',
+                value: 'GPT-5.6-Terra',
+                thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+                defaultThinkingLevel: 'medium',
+            }],
+        } as any;
+
+        expect(getEffortLevelsForModel('codex', 'gpt-5.6-terra', sessionMetadata).at(-1)?.key).toBe('ultra');
+        expect(getEffortLevelsForModel('codex', 'gpt-5.5', null).at(-1)?.key).toBe('xhigh');
     });
 
     it('keeps codex permission modes hardcoded even when metadata modes exist', () => {
