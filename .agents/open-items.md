@@ -1,3 +1,4 @@
 # Open Items
 
-- [ ] Select the next scoped contribution and record its concrete verification command before making changes.
+- [ ] Review and approve `docs/plans/codex-model-aware-reasoning-effort.md`.
+- [ ] Implement Phase 1 protocol types and `model/list` discovery after approval.
