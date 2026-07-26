@@ -33,6 +33,10 @@ import {
   sanitizeSessionEnvironment,
   wrapTmuxCommandWithSessionEnvironmentSanitizer,
 } from './sessionEnvironment';
+import {
+  discoverCodexAgentCapabilities,
+  mergeCodexAgentCapabilities,
+} from '@/codex/codexModelCapabilities';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
@@ -184,6 +188,9 @@ export async function startDaemon(): Promise<void> {
     // Ensure auth and machine registration BEFORE anything else
     const { credentials, machineId } = await authAndSetupMachineIfNeeded();
     logger.debug('[DAEMON RUN] Auth and machine setup complete');
+    const codexCapabilitiesPromise = initialMachineMetadata.cliAvailability?.codex
+      ? discoverCodexAgentCapabilities()
+      : Promise.resolve(null);
 
     // Setup state - key by PID
     const pidToTrackedSession = new Map<number, TrackedSession>();
@@ -861,9 +868,11 @@ export async function startDaemon(): Promise<void> {
     const api = await ApiClient.create(credentials);
 
     // Get or create machine
+    const codexCapabilities = await codexCapabilitiesPromise;
+    const machineMetadata = mergeCodexAgentCapabilities(initialMachineMetadata, codexCapabilities);
     const machine = await api.getOrCreateMachine({
       machineId,
-      metadata: initialMachineMetadata,
+      metadata: machineMetadata,
       daemonState: initialDaemonState
     });
     logger.debug(`[DAEMON RUN] Machine registered: ${machine.id}`);
@@ -881,6 +890,14 @@ export async function startDaemon(): Promise<void> {
 
     // Connect to server
     apiMachine.connect();
+    if (codexCapabilities) {
+      apiMachine.updateMachineMetadata((metadata) => mergeCodexAgentCapabilities(
+        metadata ?? initialMachineMetadata,
+        codexCapabilities,
+      )).catch((error) => {
+        logger.debug('[DAEMON RUN] Failed to publish Codex model capabilities', error);
+      });
+    }
 
     // Every 60 seconds:
     // 1. Prune stale sessions

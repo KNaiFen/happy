@@ -124,6 +124,24 @@ export type Session = {
   agentStateVersion: number,
 }
 
+export const CodexModelCapabilitySchema = z.object({
+  code: z.string(),
+  value: z.string(),
+  description: z.string().nullish(),
+  thinkingLevels: z.array(z.string()),
+  defaultThinkingLevel: z.string(),
+})
+
+export type CodexModelCapability = z.infer<typeof CodexModelCapabilitySchema>
+
+export const CodexAgentCapabilitiesSchema = z.object({
+  codexCliVersion: z.string(),
+  detectedAt: z.number(),
+  models: z.array(CodexModelCapabilitySchema),
+})
+
+export type CodexAgentCapabilities = z.infer<typeof CodexAgentCapabilitiesSchema>
+
 /**
  * Machine metadata - static information (rarely changes)
  */
@@ -148,7 +166,10 @@ export const MachineMetadataSchema = z.object({
     happyAgentAuthenticated: z.boolean(),
     detectedAt: z.number(),
   }).optional(),
-})
+  agentCapabilities: z.object({
+    codex: CodexAgentCapabilitiesSchema.optional(),
+  }).optional(),
+}).passthrough()
 
 export type MachineMetadata = z.infer<typeof MachineMetadataSchema>
 
@@ -284,7 +305,13 @@ export type Metadata = {
    * ACP session config option value (normalized for UI metadata consumers).
    */
   // `code` = protocol value ID, `value` = human label
-  models?: Array<{ code: string; value: string; description?: string | null }>,
+  models?: Array<{
+    code: string;
+    value: string;
+    description?: string | null;
+    thinkingLevels?: string[];
+    defaultThinkingLevel?: string;
+  }>,
   currentModelCode?: string,
   operatingModes?: Array<{ code: string; value: string; description?: string | null }>,
   currentOperatingModeCode?: string,

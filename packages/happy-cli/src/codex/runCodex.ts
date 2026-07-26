@@ -54,6 +54,10 @@ import {
     parseCodexGoalCommand,
     type CodexGoalCommand,
 } from './codexGoalStatus';
+import {
+    loadCodexModelCapabilities,
+    mergeCodexSessionModels,
+} from './codexModelCapabilities';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -866,6 +870,13 @@ export async function runCodex(opts: {
         logger.debug('[codex]: client.connect begin');
         await client.connect();
         logger.debug('[codex]: client.connect done');
+
+        const discoveredModels = await loadCodexModelCapabilities(client);
+        if (discoveredModels) {
+            session.updateMetadata((currentMetadata) => (
+                mergeCodexSessionModels(currentMetadata, discoveredModels)
+            ));
+        }
 
         if (opts.resumeThreadId) {
             await resumeExistingThread({

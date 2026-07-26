@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Model } from './codexAppServerTypes';
-import { normalizeCodexModels } from './codexModelCapabilities';
+import {
+    loadCodexModelCapabilities,
+    mergeCodexAgentCapabilities,
+    mergeCodexSessionModels,
+    normalizeCodexModels,
+} from './codexModelCapabilities';
 
 function model(overrides: Partial<Model>): Model {
     return {
@@ -35,5 +40,50 @@ describe('normalizeCodexModels', () => {
             model({ id: 'hidden', hidden: true }),
             model({ id: 'invalid', defaultReasoningEffort: 'medium' }),
         ])).toEqual([]);
+    });
+
+    it('returns no catalog when app-server discovery fails', async () => {
+        const client = {
+            listModels: vi.fn().mockRejectedValue(new Error('unsupported')),
+        };
+
+        await expect(loadCodexModelCapabilities(client)).resolves.toBeNull();
+    });
+
+    it('merges machine and session catalogs without clearing existing metadata', () => {
+        const models = normalizeCodexModels([model({})]);
+        const capabilities = {
+            codexCliVersion: 'codex-cli 0.145.0',
+            detectedAt: 123,
+            models,
+        };
+        const machineMetadata = {
+            host: 'host',
+            platform: 'darwin',
+            happyCliVersion: '1.0.0',
+            homeDir: '/home',
+            happyHomeDir: '/home/.happy',
+            happyLibDir: '/happy',
+            displayName: 'Work Mac',
+        };
+        const sessionMetadata = {
+            path: '/repo',
+            host: 'host',
+            homeDir: '/home',
+            happyHomeDir: '/home/.happy',
+            happyLibDir: '/happy',
+            happyToolsDir: '/happy/tools',
+            summary: { text: 'keep me', updatedAt: 1 },
+        };
+
+        expect(mergeCodexAgentCapabilities(machineMetadata, capabilities)).toMatchObject({
+            displayName: 'Work Mac',
+            agentCapabilities: { codex: capabilities },
+        });
+        expect(mergeCodexSessionModels(sessionMetadata, models)).toMatchObject({
+            summary: sessionMetadata.summary,
+            models,
+        });
+        expect(mergeCodexSessionModels(sessionMetadata, null)).toBe(sessionMetadata);
     });
 });
