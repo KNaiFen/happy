@@ -46,6 +46,9 @@ import type {
     InputItem,
     ReasoningEffort,
     McpServerElicitationRequestResponse,
+    Model,
+    ModelListParams,
+    ModelListResponse,
 } from './codexAppServerTypes';
 import type { SandboxConfig } from '@/persistence';
 import { initializeSandbox, wrapForMcpTransport } from '@/sandbox/manager';
@@ -782,6 +785,32 @@ export class CodexAppServerClient {
             sandbox: opts.sandbox,
             mcpServers: opts.mcpServers,
         };
+    }
+
+    async listModels(opts?: { timeoutMs?: number; pageSize?: number }): Promise<Model[]> {
+        const models: Model[] = [];
+        const seenCursors = new Set<string>();
+        let cursor: string | null = null;
+
+        do {
+            const params: ModelListParams = {
+                cursor,
+                limit: opts?.pageSize ?? 100,
+                includeHidden: false,
+            };
+            const result = await this.request('model/list', params, opts?.timeoutMs) as ModelListResponse;
+            models.push(...result.data);
+
+            cursor = result.nextCursor;
+            if (cursor && seenCursors.has(cursor)) {
+                throw new Error(`model/list returned a repeated cursor: ${cursor}`);
+            }
+            if (cursor) {
+                seenCursors.add(cursor);
+            }
+        } while (cursor);
+
+        return models;
     }
 
     // ─── Thread management ──────────────────────────────────────

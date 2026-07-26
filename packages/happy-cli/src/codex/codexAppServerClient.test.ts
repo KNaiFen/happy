@@ -138,6 +138,66 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(new CodexAppServerClient().supportsGoalActions()).toBe(false);
     });
 
+    it('lists every visible model page from app-server', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.method !== 'model/list' || msg.id == null) return;
+
+                const cursor = msg.params?.cursor ?? null;
+                setTimeout(() => {
+                    pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: cursor === null
+                            ? {
+                                data: [{
+                                    id: 'gpt-first',
+                                    model: 'gpt-first',
+                                    displayName: 'GPT First',
+                                    description: 'First model',
+                                    hidden: false,
+                                    supportedReasoningEfforts: [{ reasoningEffort: 'low', description: 'Low' }],
+                                    defaultReasoningEffort: 'low',
+                                    isDefault: true,
+                                }],
+                                nextCursor: 'page-2',
+                            }
+                            : {
+                                data: [{
+                                    id: 'gpt-second',
+                                    model: 'gpt-second',
+                                    displayName: 'GPT Second',
+                                    description: 'Second model',
+                                    hidden: false,
+                                    supportedReasoningEfforts: [{ reasoningEffort: 'ultra', description: 'Ultra' }],
+                                    defaultReasoningEffort: 'ultra',
+                                    isDefault: false,
+                                }],
+                                nextCursor: null,
+                            },
+                    });
+                }, 0);
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+
+        await expect(client.listModels({ pageSize: 1 })).resolves.toEqual([
+            expect.objectContaining({ id: 'gpt-first' }),
+            expect.objectContaining({ id: 'gpt-second' }),
+        ]);
+        expect(requests.filter((msg) => msg.method === 'model/list').map((msg) => msg.params)).toEqual([
+            { cursor: null, limit: 1, includeHidden: false },
+            { cursor: 'page-2', limit: 1, includeHidden: false },
+        ]);
+
+        await client.disconnect();
+    });
+
     it('wraps transport when sandbox is enabled', async () => {
         // Dynamic import to ensure mocks are applied
         const { CodexAppServerClient } = await import('./codexAppServerClient');

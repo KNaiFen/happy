@@ -1,5 +1,6 @@
 /**
- * Cherry-picked types from `codex app-server generate-ts` (Codex 0.107.0).
+ * Cherry-picked types from `codex app-server generate-ts --experimental`
+ * (Codex 0.145.0).
  * Only the essential types needed for our integration.
  */
 
@@ -223,6 +224,35 @@ export type InterruptConversationResponse = {
     abortReason: TurnAbortReason;
 };
 
+// --- Model catalog ---
+
+export type ReasoningEffortOption = {
+    reasoningEffort: ReasoningEffort;
+    description: string;
+};
+
+export type Model = {
+    id: string;
+    model: string;
+    displayName: string;
+    description: string;
+    hidden: boolean;
+    supportedReasoningEfforts: ReasoningEffortOption[];
+    defaultReasoningEffort: ReasoningEffort;
+    isDefault: boolean;
+};
+
+export type ModelListParams = {
+    cursor?: string | null;
+    limit?: number | null;
+    includeHidden?: boolean | null;
+};
+
+export type ModelListResponse = {
+    data: Model[];
+    nextCursor: string | null;
+};
+
 // --- Approvals (server → client requests) ---
 
 export type ExecCommandApprovalParams = {
@@ -266,7 +296,7 @@ export type ReviewDecision =
 
 export type ApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningEffort = string;
 export type ReasoningSummary = "auto" | "concise" | "detailed" | "none";
 export type TurnAbortReason = "interrupted" | "replaced" | "review_ended";
 
