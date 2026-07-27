@@ -1,0 +1,82 @@
+name: Build CLI package on version bump
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/happy-cli/package.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout version history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect CLI version bump
+        id: version
+        run: node scripts/ci/detect-package-version-change.cjs packages/happy-cli/package.json "${{ github.event.before }}"
+
+  build:
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and test CLI
+        run: pnpm --filter happy test
+
+      - name: Pack npm archive
+        run: |
+          mkdir -p artifacts
+          pnpm --filter happy pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+
+      - name: Verify npm archive
+        run: |
+          ARCHIVE="artifacts/happy-${VERSION}.tgz"
+          CONTENTS="$RUNNER_TEMP/happy-cli-archive.txt"
+          test -f "$ARCHIVE"
+          test "$(tar -xOf "$ARCHIVE" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")" = "$VERSION"
+          tar -tzf "$ARCHIVE" > "$CONTENTS"
+          grep -Fxq package/tools/archives/difftastic-arm64-darwin.tar.gz "$CONTENTS"
+          grep -Fxq package/tools/archives/ripgrep-arm64-darwin.tar.gz "$CONTENTS"
+          sha256sum "$ARCHIVE"
+
+      - name: Upload CLI package
+        uses: actions/upload-artifact@v4
+        with:
+          name: happy-cli-${{ env.VERSION }}
+          path: artifacts/happy-${{ env.VERSION }}.tgz
+          if-no-files-found: error
+          retention-days: 30

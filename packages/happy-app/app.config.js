@@ -3,7 +3,23 @@ const { execFileSync } = require('node:child_process');
 const variant = process.env.APP_ENV || 'development';
 const disableOtaUpdates = process.env.HAPPY_DISABLE_OTA === '1';
 const isLocalRelease = process.env.HAPPY_LOCAL_RELEASE === '1';
-const appVersion = "1.9.0";
+const { version: appVersion } = require('./package.json');
+
+function toAndroidVersionCode(version) {
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    if (!match) {
+        throw new Error(`Android builds require a stable X.Y.Z version, received: ${version}`);
+    }
+
+    const [, major, minor, patch] = match.map(Number);
+    if (minor > 99 || patch > 99) {
+        throw new Error(`Android version components must be below 100, received: ${version}`);
+    }
+
+    return major * 10000 + minor * 100 + patch;
+}
+
+const androidVersionCode = toAndroidVersionCode(appVersion);
 const name = {
     development: "Happy (dev)",
     preview: "Happy (preview)",
@@ -95,7 +111,7 @@ export default {
                 : {})
         },
         android: {
-            ...(isLocalRelease ? { versionCode: 10900 } : {}),
+            ...(isLocalRelease ? { versionCode: androidVersionCode } : {}),
             adaptiveIcon: {
                 foregroundImage: "./sources/assets/images/icon-adaptive.png",
                 monochromeImage: "./sources/assets/images/icon-monochrome.png",
