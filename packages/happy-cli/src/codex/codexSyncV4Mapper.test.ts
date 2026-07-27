@@ -373,4 +373,105 @@ describe('CodexSyncV4Mapper', () => {
         expect(publisher.latest('codex.runtime')[0].activeSubagentCount).toBe(0);
         await mapper.close();
     });
+
+    it('does not reopen completed turns or items when started notifications arrive late', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        const completedItem = {
+            type: 'agentMessage' as const,
+            id: 'item-late',
+            text: 'done',
+            phase: null,
+            memoryCitation: null,
+        };
+        mapper.handleNotification(notification({
+            method: 'turn/completed',
+            params: { threadId: 'thread-late', turn: turn('turn-late', 'completed', [completedItem]) },
+        }));
+        mapper.handleNotification(notification({
+            method: 'item/started',
+            params: {
+                threadId: 'thread-late',
+                turnId: 'turn-late',
+                item: { ...completedItem, text: '' },
+                startedAtMs: 1_700_000_001_000,
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'turn/started',
+            params: { threadId: 'thread-late', turn: turn('turn-late', 'inProgress') },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.turn')[0].status).toBe('completed');
+        expect(publisher.latest('codex.item')[0]).toMatchObject({
+            status: 'completed',
+            completedAt: expect.any(Number),
+        });
+        await mapper.close();
+    });
+
+    it('projects thread metadata and MCP startup lifecycle without unknown-method noise', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        mapper.importThread(thread('thread-meta'));
+        mapper.handleNotification(notification({
+            method: 'thread/name/updated',
+            params: { threadId: 'thread-meta', threadName: 'Stable name' },
+        }));
+        mapper.handleNotification(notification({
+            method: 'model/rerouted',
+            params: {
+                threadId: 'thread-meta',
+                turnId: 'turn-meta',
+                fromModel: 'gpt-old',
+                toModel: 'gpt-new',
+                reason: 'highRiskCyberActivity' as never,
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'mcpServer/startupStatus/updated',
+            params: {
+                threadId: 'thread-meta',
+                name: 'happy',
+                status: 'starting',
+                error: null,
+                failureReason: null,
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'mcpServer/startupStatus/updated',
+            params: {
+                threadId: 'thread-meta',
+                name: 'happy',
+                status: 'ready',
+                error: null,
+                failureReason: null,
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'process/exited',
+            params: {
+                processHandle: 'excluded',
+                exitCode: 0,
+                stdout: '',
+                stdoutCapReached: false,
+                stderr: '',
+                stderrCapReached: false,
+            },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.thread')[0]).toMatchObject({ name: 'Stable name', model: 'gpt-new' });
+        expect(publisher.latest('codex.item').find((item) => item.itemType === 'mcpStartup')).toMatchObject({
+            status: 'completed',
+            server: 'happy',
+        });
+        expect(publisher.latest('codex.part').find((part) => part.kind === 'mcpProgress')).toMatchObject({
+            final: true,
+            content: expect.stringContaining('"status":"ready"'),
+        });
+        expect(mapper.diagnostics().unknownNotificationMethods).toEqual({});
+        await mapper.close();
+    });
 });

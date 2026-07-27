@@ -228,6 +228,9 @@ export class CodexSyncV4Mapper {
             case 'thread/status/changed':
                 await this.applyThreadStatus(notification.params.threadId, notification.params.status);
                 return;
+            case 'thread/name/updated':
+                await this.applyThreadName(notification.params.threadId, notification.params.threadName ?? null);
+                return;
             case 'thread/settings/updated':
                 await this.applyThreadSettings(notification.params.threadId, notification.params.threadSettings);
                 return;
@@ -330,6 +333,9 @@ export class CodexSyncV4Mapper {
                     await this.applyDiagnostic(notification.params.threadId, null, 'warning', notification.params.message);
                 }
                 return;
+            case 'guardianWarning':
+                await this.applyDiagnostic(notification.params.threadId, null, 'warning', notification.params.message);
+                return;
             case 'error':
                 await this.applyDiagnostic(
                     notification.params.threadId,
@@ -342,12 +348,65 @@ export class CodexSyncV4Mapper {
                 // Deprecated coverage signal. The contextCompaction item is canonical.
                 return;
             case 'serverRequest/resolved':
+                // The request broker owns the canonical request lifecycle.
+                return;
+            case 'model/rerouted':
+                await this.applyModelReroute(notification.params.threadId, notification.params.toModel);
+                return;
             case 'mcpServer/startupStatus/updated':
+                if (notification.params.threadId) await this.applyMcpStartup(notification.params);
+                return;
+            case 'thread/archived':
+            case 'thread/closed':
+            case 'thread/deleted':
+                await this.applyThreadStatus(notification.params.threadId, { type: 'notLoaded' });
+                return;
+            case 'thread/unarchived':
+            case 'thread/environment/connected':
+            case 'thread/environment/disconnected':
+            case 'skills/changed':
+            case 'hook/started':
+            case 'hook/completed':
+            case 'item/autoApprovalReview/started':
+            case 'item/autoApprovalReview/completed':
+            case 'item/commandExecution/terminalInteraction':
+            case 'rawResponseItem/completed':
+            case 'rawResponse/completed':
+            case 'mcpServer/oauthLogin/completed':
+            case 'model/verification':
+            case 'turn/moderationMetadata':
+            case 'model/safetyBuffering/updated':
+            case 'thread/realtime/started':
+            case 'thread/realtime/itemAdded':
+            case 'thread/realtime/transcript/delta':
+            case 'thread/realtime/transcript/done':
+            case 'thread/realtime/outputAudio/delta':
+            case 'thread/realtime/sdp':
+            case 'thread/realtime/error':
+            case 'thread/realtime/closed':
+            case 'account/updated':
+            case 'account/rateLimits/updated':
+            case 'account/login/completed':
+            case 'app/list/updated':
+            case 'command/exec/outputDelta':
+            case 'process/outputDelta':
+            case 'process/exited':
+            case 'externalAgentConfig/import/progress':
+            case 'externalAgentConfig/import/completed':
+            case 'fs/changed':
+            case 'fuzzyFileSearch/sessionUpdated':
+            case 'fuzzyFileSearch/sessionCompleted':
+            case 'remoteControl/status/changed':
+            case 'windows/worldWritableWarning':
+            case 'windowsSandbox/setupCompleted':
+            case 'deprecationNotice':
+            case 'configWarning':
                 return;
             default:
+                const method = (notification as { method: string }).method;
                 this.unknownNotificationMethods.set(
-                    notification.method,
-                    (this.unknownNotificationMethods.get(notification.method) ?? 0) + 1,
+                    method,
+                    (this.unknownNotificationMethods.get(method) ?? 0) + 1,
                 );
         }
     }
@@ -356,7 +415,11 @@ export class CodexSyncV4Mapper {
         const now = this.now();
         const previous = this.threads.get(thread.id);
         const raw = thread as unknown as Record<string, unknown>;
-        const status = normalizeThreadStatus(thread.status);
+        const reportedStatus = normalizeThreadStatus(thread.status);
+        const status: CodexThreadStatusV4 = thread.turns.some((turn) => turn.status === 'inProgress')
+            && (reportedStatus.type === 'idle' || reportedStatus.type === 'active')
+            ? reportedStatus.type === 'active' ? reportedStatus : { type: 'active', activeFlags: [] }
+            : reportedStatus;
         const createdAt = toEpochMs(thread.createdAt, previous?.createdAt ?? now);
         const updatedAt = toEpochMs(thread.updatedAt, now);
         const entity: CodexThreadEntityV4 = {
@@ -390,6 +453,18 @@ export class CodexSyncV4Mapper {
         for (const turn of thread.turns) {
             await this.applyTurn(thread.id, turn, turn.status === 'inProgress' ? 'started' : 'snapshot');
         }
+
+        const projectedThread = this.threads.get(thread.id);
+        if (projectedThread && !sameThreadStatus(projectedThread.status, status)) {
+            const authoritative = { ...projectedThread, status, updatedAt };
+            const authoritativeRuntime = this.runtimeFor(thread.id, status, now);
+            this.threads.set(thread.id, authoritative);
+            this.runtimes.set(thread.id, authoritativeRuntime);
+            await this.publisher.publishEntities([
+                { entity: authoritative },
+                { entity: authoritativeRuntime },
+            ]);
+        }
     }
 
     private async applyThreadStatus(threadId: string, status: CodexThreadStatusV4): Promise<void> {
@@ -401,6 +476,71 @@ export class CodexSyncV4Mapper {
         this.runtimes.set(threadId, runtime);
         if (nextThread.status.type !== 'active') this.activeTurnByThread.delete(threadId);
         await this.publisher.publishEntities([{ entity: nextThread }, { entity: runtime }]);
+    }
+
+    private async applyThreadName(threadId: string, name: string | null): Promise<void> {
+        const now = this.now();
+        const thread = await this.ensureThread(threadId, now);
+        const next = { ...thread, name, updatedAt: now };
+        this.threads.set(threadId, next);
+        await this.publisher.publishEntity(next);
+    }
+
+    private async applyModelReroute(threadId: string, model: string): Promise<void> {
+        const now = this.now();
+        const thread = await this.ensureThread(threadId, now);
+        const next = { ...thread, model, updatedAt: now };
+        this.threads.set(threadId, next);
+        await this.publisher.publishEntity(next);
+    }
+
+    private async applyMcpStartup(
+        params: Extract<ServerNotification, { method: 'mcpServer/startupStatus/updated' }>['params'],
+    ): Promise<void> {
+        if (!params.threadId) return;
+        const now = this.now();
+        const turnId = this.activeTurnByThread.get(params.threadId) ?? '__runtime_events__';
+        await this.ensureTurn(
+            params.threadId,
+            turnId,
+            now,
+            turnId === '__runtime_events__' ? 'completed' : 'inProgress',
+        );
+        const itemId = `__mcp_startup__${params.name}`;
+        const current = await this.ensureItem(params.threadId, turnId, itemId, 'mcpStartup', now);
+        const terminal = params.status !== 'starting';
+        const item: CodexItemEntityV4 = {
+            ...current,
+            status: params.status === 'ready' ? 'completed' : params.status,
+            completedAt: terminal ? now : null,
+            server: params.name,
+            tool: 'startup',
+            arguments: asJsonValue({ failureReason: params.failureReason }),
+            updatedAt: now,
+        };
+        this.items.set(item.providerId, item);
+        await this.publisher.publishEntity(item);
+        const stream = this.ensureStream({
+            threadId: params.threadId,
+            turnId,
+            itemId,
+            kind: 'mcpProgress',
+            index: 0,
+            contentType: 'json',
+        });
+        const content = stringifyJson({
+            name: params.name,
+            status: params.status,
+            error: params.error,
+            failureReason: params.failureReason,
+        });
+        if (terminal) {
+            await this.setStreamContent(stream, content, false);
+            stream.finalized = true;
+            await this.flushStream(stream);
+        } else {
+            await this.setStreamContent(stream, content, true);
+        }
     }
 
     private async applyThreadSettings(threadId: string, settings: Record<string, unknown>): Promise<void> {
@@ -472,9 +612,14 @@ export class CodexSyncV4Mapper {
         await this.ensureThread(threadId, now);
         const key = turnKey(threadId, turn.id);
         const previous = this.turns.get(key);
-        const status = normalizeTurnStatus(turn.status);
+        const incomingStatus = normalizeTurnStatus(turn.status);
+        const status = previous && previous.status !== 'inProgress' && incomingStatus === 'inProgress'
+            ? previous.status
+            : incomingStatus;
         const startedAt = toNullableEpochMs(turn.startedAt) ?? previous?.startedAt ?? (phase === 'started' ? now : null);
-        const completedAt = toNullableEpochMs(turn.completedAt) ?? (status !== 'inProgress' ? now : null);
+        const completedAt = previous?.completedAt
+            ?? toNullableEpochMs(turn.completedAt)
+            ?? (status !== 'inProgress' ? now : null);
         const entity: CodexTurnEntityV4 = {
             schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
             entityType: 'codex.turn',
@@ -574,6 +719,9 @@ export class CodexSyncV4Mapper {
         const previous = this.items.get(key);
         const at = toEpochMs(eventAt, now);
         const raw = item as unknown as Record<string, unknown>;
+        const incomingStatus = stringOrNull(raw.status) ?? (phase === 'completed' ? 'completed' : 'inProgress');
+        const wasCompleted = previous?.completedAt !== null && previous?.completedAt !== undefined;
+        const completed = phase === 'completed' || wasCompleted;
         const entity: CodexItemEntityV4 = {
             schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
             entityType: 'codex.item',
@@ -584,12 +732,12 @@ export class CodexSyncV4Mapper {
             turnId,
             itemId: item.id,
             itemType: item.type,
-            status: stringOrNull(raw.status) ?? (phase === 'completed' ? 'completed' : 'inProgress'),
+            status: wasCompleted && phase === 'started' ? previous.status : incomingStatus,
             parentItemId: stringOrNull(raw.parentItemId),
             clientId: stringOrNull(raw.clientId),
             phase: stringOrNull(raw.phase),
             startedAt: previous?.startedAt ?? (phase === 'started' ? at : null),
-            completedAt: phase === 'completed' ? at : null,
+            completedAt: phase === 'completed' ? at : previous?.completedAt ?? null,
             command: stringOrNull(raw.command),
             cwd: stringOrNull(raw.cwd),
             processId: stringOrNull(raw.processId),
@@ -601,8 +749,8 @@ export class CodexSyncV4Mapper {
         };
         this.items.set(key, entity);
         await this.publisher.publishEntity(entity);
-        await this.captureItemContent(threadId, turnId, item, phase === 'completed');
-        if (phase === 'completed') await this.finalizeItemStreams(threadId, turnId, item.id);
+        await this.captureItemContent(threadId, turnId, item, completed);
+        if (completed) await this.finalizeItemStreams(threadId, turnId, item.id);
     }
 
     private async captureItemContent(
@@ -1012,6 +1160,13 @@ function normalizeThreadStatus(status: CodexThreadStatusV4): CodexThreadStatusV4
             flag === 'waitingOnApproval' || flag === 'waitingOnUserInput'
         )),
     };
+}
+
+function sameThreadStatus(left: CodexThreadStatusV4, right: CodexThreadStatusV4): boolean {
+    if (left.type !== right.type) return false;
+    if (left.type !== 'active' || right.type !== 'active') return true;
+    return left.activeFlags.length === right.activeFlags.length
+        && left.activeFlags.every((flag, index) => flag === right.activeFlags[index]);
 }
 
 function normalizeTurnStatus(status: Turn['status']): CodexTurnEntityV4['status'] {

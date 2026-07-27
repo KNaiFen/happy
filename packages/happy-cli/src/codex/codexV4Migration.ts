@@ -90,7 +90,11 @@ export class CodexV4Migrator {
                 await sink.flush();
                 await sink.flushOutboundOnce();
             }
-            for (const sink of this.sinks) {
+            const activationOrder = [
+                ...[...this.sinks].filter((sink) => sink !== this.options.rootSink),
+                this.options.rootSink,
+            ];
+            for (const sink of activationOrder) {
                 await sink.setSyncState('ready');
                 await sink.flush();
                 await sink.flushOutboundOnce();

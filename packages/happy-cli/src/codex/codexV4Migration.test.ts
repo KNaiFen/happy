@@ -151,6 +151,8 @@ describe('CodexV4Migrator', () => {
         const firstReady = events.findIndex((event) => event.endsWith(':state:ready'));
         const lastImport = Math.max(...events.map((event, index) => event.includes(':import:') ? index : -1));
         expect(firstReady).toBeGreaterThan(lastImport);
+        expect(events.indexOf('root:state:ready')).toBeGreaterThan(events.indexOf('nested:state:ready'));
+        expect(events.indexOf('root:state:ready')).toBeGreaterThan(events.indexOf('child:state:ready'));
         for (const name of ['root', 'child', 'nested']) {
             expect(events).toContain(`${name}:state:importing`);
             const readyIndex = events.indexOf(`${name}:state:ready`);
