@@ -110,6 +110,14 @@ type PendingRequest = {
     epoch: number;
 };
 
+type PendingCompaction = {
+    epoch: number;
+    itemId: string | null;
+    completion: Promise<void>;
+    resolve: () => void;
+    reject: (error: Error) => void;
+};
+
 type LegacyPatchChanges = Record<string, Record<string, unknown>>;
 
 type ThreadDefaults = {
@@ -349,6 +357,7 @@ export class CodexAppServerClient {
     private readonly threadDefaults = new Map<string, ThreadDefaults>();
 
     private readonly pendingInterrupts = new Map<string, Promise<void>>();
+    private readonly pendingCompactions = new Map<string, PendingCompaction>();
     private readonly unknownTurnReconciliations = new Map<string, Promise<void>>();
     private recoveryPromise: Promise<boolean> | null = null;
     private notificationProtocol: 'unknown' | 'legacy' | 'raw' = 'unknown';
@@ -428,6 +437,40 @@ export class CodexAppServerClient {
 
     private emitStableNotification(method: string, params: unknown): void {
         this.stableNotificationHandler?.({ method, params } as ServerNotification);
+    }
+
+    private trackPendingCompaction(method: string, params: any, sourceEpoch: number): void {
+        if (method !== 'item/started' && method !== 'item/completed') return;
+
+        const threadId = stringOrNull(params?.threadId);
+        const itemId = stringOrNull(params?.item?.id);
+        if (!threadId || !itemId || params?.item?.type !== 'contextCompaction') return;
+
+        const pending = this.pendingCompactions.get(threadId);
+        if (!pending || pending.epoch !== sourceEpoch) return;
+
+        if (method === 'item/started') {
+            if (pending.itemId === null) pending.itemId = itemId;
+            return;
+        }
+
+        if (pending.itemId !== itemId) return;
+        this.pendingCompactions.delete(threadId);
+        pending.resolve();
+    }
+
+    private rejectPendingCompactions(
+        epoch: number,
+        reason: string,
+    ): void {
+        for (const [threadId, pending] of this.pendingCompactions) {
+            if (pending.epoch !== epoch) continue;
+            this.pendingCompactions.delete(threadId);
+            pending.reject(new CodexRpcOutcomeUnknownError(
+                'thread/compact/start',
+                `${reason} while waiting for contextCompaction item completion; outcome is unknown`,
+            ));
+        }
     }
 
     private normalizeProtocolTurn(value: unknown): ProtocolTurn | null {
@@ -949,6 +992,7 @@ export class CodexAppServerClient {
                 ));
                 this.pending.delete(id);
             }
+            this.rejectPendingCompactions(epoch, `Codex process exited (code=${code})`);
             const threadId = this.threadId;
             if (threadId && this.threads.hasPendingTurn(threadId)) {
                 void this.recoverThreadAfterUnexpectedExit(threadId);
@@ -1054,6 +1098,7 @@ export class CodexAppServerClient {
             ));
             this.pending.delete(id);
         }
+        this.rejectPendingCompactions(epoch, 'Codex process disconnected');
 
         if (this.sandboxCleanup) {
             try { await this.sandboxCleanup(); } catch { /* ignore */ }
@@ -1386,7 +1431,34 @@ export class CodexAppServerClient {
     }
 
     async compactThread(threadId: string): Promise<ThreadCompactStartResponse> {
-        return await this.request('thread/compact/start', { threadId }) as ThreadCompactStartResponse;
+        if (this.pendingCompactions.has(threadId)) {
+            throw new Error(`A Codex compaction is already pending for thread ${threadId}`);
+        }
+
+        let resolveCompletion!: () => void;
+        let rejectCompletion!: (error: Error) => void;
+        const completion = new Promise<void>((resolve, reject) => {
+            resolveCompletion = resolve;
+            rejectCompletion = reject;
+        });
+        const pending: PendingCompaction = {
+            epoch: this.processEpoch,
+            itemId: null,
+            completion,
+            resolve: resolveCompletion,
+            reject: rejectCompletion,
+        };
+        this.pendingCompactions.set(threadId, pending);
+
+        try {
+            const request = this.request('thread/compact/start', { threadId }) as Promise<ThreadCompactStartResponse>;
+            const [response] = await Promise.all([request, pending.completion]);
+            return response;
+        } finally {
+            if (this.pendingCompactions.get(threadId) === pending) {
+                this.pendingCompactions.delete(threadId);
+            }
+        }
     }
 
     async startReview(params: ReviewStartParams): Promise<ReviewStartResponse> {
@@ -1890,7 +1962,7 @@ export class CodexAppServerClient {
 
         // Notification (no id)
         if (msg.method) {
-            this.handleNotification(msg.method, msg.params);
+            this.handleNotification(msg.method, msg.params, sourceEpoch);
             return;
         }
 
@@ -1922,6 +1994,7 @@ export class CodexAppServerClient {
             ));
             this.pending.delete(id);
         }
+        this.rejectPendingCompactions(epoch, 'Codex transport closed');
         try {
             proc.kill('SIGTERM');
         } catch { /* process already unavailable */ }
@@ -2137,7 +2210,11 @@ export class CodexAppServerClient {
         return 'denied'; // default: deny if no handler
     }
 
-    private handleNotification(method: string, params: any): void {
+    private handleNotification(
+        method: string,
+        params: any,
+        sourceEpoch: number = this.processEpoch,
+    ): void {
         // codex/event notifications: either `codex/event` or `codex/event/<type>`
         if (method === 'codex/event' || method.startsWith('codex/event/')) {
             this.notificationProtocol = 'legacy';
@@ -2162,6 +2239,10 @@ export class CodexAppServerClient {
         if (method !== 'thread/started') {
             this.emitStableNotification(method, params);
         }
+        // Hand canonical item state to the mapper before allowing the remote
+        // command result to complete, so consumers never observe success ahead
+        // of the contextCompaction item that proves it.
+        this.trackPendingCompaction(method, params, sourceEpoch);
 
         if (this.handleRawNotification(method, params, statusCompletionTurnId)) {
             logger.debug(`[CodexAppServer] Raw notification: ${method}`);

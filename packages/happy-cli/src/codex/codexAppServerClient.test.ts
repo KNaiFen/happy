@@ -2641,7 +2641,27 @@ describe('CodexAppServerClient sandbox integration', () => {
                 requests.push(msg);
                 if (msg.id == null) return;
                 if (msg.method === 'thread/compact/start') {
-                    setTimeout(() => pushJsonLine(stdout, { id: msg.id, result: {} }), 0);
+                    setTimeout(() => {
+                        pushJsonLine(stdout, { id: msg.id, result: {} });
+                        pushJsonLine(stdout, {
+                            method: 'item/started',
+                            params: {
+                                threadId: 'thread-1',
+                                turnId: 'compact-turn-1',
+                                item: { type: 'contextCompaction', id: 'compact-item-1' },
+                                startedAtMs: 100,
+                            },
+                        });
+                        pushJsonLine(stdout, {
+                            method: 'item/completed',
+                            params: {
+                                threadId: 'thread-1',
+                                turnId: 'compact-turn-1',
+                                item: { type: 'contextCompaction', id: 'compact-item-1' },
+                                completedAtMs: 200,
+                            },
+                        });
+                    }, 0);
                 } else if (msg.method === 'review/start') {
                     setTimeout(() => pushJsonLine(stdout, {
                         id: msg.id,
@@ -2696,5 +2716,89 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(requests.filter((message) => message.method === 'mcpServerStatus/list').map((message) => message.params.cursor))
             .toEqual([null, 'page-2']);
         await client.disconnect();
+    });
+
+    it('waits for the matching contextCompaction item after compact RPC acknowledgement', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.method === 'thread/compact/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, { id: msg.id, result: {} }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const stableNotifications: string[] = [];
+        client.setStableNotificationHandler((notification) => {
+            stableNotifications.push(`${notification.method}:${(notification.params as any)?.item?.id ?? ''}`);
+        });
+        await client.connect();
+
+        let settled = false;
+        const compact = client.compactThread('thread-compact').then((result) => {
+            settled = true;
+            return result;
+        });
+        await waitFor(() => requests.some((message) => message.method === 'thread/compact/start'));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+
+        pushJsonLine(proc.stdout, {
+            method: 'item/started',
+            params: {
+                threadId: 'thread-compact',
+                turnId: 'compact-turn',
+                item: { type: 'contextCompaction', id: 'compact-item' },
+                startedAtMs: 100,
+            },
+        });
+        pushJsonLine(proc.stdout, {
+            method: 'item/completed',
+            params: {
+                threadId: 'thread-compact',
+                turnId: 'compact-turn',
+                item: { type: 'contextCompaction', id: 'other-item' },
+                completedAtMs: 150,
+            },
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+
+        pushJsonLine(proc.stdout, {
+            method: 'item/completed',
+            params: {
+                threadId: 'thread-compact',
+                turnId: 'compact-turn',
+                item: { type: 'contextCompaction', id: 'compact-item' },
+                completedAtMs: 200,
+            },
+        });
+
+        await expect(compact).resolves.toEqual({});
+        expect(stableNotifications.at(-1)).toBe('item/completed:compact-item');
+        await client.disconnect();
+    });
+
+    it('marks an acknowledged compact result unknown when transport closes before item completion', async () => {
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                if (msg.method === 'thread/compact/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, { id: msg.id, result: {} }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient, CodexRpcOutcomeUnknownError } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+
+        const compact = client.compactThread('thread-compact');
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        proc.stdout.push(null);
+
+        await expect(compact).rejects.toBeInstanceOf(CodexRpcOutcomeUnknownError);
     });
 });
