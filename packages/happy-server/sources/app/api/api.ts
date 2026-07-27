@@ -22,6 +22,7 @@ import { userRoutes } from "./routes/userRoutes";
 import { feedRoutes } from "./routes/feedRoutes";
 import { kvRoutes } from "./routes/kvRoutes";
 import { v3SessionRoutes } from "./routes/v3SessionRoutes";
+import { v4SessionRoutes } from "./routes/v4SessionRoutes";
 import { attachmentRoutes } from "./routes/attachmentRoutes";
 import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
 import * as path from "path";
@@ -111,6 +112,7 @@ export async function startApi(opts: StartApiOptions = {}) {
     feedRoutes(typed);
     kvRoutes(typed);
     v3SessionRoutes(typed);
+    v4SessionRoutes(typed);
     attachmentRoutes(typed);
 
     // Static webapp (self-host mode)
@@ -158,7 +160,7 @@ export async function startApi(opts: StartApiOptions = {}) {
             const url = request.raw.url || '';
             // Don't fall through for API/socket/files paths
             if (request.method !== 'GET') return reply.code(404).send({ error: 'Not found' });
-            if (url.startsWith('/v1') || url.startsWith('/v3') || url.startsWith('/socket') ||
+            if (url.startsWith('/v1') || url.startsWith('/v3') || url.startsWith('/v4') || url.startsWith('/socket') ||
                 url.startsWith('/files/') || url.startsWith('/metrics') || url.startsWith('/health')) {
                 return reply.code(404).send({ error: 'Not found' });
             }

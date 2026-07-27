@@ -193,6 +193,10 @@ export type EphemeralEvent = {
     title: string;
     body: string;
     timestamp: number;
+} | {
+    type: 'sync-v4-invalidate';
+    sessionId: string;
+    highWatermark: number;
 };
 
 // === EVENT PAYLOAD TYPES ===

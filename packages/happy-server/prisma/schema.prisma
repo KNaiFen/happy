@@ -102,16 +102,58 @@ model Session {
     agentStateVersion Int              @default(0)
     dataEncryptionKey Bytes?
     seq               Int              @default(0)
+    syncV4Seq         Int              @default(0)
     active            Boolean          @default(true)
     lastActiveAt      DateTime         @default(now())
     createdAt         DateTime         @default(now())
     updatedAt         DateTime         @updatedAt
     messages          SessionMessage[]
+    syncV4Entities    SessionEntityV4[]
+    syncV4Mutations   SessionMutationV4[]
     usageReports      UsageReport[]
     accessKeys        AccessKey[]
 
     @@unique([accountId, tag])
     @@index([accountId, updatedAt(sort: Desc)])
+}
+
+model SessionEntityV4 {
+    id          String   @id @default(cuid())
+    sessionId   String
+    session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    producerId  String
+    entityId    String
+    entityType  String
+    revision    Int
+    op          String
+    ciphertext  String
+    updatedSeq  Int
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    @@unique([sessionId, entityId])
+    @@index([sessionId, entityId])
+    @@index([sessionId, updatedSeq])
+}
+
+model SessionMutationV4 {
+    id          String   @id @default(cuid())
+    sessionId   String
+    session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    mutationId  String
+    producerId  String
+    entityId    String
+    entityType  String
+    revision    Int
+    op          String
+    ciphertext  String
+    status      String
+    seq         Int
+    createdAt   DateTime @default(now())
+
+    @@unique([sessionId, mutationId])
+    @@unique([sessionId, seq])
+    @@index([sessionId, createdAt])
 }
 
 model SessionMessage {
