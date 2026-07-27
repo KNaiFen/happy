@@ -18,6 +18,7 @@ import { AskUserQuestionView } from './AskUserQuestionView';
 import { GeminiEditView } from './GeminiEditView';
 import { GeminiExecuteView } from './GeminiExecuteView';
 import { FileView } from './FileView';
+import { CodexReasoningSummaryView } from './CodexReasoningSummaryView';
 
 export type ToolViewProps = {
     tool: ToolCall;
@@ -37,6 +38,7 @@ export const toolViewRegistry: Record<string, ToolViewComponent> = {
     CodexBash: CodexBashView,
     CodexPatch: CodexPatchView,
     CodexDiff: CodexDiffView,
+    CodexReasoningSummary: CodexReasoningSummaryView,
     Write: WriteView,
     TodoWrite: TodoView,
     ExitPlanMode: ExitPlanToolView,
@@ -55,6 +57,7 @@ export const toolViewRegistry: Record<string, ToolViewComponent> = {
 export const toolFullViewRegistry: Record<string, ToolViewComponent> = {
     Bash: BashViewFull,
     CodexBash: CodexBashView,
+    CodexReasoningSummary: CodexReasoningSummaryView,
     Edit: EditViewFull,
     MultiEdit: MultiEditViewFull,
     Task: TaskView,
@@ -77,6 +80,7 @@ export { BashView } from './BashView';
 export { CodexBashView } from './CodexBashView';
 export { CodexPatchView } from './CodexPatchView';
 export { CodexDiffView } from './CodexDiffView';
+export { CodexReasoningSummaryView } from './CodexReasoningSummaryView';
 export { BashViewFull } from './BashViewFull';
 export { EditViewFull } from './EditViewFull';
 export { MultiEditViewFull } from './MultiEditViewFull';

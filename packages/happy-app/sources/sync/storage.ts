@@ -9,7 +9,7 @@ function useDeepEqual<T>(selector: (state: StorageState) => T): (state: StorageS
         return equal(prev.current, next) ? prev.current! : (prev.current = next);
     };
 }
-import { Session, Machine, GitStatus, SessionAgentModesPatch } from "./storageTypes";
+import { Session, Machine, GitStatus, SessionAgentModesPatch, type CodexSessionStateV4 } from "./storageTypes";
 import type { GitStatusFiles } from "./gitStatusFiles";
 import type { ProjectFilesList } from "./projectFiles";
 import { createReducer, reducer, ReducerState } from "./reducer/reducer";
@@ -35,6 +35,12 @@ import { DecryptedArtifact } from "./artifactTypes";
 import { FeedItem } from "./feedTypes";
 import { getRigActivityIndicators, getRigIdentity } from './rig';
 import { indexSessionsById } from './sessionIdentity';
+import {
+    applyCodexV4ProjectionUpdate,
+    createCodexV4Projection,
+    type CodexV4Projection,
+    type CodexV4ProjectionUpdate,
+} from './codexV4Projection';
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -107,15 +113,18 @@ export interface SessionRowData {
 
 function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): SessionRowData {
     const isOnline = session.presence === "online";
-    const hasPermissions = !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
+    const hasPermissions = session.codexState
+        ? session.codexState.pendingApprovalCount > 0 || session.codexState.pendingUserInputCount > 0
+        : !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
+    const codexExecuting = session.codexState?.execution.type === 'active';
 
     let state: SessionState;
-    if (!isOnline) {
-        state = 'disconnected';
-    } else if (hasPermissions) {
+    if (hasPermissions) {
         state = 'permission_required';
-    } else if (session.thinking) {
+    } else if (codexExecuting || session.thinking) {
         state = 'thinking';
+    } else if (!isOnline || (session.codexState && session.codexState.connection !== 'connected')) {
+        state = 'disconnected';
     } else {
         state = 'waiting';
     }
@@ -169,6 +178,7 @@ interface StorageState {
     sessionsData: SessionListItem[] | null;  // Legacy - to be removed
     sessionListViewData: SessionListViewItem[] | null;
     sessionMessages: Record<string, SessionMessages>;
+    codexV4Sessions: Record<string, CodexV4Projection>;
     pathGitStatus: Record<string, GitStatus | null>;        // keyed by "machineId:path"
     pathGitStatusFiles: Record<string, GitStatusFiles | null>; // keyed by "machineId:path"
     pathProjectFiles: Record<string, ProjectFilesList | null>;  // keyed by "machineId:path"
@@ -197,6 +207,7 @@ interface StorageState {
     applyLoaded: () => void;
     applyReady: () => void;
     applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[], hasReadyEvent: boolean, enteredPlanMode: boolean };
+    applyCodexV4Entity: (sessionId: string, update: CodexV4ProjectionUpdate) => void;
     applyMessagesLoaded: (sessionId: string) => void;
     applyOlderMessagesPagination: (sessionId: string, info: { hasMore: boolean }) => void;
     applyOlderMessagesLoading: (sessionId: string, isLoading: boolean) => void;
@@ -390,6 +401,7 @@ export const storage = create<StorageState>()((set, get) => {
         sessionsData: null,  // Legacy - to be removed
         sessionListViewData: null,
         sessionMessages: {},
+        codexV4Sessions: {},
         pathGitStatus: {},
         pathGitStatusFiles: {},
         pathProjectFiles: {},
@@ -463,9 +475,18 @@ export const storage = create<StorageState>()((set, get) => {
 
                 // Local activity timestamp — preserve in-memory value, else restore from MMKV.
                 const resolvedLastMessageSentAt = state.sessions[session.id]?.lastMessageSentAt ?? savedLastMessageSentAt[session.id];
+                const codexProjection = state.codexV4Sessions[session.id];
+                const codexState = codexProjection?.runtime
+                    ? toCodexSessionState(codexProjection.runtime)
+                    : state.sessions[session.id]?.codexState;
+                const codexThinking = codexProjection?.activated
+                    ? codexProjection.runtime?.execution.type === 'active'
+                    : session.thinking;
 
                 mergedSessions[session.id] = {
                     ...session,
+                    thinking: codexThinking,
+                    ...(codexState ? { codexState } : {}),
                     presence,
                     draft: existingDraft || savedDraft || session.draft || null,
                     permissionMode: resolvedPermissionMode,
@@ -652,6 +673,10 @@ export const storage = create<StorageState>()((set, get) => {
             let changed = new Set<string>();
             let hasReadyEvent = false;
 
+            if (get().codexV4Sessions[sessionId]?.activated) {
+                return { changed: [], hasReadyEvent: false, enteredPlanMode: false };
+            }
+
             // Track plan mode transitions through the batch in order.
             // Set true on EnterPlanMode, false on ExitPlanMode. The final value
             // tells us whether the batch ends with an unresolved plan entry.
@@ -751,6 +776,56 @@ export const storage = create<StorageState>()((set, get) => {
 
             return { changed: Array.from(changed), hasReadyEvent, enteredPlanMode: shouldEnterPlanMode };
         },
+        applyCodexV4Entity: (sessionId: string, update: CodexV4ProjectionUpdate) => set((state) => {
+            const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
+            const projection = applyCodexV4ProjectionUpdate(previous, update);
+            if (projection === previous) return state;
+
+            let sessions = state.sessions;
+            const session = state.sessions[sessionId];
+            if (session && projection.runtime) {
+                const thinking = projection.runtime.execution.type === 'active';
+                sessions = {
+                    ...state.sessions,
+                    [sessionId]: {
+                        ...session,
+                        thinking,
+                        thinkingAt: thinking && !session.thinking
+                            ? projection.runtime.lastKnownAt
+                            : session.thinkingAt,
+                        codexState: toCodexSessionState(projection.runtime),
+                    },
+                };
+            }
+
+            let sessionMessages = state.sessionMessages;
+            if (projection.activated) {
+                const existing = state.sessionMessages[sessionId];
+                const messagesMap = Object.fromEntries(projection.messages.map((message) => [message.id, message]));
+                sessionMessages = {
+                    ...state.sessionMessages,
+                    [sessionId]: {
+                        messages: projection.messages,
+                        messagesMap,
+                        reducerState: existing?.reducerState ?? createReducer(),
+                        isLoaded: true,
+                        hasMoreOlder: false,
+                        isLoadingOlder: false,
+                    },
+                };
+            }
+
+            return {
+                ...state,
+                sessions,
+                sessionMessages,
+                codexV4Sessions: {
+                    ...state.codexV4Sessions,
+                    [sessionId]: projection,
+                },
+                sessionListViewData: buildSessionListViewData(sessions, state.unreadSessionIds),
+            };
+        }),
         applyMessagesLoaded: (sessionId: string) => set((state) => {
             const existingSession = state.sessionMessages[sessionId];
             let result: StorageState;
@@ -1190,6 +1265,7 @@ export const storage = create<StorageState>()((set, get) => {
             const { [sessionId]: deletedMessages, ...remainingSessionMessages } = state.sessionMessages;
             
             const { [sessionId]: _fileCache, ...remainingFileCache } = state.sessionFileCache;
+            const { [sessionId]: _codexV4, ...remainingCodexV4Sessions } = state.codexV4Sessions;
 
             // Clear local session data from persistent storage (permission / model / effort
             // picks live in synced session metadata, #1492)
@@ -1210,6 +1286,7 @@ export const storage = create<StorageState>()((set, get) => {
                 sessions: remainingSessions,
                 sessionMessages: remainingSessionMessages,
                 sessionFileCache: remainingFileCache,
+                codexV4Sessions: remainingCodexV4Sessions,
                 sessionListViewData
             };
         }),
@@ -1380,6 +1457,24 @@ export function useSessions() {
 
 export function useSession(id: string): Session | null {
     return storage(useShallow((state) => state.sessions[id] ?? null));
+}
+
+export function useCodexV4Session(sessionId: string): CodexV4Projection | null {
+    return storage(useShallow((state) => state.codexV4Sessions[sessionId] ?? null));
+}
+
+function toCodexSessionState(runtime: NonNullable<CodexV4Projection['runtime']>): CodexSessionStateV4 {
+    return {
+        connection: runtime.connection,
+        execution: runtime.execution,
+        statusUnknown: runtime.statusUnknown,
+        syncState: runtime.syncState,
+        pendingApprovalCount: runtime.pendingApprovalCount,
+        pendingUserInputCount: runtime.pendingUserInputCount,
+        activeSubagentCount: runtime.activeSubagentCount,
+        lastError: runtime.lastError,
+        lastKnownAt: runtime.lastKnownAt,
+    };
 }
 
 /**

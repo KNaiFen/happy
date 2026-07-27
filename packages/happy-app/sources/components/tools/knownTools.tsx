@@ -528,6 +528,16 @@ export const knownTools = {
             return t('tools.names.reasoning');
         }
     },
+    'CodexReasoningSummary': {
+        title: t('tools.names.reasoning'),
+        icon: ICON_REASONING,
+        minimal: false,
+        input: z.object({}).passthrough(),
+        result: z.object({
+            content: z.string(),
+            status: z.enum(['completed', 'in_progress', 'error']).optional(),
+        }).passthrough(),
+    },
     'GeminiReasoning': {
         title: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             if (opts.tool.input?.title && typeof opts.tool.input.title === 'string') {

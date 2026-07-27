@@ -67,6 +67,10 @@ import { readFileBytes } from '@/utils/readFileBytes';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { isRigMetadataV1, rigCanUseAttachments, usesControlledSessionUi } from './rig';
+import { AppSyncV4Client, type AppSyncV4AppliedEntity } from './syncV4Client';
+import { syncV4Persistence } from './syncV4Persistence.mmkv';
+import { HttpAppSyncV4Transport } from './syncV4Transport';
+import { CodexV4ClientRegistry } from './codexV4ClientRegistry';
 
 type V3GetSessionMessagesResponse = {
     messages: ApiMessage[];
@@ -127,6 +131,7 @@ class Sync {
     private sessionMessageQueue = new Map<string, NormalizedMessage[]>();
     private sessionQueueProcessing = new Set<string>();
     private sessionMessageLocks = new Map<string, AsyncLock>();
+    private readonly codexV4Clients: CodexV4ClientRegistry<AppSyncV4Client, AppSyncV4AppliedEntity>;
     private sessionDataKeys = new Map<string, Uint8Array>(); // Store session data encryption keys internally
     private machineDataKeys = new Map<string, Uint8Array>(); // Store machine data encryption keys internally
     private artifactDataKeys = new Map<string, Uint8Array>(); // Store artifact data encryption keys internally
@@ -153,6 +158,24 @@ class Sync {
     private lastRecalculationTime = 0;
 
     constructor() {
+        this.codexV4Clients = new CodexV4ClientRegistry({
+            createClient: ({ sessionId, sessionKey, onEntity }) => AppSyncV4Client.create({
+                sessionId,
+                sessionKey,
+                persistence: syncV4Persistence,
+                transport: new HttpAppSyncV4Transport(),
+                onEntity,
+            }),
+            isEligible: (sessionId) => (
+                storage.getState().sessions[sessionId]?.metadata?.flavor === 'codex'
+            ),
+            onEntity: async (sessionId, event) => {
+                storage.getState().applyCodexV4Entity(sessionId, event);
+            },
+            onStartError: () => {
+                log.log('Codex Sync v4 client start failed; retrying after session refresh');
+            },
+        });
         this.sessionsSync = new InvalidateSync(this.fetchSessions);
         this.settingsSync = new InvalidateSync(this.syncSettings);
         this.profileSync = new InvalidateSync(this.fetchProfile);
@@ -197,6 +220,7 @@ class Sync {
                 this.machinesSync.invalidate();
                 this.pushTokenSync.invalidate();
                 this.sessionsSync.invalidate();
+                this.invalidateCodexV4Clients();
                 this.nativeUpdateSync.invalidate();
                 log.log('📱 App became active: Invalidating artifacts sync');
                 this.artifactsSync.invalidate();
@@ -294,7 +318,12 @@ class Sync {
 
 
     onSessionVisible = (sessionId: string) => {
-        this.getMessagesSync(sessionId).invalidate();
+        const codexV4 = storage.getState().codexV4Sessions[sessionId];
+        if (codexV4?.activated) {
+            this.codexV4Clients.invalidate(sessionId);
+        } else {
+            this.getMessagesSync(sessionId).invalidate();
+        }
 
         // Also invalidate git status sync for this session
         gitStatusSync.getSync(sessionId).invalidate();
@@ -1020,6 +1049,7 @@ class Sync {
 
         // Apply to storage
         this.applySessions(decryptedSessions);
+        this.reconcileCodexV4Clients(decryptedSessions);
         log.log(`📥 fetchSessions completed - processed ${decryptedSessions.length} sessions`);
 
     }
@@ -2150,6 +2180,7 @@ class Sync {
             this.friendsSync.invalidate();
             this.friendRequestsSync.invalidate();
             this.feedSync.invalidate();
+            this.invalidateCodexV4Clients();
             // Messages are fetched lazily per-session via onSessionVisible (called by SessionView
             // when realtimeStatus changes). Session metadata + agentState (including permission
             // requests) are already refreshed by sessionsSync.invalidate() above.
@@ -2285,6 +2316,8 @@ class Sync {
             this.sessionMessageLocks.delete(sessionId);
             this.sessionMessageQueue.delete(sessionId);
             this.sessionQueueProcessing.delete(sessionId);
+            this.stopCodexV4Client(sessionId);
+            syncV4Persistence.clearSession(sessionId);
 
             log.log(`🗑️ Session ${sessionId} deleted from local storage`);
         } else if (updateData.body.t === 'update-session') {
@@ -2327,6 +2360,7 @@ class Sync {
                     updatedAt: updateData.createdAt,
                     seq: updateData.seq
                 }]);
+                this.reconcileCodexV4Clients(Object.values(storage.getState().sessions));
 
                 // Invalidate git status when agent state changes (files may have been modified)
                 if (updateData.body.agentState) {
@@ -2748,6 +2782,10 @@ class Sync {
             notifyUnreadMessage();
         }
 
+        if (updateData.type === 'sync-v4-invalidate') {
+            this.codexV4Clients.invalidate(updateData.sessionId, updateData.highWatermark);
+        }
+
         // daemon-status ephemeral updates are deprecated, machine status is handled via machine-activity
     }
 
@@ -2800,6 +2838,22 @@ class Sync {
                 voiceHooks.onSessionOnline(s.id, s.metadata ?? undefined);
             }
         }
+    }
+
+    private reconcileCodexV4Clients(sessions: Array<{ id: string; metadata: Session['metadata'] }>): void {
+        this.codexV4Clients.reconcile(sessions.flatMap((session) => {
+            if (session.metadata?.flavor !== 'codex') return [];
+            const sessionKey = this.encryption.getSessionDataKey(session.id);
+            return sessionKey ? [{ sessionId: session.id, sessionKey }] : [];
+        }));
+    }
+
+    private invalidateCodexV4Clients(): void {
+        this.codexV4Clients.invalidateAll();
+    }
+
+    private stopCodexV4Client(sessionId: string): void {
+        this.codexV4Clients.stop(sessionId);
     }
 
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CodexRuntimeEntityV4 } from '@slopus/happy-wire';
 
 //
 // Agent states
@@ -290,6 +291,19 @@ export interface SessionAgentModesPatch {
     effortLevel?: string | null;
 }
 
+export type CodexSessionStateV4 = Pick<
+    CodexRuntimeEntityV4,
+    | 'connection'
+    | 'execution'
+    | 'statusUnknown'
+    | 'syncState'
+    | 'pendingApprovalCount'
+    | 'pendingUserInputCount'
+    | 'activeSubagentCount'
+    | 'lastError'
+    | 'lastKnownAt'
+>;
+
 export interface Session {
     id: string,
     seq: number,
@@ -303,6 +317,7 @@ export interface Session {
     agentStateVersion: number,
     thinking: boolean,
     thinkingAt: number,
+    codexState?: CodexSessionStateV4;
     presence: "online" | number, // "online" when active, timestamp when last seen
     todos?: TodoItem[];
     draft?: string | null; // Local draft message, not synced to server
