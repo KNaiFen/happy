@@ -21,6 +21,7 @@ import {
 } from '@/claude/utils/sessionProtocolMapper';
 import { InvalidateSync } from '@/utils/sync';
 import axios from 'axios';
+import { SyncV4Client, type SyncV4AppliedEntity } from './syncV4Client';
 
 /**
  * ACP (Agent Communication Protocol) message data types.
@@ -228,6 +229,7 @@ export class ApiSessionClient extends EventEmitter {
     private pendingOutbox: Array<{ content: string; localId: string }> = [];
     private readonly sendSync: InvalidateSync;
     private readonly receiveSync: InvalidateSync;
+    private syncV4Client: SyncV4Client | null = null;
 
     constructor(token: string, session: Session) {
         super()
@@ -281,6 +283,7 @@ export class ApiSessionClient extends EventEmitter {
             }
             this.rpcHandlerManager.onSocketConnect(this.socket);
             this.receiveSync.invalidate();
+            this.syncV4Client?.invalidate();
         })
 
         // Set up global RPC request handler
@@ -359,6 +362,12 @@ export class ApiSessionClient extends EventEmitter {
             }
         });
 
+        this.socket.on('ephemeral', (data) => {
+            if (data.type === 'sync-v4-invalidate' && data.sessionId === this.sessionId) {
+                this.syncV4Client?.invalidate(data.highWatermark);
+            }
+        });
+
         // DEATH
         this.socket.on('error', (error) => {
             logger.debug('[API] Socket error:', error);
@@ -382,6 +391,25 @@ export class ApiSessionClient extends EventEmitter {
         this.pendingFileEventCallback = callback;
         while (this.pendingFileEvents.length > 0) {
             callback(this.pendingFileEvents.shift()!);
+        }
+    }
+
+    async enableSyncV4(onEntity: (event: SyncV4AppliedEntity) => Promise<void>): Promise<SyncV4Client> {
+        if (this.syncV4Client) return this.syncV4Client;
+        const client = await SyncV4Client.create({
+            sessionId: this.sessionId,
+            sessionKey: this.encryptionKey,
+            token: this.token,
+            onEntity,
+        });
+        this.syncV4Client = client;
+        try {
+            await client.start();
+            return client;
+        } catch (error) {
+            client.stop();
+            this.syncV4Client = null;
+            throw error;
         }
     }
 
@@ -994,6 +1022,8 @@ export class ApiSessionClient extends EventEmitter {
         logger.debug('[API] socket.close() called');
         this.sendSync.stop();
         this.receiveSync.stop();
+        this.syncV4Client?.stop();
+        this.syncV4Client = null;
         if (this.reconnectInterval) {
             clearInterval(this.reconnectInterval);
             this.reconnectInterval = null;

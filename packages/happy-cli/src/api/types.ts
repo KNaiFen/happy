@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Update, UpdateMachineBody } from '@slopus/happy-wire';
+import type { SyncInvalidationV4, Update, UpdateMachineBody } from '@slopus/happy-wire';
 import { UsageSchema } from '@/claude/types'
 import type { SandboxConfig } from '@/persistence'
 
@@ -48,7 +48,10 @@ export interface ServerToClientEvents {
   'rpc-registered': (data: { method: string }) => void
   'rpc-unregistered': (data: { method: string }) => void
   'rpc-error': (data: { type: string, error: string }) => void
-  ephemeral: (data: { type: 'activity', id: string, active: boolean, activeAt: number, thinking: boolean }) => void
+  ephemeral: (data:
+    | { type: 'activity', id: string, active: boolean, activeAt: number, thinking: boolean }
+    | ({ type: 'sync-v4-invalidate' } & SyncInvalidationV4)
+  ) => void
   auth: (data: { success: boolean, user: string }) => void
   error: (data: { message: string }) => void
 }
