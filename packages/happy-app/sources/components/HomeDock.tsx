@@ -233,13 +233,15 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 20,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.button.subtle.background,
+        borderWidth: 1,
+        borderColor: theme.colors.button.subtle.border,
     },
     focusedSendButton: {
         marginLeft: 8,
     },
     sendButtonActive: {
-        backgroundColor: theme.colors.fab.background,
+        backgroundColor: theme.colors.button.subtle.background,
     },
     modalRoot: {
         flex: 1,
@@ -1003,13 +1005,13 @@ export const HomeDock = React.memo(({
                     {isSubmitting ? (
                         <ActivityIndicator
                             size="small"
-                            color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
+                            color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
                         />
                     ) : (
                         <Ionicons
                             name="arrow-up"
                             size={19}
-                            color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
+                            color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
                         />
                     )}
                 </BubblePressable>
@@ -1117,13 +1119,13 @@ export const HomeDock = React.memo(({
                         {isSubmitting ? (
                             <ActivityIndicator
                                 size="small"
-                                color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
+                                color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
                             />
                         ) : (
                             <Ionicons
                                 name="arrow-up"
                                 size={19}
-                                color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
+                                color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
                             />
                         )}
                         </BubblePressable>

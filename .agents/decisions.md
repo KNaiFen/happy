@@ -35,3 +35,7 @@
 - [2026-07-27] Bundle the workspace `@slopus/happy-wire` implementation into the CLI distribution.
   - Why: A local CLI tgz must not resolve an older npm-published wire package that lacks exports used by the current workspace source.
   - Impact: `@slopus/happy-wire` is a CLI build dependency rather than a runtime dependency, so pkgroll inlines it and users still install only the `happy` package.
+
+- [2026-07-27] Use a quiet outlined treatment for mobile send actions.
+  - Why: An unframed arrow was hard to discover, while a black-or-white solid action competed too strongly with the composer.
+  - Impact: Session, home, and new-session composers share a subtle neutral background, a one-point theme-aware outline, and a normal text-color icon; Stop retains high contrast. The APP advances to 1.9.0.

@@ -116,6 +116,11 @@ export const lightTheme = {
                 tint: '#FFFFFF',
                 disabled: '#C0C0C0',
             },
+            subtle: {
+                background: '#F0F0F0',
+                border: 'rgba(0, 0, 0, 0.14)',
+                tint: '#000000',
+            },
             secondary: {
                 tint: '#666666',
             }
@@ -341,6 +346,11 @@ export const darkTheme = {
                 background: '#000000',
                 tint: '#FFFFFF',
                 disabled: '#C0C0C0',
+            },
+            subtle: {
+                background: '#282828',
+                border: 'rgba(255, 255, 255, 0.18)',
+                tint: '#FFFFFF',
             },
             secondary: {
                 tint: '#8E8E93',

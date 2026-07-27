@@ -3,7 +3,7 @@ const { execFileSync } = require('node:child_process');
 const variant = process.env.APP_ENV || 'development';
 const disableOtaUpdates = process.env.HAPPY_DISABLE_OTA === '1';
 const isLocalRelease = process.env.HAPPY_LOCAL_RELEASE === '1';
-const appVersion = "1.8.0";
+const appVersion = "1.9.0";
 const name = {
     development: "Happy (dev)",
     preview: "Happy (preview)",
@@ -95,7 +95,7 @@ export default {
                 : {})
         },
         android: {
-            ...(isLocalRelease ? { versionCode: 10800 } : {}),
+            ...(isLocalRelease ? { versionCode: 10900 } : {}),
             adaptiveIcon: {
                 foregroundImage: "./sources/assets/images/icon-adaptive.png",
                 monochromeImage: "./sources/assets/images/icon-monochrome.png",

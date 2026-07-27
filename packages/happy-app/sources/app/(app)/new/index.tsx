@@ -1790,7 +1790,7 @@ function NewSessionScreen() {
     const composerPlaceholder = selectedAgent === 'codex' ? 'Ask Codex' : `Ask ${agent.label}`;
     const mobilePrimaryActionActive = isNativeMobile && (canSend || isSpawning);
     const sendButtonIconColor = mobilePrimaryActionActive
-        ? theme.colors.fab.icon
+        ? theme.colors.button.subtle.tint
         : isNativeMobile
             ? theme.colors.text
             : theme.colors.button.primary.tint;
@@ -2531,16 +2531,16 @@ const styles = StyleSheet.create((theme) => ({
         marginLeft: 0,
         backgroundColor: Platform.select({
             ios: 'transparent',
-            android: theme.colors.glass.backgroundStrong,
+            android: theme.colors.button.subtle.background,
             default: 'transparent',
         }),
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.glass.highlight,
+        borderWidth: 1,
+        borderColor: theme.colors.button.subtle.border,
         overflow: 'hidden',
     },
     mobileSendButtonActive: {
-        backgroundColor: theme.colors.fab.background,
-        borderColor: theme.colors.fab.background,
+        backgroundColor: theme.colors.button.subtle.background,
+        borderColor: theme.colors.button.subtle.border,
     },
     mobileSendButtonInactive: {
         opacity: 0.56,

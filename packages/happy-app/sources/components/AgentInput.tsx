@@ -390,7 +390,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginLeft: 1,
     },
     mobilePrimaryButtonActive: {
-        backgroundColor: theme.colors.fab.background,
+        backgroundColor: theme.colors.button.subtle.background,
+        borderWidth: 1,
+        borderColor: theme.colors.button.subtle.border,
     },
     mobileStopButton: {
         backgroundColor: theme.colors.fab.background,
@@ -401,11 +403,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     sendButtonGlass: {
         backgroundColor: Platform.select({
             ios: 'transparent',
-            android: theme.colors.glass.backgroundStrong,
+            android: theme.colors.button.subtle.background,
             default: 'transparent',
         }),
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.glass.highlight,
+        borderWidth: 1,
+        borderColor: theme.colors.button.subtle.border,
         overflow: 'hidden',
     },
     sendButtonInactiveGlass: {
@@ -769,7 +771,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const canSendMessage = primaryAction === 'send';
     const useGlassSendButton = glassEnabled && !shouldShowStopButton && !canSendMessage;
     const activeSendIconColor = canSendMessage
-        ? theme.colors.fab.icon
+        ? theme.colors.button.subtle.tint
         : glassEnabled
             ? theme.colors.text
             : theme.colors.button.primary.tint;
