@@ -19,3 +19,7 @@
 - [2026-07-27] Disable Expo OTA only for self-contained local Android release builds.
   - Why: The official production channel shares runtime version 21 and replaces the custom embedded bundle on the next cold launch.
   - Impact: `HAPPY_DISABLE_OTA=1` removes the update endpoint during prebuild; `android:local-release` always sets the flag before assembling the APK, while normal upstream build profiles keep their existing OTA behavior.
+
+- [2026-07-27] Target self-contained local Android release builds to arm64-v8a.
+  - Why: The intended Snapdragon 8 Elite device uses a 64-bit ARM CPU, so bundling 32-bit ARM and emulator x86 libraries only increases APK size.
+  - Impact: `android:local-release` passes `-PreactNativeArchitectures=arm64-v8a`; normal upstream Android build profiles retain their existing architecture configuration.
