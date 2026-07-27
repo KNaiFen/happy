@@ -2,6 +2,7 @@ import { AgentContentView } from '@/components/AgentContentView';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentInput } from '@/components/AgentInput';
+import { CodexQueuedMessages } from '@/components/CodexQueuedMessages';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -777,11 +778,17 @@ export function SessionViewLoaded({
         const liveMessage = composerHandleRef.current?.getMessage() ?? '';
         if (liveMessage.trim() || (expImageUpload && selectedImages.length > 0)) {
             const attachments = expImageUpload ? selectedImages : undefined;
+            const shouldQueueInCli = session.metadata?.codexCapabilities?.queueSteering === true
+                && session.thinking === true;
             composerHandleRef.current?.clearMessage();
             if (expImageUpload) clearImages();
-            sync.sendMessage(sessionId, liveMessage, { source: 'chat', attachments });
+            sync.sendMessage(sessionId, liveMessage, {
+                source: 'chat',
+                attachments,
+                ...(shouldQueueInCli ? { followUpMode: 'queue' as const } : {}),
+            });
         }
-    }, [sessionId, expImageUpload, selectedImages, clearImages]);
+    }, [sessionId, session.metadata?.codexCapabilities?.queueSteering, session.thinking, expImageUpload, selectedImages, clearImages]);
 
     const handleAbort = React.useCallback(() => {
         // Mode picks live in synced metadata — clear them there, otherwise the
@@ -1016,6 +1023,7 @@ export function SessionViewLoaded({
 
     const showSessionStatusBar = sessionStatusBarDisplay === 'above' || sessionStatusBarDisplay === 'below';
     const sessionStatusBarPosition = sessionStatusBarDisplay === 'above' ? 'above' : 'below';
+    const codexQueuedMessages = session.agentState?.codexMessageQueue?.messages ?? [];
     const sessionStatusBar = showSessionStatusBar ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <SessionStatusBar
@@ -1049,6 +1057,15 @@ export function SessionViewLoaded({
             )}
             {sessionStatusBarPosition === 'above' ? sessionStatusBar : null}
             <RigActivityBar metadata={session.metadata} />
+            {codexQueuedMessages.length > 0 && (
+                <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
+                    <CodexQueuedMessages
+                        sessionId={sessionId}
+                        messages={codexQueuedMessages}
+                        canSteer={session.metadata?.codexCapabilities?.queueSteering === true && session.thinking === true}
+                    />
+                </CenteredInputWidth>
+            )}
             {composer}
             {sessionStatusBarPosition === 'below' ? sessionStatusBar : null}
         </>

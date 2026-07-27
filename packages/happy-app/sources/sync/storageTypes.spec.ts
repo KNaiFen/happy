@@ -34,6 +34,38 @@ describe('MetadataSchema', () => {
         expect(metadata.activity?.subagents.queued).toBe(2);
         expect((metadata as any).futureCapability).toEqual({ supported: true });
     });
+
+    it('preserves Codex queue steering capability metadata', () => {
+        const metadata = MetadataSchema.parse({
+            path: '/tmp/project',
+            host: 'local-machine',
+            codexCapabilities: { queueSteering: true },
+        });
+
+        expect(metadata.codexCapabilities?.queueSteering).toBe(true);
+    });
+});
+
+describe('AgentStateSchema Codex message queue', () => {
+    it('preserves the authoritative FIFO snapshot', () => {
+        const state = AgentStateSchema.parse({
+            codexMessageQueue: {
+                revision: 3,
+                messages: [
+                    { id: 'queued-1', text: 'first', createdAt: 100 },
+                    { id: 'queued-2', text: 'second', createdAt: 200 },
+                ],
+            },
+        });
+
+        expect(state.codexMessageQueue).toEqual({
+            revision: 3,
+            messages: [
+                { id: 'queued-1', text: 'first', createdAt: 100 },
+                { id: 'queued-2', text: 'second', createdAt: 200 },
+            ],
+        });
+    });
 });
 
 describe('MachineMetadataSchema', () => {

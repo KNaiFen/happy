@@ -329,6 +329,10 @@ export const en = {
         newChat: 'New chat',
         statusBarContext: 'Context',
         statusBarPathTitle: 'Working directory',
+        queuedMessageEdit: 'Edit queued message',
+        queuedMessageSteer: 'Send to active turn',
+        queuedMessageActionFailed: "Couldn't update the queued message. Its status may have changed; try again.",
+        queuedAttachment: 'Queued attachment',
         // Fork / duplicate / rewind flow (Claude only)
         forkAction: 'Fork session',
         forkSubtitle: 'Continue in a new session with the same context',

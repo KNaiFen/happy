@@ -100,6 +100,10 @@ type SendMessageOptions = {
     source?: MessageSentSource;
     /** Optional image attachments to send before the text message. */
     attachments?: AttachmentPreview[];
+    /** Queue this follow-up in the CLI instead of rendering it immediately. */
+    followUpMode?: 'queue';
+    /** Stable identity shared by the App send and CLI queue item. */
+    localKey?: string;
 };
 
 class Sync {
@@ -598,7 +602,8 @@ class Sync {
         const modeMeta = resolveMessageModeMeta(session, {
             agentDefaultOverrides: storage.getState().localSettings.agentDefaultOverrides,
         });
-        const { displayText, source = 'chat', attachments } = options ?? {};
+        const { displayText, source = 'chat', attachments, followUpMode } = options ?? {};
+        const localId = options?.localKey ?? randomUUID();
 
         const flavor = session.metadata?.flavor;
         const rigAttachmentPolicy = isRigMetadataV1(session.metadata)
@@ -682,6 +687,7 @@ class Sync {
                                 },
                             },
                         },
+                        ...(followUpMode ? { meta: { followUpMode } } : {}),
                     };
                     const encryptedFileRecord = await encryption.encryptRawRecord(fileRecord);
                     const fileLocalId = randomUUID();
@@ -693,9 +699,6 @@ class Sync {
                 }
             }
         }
-
-        // Generate local ID
-        const localId = randomUUID();
 
         // Determine sentFrom based on platform
         let sentFrom: string;
@@ -717,6 +720,7 @@ class Sync {
         // Create user message content with metadata
         const content: RawRecord = {
             role: 'user',
+            ...(followUpMode ? { localKey: localId } : {}),
             content: {
                 type: 'text',
                 text
@@ -728,7 +732,8 @@ class Sync {
                 ...(modeMeta.model !== undefined ? { model: modeMeta.model } : {}),
                 ...(modeMeta.modelProviderId !== undefined ? { modelProviderId: modeMeta.modelProviderId } : {}),
                 ...(modeMeta.effort !== undefined ? { effort: modeMeta.effort } : {}),
-                ...(displayText && { displayText }) // Add displayText if provided
+                ...(displayText && { displayText }), // Add displayText if provided
+                ...(followUpMode ? { followUpMode } : {}),
             }
         };
         const encryptedRawRecord = await encryption.encryptRawRecord(content);

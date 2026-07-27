@@ -2,13 +2,17 @@ import { logger } from "@/ui/logger";
 
 export type PendingAttachment = { data: Uint8Array; mimeType: string; name: string };
 
-interface QueueItem<T> {
+export interface QueueItem<T> {
     message: string;
     mode: T;
     modeHash: string;
     isolate?: boolean; // If true, this message must be processed alone
     /** Decoded image attachments owned by *this* message (per-message ownership). */
     attachments?: PendingAttachment[];
+    /** Stable identifier for queue items exposed to remote clients. */
+    id?: string;
+    /** Time the tracked item entered the CLI queue. */
+    createdAt?: number;
 }
 
 /**
@@ -72,6 +76,42 @@ export class MessageQueue2<T> {
         }
 
         logger.debug(`[MessageQueue2] push() completed. Queue size: ${this.queue.length}`);
+    }
+
+    /**
+     * Push a remotely addressable queue item. Tracked items are still compatible
+     * with the existing batching API, while callers that need FIFO semantics can
+     * consume them through takeNext().
+     */
+    pushTracked(opts: {
+        id: string;
+        createdAt: number;
+        message: string;
+        mode: T;
+        attachments?: PendingAttachment[];
+        isolate?: boolean;
+    }): void {
+        if (this.closed) {
+            throw new Error('Cannot push to closed queue');
+        }
+
+        const modeHash = this.modeHasher(opts.mode);
+        this.queue.push({
+            id: opts.id,
+            createdAt: opts.createdAt,
+            message: opts.message,
+            mode: opts.mode,
+            modeHash,
+            isolate: opts.isolate ?? false,
+            attachments: opts.attachments,
+        });
+
+        if (this.onMessageHandler) {
+            this.onMessageHandler(opts.message, opts.mode);
+        }
+        this.notifyWaiter();
+
+        logger.debug(`[MessageQueue2] pushTracked() completed. Queue size: ${this.queue.length}`);
     }
 
     /**
@@ -260,6 +300,38 @@ export class MessageQueue2<T> {
         return this.queue.length;
     }
 
+    /** Return tracked items in FIFO order without exposing mutable queue state. */
+    trackedItems(): Array<Required<Pick<QueueItem<T>, 'id' | 'createdAt' | 'message'>>> {
+        return this.queue.flatMap((item) => (
+            item.id !== undefined && item.createdAt !== undefined
+                ? [{ id: item.id, createdAt: item.createdAt, message: item.message }]
+                : []
+        ));
+    }
+
+    getTracked(id: string): QueueItem<T> | null {
+        return this.queue.find((item) => item.id === id) ?? null;
+    }
+
+    updateTracked(id: string, message: string): boolean {
+        const item = this.queue.find((candidate) => candidate.id === id);
+        if (!item) return false;
+        item.message = message;
+        return true;
+    }
+
+    removeTracked(id: string): QueueItem<T> | null {
+        const index = this.queue.findIndex((item) => item.id === id);
+        if (index < 0) return null;
+        const [item] = this.queue.splice(index, 1);
+        return item;
+    }
+
+    /** Remove exactly one FIFO item, without mode batching. */
+    takeNext(): QueueItem<T> | null {
+        return this.queue.shift() ?? null;
+    }
+
     /**
      * Wait for messages and return all messages with the same mode as a single string
      * Returns { message: string, mode: T } or null if aborted/closed
@@ -333,7 +405,7 @@ export class MessageQueue2<T> {
     /**
      * Wait for messages to arrive
      */
-    private waitForMessages(abortSignal?: AbortSignal): Promise<boolean> {
+    waitForMessages(abortSignal?: AbortSignal): Promise<boolean> {
         return new Promise((resolve) => {
             let abortHandler: (() => void) | null = null;
 
@@ -379,5 +451,12 @@ export class MessageQueue2<T> {
             this.waiter = waiterFunc;
             logger.debug('[MessageQueue2] Waiting for messages...');
         });
+    }
+
+    private notifyWaiter(): void {
+        if (!this.waiter) return;
+        const waiter = this.waiter;
+        this.waiter = null;
+        waiter(true);
     }
 }

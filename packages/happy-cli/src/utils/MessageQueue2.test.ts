@@ -514,4 +514,47 @@ describe('MessageQueue2', () => {
         expect(batch3?.message).toBe('after-isolated');
         expect(batch3?.mode.type).toBe('B');
     });
+
+    it('tracks, edits, and removes remotely addressable items', () => {
+        const queue = new MessageQueue2<{ type: string }>((mode) => mode.type);
+
+        queue.push('untracked', { type: 'A' });
+        queue.pushTracked({
+            id: 'queued-1',
+            createdAt: 100,
+            message: 'first draft',
+            mode: { type: 'A' },
+        });
+        queue.pushTracked({
+            id: 'queued-2',
+            createdAt: 200,
+            message: 'second',
+            mode: { type: 'B' },
+        });
+
+        expect(queue.trackedItems()).toEqual([
+            { id: 'queued-1', createdAt: 100, message: 'first draft' },
+            { id: 'queued-2', createdAt: 200, message: 'second' },
+        ]);
+        expect(queue.updateTracked('queued-1', 'edited')).toBe(true);
+        expect(queue.getTracked('queued-1')?.message).toBe('edited');
+
+        const removed = queue.removeTracked('queued-1');
+        expect(removed?.message).toBe('edited');
+        expect(queue.trackedItems()).toEqual([
+            { id: 'queued-2', createdAt: 200, message: 'second' },
+        ]);
+    });
+
+    it('takes exactly one FIFO item without batching matching modes', async () => {
+        const queue = new MessageQueue2<string>((mode) => mode);
+        queue.push('first', 'same');
+        queue.push('second', 'same');
+
+        await expect(queue.waitForMessages()).resolves.toBe(true);
+        expect(queue.takeNext()?.message).toBe('first');
+        expect(queue.takeNext()?.message).toBe('second');
+        expect(queue.takeNext()).toBeNull();
+    });
+
 });

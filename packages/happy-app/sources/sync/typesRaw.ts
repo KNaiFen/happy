@@ -449,6 +449,7 @@ const rawRecordSchema = z.preprocess(
                 type: z.literal('text'),
                 text: z.string()
             }),
+            localKey: z.string().optional(),
             meta: MessageMetaSchema.optional()
         }),
         z.object({
@@ -768,6 +769,9 @@ export function normalizeRawMessage(id: string, localId: string | null, createdA
         return null;
     }
     raw = parsed.data;
+    if (raw.meta?.followUpMode === 'queue') {
+        return null;
+    }
     if (raw.role === 'user') {
         return {
             id,

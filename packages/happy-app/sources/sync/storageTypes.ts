@@ -121,6 +121,9 @@ export const MetadataSchema = z.object({
     machineId: z.string().optional(),
     claudeSessionId: z.string().optional(), // Claude Code session ID
     codexThreadId: z.string().optional(), // Codex app-server thread ID
+    codexCapabilities: z.object({
+        queueSteering: z.boolean().optional(),
+    }).passthrough().optional(),
     tools: z.array(z.string()).optional(),
     slashCommands: z.array(z.string()).optional(),
     mcpServers: z.array(z.object({ name: z.string(), status: z.string() })).optional(),
@@ -225,6 +228,15 @@ const UsageLimitsSchema = z.object({
     }).passthrough()),
 }).passthrough().optional().catch(undefined);
 
+export const CodexMessageQueueSchema = z.object({
+    revision: z.number().int().nonnegative(),
+    messages: z.array(z.object({
+        id: z.string().min(1),
+        text: z.string(),
+        createdAt: z.number(),
+    }).strict()),
+}).strict().optional().catch(undefined);
+
 export const AgentStateSchema = z.object({
     controlledByUser: z.boolean().nullish(),
     // Ephemeral runtime state. A malformed snapshot must not invalidate
@@ -252,6 +264,7 @@ export const AgentStateSchema = z.object({
         toolUseId: z.string().nullish()
     })).nullish(),
     agentGoalStatus: AgentGoalStatusSchema.optional(),
+    codexMessageQueue: CodexMessageQueueSchema,
 });
 
 export type AgentState = z.infer<typeof AgentStateSchema>;

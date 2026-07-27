@@ -138,6 +138,95 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(new CodexAppServerClient().supportsGoalActions()).toBe(false);
     });
 
+    it('reports turn steering support from Codex 0.145 onward', async () => {
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+
+        mockExecSync.mockReturnValue('codex-cli 0.145.0');
+        expect(new CodexAppServerClient().supportsTurnSteering()).toBe(true);
+
+        mockExecSync.mockReturnValue('codex-cli 0.144.9');
+        expect(new CodexAppServerClient().supportsTurnSteering()).toBe(false);
+    });
+
+    it('steers the active turn without interrupting it', async () => {
+        mockExecSync.mockReturnValue('codex-cli 0.145.0');
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: { id: 'thread-steer', path: '/tmp/thread-steer' },
+                            model: 'gpt-test',
+                            modelProvider: 'openai',
+                            cwd: '/tmp/project',
+                            approvalPolicy: 'never',
+                            sandbox: { type: 'dangerFullAccess' },
+                            reasoningEffort: null,
+                        },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    setTimeout(() => {
+                        pushJsonLine(stdout, {
+                            id: msg.id,
+                            result: { turn: { id: 'turn-steer', items: [], status: 'inProgress', error: null } },
+                        });
+                        pushJsonLine(stdout, {
+                            method: 'turn/started',
+                            params: { threadId: 'thread-steer', turn: { id: 'turn-steer' } },
+                        });
+                    }, 0);
+                }
+                if (msg.method === 'turn/steer' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, { id: msg.id, result: {} }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        await client.startThread({
+            model: 'gpt-test',
+            cwd: '/tmp/project',
+            approvalPolicy: 'never',
+            sandbox: 'danger-full-access',
+        });
+
+        const activeTurn = client.sendTurnAndWait('original request');
+        await waitFor(() => client.turnId === 'turn-steer');
+
+        await client.steerTurn('use the edited file', {
+            clientUserMessageId: 'queued-message-1',
+            extraInputItems: [{ type: 'localImage', path: '/tmp/guide.png' }],
+        });
+
+        expect(requests.find((msg) => msg.method === 'turn/steer')?.params).toEqual({
+            threadId: 'thread-steer',
+            expectedTurnId: 'turn-steer',
+            clientUserMessageId: 'queued-message-1',
+            input: [
+                { type: 'text', text: 'use the edited file' },
+                { type: 'localImage', path: '/tmp/guide.png' },
+            ],
+        });
+        expect(requests.some((msg) => msg.method === 'turn/interrupt')).toBe(false);
+
+        pushJsonLine(proc.stdout, {
+            method: 'turn/completed',
+            params: {
+                threadId: 'thread-steer',
+                turn: { id: 'turn-steer', items: [], status: 'completed', error: null },
+            },
+        });
+        await expect(activeTurn).resolves.toEqual({ aborted: false });
+        await client.disconnect();
+    });
+
     it('lists every visible model page from app-server', async () => {
         const requests: MockRpcMessage[] = [];
         const proc = createMockProcess({

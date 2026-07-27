@@ -137,6 +137,16 @@ function isGoalActionsAvailable(): boolean {
     return major > 0 || minor >= 140;
 }
 
+function isTurnSteeringAvailable(): boolean {
+    const version = readCodexCliVersion();
+    if (!version) {
+        return false;
+    }
+    const { major, minor } = version;
+    // turn/steer is part of the stable app-server protocol in Codex 0.145+.
+    return major > 0 || minor >= 145;
+}
+
 function normalizeRawFileChangeList(changes: unknown): LegacyPatchChanges | undefined {
     if (!Array.isArray(changes)) {
         return undefined;
@@ -274,6 +284,10 @@ export class CodexAppServerClient {
 
     supportsGoalActions(): boolean {
         return isGoalActionsAvailable();
+    }
+
+    supportsTurnSteering(): boolean {
+        return isTurnSteeringAvailable();
     }
 
     setEventHandler(handler: (msg: EventMsg) => void): void {
@@ -1232,6 +1246,35 @@ export class CodexAppServerClient {
         const aborted = await completion;
         if (timer) clearTimeout(timer);
         return { aborted };
+    }
+
+    /** Add user input to the active turn without interrupting it. */
+    async steerTurn(prompt: string, opts?: {
+        extraInputItems?: InputItem[];
+        clientUserMessageId?: string;
+    }): Promise<void> {
+        if (!this.supportsTurnSteering()) {
+            throw new Error('The installed Codex version does not support turn steering');
+        }
+        if (!this._threadId || !this._turnId || !this.hasPendingTurnCompletion()) {
+            throw new Error('No active Codex turn to steer');
+        }
+
+        const extraInputItems = opts?.extraInputItems ?? [];
+        const input: InputItem[] = [];
+        if (prompt.length > 0 || extraInputItems.length === 0) {
+            input.push({ type: 'text', text: prompt });
+        }
+        input.push(...extraInputItems);
+
+        await this.request('turn/steer', {
+            threadId: this._threadId,
+            expectedTurnId: this._turnId,
+            input,
+            ...(opts?.clientUserMessageId
+                ? { clientUserMessageId: opts.clientUserMessageId }
+                : {}),
+        });
     }
 
     async interruptTurn(opts?: { timeoutMs?: number }): Promise<void> {

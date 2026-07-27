@@ -1,5 +1,7 @@
 import { render } from "ink";
 import React from "react";
+import { z } from 'zod';
+import { createEnvelope } from '@slopus/happy-wire';
 import { ApiClient } from '@/api/api';
 import { CodexAppServerClient } from './codexAppServerClient';
 import type { ReasoningEffort } from './codexAppServerTypes';
@@ -13,7 +15,8 @@ import { Credentials, readSettings } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/run';
 import { configuration } from '@/configuration';
 import packageJson from '../../package.json';
-import { MessageQueue2, type PendingAttachment } from '@/utils/MessageQueue2';
+import { MessageQueue2, type QueueItem } from '@/utils/MessageQueue2';
+import { AsyncLock } from '@/utils/lock';
 import { projectPath } from '@/projectPath';
 import { join } from 'node:path';
 import { createSessionMetadata } from '@/utils/createSessionMetadata';
@@ -88,6 +91,14 @@ function hasCodexSubagentReference(message: Record<string, unknown>): boolean {
 const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 const DEFAULT_CODEX_EFFORT: ReasoningEffort = 'medium';
 const DEFAULT_CODEX_PERMISSION_MODE: PermissionMode = 'yolo';
+const CodexQueuedMessageIdSchema = z.string().trim().min(1).max(200);
+const CodexQueuedMessageUpdateSchema = z.object({
+    id: CodexQueuedMessageIdSchema,
+    text: z.string().trim().min(1).max(100_000),
+}).strict();
+const CodexQueuedMessageSteerSchema = z.object({
+    id: CodexQueuedMessageIdSchema,
+}).strict();
 
 /**
  * Main entry point for the codex command with ink UI
@@ -139,6 +150,8 @@ export async function runCodex(opts: {
     const settings = await readSettings();
     let machineId = settings?.machineId;
     const sandboxConfig = opts.noSandbox ? undefined : settings?.sandboxConfig;
+    const client = new CodexAppServerClient(sandboxConfig);
+    const supportsQueueSteering = client.supportsTurnSteering();
     if (!machineId) {
         console.error(`[START] No machine ID found in settings, which is unexpected since authAndSetupMachineIfNeeded should have created it. Please report this issue on https://github.com/slopus/happy-cli/issues`);
         process.exit(1);
@@ -169,6 +182,10 @@ export async function runCodex(opts: {
         ...(forkedFromMessageId ? { forkedFromMessageId } : {}),
         ...(isSideChat ? { isSideChat: true } : {}),
     });
+    metadata.codexCapabilities = { queueSteering: supportsQueueSteering };
+    if (supportsQueueSteering) {
+        state.codexMessageQueue = { revision: 0, messages: [] };
+    }
 
     const skillCommands = await discoverCodexSkillCommands();
     if (skillCommands.length > 0) {
@@ -206,7 +223,6 @@ export async function runCodex(opts: {
     // Permission handler declared here so it can be updated in onSessionSwap callback
     // (assigned later at line ~385 after client setup)
     let permissionHandler: CodexPermissionHandler;
-    let client!: CodexAppServerClient;
     let reasoningProcessor!: ReasoningProcessor;
     let abortInProgress: Promise<void> | null = null;
     const { session: initialSession, reconnectionHandle } = setupOfflineReconnection({
@@ -258,6 +274,24 @@ export async function runCodex(opts: {
     }
 
     const messageQueue = new MessageQueue2<EnhancedMode>(hashCodexEnhancedMode);
+    const queueOperations = new AsyncLock();
+    let codexQueueRevision = 0;
+    const publishCodexQueue = () => {
+        if (!supportsQueueSteering) return;
+        const revision = ++codexQueueRevision;
+        const messages = messageQueue.trackedItems().map((item) => ({
+            id: item.id,
+            text: item.message,
+            createdAt: item.createdAt,
+        }));
+        session.updateAgentState((currentState) => ({
+            ...currentState,
+            codexMessageQueue: {
+                revision,
+                messages,
+            },
+        }));
+    };
 
     session.onFileEvent((fileEvent) => {
         const ev = fileEvent.content.data.ev;
@@ -377,11 +411,37 @@ export async function runCodex(opts: {
             appendSystemPrompt: messageAppendSystemPrompt,
             effort: messageEffort,
         };
-        const enqueueResult = enqueueCodexUserText({
-            text: message.content.text,
-            mode: enhancedMode,
-            queue: messageQueue,
-            attachments: attachmentsForThisMessage,
+        const enqueueResult = await queueOperations.inLock(() => {
+            if (supportsQueueSteering && message.meta?.followUpMode === 'queue') {
+                const parsedId = CodexQueuedMessageIdSchema.safeParse(message.localKey);
+                let id = parsedId.success ? parsedId.data : randomUUID();
+                while (messageQueue.getTracked(id)) {
+                    id = randomUUID();
+                }
+                const clear = isCodexClearText(message.content.text);
+                messageQueue.pushTracked({
+                    id,
+                    createdAt: Date.now(),
+                    message: message.content.text,
+                    mode: enhancedMode,
+                    attachments: attachmentsForThisMessage,
+                    isolate: clear,
+                });
+                publishCodexQueue();
+                return clear ? 'clear' as const : 'queued' as const;
+            }
+
+            const trackedBefore = messageQueue.trackedItems().length;
+            const result = enqueueCodexUserText({
+                text: message.content.text,
+                mode: enhancedMode,
+                queue: messageQueue,
+                attachments: attachmentsForThisMessage,
+            });
+            if (messageQueue.trackedItems().length !== trackedBefore) {
+                publishCodexQueue();
+            }
+            return result;
         });
         if (enqueueResult === 'clear') {
             logger.debug('[Codex] /clear command pushed to isolated queue');
@@ -597,8 +657,6 @@ export async function runCodex(opts: {
     // Start Context 
     //
 
-    client = new CodexAppServerClient(sandboxConfig);
-
     permissionHandler = new CodexPermissionHandler(session);
     // Drop any permission requests left in agent state from a previous CLI
     // process that died while a tool prompt was open — see the matching
@@ -616,6 +674,94 @@ export async function runCodex(opts: {
             session.sendSessionProtocolMessage(envelope);
         }
     });
+    const sendTrackedUserMessageToSession = async (item: QueueItem<EnhancedMode>) => {
+        if (!item.id) return;
+
+        const emittedAt = Date.now();
+        for (const [index, attachment] of (item.attachments ?? []).entries()) {
+            try {
+                const envelope = await session.uploadLocalImageAttachmentEnvelope(attachment, {
+                    id: `${item.id}:file:${index}`,
+                    time: emittedAt + index,
+                });
+                session.sendSessionProtocolMessage(envelope);
+            } catch (error) {
+                logger.warn('[Codex] Failed to publish queued image in session history', {
+                    queueId: item.id,
+                    errorName: error instanceof Error ? error.name : typeof error,
+                });
+            }
+        }
+
+        if (item.message.trim().length > 0) {
+            session.sendSessionProtocolMessage(createEnvelope('user', {
+                t: 'text',
+                text: item.message,
+            }, {
+                id: item.id,
+                time: emittedAt + (item.attachments?.length ?? 0),
+            }));
+        }
+    };
+
+    session.rpcHandlerManager.registerHandler('codex-update-queued-message', async (params: unknown) => {
+        const parsed = CodexQueuedMessageUpdateSchema.safeParse(params);
+        if (!parsed.success) {
+            throw new Error('Invalid queued message update');
+        }
+
+        return queueOperations.inLock(() => {
+            if (!messageQueue.updateTracked(parsed.data.id, parsed.data.text)) {
+                throw new Error('Queued message no longer exists');
+            }
+            publishCodexQueue();
+            return { ok: true, revision: codexQueueRevision };
+        });
+    });
+
+    session.rpcHandlerManager.registerHandler('codex-steer-queued-message', async (params: unknown) => {
+        const parsed = CodexQueuedMessageSteerSchema.safeParse(params);
+        if (!parsed.success) {
+            throw new Error('Invalid queued message steer request');
+        }
+        if (!supportsQueueSteering) {
+            throw new Error('Turn steering is not supported by this Codex runtime');
+        }
+
+        return queueOperations.inLock(async () => {
+            const item = messageQueue.getTracked(parsed.data.id);
+            if (!item) {
+                throw new Error('Queued message no longer exists');
+            }
+            if (!thinking || !client.threadId || !client.turnId) {
+                throw new Error('The active Codex turn already finished');
+            }
+            if (isCodexClearText(item.message)) {
+                throw new Error('Queued control commands cannot steer an active turn');
+            }
+
+            const imageInputs = await prepareCodexImageInputItems(item.attachments, {
+                sessionId: session.sessionId,
+            });
+            if ((item.attachments?.length ?? 0) > 0
+                && imageInputs.inputItems.length === 0
+                && item.message.trim().length === 0) {
+                throw new Error('No supported queued input is available to steer');
+            }
+
+            await client.steerTurn(item.message, {
+                clientUserMessageId: item.id,
+                extraInputItems: imageInputs.inputItems,
+            });
+            if (!messageQueue.removeTracked(parsed.data.id)) {
+                throw new Error('Queued message changed while steering');
+            }
+            publishCodexQueue();
+            await sendTrackedUserMessageToSession(item);
+            return { ok: true, revision: codexQueueRevision };
+        });
+    });
+
     const updateCodexGoalState = (message: Record<string, unknown>) => {
         const capabilities = codexGoalActionCapabilities(client.supportsGoalActions());
         const goalStatus = mapCodexGoalEventToAgentGoalStatus(
@@ -925,31 +1071,45 @@ export async function runCodex(opts: {
             }));
         }
 
-        let pending: { message: string; mode: EnhancedMode; isolate: boolean; hash: string; attachments?: PendingAttachment[] } | null = null;
+        let pending: QueueItem<EnhancedMode> | null = null;
 
         while (!shouldExit) {
             logActiveHandles('loop-top');
-            let message: { message: string; mode: EnhancedMode; isolate: boolean; hash: string; attachments?: PendingAttachment[] } | null = pending;
+            let message: QueueItem<EnhancedMode> | null = pending;
             pending = null;
             if (!message) {
                 // Capture the current signal to distinguish idle-abort from queue close
                 const waitSignal = abortController.signal;
-                const batch = await messageQueue.waitForMessagesAndGetAsString(waitSignal);
-                if (!batch) {
+                const hasMessages = await messageQueue.waitForMessages(waitSignal);
+                if (!hasMessages) {
                     // If wait was aborted (e.g., remote abort with no active inference), ignore and continue
                     if (waitSignal.aborted && !shouldExit) {
                         logger.debug('[codex]: Wait aborted while idle; ignoring and continuing');
                         continue;
                     }
-                    logger.debug(`[codex]: batch=${!!batch}, shouldExit=${shouldExit}`);
+                    logger.debug(`[codex]: hasMessages=${hasMessages}, shouldExit=${shouldExit}`);
                     break;
                 }
-                message = batch;
+                message = await queueOperations.inLock(() => {
+                    const next = messageQueue.takeNext();
+                    if (next?.id) {
+                        publishCodexQueue();
+                    }
+                    return next;
+                });
+                // A concurrent steer may have consumed the item that woke us.
+                if (!message) {
+                    continue;
+                }
             }
 
             // Defensive check for TS narrowing
             if (!message) {
                 break;
+            }
+
+            if (message.id) {
+                await sendTrackedUserMessageToSession(message);
             }
 
             if (isCodexClearText(message.message)) {

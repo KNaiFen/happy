@@ -11,4 +11,9 @@ describe('MessageMetaSchema', () => {
         expect(parsed.permissionMode).toBe('team-custom-mode');
         expect(parsed.model).toBe('custom-model');
     });
+
+    it('accepts CLI-owned queued follow-ups', () => {
+        const parsed = MessageMetaSchema.parse({ followUpMode: 'queue' });
+        expect(parsed.followUpMode).toBe('queue');
+    });
 });

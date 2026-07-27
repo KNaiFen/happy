@@ -218,6 +218,7 @@ export const MessageMetaSchema = z.object({
   allowedTools: z.array(z.string()).nullable().optional(), // Allowed tools for this message (null = reset)
   disallowedTools: z.array(z.string()).nullable().optional(), // Disallowed tools for this message (null = reset)
   effort: z.string().nullable().optional(),
+  followUpMode: z.literal('queue').optional(),
 })
 
 export type MessageMeta = z.infer<typeof MessageMetaSchema>
@@ -283,6 +284,7 @@ export const FileEventMessageSchema = z.object({
       }),
     }),
   }),
+  meta: MessageMetaSchema.optional(),
 })
 
 export type FileEventMessage = z.infer<typeof FileEventMessageSchema>
@@ -350,6 +352,9 @@ export type Metadata = {
   archivedBy?: string,
   archiveReason?: string,
   flavor?: string
+  codexCapabilities?: {
+    queueSteering?: boolean
+  }
   sandbox?: SandboxConfig | null
   dangerouslySkipPermissions?: boolean | null
   /** Lineage for sessions created via the fork / duplicate flow. */
@@ -448,4 +453,12 @@ export type AgentState = {
     }
   }
   agentGoalStatus?: AgentGoalStatus
+  codexMessageQueue?: {
+    revision: number,
+    messages: Array<{
+      id: string,
+      text: string,
+      createdAt: number,
+    }>,
+  }
 }

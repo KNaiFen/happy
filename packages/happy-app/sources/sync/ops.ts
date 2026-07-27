@@ -706,6 +706,20 @@ export async function sessionAbort(sessionId: string): Promise<void> {
     });
 }
 
+/** Update one CLI-owned Codex follow-up without changing its FIFO position. */
+export async function sessionUpdateCodexQueuedMessage(
+    sessionId: string,
+    id: string,
+    text: string,
+): Promise<void> {
+    await apiSocket.sessionRPC(sessionId, 'codex-update-queued-message', { id, text });
+}
+
+/** Move one CLI-owned Codex follow-up into the currently active turn. */
+export async function sessionSteerCodexQueuedMessage(sessionId: string, id: string): Promise<void> {
+    await apiSocket.sessionRPC(sessionId, 'codex-steer-queued-message', { id });
+}
+
 /**
  * Allow a permission request
  */

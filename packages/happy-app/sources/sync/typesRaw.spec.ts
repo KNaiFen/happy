@@ -1658,6 +1658,31 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
             }
         });
 
+        it('hides queued source records until the CLI executes or steers them', () => {
+            const queuedUser = normalizeRawMessage('queued-user', 'queued-user', 1, {
+                role: 'user',
+                localKey: 'queued-user',
+                content: { type: 'text', text: 'queued follow-up' },
+                meta: { followUpMode: 'queue' },
+            });
+            const queuedFile = normalizeRawMessage('queued-file', 'queued-file', 1, {
+                role: 'session',
+                content: {
+                    type: 'session',
+                    data: {
+                        id: 'queued-file-envelope',
+                        time: 1,
+                        role: 'user',
+                        ev: { t: 'file', ref: 'file-ref', name: 'guide.png', size: 12 },
+                    },
+                },
+                meta: { followUpMode: 'queue' },
+            });
+
+            expect(queuedUser).toBeNull();
+            expect(queuedFile).toBeNull();
+        });
+
         it('drops persisted control-only task notifications for user and agent envelopes', () => {
             const notification = `<task-notification>
 <task-id>agent-123</task-id>

@@ -17,4 +17,16 @@ describe('UserMessageSchema', () => {
             effort: 'ultra',
         });
     });
+
+    it('preserves queued follow-up identity and delivery mode', () => {
+        const message = UserMessageSchema.parse({
+            role: 'user',
+            content: { type: 'text', text: 'check the failing test' },
+            localKey: 'queued-message-1',
+            meta: { followUpMode: 'queue' },
+        });
+
+        expect(message.localKey).toBe('queued-message-1');
+        expect(message.meta?.followUpMode).toBe('queue');
+    });
 });
