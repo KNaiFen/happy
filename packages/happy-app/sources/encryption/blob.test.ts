@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import sodium from 'libsodium-wrappers';
+
+const { testSodium } = vi.hoisted(() => ({
+    testSodium: require('libsodium-wrappers'),
+}));
 
 // Mock expo-crypto to use Node.js crypto
 vi.mock('expo-crypto', () => ({
@@ -11,8 +14,7 @@ vi.mock('expo-crypto', () => ({
 
 // Mock the libsodium.lib import to use the Node.js libsodium-wrappers
 vi.mock('@/encryption/libsodium.lib', () => {
-    const s = require('libsodium-wrappers');
-    return { default: s };
+    return { default: testSodium };
 });
 
 import { encryptBlob, decryptBlob } from './blob';
@@ -22,7 +24,7 @@ const TEST_KEY = new Uint8Array(32);
 for (let i = 0; i < 32; i++) TEST_KEY[i] = i;
 
 beforeAll(async () => {
-    await sodium.ready;
+    await testSodium.ready;
 });
 
 describe('blob encryption', () => {
