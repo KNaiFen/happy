@@ -1,4 +1,8 @@
 import * as z from 'zod';
+import {
+    AgentDefaultOverridesSchema,
+    type AgentDefaultOverrides,
+} from './agentDefaults';
 
 //
 // Schema
@@ -19,6 +23,11 @@ export const LocalSettingsSchema = z.object({
     // Persisted so the layout survives reloads and long absences.
     sidebarPanelsOpen: z.array(z.enum(['changes', 'allFiles', 'sideChat'])).describe('Open right-sidebar panels, in tab order'),
     sidebarPanelActive: z.enum(['changes', 'allFiles', 'sideChat']).nullable().describe('Currently active right-sidebar panel (null shows the picker)'),
+    // Agent defaults are mirrored to account settings, but the device-local
+    // copy is authoritative during startup so a stale server response cannot
+    // undo the user's selection after an app restart.
+    agentDefaultOverrides: AgentDefaultOverridesSchema.describe('Device-local copy of user-selected agent defaults'),
+    agentDefaultOverridesMigrated: z.boolean().describe('Whether synced agent defaults have been imported into local settings'),
     // CLI version acknowledgments - keyed by machineId
     acknowledgedCliVersions: z.record(z.string(), z.string()).describe('Acknowledged CLI versions per machine'),
 });
@@ -48,6 +57,8 @@ export const localSettingsDefaults: LocalSettings = {
     zenMode: false,
     sidebarPanelsOpen: [],
     sidebarPanelActive: null,
+    agentDefaultOverrides: {},
+    agentDefaultOverridesMigrated: false,
     acknowledgedCliVersions: {},
 };
 Object.freeze(localSettingsDefaults);
@@ -70,4 +81,17 @@ export function localSettingsParse(settings: unknown): LocalSettings {
 
 export function applyLocalSettings(settings: LocalSettings, delta: Partial<LocalSettings>): LocalSettings {
     return { ...localSettingsDefaults, ...settings, ...delta };
+}
+
+export function migrateAgentDefaultOverridesToLocal(
+    settings: LocalSettings,
+    syncedOverrides: AgentDefaultOverrides,
+): LocalSettings {
+    if (settings.agentDefaultOverridesMigrated) {
+        return settings;
+    }
+    return applyLocalSettings(settings, {
+        agentDefaultOverrides: syncedOverrides,
+        agentDefaultOverridesMigrated: true,
+    });
 }

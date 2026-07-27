@@ -23,7 +23,7 @@ import { Typography } from '@/constants/Typography';
 import { layout } from './layout';
 import { t } from '@/text';
 import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
-import { useAllMachines, useSessions, useSetting } from '@/sync/storage';
+import { useAgentDefaultOverrides, useAllMachines, useSessions, useSetting } from '@/sync/storage';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
 import { formatLastSeen, formatPathRelativeToHome } from '@/utils/sessionUtils';
 import { isMachineOnline } from '@/utils/machineUtils';
@@ -239,7 +239,7 @@ const styles = StyleSheet.create((theme) => ({
         marginLeft: 8,
     },
     sendButtonActive: {
-        backgroundColor: '#F5F5F5',
+        backgroundColor: theme.colors.fab.background,
     },
     modalRoot: {
         flex: 1,
@@ -487,7 +487,7 @@ export const HomeDock = React.memo(({
     const setPermissionMode = useNewSessionDraft((state) => state.setPermissionMode);
     const setModelMode = useNewSessionDraft((state) => state.setModelMode);
     const setEffortLevel = useNewSessionDraft((state) => state.setEffortLevel);
-    const defaultOverrides = useSetting('agentDefaultOverrides');
+    const defaultOverrides = useAgentDefaultOverrides();
     const machines = useAllMachines({ includeOffline: true });
     const sessions = useSessions();
     const selectedMachine = React.useMemo(
@@ -1001,12 +1001,15 @@ export const HomeDock = React.memo(({
                     accessibilityLabel="Send"
                 >
                     {isSubmitting ? (
-                        <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                        <ActivityIndicator
+                            size="small"
+                            color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
+                        />
                     ) : (
                         <Ionicons
                             name="arrow-up"
-                            size={16}
-                            color={canSubmit ? '#111111' : theme.colors.textSecondary}
+                            size={19}
+                            color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
                         />
                     )}
                 </BubblePressable>
@@ -1112,12 +1115,15 @@ export const HomeDock = React.memo(({
                             accessibilityLabel="Send"
                         >
                         {isSubmitting ? (
-                            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                            <ActivityIndicator
+                                size="small"
+                                color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
+                            />
                         ) : (
                             <Ionicons
                                 name="arrow-up"
-                                size={16}
-                                color={canSubmit ? '#111111' : theme.colors.textSecondary}
+                                size={19}
+                                color={canSubmit ? theme.colors.fab.icon : theme.colors.textSecondary}
                             />
                         )}
                         </BubblePressable>

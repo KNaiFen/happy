@@ -595,7 +595,9 @@ class Sync {
             }
         }
 
-        const modeMeta = resolveMessageModeMeta(session, storage.getState().settings);
+        const modeMeta = resolveMessageModeMeta(session, {
+            agentDefaultOverrides: storage.getState().localSettings.agentDefaultOverrides,
+        });
         const { displayText, source = 'chat', attachments } = options ?? {};
 
         const flavor = session.metadata?.flavor;

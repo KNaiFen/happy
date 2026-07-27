@@ -23,3 +23,11 @@
 - [2026-07-27] Target self-contained local Android release builds to arm64-v8a.
   - Why: The intended Snapdragon 8 Elite device uses a 64-bit ARM CPU, so bundling 32-bit ARM and emulator x86 libraries only increases APK size.
   - Impact: `android:local-release` passes `-PreactNativeArchitectures=arm64-v8a`; normal upstream Android build profiles retain their existing architecture configuration.
+
+- [2026-07-27] Keep Agent Defaults in device-local storage and mirror them to account settings.
+  - Why: Account settings can briefly return an older value during startup and must not undo an explicit device selection after an app restart.
+  - Impact: Agent Defaults migrate once from synced settings, all runtime consumers read the local copy, and changes continue to sync for backward compatibility.
+
+- [2026-07-27] Increment affected distributables by one minor version for every completed code-change task.
+  - Why: Locally built APP and CLI artifacts need unambiguous filenames and in-product versions.
+  - Impact: This task advances the APP to 1.8.0 and the CLI npm package to 1.3.0; each future task that changes either distributable resets its patch component while incrementing its minor component.

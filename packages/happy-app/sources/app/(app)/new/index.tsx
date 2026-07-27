@@ -33,7 +33,7 @@ import { KeyboardAvoidingView, KeyboardStickyView } from 'react-native-keyboard-
 import Constants from 'expo-constants';
 import { useHeaderHeight } from '@/utils/responsive';
 import { t } from '@/text';
-import { useAllMachines, useLocalSetting, useSessions, useSetting, storage } from '@/sync/storage';
+import { useAgentDefaultOverrides, useAllMachines, useLocalSetting, useSessions, useSetting, storage } from '@/sync/storage';
 import type { NewSessionAgentType } from '@/sync/persistence';
 import { sync } from '@/sync/sync';
 import { isMachineOnline } from '@/utils/machineUtils';
@@ -723,7 +723,7 @@ function NewSessionScreen() {
     const allMachines = useAllMachines({ includeOffline: true });
     const sessions = useSessions();
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
-    const agentDefaultOverrides = useSetting('agentDefaultOverrides');
+    const agentDefaultOverrides = useAgentDefaultOverrides();
     const fileDiffsSidebarEnabled = useSetting('fileDiffsSidebar');
     const zenMode = useLocalSetting('zenMode');
     const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -1788,20 +1788,23 @@ function NewSessionScreen() {
     );
 
     const composerPlaceholder = selectedAgent === 'codex' ? 'Ask Codex' : `Ask ${agent.label}`;
-    const sendButtonIconColor = isNativeMobile
-        ? theme.colors.text
-        : theme.colors.button.primary.tint;
+    const mobilePrimaryActionActive = isNativeMobile && (canSend || isSpawning);
+    const sendButtonIconColor = mobilePrimaryActionActive
+        ? theme.colors.fab.icon
+        : isNativeMobile
+            ? theme.colors.text
+            : theme.colors.button.primary.tint;
     const sendButtonNode = (
         <MobileGlassSurface
-            enabled={isNativeMobile}
+            enabled={isNativeMobile && !mobilePrimaryActionActive}
             interactive={!!canSend}
             style={[
                 styles.sendButton,
-                isSpawning ? styles.sendButtonActive :
-                    canSend ? styles.sendButtonActive : styles.sendButtonInactive,
                 isNativeMobile && styles.mobileSendButton,
-                isNativeMobile && canSend && styles.mobileSendButtonActive,
-                isNativeMobile && !canSend && styles.mobileSendButtonInactive,
+                isSpawning || canSend
+                    ? (isNativeMobile ? styles.mobileSendButtonActive : styles.sendButtonActive)
+                    : styles.sendButtonInactive,
+                isNativeMobile && !mobilePrimaryActionActive && styles.mobileSendButtonInactive,
             ]}
         >
             <Pressable
@@ -1820,7 +1823,7 @@ function NewSessionScreen() {
                 ) : (
                     <Octicons
                         name="arrow-up"
-                        size={isNativeMobile ? 18 : 16}
+                        size={isNativeMobile ? 19 : 16}
                         color={sendButtonIconColor}
                         style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
                     />
@@ -2536,7 +2539,8 @@ const styles = StyleSheet.create((theme) => ({
         overflow: 'hidden',
     },
     mobileSendButtonActive: {
-        opacity: 1,
+        backgroundColor: theme.colors.fab.background,
+        borderColor: theme.colors.fab.background,
     },
     mobileSendButtonInactive: {
         opacity: 0.56,

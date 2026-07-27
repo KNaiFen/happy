@@ -6,6 +6,7 @@
 - Keep changes scoped, reviewable, and consistent with existing project conventions.
 - Update `.agents/context.md`, `.agents/decisions.md`, and `.agents/open-items.md` when project state or durable decisions change.
 - Verify the smallest relevant surface before marking a task complete.
+- For every completed task that changes distributable code, increment the minor version of each affected distributable and reset its patch component to zero.
 - Commit each completed task with a short Chinese commit subject.
 
 ## Sync To Main

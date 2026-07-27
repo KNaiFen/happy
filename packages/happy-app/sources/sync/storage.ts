@@ -18,7 +18,8 @@ import { NormalizedMessage } from "./typesRaw";
 import { isMachineOnline } from '@/utils/machineUtils';
 import { getSessionName, getSessionSubtitle, getSessionAvatarId, type SessionState } from '@/utils/sessionUtils';
 import { applySettings, Settings } from "./settings";
-import { LocalSettings, applyLocalSettings } from "./localSettings";
+import { LocalSettings, applyLocalSettings, migrateAgentDefaultOverridesToLocal } from "./localSettings";
+import type { AgentDefaultOverrides } from './agentDefaults';
 import { Purchases, customerInfoToPurchases } from "./purchases";
 import { Profile } from "./profile";
 import { UserProfile, RelationshipUpdatedEvent } from "./friendTypes";
@@ -357,6 +358,14 @@ function buildSessionListViewData(
 export const storage = create<StorageState>()((set, get) => {
     let { settings, version } = loadSettings();
     let localSettings = loadLocalSettings();
+    const migratedLocalSettings = migrateAgentDefaultOverridesToLocal(
+        localSettings,
+        settings.agentDefaultOverrides,
+    );
+    if (migratedLocalSettings !== localSettings) {
+        localSettings = migratedLocalSettings;
+        saveLocalSettings(localSettings);
+    }
     let purchases = loadPurchases();
     let profile = loadProfile();
     let sessionDrafts = loadSessionDrafts();
@@ -1452,6 +1461,25 @@ export function useSettingMutable<K extends keyof Settings>(name: K): [Settings[
 
 export function useSetting<K extends keyof Settings>(name: K): Settings[K] {
     return storage(useShallow((state) => state.settings[name]));
+}
+
+export function useAgentDefaultOverrides(): AgentDefaultOverrides {
+    return useLocalSetting('agentDefaultOverrides');
+}
+
+export function useAgentDefaultOverridesMutable(): [
+    AgentDefaultOverrides,
+    (value: AgentDefaultOverrides) => void,
+] {
+    const value = useAgentDefaultOverrides();
+    const setValue = React.useCallback((next: AgentDefaultOverrides) => {
+        storage.getState().applyLocalSettings({
+            agentDefaultOverrides: next,
+            agentDefaultOverridesMigrated: true,
+        });
+        sync.applySettings({ agentDefaultOverrides: next });
+    }, []);
+    return [value, setValue];
 }
 
 export function useLocalSettings(): LocalSettings {

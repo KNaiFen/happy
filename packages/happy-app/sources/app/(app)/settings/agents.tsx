@@ -10,7 +10,7 @@ import {
     getHardcodedPermissionModes,
     type ModeOption,
 } from '@/components/modelModeOptions';
-import { useAllMachines, useSettingMutable } from '@/sync/storage';
+import { useAgentDefaultOverridesMutable, useAllMachines } from '@/sync/storage';
 import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
 import { isMachineOnline } from '@/utils/machineUtils';
 import {
@@ -53,7 +53,7 @@ function optionName(options: ModeOption[], key: string | null | undefined): stri
 
 export default function AgentDefaultsSettingsScreen() {
     const { theme } = useUnistyles();
-    const [agentDefaultOverrides, setAgentDefaultOverrides] = useSettingMutable('agentDefaultOverrides');
+    const [agentDefaultOverrides, setAgentDefaultOverrides] = useAgentDefaultOverridesMutable();
     const [expanded, setExpanded] = React.useState<ExpandedField>(null);
     const machines = useAllMachines({ includeOffline: true });
     const selectedMachineId = useNewSessionDraft((state) => state.selectedMachineId);

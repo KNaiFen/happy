@@ -179,7 +179,9 @@ export function useSessionQuickActions(
             throw new HappyError(t('sessionInfo.resumeSessionMissingMachine'), false);
         }
 
-        const modeMeta = resolveMessageModeMeta(session, storage.getState().settings);
+        const modeMeta = resolveMessageModeMeta(session, {
+            agentDefaultOverrides: storage.getState().localSettings.agentDefaultOverrides,
+        });
         const result = await machineResumeSession({
             machineId,
             sessionId: session.id,

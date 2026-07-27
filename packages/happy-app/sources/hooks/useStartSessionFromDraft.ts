@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useAllMachines, useSetting } from '@/sync/storage';
+import { useAgentDefaultOverrides, useAllMachines } from '@/sync/storage';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
 import { machineSpawnNewSession, sessionSetAgentModes, type SessionAgentModesPatch } from '@/sync/ops';
 import { sync } from '@/sync/sync';
@@ -30,7 +30,7 @@ function resolveOption<T extends { key: string }>(
 
 export function useStartSessionFromDraft() {
     const machines = useAllMachines({ includeOffline: true });
-    const defaultOverrides = useSetting('agentDefaultOverrides');
+    const defaultOverrides = useAgentDefaultOverrides();
     const navigateToSession = useNavigateToSession();
     const [isStarting, setIsStarting] = React.useState(false);
     const isStartingRef = React.useRef(false);

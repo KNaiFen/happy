@@ -390,10 +390,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginLeft: 1,
     },
     mobilePrimaryButtonActive: {
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.fab.background,
     },
     mobileStopButton: {
-        backgroundColor: theme.dark ? '#F5F5F5' : theme.colors.button.primary.background,
+        backgroundColor: theme.colors.fab.background,
     },
     sendButtonActive: {
         backgroundColor: theme.colors.button.primary.background,
@@ -692,7 +692,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const compactMobileComposer = Platform.OS !== 'web' && !isRunningOnMac() && screenWidth <= 700;
     const glassEnabled = compactMobileComposer;
     const useNativeSettingsMenus = compactMobileComposer;
-    const activeSendIconColor = glassEnabled ? theme.colors.text : theme.colors.button.primary.tint;
     const isSendBlocked = props.blockSend ?? false;
 
     // `hasText` drives only the send-button appearance/enabled state. It's
@@ -768,6 +767,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
     const shouldShowStopButton = primaryAction === 'stop';
     const canSendMessage = primaryAction === 'send';
+    const useGlassSendButton = glassEnabled && !shouldShowStopButton && !canSendMessage;
+    const activeSendIconColor = canSendMessage
+        ? theme.colors.fab.icon
+        : glassEnabled
+            ? theme.colors.text
+            : theme.colors.button.primary.tint;
     const mobileCanPressSendButton = !isAborting && primaryAction !== 'idle';
     const desktopCanPressSendButton = !props.isSending
         && !props.isSendDisabled
@@ -2058,7 +2063,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         <Shaker ref={shakerRef}>
                             <MobileGlassSurface
-                                enabled={glassEnabled && !shouldShowStopButton}
+                                enabled={useGlassSendButton}
                                 interactive={canPressSendButton}
                                 style={[
                                     styles.sendButton,
@@ -2067,8 +2072,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         : shouldShowStopButton ? styles.mobileStopButton
                                             : canSendMessage ? styles.mobilePrimaryButtonActive
                                                 : styles.sendButtonInactive,
-                                    glassEnabled && !shouldShowStopButton && styles.sendButtonGlass,
-                                    glassEnabled && !canPressSendButton && styles.sendButtonInactiveGlass,
+                                    useGlassSendButton && styles.sendButtonGlass,
+                                    useGlassSendButton && !canPressSendButton && styles.sendButtonInactiveGlass,
                                 ]}
                             >
                                 <BubblePressable
@@ -2088,13 +2093,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     {isAborting ? (
                                         <ActivityIndicator
                                             size="small"
-                                            color={shouldShowStopButton && theme.dark ? '#000000' : activeSendIconColor}
+                                            color={shouldShowStopButton ? theme.colors.fab.icon : activeSendIconColor}
                                         />
                                     ) : shouldShowStopButton ? (
                                         <Octicons
                                             name="stop"
                                             size={16}
-                                            color={theme.dark ? '#000000' : '#FFFFFF'}
+                                            color={theme.colors.fab.icon}
                                         />
                                     ) : isSendBlocked ? (
                                         <Ionicons
@@ -2105,7 +2110,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     ) : (
                                         <Octicons
                                             name="arrow-up"
-                                            size={16}
+                                            size={19}
                                             color={activeSendIconColor}
                                             style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
                                         />

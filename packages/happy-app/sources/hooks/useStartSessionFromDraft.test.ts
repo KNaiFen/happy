@@ -24,7 +24,7 @@ vi.mock('react', () => ({
 
 vi.mock('@/sync/storage', () => ({
     useAllMachines: () => mocks.machines,
-    useSetting: () => mocks.defaultOverrides,
+    useAgentDefaultOverrides: () => mocks.defaultOverrides,
 }));
 
 vi.mock('@/sync/agentDefaults', () => ({
