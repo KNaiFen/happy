@@ -2,10 +2,12 @@
 
 import type { CodexRuntimeEntityV4 } from '@slopus/happy-wire';
 import type { Thread } from './protocol';
+import type { ThreadGoal } from './protocol';
 
 export interface CodexV4MigrationSink {
     prepareMigration(threadId: string): Promise<void>;
     importThread(thread: Thread): void;
+    importGoal(threadId: string, goal: ThreadGoal | null): void;
     setSyncState(syncState: CodexRuntimeEntityV4['syncState']): Promise<void>;
     flush(): Promise<void>;
     flushOutboundOnce(): Promise<void>;
@@ -22,6 +24,7 @@ export interface CodexV4ChildThreadRoute {
 interface MigrationOptions {
     rootSink: CodexV4MigrationSink;
     readThread: (threadId: string) => Promise<Thread>;
+    readGoal?: (threadId: string) => Promise<ThreadGoal | null>;
     resolveChildSink: (route: CodexV4ChildThreadRoute) => Promise<CodexV4MigrationSink>;
 }
 
@@ -61,6 +64,10 @@ export class CodexV4Migrator {
                 seen.add(current.thread.id);
 
                 current.sink.importThread(current.thread);
+                current.sink.importGoal(
+                    current.thread.id,
+                    this.options.readGoal ? await this.options.readGoal(current.thread.id) : null,
+                );
                 await current.sink.flush();
                 await current.sink.flushOutboundOnce();
 

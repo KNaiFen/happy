@@ -33,6 +33,8 @@ import type {
     InjectItemsResponse,
     ThreadGoalSetParams,
     ThreadGoalSetResponse,
+    ThreadGoalGetParams,
+    ThreadGoalGetResponse,
     ThreadGoalClearParams,
     ThreadGoalClearResponse,
     Thread,
@@ -1239,6 +1241,13 @@ export class CodexAppServerClient {
             ...(opts.tokenBudget !== undefined ? { tokenBudget: opts.tokenBudget } : {}),
         };
         return await this.request('thread/goal/set', params) as ThreadGoalSetResponse;
+    }
+
+    async getGoal(opts: {
+        threadId: string;
+    }): Promise<ThreadGoalGetResponse> {
+        const params: ThreadGoalGetParams = { threadId: opts.threadId };
+        return await this.request('thread/goal/get', params) as ThreadGoalGetResponse;
     }
 
     async clearGoal(opts: {

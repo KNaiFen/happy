@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CodexEntityV4Schema,
   CodexPartEntityV4Schema,
+  CodexThreadGoalV4Schema,
   MAX_CODEX_SYNC_V4_PART_BYTES,
   encodeSyncV4Aad,
   encodeSyncV4OpaqueEntityIdInput,
@@ -26,6 +27,18 @@ const part = {
 };
 
 describe('Codex Sync v4 entity schemas', () => {
+  it('keeps official goal progress in the recoverable thread projection', () => {
+    expect(CodexThreadGoalV4Schema.parse({
+      objective: 'finish sync v4',
+      status: 'active',
+      tokenBudget: null,
+      tokensUsed: 12,
+      timeUsedSeconds: 3,
+      createdAt: 10,
+      updatedAt: 11,
+    })).toMatchObject({ objective: 'finish sync v4', status: 'active' });
+  });
+
   it('accepts official reasoning summaries as ordered parts', () => {
     expect(CodexEntityV4Schema.parse(part)).toEqual(part);
   });

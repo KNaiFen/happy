@@ -195,4 +195,59 @@ describe('resolveVisibleAgentGoalStatus', () => {
 
         expect(visible).toBeNull();
     });
+
+    it('uses the recoverable v4 goal after activation', () => {
+        const visible = resolveVisibleAgentGoalStatus(sessionWith({ agentState: null }), {
+            activated: true,
+            thread: {
+                threadId: 'codex-thread-v4',
+                goal: {
+                    objective: 'finish sync v4',
+                    status: 'blocked',
+                    tokenBudget: 10_000,
+                    tokensUsed: 200,
+                    timeUsedSeconds: 30,
+                    createdAt: 10_000,
+                    updatedAt: 11_000,
+                },
+            },
+        });
+
+        expect(visible).toMatchObject({
+            source: 'codex',
+            sourceSessionId: 'codex-thread-v4',
+            text: 'finish sync v4',
+        });
+    });
+
+    it('does not fall back to stale v3 goal after v4 activation', () => {
+        const session = sessionWith({
+            agentState: {
+                agentGoalStatus: {
+                    status: 'active',
+                    source: 'codex',
+                    text: 'stale v3 goal',
+                    observedAt: 9_000,
+                    sourceSessionId: 'codex-thread-1',
+                },
+            },
+        });
+
+        expect(resolveVisibleAgentGoalStatus(session, { activated: true, thread: null })).toBeNull();
+        expect(resolveVisibleAgentGoalStatus(session, {
+            activated: true,
+            thread: {
+                threadId: 'codex-thread-v4',
+                goal: {
+                    objective: 'completed goal',
+                    status: 'complete',
+                    tokenBudget: null,
+                    tokensUsed: 1,
+                    timeUsedSeconds: 1,
+                    createdAt: 10_000,
+                    updatedAt: 11_000,
+                },
+            },
+        })).toBeNull();
+    });
 });

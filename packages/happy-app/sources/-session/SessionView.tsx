@@ -29,7 +29,7 @@ import { voiceHooks } from '@/realtime/hooks/voiceHooks';
 import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
 import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat, sessionKill, sessionArchive } from '@/sync/ops';
-import { storage, useAgentDefaultOverrides, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
+import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { useSession } from '@/sync/storage';
 import { getSessionForkSource } from '@/utils/sessionFork';
 import { useHappyAction } from '@/hooks/useHappyAction';
@@ -632,6 +632,7 @@ export function SessionViewLoaded({
     embedded?: boolean;
     onHeaderBackdropVisibilityChange?: (visible: boolean) => void;
 }) {
+    const codexV4Session = useCodexV4Session(sessionId);
     const { theme } = useUnistyles();
     const router = useRouter();
     const safeArea = useSafeAreaInsets();
@@ -841,8 +842,9 @@ export function SessionViewLoaded({
         : null;
 
     const visibleAgentGoal = React.useMemo(() => (
-        resolveVisibleAgentGoalStatus(session)
+        resolveVisibleAgentGoalStatus(session, codexV4Session)
     ), [
+        codexV4Session,
         session.agentState?.agentGoalStatus,
         session.presence,
         session.metadata?.claudeSessionId,

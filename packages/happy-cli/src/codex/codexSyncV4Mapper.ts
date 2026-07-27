@@ -22,6 +22,7 @@ import type { SyncV4Client } from '@/api/syncV4Client';
 import type {
     ServerNotification,
     Thread,
+    ThreadGoal,
     ThreadItem,
     Turn,
 } from './protocol';
@@ -83,6 +84,7 @@ export class CodexSyncV4Mapper {
     private readonly activeTurnByThread = new Map<string, string>();
     private readonly diagnosticSequenceByTurn = new Map<string, number>();
     private readonly unknownNotificationMethods = new Map<string, number>();
+    private readonly liveGoalObserved = new Set<string>();
     private pipeline: Promise<void> = Promise.resolve();
     private lastError: unknown = null;
     private closed = false;
@@ -109,6 +111,11 @@ export class CodexSyncV4Mapper {
     importThread(thread: Thread): void {
         if (this.closed) return;
         void this.enqueue(() => this.applyThreadSnapshot(thread)).catch(() => undefined);
+    }
+
+    importGoal(threadId: string, goal: ThreadGoal | null): void {
+        if (this.closed) return;
+        void this.enqueue(() => this.applyThreadGoal(threadId, goal, true)).catch(() => undefined);
     }
 
     async setConnection(
@@ -231,6 +238,12 @@ export class CodexSyncV4Mapper {
                     notification.params.tokenUsage,
                 );
                 return;
+            case 'thread/goal/updated':
+                await this.applyThreadGoal(notification.params.threadId, notification.params.goal, false);
+                return;
+            case 'thread/goal/cleared':
+                await this.applyThreadGoal(notification.params.threadId, null, false);
+                return;
             case 'turn/started':
                 await this.applyTurn(notification.params.threadId, notification.params.turn, 'started');
                 return;
@@ -330,8 +343,6 @@ export class CodexSyncV4Mapper {
                 return;
             case 'serverRequest/resolved':
             case 'mcpServer/startupStatus/updated':
-            case 'thread/goal/updated':
-            case 'thread/goal/cleared':
                 return;
             default:
                 this.unknownNotificationMethods.set(
@@ -368,6 +379,7 @@ export class CodexSyncV4Mapper {
             status,
             canAcceptDirectInput: typeof raw.canAcceptDirectInput === 'boolean' ? raw.canAcceptDirectInput : null,
             settings: previous?.settings ?? emptyThreadSettings(),
+            goal: previous?.goal ?? null,
             tokenUsage: previous?.tokenUsage ?? null,
         };
         const runtime = this.runtimeFor(thread.id, status, now);
@@ -410,6 +422,24 @@ export class CodexSyncV4Mapper {
                 collaborationMode: asJsonValue(settings.collaborationMode),
                 personality: stringOrNull(settings.personality),
             },
+            updatedAt: now,
+        };
+        this.threads.set(threadId, next);
+        await this.publisher.publishEntity(next);
+    }
+
+    private async applyThreadGoal(
+        threadId: string,
+        goal: ThreadGoal | null,
+        fromSnapshot: boolean,
+    ): Promise<void> {
+        if (fromSnapshot && this.liveGoalObserved.has(threadId)) return;
+        if (!fromSnapshot) this.liveGoalObserved.add(threadId);
+        const now = this.now();
+        const thread = await this.ensureThread(threadId, now);
+        const next: CodexThreadEntityV4 = {
+            ...thread,
+            goal: goal ? normalizeThreadGoal(goal, now) : null,
             updatedAt: now,
         };
         this.threads.set(threadId, next);
@@ -710,6 +740,7 @@ export class CodexSyncV4Mapper {
             status: { type: 'notLoaded' },
             canAcceptDirectInput: null,
             settings: emptyThreadSettings(),
+            goal: null,
             tokenUsage: null,
         };
         const runtime = this.runtimeFor(threadId, thread.status, now, false);
@@ -994,6 +1025,18 @@ function normalizeThreadTokenUsage(usage: ThreadTokenUsage): ThreadTokenUsage {
         total: normalizeTokenUsageBreakdown(usage.total),
         last: normalizeTokenUsageBreakdown(usage.last),
         modelContextWindow: positiveIntOrNull(usage.modelContextWindow),
+    };
+}
+
+function normalizeThreadGoal(goal: ThreadGoal, fallbackTimestamp: number): NonNullable<CodexThreadEntityV4['goal']> {
+    return {
+        objective: goal.objective,
+        status: goal.status,
+        tokenBudget: goal.tokenBudget === null ? null : nonnegativeInt(goal.tokenBudget),
+        tokensUsed: nonnegativeInt(goal.tokensUsed),
+        timeUsedSeconds: nonnegativeInt(goal.timeUsedSeconds),
+        createdAt: toEpochMs(goal.createdAt, fallbackTimestamp),
+        updatedAt: toEpochMs(goal.updatedAt, fallbackTimestamp),
     };
 }
 

@@ -1237,6 +1237,7 @@ export async function runCodex(opts: {
             readThread: async (threadId) => (
                 await client.readThread({ threadId, includeTurns: true, emitSnapshot: false })
             ).thread,
+            readGoal: async (threadId) => (await client.getGoal({ threadId })).goal,
             createChildBinding: async (route, parentBinding) => {
                 const identity = await deriveCodexV4ChildSessionIdentity({
                     parentSessionId: parentBinding.sessionId,
@@ -1313,6 +1314,7 @@ export async function runCodex(opts: {
                 readThread: async (threadId) => (
                     await client.readThread({ threadId, includeTurns: true, emitSnapshot: false })
                 ).thread,
+                readGoal: async (threadId) => (await client.getGoal({ threadId })).goal,
                 resolveChildSink: (route) => router.migrationSinkForChild(route),
             });
             await migrator.prepareRoot(opts.resumeThreadId);

@@ -42,6 +42,17 @@ export const CodexThreadTokenUsageV4Schema = z.object({
   modelContextWindow: z.number().int().positive().nullable(),
 }).strict();
 
+export const CodexThreadGoalV4Schema = z.object({
+  objective: z.string().min(1),
+  status: z.enum(['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete']),
+  tokenBudget: z.number().int().nonnegative().nullable(),
+  tokensUsed: z.number().int().nonnegative(),
+  timeUsedSeconds: z.number().int().nonnegative(),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+}).strict();
+export type CodexThreadGoalV4 = z.infer<typeof CodexThreadGoalV4Schema>;
+
 export const CodexThreadEntityV4Schema = z.object({
   ...entityBaseShape,
   entityType: z.literal('codex.thread'),
@@ -69,6 +80,7 @@ export const CodexThreadEntityV4Schema = z.object({
     collaborationMode: jsonSchema.nullable(),
     personality: z.string().nullable(),
   }).strict(),
+  goal: CodexThreadGoalV4Schema.nullable(),
   tokenUsage: CodexThreadTokenUsageV4Schema.nullable(),
 }).strict();
 export type CodexThreadEntityV4 = z.infer<typeof CodexThreadEntityV4Schema>;

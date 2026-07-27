@@ -101,6 +101,59 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('CodexSyncV4Mapper', () => {
+    it('projects goal updates and clears into the recoverable thread entity', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            now: () => 1_800_000_000_000,
+        });
+        mapper.importThread(thread('thread-goal'));
+        mapper.handleNotification(notification({
+            method: 'thread/goal/updated',
+            params: {
+                threadId: 'thread-goal',
+                turnId: null,
+                goal: {
+                    threadId: 'thread-goal',
+                    objective: 'finish sync v4',
+                    status: 'active',
+                    tokenBudget: 10_000,
+                    tokensUsed: 500,
+                    timeUsedSeconds: 30,
+                    createdAt: 1_700_000_000,
+                    updatedAt: 1_700_000_010,
+                },
+            },
+        }));
+        await mapper.flush();
+        expect(publisher.latest('codex.thread')[0].goal).toEqual({
+            objective: 'finish sync v4',
+            status: 'active',
+            tokenBudget: 10_000,
+            tokensUsed: 500,
+            timeUsedSeconds: 30,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_010_000,
+        });
+
+        mapper.handleNotification(notification({
+            method: 'thread/goal/cleared',
+            params: { threadId: 'thread-goal' },
+        }));
+        mapper.importGoal('thread-goal', {
+            threadId: 'thread-goal',
+            objective: 'stale migration goal',
+            status: 'active',
+            tokenBudget: null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1_600_000_000,
+            updatedAt: 1_600_000_001,
+        });
+        await mapper.flush();
+        expect(publisher.latest('codex.thread')[0].goal).toBeNull();
+    });
+
     it('projects lifecycle and streaming deltas into stable in-place entities', async () => {
         const publisher = new RecordingPublisher();
         let now = 1_800_000_000_000;

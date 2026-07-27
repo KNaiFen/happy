@@ -1,8 +1,13 @@
+import type { CodexThreadEntityV4 } from '@slopus/happy-wire';
 import type { AgentGoalStatus, Session } from '@/sync/storageTypes';
 
 export type VisibleAgentGoalStatus = AgentGoalStatus & { status: 'active'; text: string; sourceSessionId: string };
 
 type GoalSession = Pick<Session, 'agentState' | 'presence' | 'metadata'>;
+type CodexV4GoalProjection = {
+    activated: boolean;
+    thread: Pick<CodexThreadEntityV4, 'threadId' | 'goal'> | null;
+};
 
 function expectedSourceSessionId(session: GoalSession, source: AgentGoalStatus['source']): string | null {
     if (source === 'claude') {
@@ -22,7 +27,24 @@ function sourceIdentityMatches(session: GoalSession, goal: VisibleAgentGoalStatu
         && goal.sourceSessionId === expected;
 }
 
-export function resolveVisibleAgentGoalStatus(session: GoalSession): VisibleAgentGoalStatus | null {
+export function resolveVisibleAgentGoalStatus(
+    session: GoalSession,
+    codexV4?: CodexV4GoalProjection | null,
+): VisibleAgentGoalStatus | null {
+    if (codexV4?.activated) {
+        const goal = codexV4.thread?.goal;
+        if (!goal || goal.status === 'complete') return null;
+        return {
+            source: 'codex',
+            observedAt: goal.updatedAt,
+            sourceSessionId: codexV4.thread!.threadId,
+            sourceRevision: goal.updatedAt,
+            status: 'active',
+            text: goal.objective,
+            capabilities: { clear: true, edit: true },
+        };
+    }
+
     const goal = session.agentState?.agentGoalStatus;
     if (!goal || goal.status !== 'active') {
         return null;

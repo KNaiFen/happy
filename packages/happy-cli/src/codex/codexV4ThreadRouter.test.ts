@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CodexRelationEntityV4 } from '@slopus/happy-wire';
-import type { ServerNotification, Thread } from './protocol';
+import type { ServerNotification, Thread, ThreadGoal } from './protocol';
 import {
     CodexV4ThreadRouter,
     type CodexV4SessionBinding,
@@ -10,6 +10,7 @@ class FakeMapper {
     readonly notifications: ServerNotification[] = [];
     readonly snapshots: Thread[] = [];
     readonly relations: CodexRelationEntityV4[] = [];
+    readonly goals: Array<{ threadId: string; goal: ThreadGoal | null }> = [];
 
     handleNotification(notification: ServerNotification): void {
         this.notifications.push(notification);
@@ -17,6 +18,10 @@ class FakeMapper {
 
     importThread(thread: Thread): void {
         this.snapshots.push(thread);
+    }
+
+    importGoal(threadId: string, goal: ThreadGoal | null): void {
+        this.goals.push({ threadId, goal });
     }
 
     async upsertRelation(relation: CodexRelationEntityV4): Promise<void> {

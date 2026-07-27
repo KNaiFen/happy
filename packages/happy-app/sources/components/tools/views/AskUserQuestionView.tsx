@@ -6,6 +6,9 @@ import { ToolSectionView } from '../ToolSectionView';
 import { sessionAllow } from '@/sync/ops';
 import { t } from '@/text';
 import { Ionicons } from '@expo/vector-icons';
+import { isMcpElicitationInput } from '@/sync/mcpElicitation';
+import { McpElicitationView } from './McpElicitationView';
+import { parseToolUserInputAnswers } from '@/sync/toolUserInput';
 
 interface QuestionOption {
     label: string;
@@ -167,7 +170,7 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
-export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
+const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
     const { theme } = useUnistyles();
     const [selections, setSelections] = React.useState<Map<number, Set<number>>>(new Map());
     const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -176,6 +179,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId 
     // Parse input
     const input = tool.input as AskUserQuestionInput | undefined;
     const questions = input?.questions;
+    const completedAnswers = React.useMemo(() => parseToolUserInputAnswers(tool.result), [tool.result]);
 
     if (!questions || !Array.isArray(questions) || questions.length === 0) {
         return null;
@@ -267,6 +271,8 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId 
                                 .map(optIndex => q.options[optIndex]?.label)
                                 .filter(Boolean)
                                 .join(', ')
+                            : q.id && completedAnswers[q.id]
+                                ? completedAnswers[q.id].join(', ')
                             : '-';
                         return (
                             <View key={qIndex} style={styles.submittedItem}>
@@ -362,3 +368,9 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId 
         </ToolSectionView>
     );
 });
+
+export const AskUserQuestionView = React.memo<ToolViewProps>((props) => (
+    isMcpElicitationInput(props.tool.input)
+        ? <McpElicitationView {...props} />
+        : <ChoiceQuestionView {...props} />
+));

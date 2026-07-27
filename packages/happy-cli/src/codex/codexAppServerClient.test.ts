@@ -1652,6 +1652,26 @@ describe('CodexAppServerClient sandbox integration', () => {
                     }, 0);
                 }
 
+                if (msg.method === 'thread/goal/get' && msg.id != null) {
+                    setTimeout(() => {
+                        pushJsonLine(stdout, {
+                            id: msg.id,
+                            result: {
+                                goal: {
+                                    threadId: 'thread-goal-1',
+                                    objective: 'finish the task',
+                                    status: 'active',
+                                    tokenBudget: null,
+                                    tokensUsed: 1,
+                                    timeUsedSeconds: 2,
+                                    createdAt: 1781680000,
+                                    updatedAt: 1781680001,
+                                },
+                            },
+                        });
+                    }, 0);
+                }
+
                 if (msg.method === 'thread/goal/clear' && msg.id != null) {
                     setTimeout(() => {
                         pushJsonLine(stdout, {
@@ -1682,6 +1702,9 @@ describe('CodexAppServerClient sandbox integration', () => {
         await expect(client.clearGoal({
             threadId: 'thread-goal-1',
         })).resolves.toEqual({ cleared: true });
+        await expect(client.getGoal({ threadId: 'thread-goal-1' })).resolves.toMatchObject({
+            goal: { objective: 'finish the task', status: 'active' },
+        });
 
         expect(requests).toEqual(expect.arrayContaining([
             expect.objectContaining({
@@ -1690,6 +1713,10 @@ describe('CodexAppServerClient sandbox integration', () => {
                     threadId: 'thread-goal-1',
                     objective: 'finish the task',
                 },
+            }),
+            expect.objectContaining({
+                method: 'thread/goal/get',
+                params: { threadId: 'thread-goal-1' },
             }),
             expect.objectContaining({
                 method: 'thread/goal/clear',

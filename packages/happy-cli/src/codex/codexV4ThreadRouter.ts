@@ -14,7 +14,7 @@ import type { CodexV4CommandProcessor } from './codexV4CommandProcessor';
 import type { CodexV4RequestBroker } from './codexV4RequestBroker';
 import type { CodexV4ChildThreadRoute, CodexV4MigrationSink } from './codexV4Migration';
 import { childThreadReferences } from './codexV4Migration';
-import type { ServerNotification, Thread, ThreadStatus } from './protocol';
+import type { ServerNotification, Thread, ThreadGoal, ThreadStatus } from './protocol';
 
 export interface CodexV4SessionBinding {
     sessionId: string;
@@ -29,6 +29,7 @@ export interface CodexV4SessionBinding {
 interface ThreadRouterOptions {
     rootBinding: CodexV4SessionBinding;
     readThread: (threadId: string) => Promise<Thread>;
+    readGoal?: (threadId: string) => Promise<ThreadGoal | null>;
     createChildBinding: (
         route: CodexV4ChildThreadRoute,
         parentBinding: CodexV4SessionBinding,
@@ -129,7 +130,13 @@ export class CodexV4ThreadRouter {
         } else if (!binding) {
             const hydrated = await this.options.readThread(threadId);
             binding = await this.bindingForSnapshot(hydrated);
-            if (binding === this.options.rootBinding) binding.mapper.importThread(hydrated);
+            if (binding === this.options.rootBinding) {
+                binding.mapper.importThread(hydrated);
+                binding.mapper.importGoal(
+                    threadId,
+                    this.options.readGoal ? await this.options.readGoal(threadId) : null,
+                );
+            }
         }
 
         binding.mapper.handleNotification(notification);
@@ -202,7 +209,10 @@ export class CodexV4ThreadRouter {
         this.bindingsByThread.set(thread.id, binding);
         const finalLineage = this.lineagesByChild.get(thread.id) ?? resolvedLineage;
         await this.publishRelation(thread, binding, finalLineage);
-        if (activate) await activateChildBinding(binding, thread);
+        if (activate) {
+            const goal = this.options.readGoal ? await this.options.readGoal(thread.id) : null;
+            await activateChildBinding(binding, thread, goal);
+        }
         return binding;
     }
 
@@ -348,13 +358,18 @@ function migrationSink(binding: CodexV4SessionBinding): CodexV4MigrationSink {
     return {
         prepareMigration: (threadId) => binding.mapper.prepareMigration(threadId),
         importThread: (thread) => binding.mapper.importThread(thread),
+        importGoal: (threadId, goal) => binding.mapper.importGoal(threadId, goal),
         setSyncState: (state) => binding.mapper.setSyncState(state),
         flush: () => binding.mapper.flush(),
         flushOutboundOnce: () => binding.syncClient.flushOutboundOnce(),
     };
 }
 
-async function activateChildBinding(binding: CodexV4SessionBinding, thread: Thread): Promise<void> {
+async function activateChildBinding(
+    binding: CodexV4SessionBinding,
+    thread: Thread,
+    goal: ThreadGoal | null,
+): Promise<void> {
     const sink = migrationSink(binding);
     await sink.prepareMigration(thread.id);
     await sink.flush();
@@ -363,6 +378,7 @@ async function activateChildBinding(binding: CodexV4SessionBinding, thread: Thre
     await sink.flush();
     await sink.flushOutboundOnce();
     sink.importThread(thread);
+    sink.importGoal(thread.id, goal);
     await sink.flush();
     await sink.flushOutboundOnce();
     await sink.setSyncState('ready');

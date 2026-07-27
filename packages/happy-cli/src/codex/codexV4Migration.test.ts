@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CodexRuntimeEntityV4 } from '@slopus/happy-wire';
-import type { Thread, ThreadItem, Turn } from './protocol';
+import type { Thread, ThreadGoal, ThreadItem, Turn } from './protocol';
 import {
     childThreadReferences,
     CodexV4Migrator,
@@ -82,6 +82,10 @@ class FakeSink implements CodexV4MigrationSink {
         this.events.push(`${this.name}:import:${value.id}`);
     }
 
+    importGoal(threadId: string, goal: ThreadGoal | null): void {
+        this.events.push(`${this.name}:goal:${threadId}:${goal?.objective ?? 'none'}`);
+    }
+
     async setSyncState(state: CodexRuntimeEntityV4['syncState']): Promise<void> {
         this.events.push(`${this.name}:state:${state}`);
     }
@@ -108,6 +112,16 @@ describe('CodexV4Migrator', () => {
         const routes: string[] = [];
         const migrator = new CodexV4Migrator({
             rootSink,
+            readGoal: async (threadId) => ({
+                threadId,
+                objective: `goal-${threadId}`,
+                status: 'active',
+                tokenBudget: null,
+                tokensUsed: 0,
+                timeUsedSeconds: 0,
+                createdAt: 1,
+                updatedAt: 2,
+            }),
             readThread: async (threadId) => snapshots.get(threadId)!,
             resolveChildSink: async (route) => {
                 routes.push([
@@ -131,6 +145,9 @@ describe('CodexV4Migrator', () => {
         expect(events).toContain('root:import:root');
         expect(events).toContain('child:import:child');
         expect(events).toContain('nested:import:nested');
+        expect(events).toContain('root:goal:root:goal-root');
+        expect(events).toContain('child:goal:child:goal-child');
+        expect(events).toContain('nested:goal:nested:goal-nested');
         const firstReady = events.findIndex((event) => event.endsWith(':state:ready'));
         const lastImport = Math.max(...events.map((event, index) => event.includes(':import:') ? index : -1));
         expect(firstReady).toBeGreaterThan(lastImport);
