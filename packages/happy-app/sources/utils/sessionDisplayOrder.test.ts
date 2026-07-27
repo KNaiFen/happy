@@ -23,6 +23,7 @@ function session(
         modelName: null,
         activitySummary: null,
         state: 'waiting',
+        statusUnknown: false,
         createdAt,
         hasDraft: false,
         active: true,

@@ -3,7 +3,7 @@ import { Session } from '@/sync/storageTypes';
 import { t } from '@/text';
 import { buildResumeCommand, buildResumeCommandBlock, ResumeCommandBlock } from './resumeCommand';
 
-export type SessionState = 'disconnected' | 'thinking' | 'waiting' | 'permission_required';
+export type SessionState = 'disconnected' | 'thinking' | 'waiting' | 'permission_required' | 'error';
 
 export interface SessionStatus {
     state: SessionState;
@@ -21,11 +21,59 @@ export interface SessionStatus {
  */
 export function useSessionStatus(session: Session): SessionStatus {
     const isOnline = session.presence === "online";
-    const hasPermissions = (session.agentState?.requests && Object.keys(session.agentState.requests).length > 0 ? true : false);
+    const hasPermissions = session.codexState
+        ? session.codexState.pendingApprovalCount > 0 || session.codexState.pendingUserInputCount > 0
+        : !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
 
     const vibingMessage = React.useMemo(() => {
         return vibingMessages[Math.floor(Math.random() * vibingMessages.length)].toLowerCase() + '…';
-    }, [isOnline, hasPermissions, session.thinking]);
+    }, [isOnline, hasPermissions, session.codexState?.execution.type, session.thinking]);
+
+    return resolveSessionStatus(session, vibingMessage);
+}
+
+export function resolveSessionStatus(session: Session, vibingMessage: string): SessionStatus {
+    const isOnline = session.presence === "online";
+    const codexState = session.codexState;
+    const hasPermissions = codexState
+        ? codexState.pendingApprovalCount > 0 || codexState.pendingUserInputCount > 0
+        : !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
+    const isExecuting = codexState
+        ? codexState.execution.type === 'active'
+        : session.thinking === true;
+    const hasSystemError = codexState?.execution.type === 'systemError';
+    const codexStatusUnknown = !!codexState && (
+        !isOnline
+        || codexState.connection !== 'connected'
+        || codexState.statusUnknown
+    );
+
+    if (codexStatusUnknown) {
+        const lastKnownStatus = hasPermissions
+            ? t('status.permissionRequired')
+            : isExecuting
+                ? vibingMessage
+                : hasSystemError
+                    ? t('status.error')
+                    : null;
+        return {
+            state: hasPermissions
+                ? 'permission_required'
+                : isExecuting
+                    ? 'thinking'
+                    : hasSystemError
+                        ? 'error'
+                        : 'waiting',
+            isConnected: false,
+            statusText: lastKnownStatus
+                ? `${lastKnownStatus} · ${t('status.unknown')}`
+                : t('status.unknown'),
+            shouldShowStatus: true,
+            statusColor: '#999',
+            statusDotColor: '#999',
+            isPulsing: false,
+        };
+    }
 
     if (!isOnline) {
         return {
@@ -51,7 +99,18 @@ export function useSessionStatus(session: Session): SessionStatus {
         };
     }
 
-    if (session.thinking === true) {
+    if (hasSystemError) {
+        return {
+            state: 'error',
+            isConnected: true,
+            statusText: t('status.error'),
+            shouldShowStatus: true,
+            statusColor: '#FF3B30',
+            statusDotColor: '#FF3B30',
+        };
+    }
+
+    if (isExecuting) {
         return {
             state: 'thinking',
             isConnected: true,

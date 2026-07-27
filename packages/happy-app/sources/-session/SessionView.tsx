@@ -641,6 +641,10 @@ export function SessionViewLoaded({
     const isTablet = useIsTablet();
     const realtimeStatus = useRealtimeStatus();
     const isCodexReadOnly = session.metadata?.codexReadOnly === true;
+    const isCodexV4Active = codexV4Session?.activated === true;
+    const isSessionExecuting = isCodexV4Active
+        ? codexV4Session.runtime?.execution.type === 'active'
+        : session.thinking;
     const { messages, isLoaded } = useSessionMessages(sessionId);
     const acknowledgedCliVersions = useLocalSetting('acknowledgedCliVersions');
     const zenMode = useLocalSetting('zenMode');
@@ -783,7 +787,7 @@ export function SessionViewLoaded({
         if (liveMessage.trim() || (expImageUpload && selectedImages.length > 0)) {
             const attachments = expImageUpload ? selectedImages : undefined;
             const shouldQueueInCli = session.metadata?.codexCapabilities?.queueSteering === true
-                && session.thinking === true;
+                && isSessionExecuting;
             await sync.sendMessage(sessionId, liveMessage, {
                 source: 'chat',
                 attachments,
@@ -792,7 +796,7 @@ export function SessionViewLoaded({
             composerHandleRef.current?.clearMessage();
             if (expImageUpload) clearImages();
         }
-    }, [sessionId, session.metadata?.codexCapabilities?.queueSteering, session.thinking, expImageUpload, selectedImages, clearImages]);
+    }, [sessionId, session.metadata?.codexCapabilities?.queueSteering, isSessionExecuting, expImageUpload, selectedImages, clearImages]);
     const [, handleSend] = useHappyAction(sendMessage);
 
     const handleAbort = React.useCallback(() => {
@@ -984,7 +988,8 @@ export function SessionViewLoaded({
             onEffortLevelChange={isRigReasoningSelectionEnabled(session.metadata) ? updateEffortLevel : undefined}
             metadata={session.metadata}
             connectionStatus={connectionStatus}
-            blockSend={isRig && session.thinking && session.metadata?.capabilities?.steering !== true}
+            blockSend={(isCodexV4Active && !sessionStatus.isConnected)
+                || (isRig && isSessionExecuting && session.metadata?.capabilities?.steering !== true)}
             onSend={handleSend}
             onMicPress={(embedded || isDisconnected) ? undefined : micButtonState.onMicPress}
             isMicActive={(embedded || isDisconnected) ? false : micButtonState.isMicActive}
@@ -1068,7 +1073,7 @@ export function SessionViewLoaded({
                     <CodexQueuedMessages
                         sessionId={sessionId}
                         messages={codexQueuedMessages}
-                        canSteer={session.metadata?.codexCapabilities?.queueSteering === true && session.thinking === true}
+                        canSteer={session.metadata?.codexCapabilities?.queueSteering === true && isSessionExecuting}
                     />
                 </CenteredInputWidth>
             )}

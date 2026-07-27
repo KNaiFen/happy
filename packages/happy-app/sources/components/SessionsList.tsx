@@ -417,6 +417,7 @@ const STATUS_CONFIG: Record<SessionState, { color: string; dotColor: string; isP
     thinking: { color: '#007AFF', dotColor: '#007AFF', isPulsing: true, isConnected: true },
     waiting: { color: '#34C759', dotColor: '#34C759', isPulsing: false, isConnected: true },
     permission_required: { color: '#FF9500', dotColor: '#FF9500', isPulsing: true, isConnected: true },
+    error: { color: '#FF3B30', dotColor: '#FF3B30', isPulsing: false, isConnected: true },
 };
 
 const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }: {
@@ -433,21 +434,36 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
     // Override to solid blue when session has unread results
     const status = session.hasUnread
         ? { ...baseStatus, color: '#007AFF', dotColor: '#007AFF', isPulsing: false, isConnected: baseStatus.isConnected }
-        : baseStatus;
+        : session.statusUnknown
+            ? STATUS_CONFIG.disconnected
+            : baseStatus;
 
     const vibingMessage = React.useMemo(() => {
         return vibingMessages[Math.floor(Math.random() * vibingMessages.length)].toLowerCase() + '…';
     }, [session.state]);
 
+    const knownStatusText = session.state === 'thinking'
+        ? vibingMessage
+        : session.state === 'permission_required'
+            ? t('status.permissionRequired')
+            : session.state === 'error'
+                ? t('status.error')
+                : null;
     const statusText = session.hasUnread
         ? t('status.unread')
-        : session.state === 'thinking'
-            ? vibingMessage
+        : session.statusUnknown
+            ? knownStatusText
+                ? `${knownStatusText} · ${t('status.unknown')}`
+                : t('status.unknown')
+            : session.state === 'thinking'
+                ? vibingMessage
             : session.state === 'disconnected'
                 ? t('status.lastSeen', { time: formatLastSeen(session.activeAt!, false) })
                 : session.state === 'permission_required'
                     ? t('status.permissionRequired')
-                    : t('status.online');
+                    : session.state === 'error'
+                        ? t('status.error')
+                        : t('status.online');
 
     const handlePress = React.useCallback(() => {
         navigateToSession(session.id);

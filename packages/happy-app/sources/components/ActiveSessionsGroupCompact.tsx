@@ -29,6 +29,7 @@ const STATUS_CONFIG: Record<SessionState, { color: string; dotColor: string; isP
     thinking: { color: '#007AFF', dotColor: '#007AFF', isPulsing: true, isConnected: true },
     waiting: { color: '#34C759', dotColor: '#34C759', isPulsing: false, isConnected: true },
     permission_required: { color: '#FF9500', dotColor: '#FF9500', isPulsing: true, isConnected: true },
+    error: { color: '#FF3B30', dotColor: '#FF3B30', isPulsing: false, isConnected: true },
 };
 
 interface ActiveSessionsGroupProps {
@@ -229,7 +230,9 @@ const CompactSessionRow = React.memo(({ session, selected, showBorder }: { sessi
     // Override to solid blue when session has unread results
     const status = session.hasUnread
         ? { ...baseStatus, color: '#007AFF', dotColor: '#007AFF', isPulsing: false, isConnected: baseStatus.isConnected }
-        : baseStatus;
+        : session.statusUnknown
+            ? STATUS_CONFIG.disconnected
+            : baseStatus;
     const navigateToSession = useNavigateToSession();
     const swipeableRef = React.useRef<Swipeable | null>(null);
     const swipeEnabled = Platform.OS !== 'web';
@@ -281,7 +284,7 @@ const CompactSessionRow = React.memo(({ session, selected, showBorder }: { sessi
                     color={theme.colors.textSecondary}
                 />
             );
-        } else if (session.state === 'permission_required' || session.state === 'thinking') {
+        } else if (session.state === 'permission_required' || session.state === 'thinking' || session.state === 'error') {
             indicator = <StatusDot color={status.dotColor} isPulsing={status.isPulsing} />;
         } else if (session.state === 'waiting') {
             indicator = <StatusDot color={theme.colors.textSecondary} isPulsing={false} />;

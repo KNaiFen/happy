@@ -98,6 +98,7 @@ export interface SessionRowData {
     modelName: string | null;
     activitySummary: string | null;
     state: SessionState;
+    statusUnknown: boolean;
     // Only present on inactive sessions — active sessions never show "last seen"
     // and activeAt updates on every heartbeat, causing needless deep-equal diffs
     activeAt?: number;
@@ -118,13 +119,21 @@ function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): 
         ? session.codexState.pendingApprovalCount > 0 || session.codexState.pendingUserInputCount > 0
         : !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
     const codexExecuting = session.codexState?.execution.type === 'active';
+    const codexSystemError = session.codexState?.execution.type === 'systemError';
+    const statusUnknown = !!session.codexState && (
+        !isOnline
+        || session.codexState.connection !== 'connected'
+        || session.codexState.statusUnknown
+    );
 
     let state: SessionState;
     if (hasPermissions) {
         state = 'permission_required';
-    } else if (codexExecuting || session.thinking) {
+    } else if (codexSystemError) {
+        state = 'error';
+    } else if (session.codexState ? codexExecuting : session.thinking) {
         state = 'thinking';
-    } else if (!isOnline || (session.codexState && session.codexState.connection !== 'connected')) {
+    } else if (!isOnline && !session.codexState) {
         state = 'disconnected';
     } else {
         state = 'waiting';
@@ -146,6 +155,7 @@ function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): 
             ? rigActivity.map((item) => `${item.count}${item.queued ? `+${item.queued}` : ''} ${item.key}`).join(' · ')
             : null,
         state,
+        statusUnknown,
         ...(!session.active && { activeAt: session.activeAt, createdAt: session.createdAt }),
         hasDraft: !!session.draft,
         active: session.active,
