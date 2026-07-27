@@ -91,6 +91,17 @@ type CodexWireResponse = {
     error?: { code: number | string; message?: string; data?: unknown };
 };
 
+class CodexRpcResponseError extends Error {
+    constructor(
+        readonly method: string,
+        readonly code: number | string,
+        readonly providerMessage: string | null,
+    ) {
+        super(`${method} failed (code=${code})`);
+        this.name = 'CodexRpcResponseError';
+    }
+}
+
 type PendingRequest = {
     resolve: (result: unknown) => void;
     reject: (error: Error) => void;
@@ -179,6 +190,13 @@ function isStableServerRequestMethod(method: string): method is CodexServerReque
         || method === 'item/permissions/requestApproval'
         || method === 'item/tool/requestUserInput'
         || method === 'mcpServer/elicitation/request';
+}
+
+function isPaginatedThreadReadError(error: unknown): boolean {
+    return error instanceof CodexRpcResponseError
+        && error.method === 'thread/read'
+        && error.code === -32600
+        && error.providerMessage === 'paginated threads do not support thread/read(includeTurns=true)';
 }
 
 // Codex item ids are per-thread counters, so items from collab subagent
@@ -1284,6 +1302,34 @@ export class CodexAppServerClient {
         return { thread };
     }
 
+    async readThreadComplete(opts: {
+        threadId: string;
+        emitSnapshot?: boolean;
+    }): Promise<{ thread: ProtocolThread }> {
+        try {
+            return await this.readThread({
+                threadId: opts.threadId,
+                includeTurns: true,
+                emitSnapshot: opts.emitSnapshot,
+            });
+        } catch (error) {
+            if (!isPaginatedThreadReadError(error)) throw error;
+        }
+
+        // Stable-v2 thread/resume materializes complete turns for paginated
+        // histories when no experimental pagination fields are supplied.
+        const result = await this.request('thread/resume', {
+            threadId: opts.threadId,
+        }) as ThreadResumeResponse;
+        const thread = this.registerThreadSnapshot(
+            result.thread,
+            'snapshot',
+            opts.emitSnapshot !== false,
+        );
+        if (!thread) throw new Error('thread/resume returned an invalid thread snapshot');
+        return { thread };
+    }
+
     async rollbackThread(opts: {
         threadId: string;
         numTurns: number;
@@ -1811,7 +1857,11 @@ export class CodexAppServerClient {
                     const code = typeof msg.error.code === 'number' || typeof msg.error.code === 'string'
                         ? msg.error.code
                         : 'unknown';
-                    pending.reject(new Error(`${pending.method} failed (code=${code})`));
+                    pending.reject(new CodexRpcResponseError(
+                        pending.method,
+                        code,
+                        stringOrNull(msg.error.message),
+                    ));
                 } else {
                     try {
                         pending.onResult?.(msg.result);

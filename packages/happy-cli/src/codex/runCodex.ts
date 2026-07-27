@@ -1238,7 +1238,7 @@ export async function runCodex(opts: {
         const router = new CodexV4ThreadRouter({
             rootBinding,
             readThread: async (threadId) => (
-                await client.readThread({ threadId, includeTurns: true, emitSnapshot: false })
+                await client.readThreadComplete({ threadId, emitSnapshot: false })
             ).thread,
             readGoal: async (threadId) => (await client.getGoal({ threadId })).goal,
             createChildBinding: async (route, parentBinding) => {
@@ -1328,7 +1328,7 @@ export async function runCodex(opts: {
             const migrator = new CodexV4Migrator({
                 rootSink: router.migrationSinkForRoot(),
                 readThread: async (threadId) => (
-                    await client.readThread({ threadId, includeTurns: true, emitSnapshot: false })
+                    await client.readThreadComplete({ threadId, emitSnapshot: false })
                 ).thread,
                 readGoal: async (threadId) => (await client.getGoal({ threadId })).goal,
                 resolveChildSink: (route) => router.migrationSinkForChild(route),

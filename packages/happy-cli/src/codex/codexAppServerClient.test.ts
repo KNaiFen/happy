@@ -1235,6 +1235,65 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it('falls back to stable thread resume for a complete paginated snapshot', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.method === 'thread/read' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        error: {
+                            code: -32600,
+                            message: 'paginated threads do not support thread/read(includeTurns=true)',
+                        },
+                    }), 0);
+                }
+                if (msg.method === 'thread/resume' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: {
+                                id: 'thread-paginated',
+                                turns: [{
+                                    id: 'turn-history',
+                                    items: [],
+                                    status: 'completed',
+                                    error: null,
+                                }],
+                            },
+                            model: 'gpt-test',
+                            modelProvider: 'openai',
+                            cwd: '/tmp/project',
+                            instructionSources: [],
+                            approvalPolicy: 'on-request',
+                            approvalsReviewer: 'user',
+                            sandbox: { type: 'readOnly', networkAccess: false },
+                            reasoningEffort: null,
+                        },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+
+        const snapshot = await client.readThreadComplete({
+            threadId: 'thread-paginated',
+            emitSnapshot: false,
+        });
+
+        expect(snapshot.thread.turns.map((turn) => turn.id)).toEqual(['turn-history']);
+        expect(requests.find((request) => request.method === 'thread/resume')?.params).toEqual({
+            threadId: 'thread-paginated',
+        });
+        expect(client.threadId).toBeNull();
+        await client.disconnect();
+    });
+
     it('clears active thread state so the next prompt starts a fresh thread', async () => {
         const requests: MockRpcMessage[] = [];
         let nextThreadNumber = 1;

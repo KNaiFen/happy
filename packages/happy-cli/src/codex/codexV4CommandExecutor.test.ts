@@ -44,6 +44,9 @@ function fakeClient(overrides: Record<string, unknown> = {}): CodexAppServerClie
         readThread: vi.fn(async () => ({
             thread: { id: 'thread-1', turns: [] },
         })),
+        readThreadComplete: vi.fn(async () => ({
+            thread: { id: 'thread-1', turns: [] },
+        })),
         forkThread: vi.fn(),
         rollbackThread: vi.fn(),
         setGoal: vi.fn(),
@@ -117,7 +120,7 @@ describe('CodexV4CommandExecutor', () => {
 
     it('reconciles turn submission through official UserMessage.clientId', async () => {
         const client = fakeClient({
-            readThread: vi.fn(async () => ({
+            readThreadComplete: vi.fn(async () => ({
                 thread: {
                     id: 'thread-1',
                     turns: [{
@@ -216,7 +219,7 @@ describe('CodexV4CommandExecutor', () => {
 
     it('rolls back every official turn for /clear', async () => {
         const client = fakeClient({
-            readThread: vi.fn(async () => ({
+            readThreadComplete: vi.fn(async () => ({
                 thread: { id: 'thread-1', turns: [{ id: 'turn-1' }, { id: 'turn-2' }, { id: 'turn-3' }] },
             })),
             rollbackThread: vi.fn(async () => ({ thread: { id: 'thread-1' } })),

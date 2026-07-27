@@ -73,7 +73,7 @@ export class CodexV4CommandExecutor {
             }
             case 'thread.read': {
                 const threadId = commandThreadId(command, payload);
-                const result = await this.options.client.readThread({ threadId, includeTurns: true });
+                const result = await this.options.client.readThreadComplete({ threadId });
                 return { threadId: result.thread.id, result: { status: result.thread.status } };
             }
             case 'thread.fork': {
@@ -93,7 +93,7 @@ export class CodexV4CommandExecutor {
                 assertNoUnsupportedInput(payload, 'thread.rollback');
                 let numTurns: number;
                 if (payload.allTurns === true) {
-                    const snapshot = await this.options.client.readThread({ threadId, includeTurns: true });
+                    const snapshot = await this.options.client.readThreadComplete({ threadId });
                     numTurns = snapshot.thread.turns.length;
                     if (numTurns === 0) return { threadId, result: { rolledBackTurns: 0 } };
                 } else {
@@ -213,7 +213,7 @@ export class CodexV4CommandExecutor {
         if (command.command === 'turn.start' || command.command === 'turn.steer') {
             const payload = commandPayload(command.payload);
             const threadId = commandThreadId(command, payload);
-            const snapshot = await this.options.client.readThread({ threadId, includeTurns: true });
+            const snapshot = await this.options.client.readThreadComplete({ threadId });
             const submittedTurnId = findClientUserMessage(snapshot.thread, command.commandId);
             return submittedTurnId
                 ? { action: 'succeeded', threadId, turnId: submittedTurnId }
