@@ -1088,6 +1088,60 @@ export async function runCodex(opts: {
                 requestBroker,
                 defaultCwd: process.cwd(),
                 mcpServers,
+                preparePrompt: (text, command) => {
+                    const payload = command.payload && typeof command.payload === 'object' && !Array.isArray(command.payload)
+                        ? command.payload as Record<string, unknown>
+                        : {};
+                    const appendSystemPrompt = typeof payload.appendSystemPrompt === 'string'
+                        ? payload.appendSystemPrompt
+                        : undefined;
+                    return buildCodexTurnPrompt({
+                        message: text,
+                        mode: {
+                            appendSystemPrompt,
+                        },
+                        includeAppendSystemPrompt: Boolean(appendSystemPrompt && !appendSystemPromptInjected),
+                        includeTitleInstruction: first,
+                    });
+                },
+                onTurnStarted: (command) => {
+                    const payload = command.payload && typeof command.payload === 'object' && !Array.isArray(command.payload)
+                        ? command.payload as Record<string, unknown>
+                        : {};
+                    first = false;
+                    if (typeof payload.appendSystemPrompt === 'string' && payload.appendSystemPrompt.length > 0) {
+                        appendSystemPromptInjected = true;
+                    }
+                },
+                prepareAttachments: async (attachments) => {
+                    const downloaded = [];
+                    for (const attachment of attachments) {
+                        const data = await bindingOptions.target.downloadAndDecryptAttachment(attachment.ref);
+                        if (data) downloaded.push({
+                            data,
+                            mimeType: attachment.mimeType,
+                            name: attachment.name,
+                        });
+                    }
+                    return (await prepareCodexImageInputItems(downloaded, {
+                        sessionId: bindingOptions.target.sessionId,
+                    })).inputItems;
+                },
+                resolveExecutionPolicy: (permissionMode) => {
+                    if (!VALID_REMOTE_PERMISSION_MODES.includes(permissionMode as PermissionMode)) {
+                        throw new Error('Unsupported Codex permission mode');
+                    }
+                    activeTurnPermissionMode = permissionMode as PermissionMode;
+                    return resolveCodexExecutionPolicy(
+                        permissionMode as PermissionMode,
+                        client.sandboxEnabled,
+                    );
+                },
+                resolveEffort: (model, effort) => resolveCodexEffortForModel({
+                    model,
+                    effort,
+                    models: codexModelCapabilities,
+                }).effort,
             });
             const childAllowedCommands = new Set([
                 'thread.read',

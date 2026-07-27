@@ -23,6 +23,7 @@ interface CodexV4ClientRegistryOptions<TClient extends CodexV4RegistryClient, TE
 interface StartingClient<TClient extends CodexV4RegistryClient> {
     generation: number;
     client: TClient | null;
+    created: Promise<TClient>;
     promise: Promise<void>;
 }
 
@@ -71,28 +72,47 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         return this.starts.has(sessionId);
     }
 
+    async withClient<TResult>(sessionId: string, operation: (client: TClient) => Promise<TResult>): Promise<TResult> {
+        const active = this.clients.get(sessionId);
+        if (active) return await operation(active);
+
+        const starting = this.starts.get(sessionId);
+        if (!starting) throw new Error('Codex Sync v4 client is not available');
+        const client = starting.client ?? await starting.created;
+        if (
+            this.generations.get(sessionId) !== starting.generation
+            || !this.options.isEligible(sessionId)
+        ) {
+            throw new Error('Codex Sync v4 client is no longer eligible');
+        }
+        return await operation(client);
+    }
+
     private start(session: CodexV4RegistrySession): void {
         const generation = (this.generations.get(session.sessionId) ?? 0) + 1;
         this.generations.set(session.sessionId, generation);
-        const record: StartingClient<TClient> = {
-            generation,
-            client: null,
-            promise: Promise.resolve(),
-        };
+        let record!: StartingClient<TClient>;
         const isCurrent = () => (
             this.generations.get(session.sessionId) === generation
             && (this.starts.get(session.sessionId) === record || this.clients.get(session.sessionId) === record.client)
         );
+        const created = this.options.createClient({
+            ...session,
+            onEntity: async (event) => {
+                if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
+                await this.options.onEntity(session.sessionId, event);
+            },
+        });
+        record = {
+            generation,
+            client: null,
+            created,
+            promise: Promise.resolve(),
+        };
         this.starts.set(session.sessionId, record);
         record.promise = (async () => {
             try {
-                const client = await this.options.createClient({
-                    ...session,
-                    onEntity: async (event) => {
-                        if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
-                        await this.options.onEntity(session.sessionId, event);
-                    },
-                });
+                const client = await created;
                 record.client = client;
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) {
                     client.stop();

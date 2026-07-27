@@ -55,12 +55,16 @@ function fakeClient(overrides: Record<string, unknown> = {}): CodexAppServerClie
     } as unknown as CodexAppServerClient;
 }
 
-function executor(client: CodexAppServerClient) {
+function executor(
+    client: CodexAppServerClient,
+    overrides: Partial<ConstructorParameters<typeof CodexV4CommandExecutor>[0]> = {},
+) {
     return new CodexV4CommandExecutor({
         client,
         requestBroker: { resolve: vi.fn(async ({ requestId }) => ({ providerRequestId: requestId })) },
         defaultCwd: '/workspace',
         preparePrompt: (text) => `[prepared] ${text}`,
+        ...overrides,
     });
 }
 
@@ -127,6 +131,93 @@ describe('CodexV4CommandExecutor', () => {
         const client = fakeClient();
         await expect(executor(client).execute(command('thread.magic', { text: 'do magic' })))
             .rejects.toThrow('Unsupported Codex v4 command: thread.magic');
+        expect(client.startTurnOnThread).not.toHaveBeenCalled();
+    });
+
+    it('downloads attachment references into official localImage input items', async () => {
+        const client = fakeClient();
+        const prepareAttachments = vi.fn(async () => ([{
+            type: 'localImage' as const,
+            path: '/tmp/codex-v4/image.png',
+        }]));
+        await executor(client, { prepareAttachments }).execute(command('turn.start', {
+            text: 'inspect',
+            attachments: [{ ref: 'encrypted-ref', name: 'image.png', mimeType: 'image/png' }],
+        }));
+
+        expect(prepareAttachments).toHaveBeenCalledWith([
+            { ref: 'encrypted-ref', name: 'image.png', mimeType: 'image/png' },
+        ]);
+        expect(client.startTurnOnThread).toHaveBeenCalledWith(
+            'thread-1',
+            '[prepared] inspect',
+            expect.objectContaining({
+                clientUserMessageId: 'command-1',
+                extraInputItems: [{ type: 'localImage', path: '/tmp/codex-v4/image.png' }],
+            }),
+        );
+    });
+
+    it('resolves a named Codex skill to an official skill input item', async () => {
+        const client = fakeClient({
+            listSkills: vi.fn(async () => ({
+                data: [{ cwd: '/workspace', skills: [{ name: 'release', path: '/skills/release/SKILL.md', enabled: true }] }],
+            })),
+        });
+        await executor(client).execute(command('turn.start', { text: 'dry run', skillName: 'release' }));
+
+        expect(client.startTurnOnThread).toHaveBeenCalledWith(
+            'thread-1',
+            '[prepared] dry run',
+            expect.objectContaining({
+                extraInputItems: [{ type: 'skill', name: 'release', path: '/skills/release/SKILL.md' }],
+            }),
+        );
+    });
+
+    it('maps the App permission mode and model effort before starting a turn', async () => {
+        const client = fakeClient();
+        const resolveExecutionPolicy = vi.fn(() => ({
+            approvalPolicy: 'never' as const,
+            sandbox: 'workspace-write' as const,
+        }));
+        const resolveEffort = vi.fn(() => 'medium');
+        await executor(client, { resolveExecutionPolicy, resolveEffort }).execute(command('turn.start', {
+            text: 'hello',
+            model: 'gpt-test',
+            effort: 'xhigh',
+            permissionMode: 'acceptEdits',
+        }));
+
+        expect(resolveExecutionPolicy).toHaveBeenCalledWith('acceptEdits');
+        expect(resolveEffort).toHaveBeenCalledWith('gpt-test', 'xhigh');
+        expect(client.startTurnOnThread).toHaveBeenCalledWith(
+            'thread-1',
+            '[prepared] hello',
+            expect.objectContaining({ approvalPolicy: 'never', sandbox: 'workspace-write', effort: 'medium' }),
+        );
+    });
+
+    it('rolls back every official turn for /clear', async () => {
+        const client = fakeClient({
+            readThread: vi.fn(async () => ({
+                thread: { id: 'thread-1', turns: [{ id: 'turn-1' }, { id: 'turn-2' }, { id: 'turn-3' }] },
+            })),
+            rollbackThread: vi.fn(async () => ({ thread: { id: 'thread-1' } })),
+        });
+        await expect(executor(client).execute(command('thread.rollback', { allTurns: true }))).resolves.toEqual({
+            threadId: 'thread-1',
+            result: { rolledBackTurns: 3 },
+        });
+        expect(client.rollbackThread).toHaveBeenCalledWith({ threadId: 'thread-1', numTurns: 3 });
+    });
+
+    it('fails malformed native controls without starting a prompt turn', async () => {
+        const client = fakeClient();
+        await expect(executor(client).execute(command('thread.compact', { unsupportedPrompt: 'custom' })))
+            .rejects.toThrow('thread.compact does not support a per-request prompt');
+        await expect(executor(client).execute(command('skills.list', { unsupportedArguments: 'extra' })))
+            .rejects.toThrow('skills.list does not accept arguments');
         expect(client.startTurnOnThread).not.toHaveBeenCalled();
     });
 });

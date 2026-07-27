@@ -124,4 +124,25 @@ describe('CodexV4ClientRegistry', () => {
         expect(clients[0].invalidations).toEqual([]);
         expect(clients[1].invalidations).toEqual([42]);
     });
+
+    it('allows a durable publish while client hydration is still starting', async () => {
+        const client = new TestClient();
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async () => client,
+            isEligible: () => true,
+            onEntity: async () => undefined,
+        });
+        registry.reconcile([session]);
+
+        const published = await registry.withClient(session.sessionId, async (startingClient) => {
+            expect(startingClient).toBe(client);
+            return 'persisted';
+        });
+
+        expect(published).toBe('persisted');
+        expect(registry.hasStartingClient(session.sessionId)).toBe(true);
+        client.started.resolve();
+        await client.started.promise;
+        await Promise.resolve();
+    });
 });

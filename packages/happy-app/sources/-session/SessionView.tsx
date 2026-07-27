@@ -777,21 +777,22 @@ export function SessionViewLoaded({
 
     // handleSend reads the live message via the composer ref, so it doesn't
     // need to re-create on every keystroke.
-    const handleSend = React.useCallback(() => {
+    const sendMessage = React.useCallback(async () => {
         const liveMessage = composerHandleRef.current?.getMessage() ?? '';
         if (liveMessage.trim() || (expImageUpload && selectedImages.length > 0)) {
             const attachments = expImageUpload ? selectedImages : undefined;
             const shouldQueueInCli = session.metadata?.codexCapabilities?.queueSteering === true
                 && session.thinking === true;
-            composerHandleRef.current?.clearMessage();
-            if (expImageUpload) clearImages();
-            sync.sendMessage(sessionId, liveMessage, {
+            await sync.sendMessage(sessionId, liveMessage, {
                 source: 'chat',
                 attachments,
                 ...(shouldQueueInCli ? { followUpMode: 'queue' as const } : {}),
             });
+            composerHandleRef.current?.clearMessage();
+            if (expImageUpload) clearImages();
         }
     }, [sessionId, session.metadata?.codexCapabilities?.queueSteering, session.thinking, expImageUpload, selectedImages, clearImages]);
+    const [, handleSend] = useHappyAction(sendMessage);
 
     const handleAbort = React.useCallback(() => {
         // Mode picks live in synced metadata — clear them there, otherwise the

@@ -17,6 +17,7 @@ import {
     rigCanWriteFiles,
     rigHasRpcMethod,
 } from './rig';
+import { codexV4RequestResponse, findActiveCodexV4Turn } from './codexV4Commands';
 
 export type { SessionAgentModesPatch };
 
@@ -701,6 +702,23 @@ export async function sessionAbort(sessionId: string): Promise<void> {
     if (!rigCanAbort(metadata)) {
         throw new Error('Abort is not available for this session');
     }
+    if (sync.isCodexV4Activated(sessionId)) {
+        const projection = storage.getState().codexV4Sessions[sessionId];
+        const activeTurn = projection ? findActiveCodexV4Turn(projection) : null;
+        if (!projection?.thread || !activeTurn) {
+            if (projection?.runtime?.execution.type === 'active') {
+                throw new Error('The active Codex turn identity is not available yet');
+            }
+            return;
+        }
+        await sync.publishCodexV4Command(sessionId, {
+            command: 'turn.interrupt',
+            threadId: projection.thread.threadId,
+            expectedTurnId: activeTurn.turnId,
+            payload: { expectedTurnId: activeTurn.turnId },
+        });
+        return;
+    }
     await apiSocket.sessionRPC(sessionId, 'abort', isRigMetadata(metadata) ? {} : {
         reason: `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.`
     });
@@ -724,6 +742,10 @@ export async function sessionSteerCodexQueuedMessage(sessionId: string, id: stri
  * Allow a permission request
  */
 export async function sessionAllow(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'approved' | 'approved_for_session', updatedInput?: Record<string, unknown>): Promise<void> {
+    if (sync.isCodexV4Activated(sessionId)) {
+        await resolveCodexV4Request(sessionId, id, true, decision, updatedInput);
+        return;
+    }
     const request: SessionPermissionRequest = { id, approved: true, mode, allowTools: allowedTools, decision, updatedInput };
     await apiSocket.sessionRPC(sessionId, 'permission', request);
 }
@@ -732,6 +754,10 @@ export async function sessionAllow(sessionId: string, id: string, mode?: 'defaul
  * Deny a permission request
  */
 export async function sessionDeny(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'denied' | 'abort'): Promise<void> {
+    if (sync.isCodexV4Activated(sessionId)) {
+        await resolveCodexV4Request(sessionId, id, false, decision);
+        return;
+    }
     const request: SessionPermissionRequest = { id, approved: false, mode, allowTools: allowedTools, decision };
     await apiSocket.sessionRPC(sessionId, 'permission', request);
 }
@@ -757,10 +783,58 @@ export async function sessionGoalAction(
     action: SessionGoalActionRequest['action'],
     objective?: string,
 ): Promise<void> {
+    if (sync.isCodexV4Activated(sessionId)) {
+        const threadId = storage.getState().codexV4Sessions[sessionId]?.thread?.threadId;
+        if (!threadId) throw new Error('Codex thread is not available');
+        if (action === 'clear') {
+            await sync.publishCodexV4Command(sessionId, {
+                command: 'goal.clear',
+                threadId,
+                payload: {},
+            });
+            return;
+        }
+        if (action === 'edit' && objective) {
+            await sync.publishCodexV4Command(sessionId, {
+                command: 'goal.set',
+                threadId,
+                payload: { objective },
+            });
+            return;
+        }
+        if (action === 'stop') {
+            await sessionAbort(sessionId);
+            return;
+        }
+        throw new Error('Codex goal action is incomplete');
+    }
     await apiSocket.sessionRPC(sessionId, 'goal-action', {
         action,
         ...(objective !== undefined ? { objective } : {}),
     } satisfies SessionGoalActionRequest);
+}
+
+async function resolveCodexV4Request(
+    sessionId: string,
+    requestId: string,
+    approved: boolean,
+    decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort',
+    updatedInput?: Record<string, unknown>,
+): Promise<void> {
+    const projection = storage.getState().codexV4Sessions[sessionId];
+    const request = projection
+        ? Object.values(projection.entities['codex.request']).find((entry) => entry.requestId === requestId)
+        : null;
+    if (!request || request.status !== 'pending') throw new Error('Codex request is no longer pending');
+    await sync.publishCodexV4Command(sessionId, {
+        command: 'request.resolve',
+        threadId: request.threadId,
+        expectedTurnId: request.turnId,
+        payload: {
+            requestId,
+            response: codexV4RequestResponse({ request, approved, decision, updatedInput }),
+        },
+    });
 }
 
 /**

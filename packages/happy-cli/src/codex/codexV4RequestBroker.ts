@@ -143,11 +143,12 @@ function requestOptions(
             });
         case 'item/tool/requestUserInput':
             return asJsonValue({
+                requestMethod: method,
                 questions: params.questions,
                 autoResolutionMs: params.autoResolutionMs,
             });
         case 'mcpServer/elicitation/request':
-            return asJsonValue(params);
+            return asJsonValue({ requestMethod: method, ...params });
     }
 }
 

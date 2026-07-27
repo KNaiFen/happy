@@ -13,6 +13,7 @@ interface QuestionOption {
 }
 
 interface Question {
+    id?: string;
     question: string;
     header: string;
     options: QuestionOption[];
@@ -226,14 +227,15 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId 
         setIsSubmitted(true);
 
         const answers: Record<string, string> = {};
+        const codexAnswers: Record<string, { answers: string[] }> = {};
         questions.forEach((q, qIndex) => {
             const selected = selections.get(qIndex);
             if (selected && selected.size > 0) {
                 const selectedLabels = Array.from(selected)
                     .map(optIndex => q.options[optIndex]?.label)
-                    .filter(Boolean)
-                    .join(', ');
-                answers[q.question] = selectedLabels;
+                    .filter((label): label is string => Boolean(label));
+                answers[q.question] = selectedLabels.join(', ');
+                if (q.id) codexAnswers[q.id] = { answers: selectedLabels };
             }
         });
 
@@ -241,7 +243,10 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId 
             // AskUserQuestion expects answers to be returned as part of the tool input,
             // not as a follow-up plain text message.
             if (tool.permission?.id) {
-                await sessionAllow(sessionId, tool.permission.id, undefined, undefined, 'approved', { answers });
+                await sessionAllow(sessionId, tool.permission.id, undefined, undefined, 'approved', {
+                    answers,
+                    ...(Object.keys(codexAnswers).length > 0 ? { codexAnswers } : {}),
+                });
             }
         } catch (error) {
             console.error('Failed to submit answer:', error);

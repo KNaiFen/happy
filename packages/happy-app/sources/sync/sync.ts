@@ -71,6 +71,12 @@ import { AppSyncV4Client, type AppSyncV4AppliedEntity } from './syncV4Client';
 import { syncV4Persistence } from './syncV4Persistence.mmkv';
 import { HttpAppSyncV4Transport } from './syncV4Transport';
 import { CodexV4ClientRegistry } from './codexV4ClientRegistry';
+import {
+    commandForCodexV4Input,
+    createCodexV4Command,
+    parseCodexV4Input,
+    type CodexV4CommandDraft,
+} from './codexV4Commands';
 
 type V3GetSessionMessagesResponse = {
     messages: ApiMessage[];
@@ -335,6 +341,27 @@ class Sync {
         }
     }
 
+    isCodexV4Activated(sessionId: string): boolean {
+        const state = storage.getState();
+        return state.sessions[sessionId]?.metadata?.flavor === 'codex'
+            && state.codexV4Sessions[sessionId]?.activated === true;
+    }
+
+    async publishCodexV4Command(
+        sessionId: string,
+        draft: CodexV4CommandDraft,
+        commandId: string = randomUUID(),
+    ) {
+        if (!this.isCodexV4Activated(sessionId)) {
+            throw new Error('Codex Sync v4 is not active for this session');
+        }
+        const command = createCodexV4Command(draft, { commandId });
+        await this.codexV4Clients.withClient(sessionId, async (client) => {
+            await client.publishEntity(command);
+        });
+        return command;
+    }
+
     private getMessagesSync(sessionId: string): InvalidateSync {
         let sync = this.messagesSync.get(sessionId);
         if (!sync) {
@@ -574,6 +601,7 @@ class Sync {
                 uploaded.push({
                     ref,
                     name: attachment.name,
+                    mimeType: attachment.mimeType,
                     size: attachment.size,
                     width: attachment.width,
                     height: attachment.height,
@@ -635,6 +663,11 @@ class Sync {
         const localId = options?.localKey ?? randomUUID();
 
         const flavor = session.metadata?.flavor;
+        const codexV4Projection = storage.getState().codexV4Sessions[sessionId];
+        const useCodexV4 = flavor === 'codex' && codexV4Projection?.activated === true;
+        const parsedCodexV4Input = useCodexV4
+            ? parseCodexV4Input(text, session.metadata?.skills ?? [])
+            : null;
         const rigAttachmentPolicy = isRigMetadataV1(session.metadata)
             ? session.metadata?.capabilities?.attachments
             : null;
@@ -666,8 +699,10 @@ class Sync {
         }
 
         // Upload attachments and queue file events before the text message.
+        let uploadedAttachments: UploadedAttachment[] = [];
         if (effectiveAttachments && effectiveAttachments.length > 0) {
             const { uploaded, failed } = await this.uploadAttachmentsForSession(sessionId, effectiveAttachments);
+            uploadedAttachments = uploaded;
 
             if (failed > 0) {
                 Modal.alert(
@@ -677,7 +712,7 @@ class Sync {
                 );
             }
 
-            if (uploaded.length > 0) {
+            if (!useCodexV4 && uploaded.length > 0) {
                 let pending = this.pendingOutbox.get(sessionId);
                 if (!pending) {
                     pending = [];
@@ -727,6 +762,28 @@ class Sync {
                     pending.push({ localId: fileLocalId, content: encryptedFileRecord });
                 }
             }
+        }
+
+        if (useCodexV4 && codexV4Projection && parsedCodexV4Input) {
+            const draft = commandForCodexV4Input({
+                parsed: parsedCodexV4Input,
+                projection: codexV4Projection,
+                mode: {
+                    ...(modeMeta.model !== undefined ? { model: modeMeta.model } : {}),
+                    ...(modeMeta.effort !== undefined ? { effort: modeMeta.effort } : {}),
+                    ...(modeMeta.permissionMode !== undefined ? { permissionMode: modeMeta.permissionMode } : {}),
+                    appendSystemPrompt: systemPrompt,
+                },
+                attachments: uploadedAttachments.map((attachment) => ({
+                    ref: attachment.ref,
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                })),
+            });
+            await this.publishCodexV4Command(sessionId, draft, localId);
+            trackMessageSent(source, session.metadata);
+            storage.getState().markSessionMessageSent(sessionId);
+            return;
         }
 
         // Determine sentFrom based on platform

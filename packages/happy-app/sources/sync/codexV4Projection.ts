@@ -1,5 +1,7 @@
 import type {
     CodexEntityType,
+    CodexCommandEntityV4,
+    CodexCommandResultEntityV4,
     CodexEntityV4,
     CodexItemEntityV4,
     CodexPartEntityV4,
@@ -105,7 +107,20 @@ function projectMessages(entities: CodexV4EntityBuckets): Message[] {
     const parts = Object.values(entities['codex.part']);
     const requests = Object.values(entities['codex.request']);
     const relations = Object.values(entities['codex.relation']);
+    const commands = Object.values(entities['codex.command']);
+    const commandsById = new Map(commands.map((command) => [command.commandId, command]));
+    const providerUserMessageIds = new Set(
+        Object.values(entities['codex.item'])
+            .filter((item) => item.itemType.toLowerCase() === 'usermessage' && item.clientId)
+            .map((item) => item.clientId!),
+    );
+    const replacedCommandIds = new Set(
+        commands
+            .map((command) => command.replacesCommandId)
+            .filter((commandId): commandId is string => Boolean(commandId)),
+    );
     const messages: Message[] = [];
+    const attachedRequestIds = new Set<string>();
 
     for (const item of Object.values(entities['codex.item'])) {
         const itemParts = parts
@@ -116,6 +131,7 @@ function projectMessages(entities: CodexV4EntityBuckets): Message[] {
             && request.turnId === item.turnId
             && request.itemId === item.itemId
         ));
+        for (const request of itemRequests) attachedRequestIds.add(request.requestId);
         const relation = relations.find((candidate) => (
             candidate.parentThreadId === item.threadId
             && candidate.parentTurnId === item.turnId
@@ -125,19 +141,66 @@ function projectMessages(entities: CodexV4EntityBuckets): Message[] {
         if (projected) messages.push(projected);
     }
 
-    const attachedRequestIds = new Set(
-        Object.values(entities['codex.request'])
-            .filter((request) => request.itemId)
-            .map((request) => request.requestId),
-    );
     for (const request of requests) {
         if (request.requestType !== 'toolUserInput' || attachedRequestIds.has(request.requestId)) continue;
         messages.push(projectUserInputRequest(request));
     }
 
+    for (const command of commands) {
+        if (providerUserMessageIds.has(command.clientUserMessageId) || replacedCommandIds.has(command.commandId)) continue;
+        const displayText = jsonObject(command.payload).displayText;
+        if (typeof displayText !== 'string' || displayText.length === 0) continue;
+        messages.push({
+            kind: 'user-text',
+            id: `codex-v4:command:${command.providerId}`,
+            localId: command.clientUserMessageId,
+            createdAt: command.createdAt,
+            text: displayText,
+        });
+    }
+
+    for (const result of Object.values(entities['codex.commandResult'])) {
+        const command = commandsById.get(result.commandId);
+        if (isTextTurnCommand(command) && !isCommandFailure(result.status)) continue;
+        messages.push(projectCommandResult(result, command));
+    }
+
     return messages.sort((left, right) => (
         right.createdAt - left.createdAt || right.id.localeCompare(left.id)
     ));
+}
+
+function projectCommandResult(
+    result: CodexCommandResultEntityV4,
+    command: CodexCommandEntityV4 | undefined,
+): ToolCallMessage {
+    const failed = isCommandFailure(result.status);
+    const completed = result.status === 'succeeded' || failed;
+    return {
+        kind: 'tool-call',
+        id: `codex-v4:command-result:${result.providerId}`,
+        localId: null,
+        createdAt: result.createdAt,
+        children: [],
+        tool: {
+            name: 'CodexControlCommand',
+            state: failed ? 'error' : completed ? 'completed' : 'running',
+            input: { command: command?.command ?? 'unknown' },
+            result: result.error ?? result.result ?? { status: result.status },
+            createdAt: result.createdAt,
+            startedAt: result.createdAt,
+            completedAt: completed ? result.updatedAt : null,
+            description: null,
+        },
+    };
+}
+
+function isTextTurnCommand(command: CodexCommandEntityV4 | undefined): boolean {
+    return command?.command === 'turn.start' || command?.command === 'turn.steer';
+}
+
+function isCommandFailure(status: CodexCommandResultEntityV4['status']): boolean {
+    return status === 'failed' || status === 'resultUnknown' || status === 'notReplayed';
 }
 
 function projectItem(
@@ -315,6 +378,7 @@ function projectUserInputRequest(request: CodexRequestEntityV4): ToolCallMessage
             startedAt: request.createdAt,
             completedAt: request.resolvedAt,
             description: request.title,
+            permission: projectPermission(request),
         },
     };
 }
@@ -354,6 +418,12 @@ function parseJsonContent(content: string): unknown | null {
     } catch {
         return null;
     }
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
 }
 
 function mcpToolName(server: string | null, tool: string | null): string {

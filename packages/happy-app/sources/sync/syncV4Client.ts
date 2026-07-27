@@ -143,6 +143,7 @@ export class AppSyncV4Client {
 
     async hydrate(): Promise<void> {
         const persistent = this.persistence.loadSession(this.sessionId);
+        const cachedRevisions = new Map(persistent.entities.map((entity) => [entity.entityId, entity.revision]));
         for (const cached of persistent.entities) {
             const entity = await this.crypto.decryptEntity(toAad(this.sessionId, cached), cached.ciphertext);
             await this.onEntity({
@@ -151,6 +152,17 @@ export class AppSyncV4Client {
                 op: cached.op,
                 revision: cached.revision,
                 seq: cached.updatedSeq,
+            });
+        }
+        for (const mutation of persistent.outbox) {
+            if ((cachedRevisions.get(mutation.entityId) ?? 0) >= mutation.revision) continue;
+            const entity = await this.crypto.decryptEntity(toAad(this.sessionId, mutation), mutation.ciphertext);
+            await this.onEntity({
+                entity,
+                source: 'cache',
+                op: mutation.op,
+                revision: mutation.revision,
+                seq: null,
             });
         }
         if (persistent.snapshotRequired) await this.rebuildFromSnapshot();
@@ -196,6 +208,17 @@ export class AppSyncV4Client {
             this.persistence.enqueueMutations(this.sessionId, nextMutations);
             return nextMutations;
         });
+        for (let index = 0; index < mutations.length; index += 1) {
+            const entry = entries[index];
+            const mutation = mutations[index];
+            await this.onEntity({
+                entity: entry.entity,
+                source: 'cache',
+                op: mutation.op,
+                revision: mutation.revision,
+                seq: null,
+            });
+        }
         if (this.started) this.sendSync.invalidate();
         return mutations;
     }

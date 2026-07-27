@@ -21,6 +21,19 @@ interface CommandExecutorOptions {
     defaultCwd: string;
     mcpServers?: Record<string, unknown>;
     preparePrompt?: (text: string, command: CodexCommandEntityV4) => string;
+    onTurnStarted?: (command: CodexCommandEntityV4) => void;
+    prepareAttachments?: (attachments: CodexV4AttachmentReference[]) => Promise<InputItem[]>;
+    resolveExecutionPolicy?: (permissionMode: string) => {
+        approvalPolicy: ApprovalPolicy;
+        sandbox: SandboxMode;
+    };
+    resolveEffort?: (model: string | undefined, effort: string | undefined) => string | null | undefined;
+}
+
+export interface CodexV4AttachmentReference {
+    ref: string;
+    name: string;
+    mimeType: string;
 }
 
 const READ_ONLY_COMMANDS = new Set([
@@ -77,12 +90,24 @@ export class CodexV4CommandExecutor {
             }
             case 'thread.rollback': {
                 const threadId = commandThreadId(command, payload);
-                const numTurns = positiveInt(payload.numTurns, 'thread.rollback requires a positive numTurns');
+                assertNoUnsupportedInput(payload, 'thread.rollback');
+                let numTurns: number;
+                if (payload.allTurns === true) {
+                    const snapshot = await this.options.client.readThread({ threadId, includeTurns: true });
+                    numTurns = snapshot.thread.turns.length;
+                    if (numTurns === 0) return { threadId, result: { rolledBackTurns: 0 } };
+                } else {
+                    numTurns = positiveInt(payload.numTurns, 'thread.rollback requires a positive numTurns');
+                }
                 const result = await this.options.client.rollbackThread({ threadId, numTurns });
                 return { threadId: result.thread.id, result: { rolledBackTurns: numTurns } };
             }
             case 'thread.compact': {
                 const threadId = commandThreadId(command, payload);
+                assertNoUnsupportedInput(payload, 'thread.compact');
+                if (optionalString(payload.unsupportedPrompt)) {
+                    throw new Error('thread.compact does not support a per-request prompt');
+                }
                 await this.options.client.compactThread(threadId);
                 return { threadId, result: { started: true } };
             }
@@ -94,11 +119,14 @@ export class CodexV4CommandExecutor {
                     payload.expectedTurnId,
                     'turn.steer requires expectedTurnId',
                 );
+                const extraInputItems = await this.extraInputItems(payload);
+                const text = optionalString(payload.text) ?? '';
+                if (!text && extraInputItems.length === 0) throw new Error('turn.steer requires input');
                 await this.options.client.steerTurnOnThread(
                     threadId,
                     expectedTurnId,
-                    requiredString(payload.text, 'turn.steer requires text'),
-                    { clientUserMessageId: command.commandId },
+                    text,
+                    { clientUserMessageId: command.commandId, extraInputItems },
                 );
                 return { threadId, turnId: expectedTurnId };
             }
@@ -113,6 +141,7 @@ export class CodexV4CommandExecutor {
             }
             case 'review.start': {
                 const threadId = commandThreadId(command, payload);
+                assertNoUnsupportedInput(payload, 'review.start');
                 const target = reviewTarget(payload.target);
                 const delivery = payload.delivery === 'detached' ? 'detached' : 'inline';
                 const result = await this.options.client.startReview({ threadId, target, delivery });
@@ -134,6 +163,7 @@ export class CodexV4CommandExecutor {
             }
             case 'goal.set': {
                 const threadId = commandThreadId(command, payload);
+                assertNoUnsupportedInput(payload, 'goal.set');
                 const result = await this.options.client.setGoal({
                     threadId,
                     objective: requiredString(payload.objective, 'goal.set requires objective'),
@@ -144,10 +174,15 @@ export class CodexV4CommandExecutor {
             }
             case 'goal.clear': {
                 const threadId = commandThreadId(command, payload);
+                assertNoUnsupportedInput(payload, 'goal.clear');
                 const result = await this.options.client.clearGoal({ threadId });
                 return { threadId, result };
             }
             case 'skills.list': {
+                assertNoUnsupportedInput(payload, 'skills.list');
+                if (optionalString(payload.unsupportedArguments)) {
+                    throw new Error('skills.list does not accept arguments');
+                }
                 const result = await this.options.client.listSkills({
                     cwds: stringArray(payload.cwds) ?? [this.options.defaultCwd],
                     forceReload: payload.forceReload === true,
@@ -155,6 +190,10 @@ export class CodexV4CommandExecutor {
                 return { threadId: command.threadId, result: { skills: result.data } };
             }
             case 'mcp.status.list': {
+                assertNoUnsupportedInput(payload, 'mcp.status.list');
+                if (optionalString(payload.unsupportedArguments)) {
+                    throw new Error('mcp.status.list does not accept arguments');
+                }
                 const threadId = optionalString(payload.threadId) ?? command.threadId;
                 const result = await this.options.client.listMcpServerStatus({ threadId });
                 return { threadId, result: { servers: result } };
@@ -206,18 +245,51 @@ export class CodexV4CommandExecutor {
                 mcpServers: this.options.mcpServers,
             });
         }
-        const rawText = requiredString(payload.text, 'turn.start requires text');
+        const rawText = optionalString(payload.text) ?? '';
+        const extraInputItems = await this.extraInputItems(payload);
+        if (!rawText && extraInputItems.length === 0) throw new Error('turn.start requires input');
         const prompt = this.options.preparePrompt?.(rawText, command) ?? rawText;
+        const model = optionalString(payload.model) ?? undefined;
+        const requestedEffort = optionalString(payload.effort) ?? undefined;
+        const permissionMode = optionalString(payload.permissionMode);
+        const executionPolicy = permissionMode
+            ? this.options.resolveExecutionPolicy?.(permissionMode)
+            : undefined;
+        const resolvedEffort = this.options.resolveEffort
+            ? this.options.resolveEffort(model, requestedEffort)
+            : requestedEffort;
         const result = await this.options.client.startTurnOnThread(threadId, prompt, {
-            model: optionalString(payload.model) ?? undefined,
+            model,
             cwd: optionalString(payload.cwd) ?? undefined,
-            approvalPolicy: approvalPolicy(payload.approvalPolicy),
-            sandbox: sandboxMode(payload.sandbox),
-            effort: optionalString(payload.effort) ?? undefined,
+            approvalPolicy: executionPolicy?.approvalPolicy ?? approvalPolicy(payload.approvalPolicy),
+            sandbox: executionPolicy?.sandbox ?? sandboxMode(payload.sandbox),
+            effort: resolvedEffort ?? undefined,
             clientUserMessageId: command.commandId,
-            extraInputItems: [] as InputItem[],
+            extraInputItems,
         });
+        this.options.onTurnStarted?.(command);
         return { threadId, turnId: result.turnId };
+    }
+
+    private async extraInputItems(payload: Record<string, unknown>): Promise<InputItem[]> {
+        const input: InputItem[] = [];
+        const attachments = attachmentReferences(payload.attachments);
+        if (attachments.length > 0) {
+            if (!this.options.prepareAttachments) throw new Error('Codex v4 attachments are unavailable');
+            input.push(...await this.options.prepareAttachments(attachments));
+        }
+
+        const skillName = optionalString(payload.skillName);
+        if (skillName) {
+            const cwd = optionalString(payload.cwd) ?? this.options.defaultCwd;
+            const response = await this.options.client.listSkills({ cwds: [cwd], forceReload: false });
+            const skill = response.data
+                .flatMap((entry) => entry.skills)
+                .find((entry) => entry.enabled && entry.name === skillName && entry.path.length > 0);
+            if (!skill) throw new Error('Requested Codex skill is unavailable');
+            input.push({ type: 'skill', name: skill.name, path: skill.path });
+        }
+        return input;
     }
 }
 
@@ -294,4 +366,26 @@ function nullableNonnegativeInt(value: unknown): number | null | undefined {
 
 function stringArray(value: unknown): string[] | null {
     return Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? value : null;
+}
+
+function attachmentReferences(value: unknown): CodexV4AttachmentReference[] {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value)) throw new Error('Codex v4 attachments must be an array');
+    return value.map((entry) => {
+        const attachment = asRecord(entry);
+        return {
+            ref: requiredString(attachment.ref, 'Codex v4 attachment ref is missing'),
+            name: requiredString(attachment.name, 'Codex v4 attachment name is missing'),
+            mimeType: requiredString(attachment.mimeType, 'Codex v4 attachment MIME type is missing'),
+        };
+    });
+}
+
+function assertNoUnsupportedInput(payload: Record<string, unknown>, command: string): void {
+    if (typeof payload.unsupportedAttachments === 'number' && payload.unsupportedAttachments > 0) {
+        throw new Error(`${command} does not accept attachments`);
+    }
+    if (optionalString(payload.unsupportedArguments)) {
+        throw new Error(`${command} does not accept arguments`);
+    }
 }

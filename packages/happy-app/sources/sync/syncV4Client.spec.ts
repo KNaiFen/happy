@@ -129,6 +129,41 @@ function toChange(mutation: SyncMutationV4, seq: number): SyncChangeV4 {
 }
 
 describe('AppSyncV4Client', () => {
+    it('projects a local command immediately after its outbox write', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const sender = await client(storage, transport, applied);
+
+        await sender.publishEntity(command('local-command'));
+
+        expect(applied).toMatchObject([{
+            entity: { commandId: 'local-command' },
+            source: 'cache',
+            revision: 1,
+            seq: null,
+        }]);
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+    });
+
+    it('hydrates an unacknowledged command from the outbox after restart', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const first = await client(storage, transport);
+        await first.publishEntity(command('pending-command'));
+
+        const hydrated: AppSyncV4AppliedEntity[] = [];
+        const reopened = await client(storage, transport, hydrated);
+        await reopened.hydrate();
+
+        expect(hydrated).toMatchObject([{
+            entity: { commandId: 'pending-command' },
+            source: 'cache',
+            revision: 1,
+            seq: null,
+        }]);
+    });
+
     it('keeps consecutive revisions for one entity across a batch and its ACK', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();

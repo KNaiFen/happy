@@ -21,6 +21,7 @@ export type AttachmentPreview = {
 export type UploadedAttachment = {
     ref: string;
     name: string;
+    mimeType: string;
     size: number;
     width: number;
     height: number;

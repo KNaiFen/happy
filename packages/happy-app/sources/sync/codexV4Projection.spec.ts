@@ -1,5 +1,7 @@
 import type {
     CodexEntityV4,
+    CodexCommandEntityV4,
+    CodexCommandResultEntityV4,
     CodexItemEntityV4,
     CodexPartEntityV4,
     CodexRelationEntityV4,
@@ -187,6 +189,86 @@ describe('Codex v4 projection', () => {
                     childStatus: 'active',
                 },
             },
+        });
+    });
+
+    it('projects a command optimistically and removes it when the provider user item arrives', () => {
+        const command: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-1',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'command-1',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'turn.start',
+            payload: { text: 'hello', displayText: 'hello' },
+            clientUserMessageId: 'command-1',
+            replacesCommandId: null,
+        };
+        let projection = apply(createCodexV4Projection(), command);
+        expect(projection.messages).toMatchObject([{
+            kind: 'user-text',
+            localId: 'command-1',
+            text: 'hello',
+        }]);
+
+        projection = apply(projection, {
+            ...item,
+            itemType: 'userMessage',
+            clientId: 'command-1',
+        });
+        projection = apply(projection, part('hello'));
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            kind: 'user-text',
+            localId: 'command-1',
+            text: 'hello',
+            codexItemId: 'item-1',
+        });
+    });
+
+    it('projects control progress and failed prompt results as stable tool messages', () => {
+        const control: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-compact',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'command-compact',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'thread.compact',
+            payload: { displayText: '/compact' },
+            clientUserMessageId: 'command-compact',
+            replacesCommandId: null,
+        };
+        const result: CodexCommandResultEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'command-compact',
+            createdAt: 11,
+            updatedAt: 11,
+            commandId: 'command-compact',
+            threadId: 'thread-1',
+            turnId: null,
+            status: 'executing',
+            providerRequestId: null,
+            result: null,
+            error: null,
+        };
+        let projection = apply(createCodexV4Projection(), control);
+        projection = apply(projection, result);
+        expect(projection.messages.find((message) => message.kind === 'tool-call')).toMatchObject({
+            id: 'codex-v4:command-result:command-compact',
+            tool: { state: 'running', input: { command: 'thread.compact' } },
+        });
+
+        projection = apply(projection, { ...result, status: 'failed', error: 'compact failed', updatedAt: 12 }, 2);
+        expect(projection.messages.find((message) => message.kind === 'tool-call')).toMatchObject({
+            id: 'codex-v4:command-result:command-compact',
+            tool: { state: 'error', result: 'compact failed' },
         });
     });
 });
