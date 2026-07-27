@@ -1,5 +1,5 @@
 import type { AgentGoalStatus } from '@/api/types';
-import type { ThreadGoal } from './codexAppServerTypes';
+import type { ThreadGoal } from './protocol';
 
 type CodexGoalEvent = Record<string, unknown>;
 type AgentGoalCapabilities = NonNullable<Extract<AgentGoalStatus, { status: 'active' }>['capabilities']>;

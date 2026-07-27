@@ -198,6 +198,125 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it('emits exact 0.145 stable-v2 initialize, thread, and turn request shapes', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: { id: 'thread-shape', turns: [], status: { type: 'idle' } },
+                            model: 'gpt-test',
+                            modelProvider: 'openai',
+                            serviceTier: null,
+                            cwd: '/tmp/project',
+                            instructionSources: [],
+                            approvalPolicy: 'on-request',
+                            approvalsReviewer: 'user',
+                            sandbox: {
+                                type: 'workspaceWrite',
+                                writableRoots: [],
+                                networkAccess: false,
+                                excludeTmpdirEnvVar: false,
+                                excludeSlashTmp: false,
+                            },
+                            reasoningEffort: null,
+                        },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            turn: {
+                                id: 'turn-shape',
+                                items: [],
+                                itemsView: 'full',
+                                status: 'inProgress',
+                                error: null,
+                                startedAt: 1,
+                                completedAt: null,
+                                durationMs: null,
+                            },
+                        },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        await client.startThread({
+            model: 'gpt-test',
+            cwd: '/tmp/project',
+            approvalPolicy: 'on-request',
+            sandbox: 'workspace-write',
+            mcpServers: {
+                happy: { command: 'happy-mcp', args: ['serve'], optional: undefined },
+            },
+        });
+        await client.startTurnOnThread('thread-shape', 'run tests', {
+            clientUserMessageId: 'command-shape',
+            cwd: '/tmp/project',
+            approvalPolicy: 'on-request',
+            sandbox: 'workspace-write',
+            model: 'gpt-test',
+            effort: 'high',
+        });
+
+        expect(requests.find((msg) => msg.method === 'initialize')).toEqual({
+            id: 1,
+            method: 'initialize',
+            params: {
+                clientInfo: {
+                    name: 'happy-codex',
+                    title: 'Happy Codex Client',
+                    version: expect.any(String),
+                },
+                capabilities: {
+                    experimentalApi: false,
+                    requestAttestation: false,
+                },
+            },
+        });
+        expect(requests.find((msg) => msg.method === 'initialized')).toEqual({ method: 'initialized' });
+        expect(requests.find((msg) => msg.method === 'thread/start')?.params).toEqual({
+            model: 'gpt-test',
+            modelProvider: null,
+            cwd: '/tmp/project',
+            approvalPolicy: 'on-request',
+            sandbox: 'workspace-write',
+            config: {
+                mcp_servers: { happy: { command: 'happy-mcp', args: ['serve'] } },
+            },
+            baseInstructions: null,
+            developerInstructions: null,
+        });
+        expect(requests.find((msg) => msg.method === 'turn/start')?.params).toEqual({
+            threadId: 'thread-shape',
+            clientUserMessageId: 'command-shape',
+            input: [{ type: 'text', text: 'run tests', text_elements: [] }],
+            cwd: '/tmp/project',
+            approvalPolicy: 'on-request',
+            model: 'gpt-test',
+            effort: 'high',
+            sandboxPolicy: {
+                type: 'workspaceWrite',
+                writableRoots: [],
+                networkAccess: false,
+                excludeTmpdirEnvVar: false,
+                excludeSlashTmp: false,
+            },
+        });
+        expect(requests.every((message) => !Object.prototype.hasOwnProperty.call(message, 'jsonrpc'))).toBe(true);
+
+        await client.disconnect();
+    });
+
     it('rejects pending RPC immediately when stdout closes without a process exit', async () => {
         const proc = createMockProcess();
         mockSpawn.mockImplementation(() => proc);
@@ -277,7 +396,7 @@ describe('CodexAppServerClient sandbox integration', () => {
             expectedTurnId: 'turn-steer',
             clientUserMessageId: 'queued-message-1',
             input: [
-                { type: 'text', text: 'use the edited file' },
+                { type: 'text', text: 'use the edited file', text_elements: [] },
                 { type: 'localImage', path: '/tmp/guide.png' },
             ],
         });
@@ -861,8 +980,8 @@ describe('CodexAppServerClient sandbox integration', () => {
             cwd: '/tmp/project',
             approvalPolicy: 'on-request',
             sandbox: 'read-only',
-            persistExtendedHistory: true,
         }));
+        expect(resumeRequest?.params).not.toHaveProperty('persistExtendedHistory');
         expect(client.threadId).toBe('thread-1');
 
         await expect(client.sendTurnAndWait('follow up after reconnect')).resolves.toEqual({ aborted: false });

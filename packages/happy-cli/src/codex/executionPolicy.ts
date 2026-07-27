@@ -1,4 +1,4 @@
-import type { ApprovalPolicy, SandboxMode } from './codexAppServerTypes';
+import type { ApprovalPolicy, SandboxMode } from './protocol';
 import type { PermissionMode } from '@/api/types';
 
 export function resolveCodexExecutionPolicy(

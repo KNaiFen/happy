@@ -1,5 +1,5 @@
 import type { CodexModelCapability } from '@/api/types';
-import type { ReasoningEffort } from './codexAppServerTypes';
+import type { ReasoningEffort } from './protocol';
 
 const COMPATIBILITY_EFFORTS = new Set<ReasoningEffort>([
     'none',

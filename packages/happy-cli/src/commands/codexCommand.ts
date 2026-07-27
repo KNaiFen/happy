@@ -4,7 +4,7 @@ import { extractCodexResumeFlag } from '@/codex/cliArgs'
 import { extractNoSandboxFlag } from '@/utils/sandboxFlags'
 import { ensureDaemonRunning } from '@/daemon/ensureDaemonRunning'
 import type { PermissionMode } from '@/api/types'
-import type { ReasoningEffort } from '@/codex/codexAppServerTypes'
+import type { ReasoningEffort } from '@/codex/protocol'
 
 export async function handleCodexCommand(args: string[]): Promise<void> {
   let startedBy: 'daemon' | 'terminal' | undefined = undefined

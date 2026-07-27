@@ -18,12 +18,23 @@ describe('fake Codex app-server', () => {
     it('runs a default thread and streaming turn over real JSONL stdio', async () => {
         const fake = await startFake({});
         try {
-            send(fake, { id: 1, method: 'initialize', params: {} });
+            send(fake, {
+                id: 1,
+                method: 'initialize',
+                params: {
+                    clientInfo: { name: 'happy-test', title: 'Happy Test', version: '0.0.0' },
+                    capabilities: { experimentalApi: false, requestAttestation: false },
+                },
+            });
             await waitFor(() => response(fake, 1) !== null);
             send(fake, { id: 2, method: 'thread/start', params: { cwd: '/tmp/project', model: 'gpt-test' } });
             await waitFor(() => response(fake, 2) !== null);
             const threadId = (((response(fake, 2)?.result as Record<string, unknown>).thread as Record<string, unknown>).id as string);
-            send(fake, { id: 3, method: 'turn/start', params: { threadId, input: [{ type: 'text', text: 'test' }] } });
+            send(fake, {
+                id: 3,
+                method: 'turn/start',
+                params: { threadId, input: [{ type: 'text', text: 'test', text_elements: [] }] },
+            });
             await waitFor(() => fake.messages.some((message) => message.method === 'turn/completed'));
 
             expect(response(fake, 1)?.result).toMatchObject({ userAgent: 'happy-fake-codex/0.145.0' });
@@ -68,6 +79,47 @@ describe('fake Codex app-server', () => {
         }
     });
 
+    it('rejects legacy and incomplete request shapes in strict stable-v2 mode', async () => {
+        const fake = await startFake({ strictStableV2: true });
+        try {
+            send(fake, {
+                id: 1,
+                method: 'initialize',
+                params: {
+                    clientInfo: { name: 'happy-test', title: 'Happy Test', version: '0.0.0' },
+                    capabilities: { experimentalApi: false, requestAttestation: false },
+                },
+            });
+            await waitFor(() => response(fake, 1) !== null);
+
+            send(fake, {
+                id: 2,
+                method: 'thread/start',
+                params: { cwd: '/tmp/project', profile: null },
+            });
+            await waitFor(() => errorResponse(fake, 2) !== null);
+            expect(errorResponse(fake, 2)?.error).toMatchObject({ code: -32602, message: 'unexpected field: profile' });
+
+            send(fake, { id: 3, method: 'thread/start', params: { cwd: '/tmp/project' } });
+            await waitFor(() => response(fake, 3) !== null);
+            const threadId = (((response(fake, 3)?.result as Record<string, unknown>).thread as Record<string, unknown>).id as string);
+            send(fake, {
+                id: 4,
+                method: 'turn/start',
+                params: {
+                    threadId,
+                    input: [{ type: 'text', text: 'missing elements' }],
+                    sandboxPolicy: { type: 'workspaceWrite' },
+                },
+            });
+            await waitFor(() => errorResponse(fake, 4) !== null);
+            expect(errorResponse(fake, 4)?.error).toMatchObject({ code: -32602 });
+        } finally {
+            fake.child.kill('SIGTERM');
+            await waitForExit(fake.child);
+        }
+    });
+
     it('injects a transport disconnect and a configured process exit', async () => {
         const disconnected = await startFake({
             defaultBehavior: false,
@@ -105,11 +157,15 @@ async function startFake(scenario: Record<string, unknown>): Promise<RunningFake
 }
 
 function send(fake: RunningFake, message: Record<string, unknown>): void {
-    fake.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+    fake.child.stdin.write(`${JSON.stringify(message)}\n`);
 }
 
 function response(fake: RunningFake, id: number): Record<string, unknown> | null {
     return fake.messages.find((message) => message.id === id && message.result !== undefined) ?? null;
+}
+
+function errorResponse(fake: RunningFake, id: number): Record<string, unknown> | null {
+    return fake.messages.find((message) => message.id === id && message.error !== undefined) ?? null;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {

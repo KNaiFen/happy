@@ -2,7 +2,7 @@ import type { PermissionMode } from '@/api/types';
 import { CHANGE_TITLE_INSTRUCTION } from '@/gemini/constants';
 import { hashObject } from '@/utils/deterministicJson';
 
-import type { ReasoningEffort } from './codexAppServerTypes';
+import type { ReasoningEffort } from './protocol';
 
 export interface CodexEnhancedMode {
     permissionMode: PermissionMode;

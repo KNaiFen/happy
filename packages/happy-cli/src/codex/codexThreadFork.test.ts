@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { Thread } from './protocol';
 
 import {
     CodexForkRewindPointNotFoundError,
@@ -13,7 +14,7 @@ const threadWithTurns = {
             id: 'turn-1',
             startedAt: 100,
             items: [
-                { type: 'userMessage', id: 'user-1', content: [{ type: 'text', text: 'first prompt' }] },
+                { type: 'userMessage', id: 'user-1', content: [{ type: 'text', text: 'first prompt', text_elements: [] }] },
                 { type: 'agentMessage', id: 'agent-1', text: 'first answer' },
             ],
         },
@@ -21,7 +22,7 @@ const threadWithTurns = {
             id: 'turn-2',
             startedAt: 200,
             items: [
-                { type: 'userMessage', id: 'user-2', content: [{ type: 'text', text: 'second prompt' }] },
+                { type: 'userMessage', id: 'user-2', content: [{ type: 'text', text: 'second prompt', text_elements: [] }] },
                 { type: 'agentMessage', id: 'agent-2', text: 'second answer' },
             ],
         },
@@ -29,12 +30,12 @@ const threadWithTurns = {
             id: 'turn-3',
             startedAt: 300,
             items: [
-                { type: 'userMessage', id: 'user-3', content: [{ type: 'text', text: 'third prompt' }] },
+                { type: 'userMessage', id: 'user-3', content: [{ type: 'text', text: 'third prompt', text_elements: [] }] },
                 { type: 'agentMessage', id: 'agent-3', text: 'third answer' },
             ],
         },
     ],
-};
+} as unknown as Thread;
 
 describe('codexThreadFork', () => {
     it('lists text user messages from Codex turns as rewind points', () => {

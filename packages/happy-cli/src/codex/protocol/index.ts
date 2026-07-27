@@ -1,9 +1,15 @@
+export type { ClientNotification } from './generated/ClientNotification';
 export type { ClientRequest } from './generated/ClientRequest';
+export type { InitializeParams } from './generated/InitializeParams';
+export type { InitializeResponse } from './generated/InitializeResponse';
+export type { JsonValue } from './generated/serde_json/JsonValue';
 export type { ServerNotification } from './generated/ServerNotification';
 export type { ServerRequest } from './generated/ServerRequest';
 
 export type {
     AgentMessageDeltaNotification,
+    AskForApproval,
+    AskForApproval as ApprovalPolicy,
     CommandExecutionOutputDeltaNotification,
     CommandExecutionRequestApprovalParams,
     ContextCompactedNotification,
@@ -16,6 +22,7 @@ export type {
     McpToolCallProgressNotification,
     ListMcpServerStatusParams,
     ListMcpServerStatusResponse,
+    McpServerElicitationRequestResponse,
     Model,
     ModelListParams,
     ModelListResponse,
@@ -27,6 +34,8 @@ export type {
     ReasoningTextDeltaNotification,
     ReviewStartParams,
     ReviewStartResponse,
+    SandboxMode,
+    SandboxPolicy,
     SkillsListParams,
     SkillsListResponse,
     Thread,
@@ -37,8 +46,12 @@ export type {
     ThreadGoal,
     ThreadGoalClearParams,
     ThreadGoalClearResponse,
+    ThreadGoalGetParams,
+    ThreadGoalGetResponse,
     ThreadGoalSetParams,
     ThreadGoalSetResponse,
+    ThreadInjectItemsParams,
+    ThreadInjectItemsResponse,
     ThreadItem,
     ThreadReadParams,
     ThreadReadResponse,
@@ -66,6 +79,7 @@ export type {
     TurnSteerParams,
     TurnSteerResponse,
     UserInput,
+    UserInput as InputItem,
     WarningNotification,
 } from './generated/v2';
 

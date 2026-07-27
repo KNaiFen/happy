@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Model } from './codexAppServerTypes';
+import type { Model } from './protocol';
 import {
     loadCodexModelCapabilities,
     mergeCodexAgentCapabilities,
@@ -11,6 +11,9 @@ function model(overrides: Partial<Model>): Model {
     return {
         id: 'gpt-test',
         model: 'gpt-test',
+        upgrade: null,
+        upgradeInfo: null,
+        availabilityNux: null,
         displayName: 'GPT Test',
         description: 'Test model',
         hidden: false,
@@ -19,6 +22,11 @@ function model(overrides: Partial<Model>): Model {
             { reasoningEffort: 'ultra', description: 'Ultra' },
         ],
         defaultReasoningEffort: 'low',
+        inputModalities: [],
+        supportsPersonality: false,
+        additionalSpeedTiers: [],
+        serviceTiers: [],
+        defaultServiceTier: null,
         isDefault: false,
         ...overrides,
     };

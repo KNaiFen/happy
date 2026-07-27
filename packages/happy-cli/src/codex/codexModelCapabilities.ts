@@ -7,7 +7,7 @@ import type {
 } from '@/api/types';
 import { logger } from '@/ui/logger';
 import { CodexAppServerClient } from './codexAppServerClient';
-import type { Model } from './codexAppServerTypes';
+import type { Model } from './protocol';
 
 export function normalizeCodexModels(models: Model[]): CodexModelCapability[] {
     return models

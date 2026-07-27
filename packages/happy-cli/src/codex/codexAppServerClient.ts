@@ -18,39 +18,8 @@ import { spawn as crossSpawn } from 'cross-spawn';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import { logger } from '@/ui/logger';
 import type {
-    InitializeParams,
-    NewConversationParams,
-    NewConversationResponse,
-    ResumeConversationParams,
-    ResumeConversationResponse,
-    ForkConversationParams,
-    ForkConversationResponse,
-    ReadConversationParams,
-    ReadConversationResponse,
-    RollbackConversationParams,
-    RollbackConversationResponse,
-    InjectItemsParams,
-    InjectItemsResponse,
-    ThreadGoalSetParams,
-    ThreadGoalSetResponse,
-    ThreadGoalGetParams,
-    ThreadGoalGetResponse,
-    ThreadGoalClearParams,
-    ThreadGoalClearResponse,
-    Thread,
-    InterruptConversationParams,
     ReviewDecision,
     EventMsg,
-    JsonRpcRequest,
-    JsonRpcResponse,
-    ApprovalPolicy,
-    SandboxMode,
-    InputItem,
-    ReasoningEffort,
-    McpServerElicitationRequestResponse,
-    Model,
-    ModelListParams,
-    ModelListResponse,
 } from './codexAppServerTypes';
 import type { SandboxConfig } from '@/persistence';
 import { initializeSandbox, wrapForMcpTransport } from '@/sandbox/manager';
@@ -63,19 +32,64 @@ import {
 import { CodexThreadRegistry } from './codexThreadRegistry';
 import type { CodexProtocolTraceDirection, CodexProtocolTraceSink } from './codexProtocolTrace';
 import type {
+    ApprovalPolicy,
+    ClientNotification,
+    ClientRequest,
+    InitializeParams,
+    InputItem,
+    JsonValue,
     ServerNotification,
     ListMcpServerStatusParams,
     ListMcpServerStatusResponse,
+    McpServerElicitationRequestResponse,
+    Model,
+    ModelListParams,
+    ModelListResponse,
+    ReasoningEffort,
     ReviewStartParams,
     ReviewStartResponse,
+    SandboxMode,
+    SandboxPolicy,
     SkillsListParams,
     SkillsListResponse,
     ThreadCompactStartResponse,
+    ThreadForkParams,
+    ThreadForkResponse,
+    ThreadGoalClearParams,
+    ThreadGoalClearResponse,
+    ThreadGoalGetParams,
+    ThreadGoalGetResponse,
+    ThreadGoalSetParams,
+    ThreadGoalSetResponse,
+    ThreadInjectItemsParams,
+    ThreadInjectItemsResponse,
+    ThreadReadParams,
+    ThreadReadResponse,
+    ThreadResumeParams,
+    ThreadResumeResponse,
+    ThreadRollbackParams,
+    ThreadRollbackResponse,
+    ThreadStartParams,
+    ThreadStartResponse,
     Thread as ProtocolThread,
     ThreadStatus as ProtocolThreadStatus,
+    TurnInterruptParams,
     Turn as ProtocolTurn,
+    TurnStartParams,
+    TurnStartResponse,
+    TurnSteerParams,
     TurnStatus as ProtocolTurnStatus,
 } from './protocol';
+
+type StableClientMethod = ClientRequest['method'];
+type StableClientRequestFor<M extends StableClientMethod> = Extract<ClientRequest, { method: M }>;
+type StableClientRequestParams<M extends StableClientMethod> = StableClientRequestFor<M>['params'];
+
+type CodexWireResponse = {
+    id: number;
+    result?: unknown;
+    error?: { code: number | string; message?: string; data?: unknown };
+};
 
 type PendingRequest = {
     resolve: (result: unknown) => void;
@@ -174,6 +188,47 @@ function isGoalActionsAvailable(): boolean {
 
 function isTurnSteeringAvailable(): boolean {
     return isCodexCliVersionAtLeast(readCodexCliVersion(), { major: 0, minor: 145, patch: 0 });
+}
+
+function sandboxPolicyForMode(mode: SandboxMode): SandboxPolicy {
+    switch (mode) {
+        case 'danger-full-access':
+            return { type: 'dangerFullAccess' };
+        case 'read-only':
+            return { type: 'readOnly', networkAccess: false };
+        case 'workspace-write':
+            return {
+                type: 'workspaceWrite',
+                writableRoots: [],
+                networkAccess: false,
+                excludeTmpdirEnvVar: false,
+                excludeSlashTmp: false,
+            };
+    }
+}
+
+function toJsonValue(value: unknown, path: string): JsonValue | undefined {
+    if (value === undefined) return undefined;
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (Array.isArray(value)) {
+        return value.map((entry, index) => {
+            const normalized = toJsonValue(entry, `${path}[${index}]`);
+            if (normalized === undefined) {
+                throw new Error(`${path}[${index}] cannot be undefined`);
+            }
+            return normalized;
+        });
+    }
+    if (typeof value === 'object') {
+        const normalized: { [key: string]: JsonValue | undefined } = {};
+        for (const [key, entry] of Object.entries(value)) {
+            const jsonEntry = toJsonValue(entry, `${path}.${key}`);
+            if (jsonEntry !== undefined) normalized[key] = jsonEntry;
+        }
+        return normalized;
+    }
+    throw new Error(`${path} contains a non-JSON ${typeof value} value`);
 }
 
 function normalizeRawFileChangeList(changes: unknown): LegacyPatchChanges | undefined {
@@ -899,11 +954,12 @@ export class CodexAppServerClient {
             },
             capabilities: {
                 experimentalApi: false,
+                requestAttestation: false,
             },
         };
         try {
             await this.request('initialize', initParams);
-            this.notify('initialized');
+            this.notify({ method: 'initialized' });
             this.connected = true;
             this.updateConnection({
                 connection: 'connected',
@@ -985,8 +1041,13 @@ export class CodexAppServerClient {
         await this.disconnectInternal();
     }
 
-    private buildThreadConfig(mcpServers?: Record<string, unknown>): Record<string, unknown> | null {
-        return mcpServers ? { mcp_servers: mcpServers } : null;
+    private buildThreadConfig(mcpServers?: Record<string, unknown>): ThreadStartParams['config'] {
+        if (!mcpServers) return null;
+        const normalized = toJsonValue(mcpServers, 'mcpServers');
+        if (!normalized || Array.isArray(normalized) || typeof normalized !== 'object') {
+            throw new Error('mcpServers must be a JSON object');
+        }
+        return { mcp_servers: normalized };
     }
 
     private rememberThreadDefaults(threadId: string, opts: ThreadDefaults): void {
@@ -1086,28 +1147,23 @@ export class CodexAppServerClient {
         sandbox?: SandboxMode;
         mcpServers?: Record<string, unknown>;
     }): Promise<{ threadId: string; model: string }> {
-        const params: NewConversationParams = {
+        const params: ThreadStartParams = {
             model: opts.model ?? null,
             modelProvider: null,
-            profile: null,
             cwd: opts.cwd ?? process.cwd(),
             approvalPolicy: opts.approvalPolicy ?? null,
             sandbox: opts.sandbox ?? null,
             config: this.buildThreadConfig(opts.mcpServers),
             baseInstructions: null,
             developerInstructions: null,
-            compactPrompt: null,
-            includeApplyPatchTool: null,
-            experimentalRawEvents: false,
-            persistExtendedHistory: true,
         };
 
         const result = await this.request('thread/start', params, undefined, (value) => {
-            const response = value as NewConversationResponse;
+            const response = value as ThreadStartResponse;
             this.registerThreadSnapshot(response.thread);
             this.threads.selectThread(response.thread.id);
             this.rememberThreadDefaults(response.thread.id, opts);
-        }) as NewConversationResponse;
+        }) as ThreadStartResponse;
         logger.debug('[CodexAppServer] Thread started');
         return { threadId: result.thread.id, model: result.model };
     }
@@ -1127,7 +1183,7 @@ export class CodexAppServerClient {
         }
 
         const defaults = this.threadDefaults.get(threadId) ?? {};
-        const params: ResumeConversationParams = {
+        const params: ThreadResumeParams = {
             threadId,
             model: opts?.model ?? defaults.model ?? null,
             modelProvider: null,
@@ -1137,7 +1193,6 @@ export class CodexAppServerClient {
             config: this.buildThreadConfig(opts?.mcpServers ?? defaults.mcpServers),
             baseInstructions: null,
             developerInstructions: null,
-            persistExtendedHistory: true,
         };
 
         const nextDefaults = {
@@ -1149,7 +1204,7 @@ export class CodexAppServerClient {
         };
         let resumedSnapshot: ProtocolThread | null = null;
         const result = await this.request('thread/resume', params, undefined, (value) => {
-            const response = value as ResumeConversationResponse;
+            const response = value as ThreadResumeResponse;
             resumedSnapshot = this.registerThreadSnapshot(
                 response.thread,
                 'snapshot',
@@ -1157,7 +1212,7 @@ export class CodexAppServerClient {
             );
             this.threads.selectThread(response.thread.id);
             this.rememberThreadDefaults(response.thread.id, nextDefaults);
-        }) as ResumeConversationResponse;
+        }) as ThreadResumeResponse;
         const thread = resumedSnapshot ?? this.normalizeProtocolThread(result.thread);
         if (!thread) throw new Error('thread/resume returned an invalid thread snapshot');
         logger.debug('[CodexAppServer] Thread resumed');
@@ -1171,9 +1226,9 @@ export class CodexAppServerClient {
         approvalPolicy?: ApprovalPolicy;
         sandbox?: SandboxMode;
         mcpServers?: Record<string, unknown>;
-    }): Promise<{ threadId: string; model: string; thread: Thread }> {
+    }): Promise<{ threadId: string; model: string; thread: ProtocolThread }> {
         const defaults = this.threadDefaults.get(opts.threadId) ?? {};
-        const params: ForkConversationParams = {
+        const params: ThreadForkParams = {
             threadId: opts.threadId,
             model: opts.model ?? defaults.model ?? null,
             modelProvider: null,
@@ -1195,11 +1250,11 @@ export class CodexAppServerClient {
             mcpServers: opts.mcpServers ?? defaults.mcpServers,
         };
         const result = await this.request('thread/fork', params, undefined, (value) => {
-            const response = value as ForkConversationResponse;
+            const response = value as ThreadForkResponse;
             this.registerThreadSnapshot(response.thread, 'snapshot');
             this.threads.selectThread(response.thread.id);
             this.rememberThreadDefaults(response.thread.id, nextDefaults);
-        }) as ForkConversationResponse;
+        }) as ThreadForkResponse;
         logger.debug('[CodexAppServer] Thread forked');
         return { threadId: result.thread.id, model: result.model, thread: result.thread };
     }
@@ -1209,11 +1264,11 @@ export class CodexAppServerClient {
         includeTurns?: boolean;
         emitSnapshot?: boolean;
     }): Promise<{ thread: ProtocolThread }> {
-        const params: ReadConversationParams = {
+        const params: ThreadReadParams = {
             threadId: opts.threadId,
             includeTurns: opts.includeTurns ?? true,
         };
-        const result = await this.request('thread/read', params) as ReadConversationResponse;
+        const result = await this.request('thread/read', params) as ThreadReadResponse;
         const thread = this.registerThreadSnapshot(result.thread, 'snapshot', opts.emitSnapshot !== false);
         if (!thread) throw new Error('thread/read returned an invalid thread snapshot');
         return { thread };
@@ -1222,25 +1277,25 @@ export class CodexAppServerClient {
     async rollbackThread(opts: {
         threadId: string;
         numTurns: number;
-    }): Promise<RollbackConversationResponse> {
-        const params: RollbackConversationParams = {
+    }): Promise<ThreadRollbackResponse> {
+        const params: ThreadRollbackParams = {
             threadId: opts.threadId,
             numTurns: opts.numTurns,
         };
-        const result = await this.request('thread/rollback', params) as RollbackConversationResponse;
+        const result = await this.request('thread/rollback', params) as ThreadRollbackResponse;
         this.registerThreadSnapshot(result.thread, 'snapshot');
         return result;
     }
 
     async injectItems(opts: {
         threadId: string;
-        items: unknown[];
-    }): Promise<InjectItemsResponse> {
-        const params: InjectItemsParams = {
+        items: ThreadInjectItemsParams['items'];
+    }): Promise<ThreadInjectItemsResponse> {
+        const params: ThreadInjectItemsParams = {
             threadId: opts.threadId,
             items: opts.items,
         };
-        return await this.request('thread/inject_items', params) as InjectItemsResponse;
+        return await this.request('thread/inject_items', params) as ThreadInjectItemsResponse;
     }
 
     async setGoal(opts: {
@@ -1459,12 +1514,12 @@ export class CodexAppServerClient {
         const extraInputItems = opts?.extraInputItems ?? [];
         const input: InputItem[] = [];
         if (prompt.length > 0 || extraInputItems.length === 0) {
-            input.push({ type: 'text', text: prompt });
+            input.push({ type: 'text', text: prompt, text_elements: [] });
         }
         input.push(...extraInputItems);
 
         // Build params — only include optional fields when set (server uses thread defaults otherwise)
-        const params: Record<string, unknown> = {
+        const params: TurnStartParams = {
             threadId,
             input,
         };
@@ -1474,25 +1529,14 @@ export class CodexAppServerClient {
         if (opts?.model) params.model = opts.model;
         if (opts?.effort) params.effort = opts.effort;
 
-        // Map sandbox mode to the camelCase policy format the server expects
         if (opts?.sandbox) {
-            switch (opts.sandbox) {
-                case 'workspace-write':
-                    params.sandboxPolicy = { type: 'workspaceWrite' };
-                    break;
-                case 'danger-full-access':
-                    params.sandboxPolicy = { type: 'dangerFullAccess' };
-                    break;
-                case 'read-only':
-                    params.sandboxPolicy = { type: 'readOnly' };
-                    break;
-            }
+            params.sandboxPolicy = sandboxPolicyForMode(opts.sandbox);
         }
 
         // turn/start returns immediately; turn completes via events.
         // We don't await completion here — the caller's event handler
         // tracks task_complete / turn_aborted.
-        const result = await this.request('turn/start', params) as { turn?: unknown };
+        const result = await this.request('turn/start', params) as TurnStartResponse;
         const turn = this.normalizeProtocolTurn(result?.turn);
         if (turn) {
             this.threads.registerTurn(threadId, turn);
@@ -1587,18 +1631,19 @@ export class CodexAppServerClient {
         const extraInputItems = opts?.extraInputItems ?? [];
         const input: InputItem[] = [];
         if (prompt.length > 0 || extraInputItems.length === 0) {
-            input.push({ type: 'text', text: prompt });
+            input.push({ type: 'text', text: prompt, text_elements: [] });
         }
         input.push(...extraInputItems);
 
-        await this.request('turn/steer', {
+        const params: TurnSteerParams = {
             threadId,
             expectedTurnId,
             input,
             ...(opts?.clientUserMessageId
                 ? { clientUserMessageId: opts.clientUserMessageId }
                 : {}),
-        });
+        };
+        await this.request('turn/steer', params);
     }
 
     async interruptTurn(opts?: { timeoutMs?: number }): Promise<void> {
@@ -1617,7 +1662,7 @@ export class CodexAppServerClient {
         turnId: string,
         opts?: { timeoutMs?: number },
     ): Promise<void> {
-        const params: InterruptConversationParams = {
+        const params: TurnInterruptParams = {
             threadId,
             turnId,
         };
@@ -1670,9 +1715,9 @@ export class CodexAppServerClient {
     /** Default timeout for RPC requests (ms). */
     private static readonly REQUEST_TIMEOUT_MS = 30_000;
 
-    private request(
-        method: string,
-        params?: unknown,
+    private request<M extends StableClientMethod>(
+        method: M,
+        params: StableClientRequestParams<M>,
         timeoutMs?: number,
         onResult?: (result: unknown) => void,
     ): Promise<unknown> {
@@ -1700,7 +1745,7 @@ export class CodexAppServerClient {
                 epoch: this.processEpoch,
             });
 
-            const msg: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
+            const msg = { id, method, params } as StableClientRequestFor<M>;
             const line = JSON.stringify(msg) + '\n';
             logger.debug(`[CodexAppServer] → ${method} (id=${id})`);
             this.recordProtocolTrace('outbound', msg);
@@ -1708,17 +1753,16 @@ export class CodexAppServerClient {
         });
     }
 
-    private notify(method: string, params?: unknown): void {
+    private notify(msg: ClientNotification): void {
         if (!this.process?.stdin?.writable) return;
-        const msg: JsonRpcRequest = { jsonrpc: '2.0', method, params };
         this.recordProtocolTrace('outbound', msg);
         this.process.stdin.write(JSON.stringify(msg) + '\n');
-        logger.debug(`[CodexAppServer] → ${method} (notification)`);
+        logger.debug(`[CodexAppServer] → ${msg.method} (notification)`);
     }
 
     private respond(id: number, result: unknown): void {
         if (!this.process?.stdin?.writable) return;
-        const msg: JsonRpcResponse = { jsonrpc: '2.0', id, result };
+        const msg: CodexWireResponse = { id, result };
         this.recordProtocolTrace('outbound', msg);
         this.process.stdin.write(JSON.stringify(msg) + '\n');
         logger.debug(`[CodexAppServer] → response (id=${id})`);

@@ -6,7 +6,7 @@ import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 import type { PendingAttachment } from '@/utils/MessageQueue2';
 
-import type { InputItem } from '../codexAppServerTypes';
+import type { InputItem } from '../protocol';
 
 export type SupportedImageType = {
     mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';

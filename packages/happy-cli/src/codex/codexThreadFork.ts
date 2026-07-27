@@ -1,4 +1,4 @@
-import type { Thread, ThreadItem, ThreadTurn } from './codexAppServerTypes';
+import type { JsonValue, Thread, ThreadItem, Turn } from './protocol';
 
 export type CodexRewindPoint = {
     itemId: string;
@@ -21,7 +21,7 @@ type CodexForkClient = {
         mcpServers?: Record<string, unknown>;
     }) => Promise<{ threadId: string; thread: Thread }>;
     rollbackThread: (opts: { threadId: string; numTurns: number }) => Promise<{ thread: Thread }>;
-    injectItems: (opts: { threadId: string; items: unknown[] }) => Promise<unknown>;
+    injectItems: (opts: { threadId: string; items: JsonValue[] }) => Promise<unknown>;
 };
 
 export class CodexForkRewindPointNotFoundError extends Error {
@@ -52,7 +52,7 @@ function textFromUserItem(item: ThreadItem): string | null {
     return textParts.length > 0 ? textParts : null;
 }
 
-function timestampFromTurn(turn: ThreadTurn): number {
+function timestampFromTurn(turn: Turn): number {
     const seconds = turn.startedAt ?? turn.completedAt;
     return typeof seconds === 'number' && Number.isFinite(seconds)
         ? seconds * 1000

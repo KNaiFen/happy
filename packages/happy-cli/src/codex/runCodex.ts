@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { createEnvelope } from '@slopus/happy-wire';
 import { ApiClient } from '@/api/api';
 import { CodexAppServerClient } from './codexAppServerClient';
-import type { ReasoningEffort } from './codexAppServerTypes';
+import type { ReasoningEffort } from './protocol';
 import { CodexPermissionHandler } from './utils/permissionHandler';
 import { ReasoningProcessor } from './utils/reasoningProcessor';
 import { DiffProcessor } from './utils/diffProcessor';

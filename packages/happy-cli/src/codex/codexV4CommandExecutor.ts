@@ -4,10 +4,10 @@ import type { CodexCommandEntityV4 } from '@slopus/happy-wire';
 import type {
     ApprovalPolicy,
     InputItem,
+    ReviewStartParams,
     SandboxMode,
     Thread,
-} from './codexAppServerTypes';
-import type { ReviewStartParams } from './protocol';
+} from './protocol';
 import { CodexAppServerClient } from './codexAppServerClient';
 import type {
     CodexV4CommandOutcome,
@@ -323,7 +323,7 @@ function reviewTarget(value: unknown): ReviewStartParams['target'] {
 }
 
 function approvalPolicy(value: unknown): ApprovalPolicy | undefined {
-    return value === 'untrusted' || value === 'on-failure' || value === 'on-request' || value === 'never'
+    return value === 'untrusted' || value === 'on-request' || value === 'never'
         ? value
         : undefined;
 }
