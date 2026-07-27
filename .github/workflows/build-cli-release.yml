@@ -29,9 +29,42 @@ jobs:
         id: version
         run: node scripts/ci/detect-package-version-change.cjs packages/happy-cli/package.json "${{ github.event.before }}"
 
-  build:
+  ci:
+    name: Validate CLI
     needs: version
     if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck CLI
+        run: pnpm --filter happy typecheck
+
+      # The CLI unit suite exercises the built binary, so its existing test
+      # script performs a build before Vitest. This remains a CI prerequisite;
+      # the release package job below still cannot start until CI succeeds.
+      - name: Test CLI
+        run: pnpm --filter happy test
+
+  build:
+    needs: [version, ci]
+    if: needs.version.outputs.changed == 'true' && needs.ci.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -54,8 +87,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build and test CLI
-        run: pnpm --filter happy test
+      - name: Build CLI
+        run: pnpm --filter happy build
 
       - name: Pack npm archive
         run: |

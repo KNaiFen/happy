@@ -29,9 +29,39 @@ jobs:
         id: version
         run: node scripts/ci/detect-package-version-change.cjs packages/happy-app/package.json "${{ github.event.before }}"
 
-  build:
+  ci:
+    name: Validate Android app
     needs: version
     if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck APP
+        run: pnpm --filter happy-app typecheck
+
+      - name: Test APP
+        run: pnpm --filter happy-app exec vitest run
+
+  build:
+    needs: [version, ci]
+    if: needs.version.outputs.changed == 'true' && needs.ci.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -69,12 +99,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Typecheck APP
-        run: pnpm --filter happy-app typecheck
-
-      - name: Test APP
-        run: pnpm --filter happy-app exec vitest run
 
       - name: Generate Android project
         env:
