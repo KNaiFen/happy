@@ -87,6 +87,9 @@ export class CodexSyncV4Mapper {
     private rawReasoningUtf8Bytes = 0;
     private rawReasoningDeltaCount = 0;
     private authoritativeStreamMismatchCount = 0;
+    private connection: CodexRuntimeEntityV4['connection'] = 'connected';
+    private connectionStatusUnknown = false;
+    private connectionError: string | null = null;
 
     constructor(
         private readonly publisher: SyncPublisher,
@@ -109,13 +112,16 @@ export class CodexSyncV4Mapper {
     ): Promise<void> {
         if (this.closed) return;
         await this.enqueue(async () => {
+            this.connection = connection;
+            this.connectionStatusUnknown = opts?.statusUnknown ?? connection !== 'connected';
+            this.connectionError = opts?.error ?? (connection === 'connected' ? null : this.connectionError);
             const now = this.now();
             for (const [threadId, current] of this.runtimes) {
                 const runtime: CodexRuntimeEntityV4 = {
                     ...current,
                     connection,
-                    statusUnknown: opts?.statusUnknown ?? connection !== 'connected',
-                    lastError: opts?.error ?? (connection === 'connected' ? null : current.lastError),
+                    statusUnknown: this.connectionStatusUnknown,
+                    lastError: this.connectionError ?? (connection === 'connected' ? null : current.lastError),
                     lastKnownAt: now,
                     updatedAt: now,
                 };
@@ -685,7 +691,7 @@ export class CodexSyncV4Mapper {
             settings: emptyThreadSettings(),
             tokenUsage: null,
         };
-        const runtime = this.runtimeFor(threadId, thread.status, now);
+        const runtime = this.runtimeFor(threadId, thread.status, now, false);
         this.threads.set(threadId, thread);
         this.runtimes.set(threadId, runtime);
         await this.publisher.publishEntities([{ entity: thread }, { entity: runtime }]);
@@ -769,6 +775,7 @@ export class CodexSyncV4Mapper {
         threadId: string,
         execution: CodexThreadStatusV4,
         now: number,
+        authoritative = true,
     ): CodexRuntimeEntityV4 {
         const previous = this.runtimes.get(threadId);
         return {
@@ -778,16 +785,18 @@ export class CodexSyncV4Mapper {
             createdAt: previous?.createdAt ?? now,
             updatedAt: now,
             threadId,
-            connection: previous?.connection ?? 'connected',
+            connection: this.connection,
             execution: normalizeThreadStatus(execution),
-            statusUnknown: false,
+            statusUnknown: this.connection !== 'connected' || (!authoritative && this.connectionStatusUnknown),
             protocolVersion: this.options.protocolVersion ?? 'stable-v2',
             codexCliVersion: this.options.codexCliVersion,
             syncState: previous?.syncState ?? this.options.initialSyncState ?? 'ready',
             pendingApprovalCount: previous?.pendingApprovalCount ?? 0,
             pendingUserInputCount: previous?.pendingUserInputCount ?? 0,
             activeSubagentCount: previous?.activeSubagentCount ?? 0,
-            lastError: execution.type === 'systemError' ? previous?.lastError ?? 'systemError' : null,
+            lastError: execution.type === 'systemError'
+                ? previous?.lastError ?? 'systemError'
+                : this.connectionError,
             lastKnownAt: now,
         };
     }

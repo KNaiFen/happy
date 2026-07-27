@@ -156,6 +156,32 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(mockSpawn).not.toHaveBeenCalled();
     });
 
+    it('publishes connection uncertainty across startup and unexpected process exit', async () => {
+        const proc = createMockProcess();
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const states: Array<{
+            connection: string;
+            statusUnknown: boolean;
+            error: string | null;
+        }> = [];
+        client.setConnectionHandler((event) => states.push(event));
+
+        await client.connect();
+        proc.emit('error', new Error('transport failed'));
+        proc.emit('exit', 1, null);
+
+        expect(states).toEqual([
+            { connection: 'disconnected', statusUnknown: true, error: null },
+            { connection: 'connecting', statusUnknown: true, error: null },
+            { connection: 'connected', statusUnknown: false, error: null },
+            { connection: 'error', statusUnknown: true, error: 'Error' },
+            { connection: 'disconnected', statusUnknown: true, error: null },
+        ]);
+    });
+
     it('steers the active turn without interrupting it', async () => {
         mockExecSync.mockReturnValue('codex-cli 0.145.0');
         const requests: MockRpcMessage[] = [];

@@ -132,6 +132,14 @@ export interface CodexServerRequest {
 
 export type CodexServerRequestHandler = (request: CodexServerRequest) => Promise<unknown>;
 
+export interface CodexConnectionEvent {
+    connection: 'connecting' | 'connected' | 'disconnected' | 'error';
+    statusUnknown: boolean;
+    error: string | null;
+}
+
+export type CodexConnectionHandler = (event: CodexConnectionEvent) => void;
+
 function stringOrNull(value: unknown): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null;
 }
@@ -274,6 +282,12 @@ export class CodexAppServerClient {
     private approvalHandler: ApprovalHandler | null = null;
     private stableNotificationHandler: ((notification: ServerNotification) => void) | null = null;
     private serverRequestHandler: CodexServerRequestHandler | null = null;
+    private connectionHandler: CodexConnectionHandler | null = null;
+    private connectionEvent: CodexConnectionEvent = {
+        connection: 'disconnected',
+        statusUnknown: true,
+        error: null,
+    };
 
     constructor(sandboxConfig?: SandboxConfig) {
         this.sandboxConfig = sandboxConfig;
@@ -309,6 +323,16 @@ export class CodexAppServerClient {
 
     setServerRequestHandler(handler: CodexServerRequestHandler | null): void {
         this.serverRequestHandler = handler;
+    }
+
+    setConnectionHandler(handler: CodexConnectionHandler | null): void {
+        this.connectionHandler = handler;
+        handler?.(this.connectionEvent);
+    }
+
+    private updateConnection(event: CodexConnectionEvent): void {
+        this.connectionEvent = event;
+        this.connectionHandler?.(event);
     }
 
     private emitStableNotification(method: string, params: unknown): void {
@@ -752,6 +776,7 @@ export class CodexAppServerClient {
     async connect(): Promise<void> {
         if (this.connected) return;
         assertMinimumCodexCliVersion();
+        this.updateConnection({ connection: 'connecting', statusUnknown: true, error: null });
 
         let command = 'codex';
         let args = ['app-server', '--listen', 'stdio://'];
@@ -801,6 +826,9 @@ export class CodexAppServerClient {
 
         proc.on('error', (err) => {
             logger.debug(`[CodexAppServer] Process error (${errorKind(err)})`);
+            if (this.process === proc && this.processEpoch === epoch) {
+                this.updateConnection({ connection: 'error', statusUnknown: true, error: errorKind(err) });
+            }
         });
 
         proc.on('exit', (code, signal) => {
@@ -812,6 +840,7 @@ export class CodexAppServerClient {
             }
             this.connected = false;
             this.process = null;
+            this.updateConnection({ connection: 'disconnected', statusUnknown: true, error: null });
             this.readline?.close();
             this.readline = null;
             // Reject all pending requests
@@ -853,10 +882,20 @@ export class CodexAppServerClient {
                 experimentalApi: false,
             },
         };
-        await this.request('initialize', initParams);
-        this.notify('initialized');
-        this.connected = true;
-        logger.debug('[CodexAppServer] Connected and initialized');
+        try {
+            await this.request('initialize', initParams);
+            this.notify('initialized');
+            this.connected = true;
+            this.updateConnection({
+                connection: 'connected',
+                statusUnknown: this.threadId !== null,
+                error: null,
+            });
+            logger.debug('[CodexAppServer] Connected and initialized');
+        } catch (error) {
+            this.updateConnection({ connection: 'error', statusUnknown: true, error: errorKind(error) });
+            throw error;
+        }
     }
 
     private async disconnectInternal(opts?: { preserveThreadState?: boolean }): Promise<void> {
@@ -894,6 +933,7 @@ export class CodexAppServerClient {
 
         this.process = null;
         this.connected = false;
+        this.updateConnection({ connection: 'disconnected', statusUnknown: true, error: null });
         this.notificationProtocol = 'unknown';
         this.completedTurnIds.clear();
         if (!opts?.preserveThreadState) {

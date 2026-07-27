@@ -239,6 +239,36 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.close();
     });
 
+    it('keeps the last execution state unknown across disconnect until an authoritative snapshot arrives', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        mapper.importThread(thread('thread-1', [turn('turn-1', 'inProgress')]));
+        await mapper.flush();
+
+        await mapper.setConnection('disconnected', { statusUnknown: true });
+        expect(publisher.latest('codex.runtime')[0]).toMatchObject({
+            connection: 'disconnected',
+            execution: { type: 'active' },
+            statusUnknown: true,
+        });
+
+        await mapper.setConnection('connected', { statusUnknown: true });
+        expect(publisher.latest('codex.runtime')[0]).toMatchObject({
+            connection: 'connected',
+            execution: { type: 'active' },
+            statusUnknown: true,
+        });
+
+        mapper.importThread(thread('thread-1'));
+        await mapper.flush();
+        expect(publisher.latest('codex.runtime')[0]).toMatchObject({
+            connection: 'connected',
+            execution: { type: 'idle' },
+            statusUnknown: false,
+        });
+        await mapper.close();
+    });
+
     it('imports only reasoning summaries and keeps parent and child item identities isolated', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });

@@ -1119,6 +1119,16 @@ export async function runCodex(opts: {
             codexV4Migration.finalizer = finalizeMigration;
             client.setStableNotificationHandler((notification) => mapper.handleNotification(notification));
             client.setServerRequestHandler((request) => requestBroker.handle(request));
+            client.setConnectionHandler((event) => {
+                void mapper.setConnection(event.connection, {
+                    statusUnknown: event.statusUnknown,
+                    error: event.error,
+                }).catch((error) => {
+                    logger.warn('[Codex v4] Failed to publish connection state', {
+                        errorName: error instanceof Error ? error.name : typeof error,
+                    });
+                });
+            });
             return (event) => commandProcessor.handle(event);
         });
 
@@ -1402,6 +1412,7 @@ export async function runCodex(opts: {
         codexV4Runtime.commandProcessor?.close();
         client.setStableNotificationHandler(null);
         client.setServerRequestHandler(null);
+        client.setConnectionHandler(null);
         try {
             await codexV4Runtime.mapper?.close();
             await codexV4Runtime.syncClient?.flushOutboundOnce();
