@@ -47,6 +47,7 @@ describe('CodexV4ClientRegistry', () => {
             createClient: async () => client,
             isEligible: () => eligible,
             onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
         });
 
         registry.reconcile([session]);
@@ -65,16 +66,22 @@ describe('CodexV4ClientRegistry', () => {
     it('drops callbacks from a client canceled by session deletion', async () => {
         let eligible = true;
         let deliver: ((event: TestEvent) => Promise<void>) | null = null;
+        let reset: (() => Promise<void>) | null = null;
         const received: TestEvent[] = [];
+        let resetCount = 0;
         const client = new TestClient();
         const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
             createClient: async (options) => {
                 deliver = options.onEntity;
+                reset = options.onSnapshotReset;
                 return client;
             },
             isEligible: () => eligible,
             onEntity: async (_sessionId, event) => {
                 received.push(event);
+            },
+            onSnapshotReset: async () => {
+                resetCount += 1;
             },
         });
 
@@ -82,14 +89,17 @@ describe('CodexV4ClientRegistry', () => {
         await Promise.resolve();
         expect(deliver).not.toBeNull();
         await deliver!({ value: 'before-delete' });
+        await reset!();
 
         eligible = false;
         registry.reconcile([]);
         await deliver!({ value: 'after-delete' });
+        await reset!();
         client.started.resolve();
         await Promise.resolve();
 
         expect(received).toEqual([{ value: 'before-delete' }]);
+        expect(resetCount).toBe(1);
         expect(registry.hasClient(session.sessionId)).toBe(false);
         expect(registry.hasStartingClient(session.sessionId)).toBe(false);
     });
@@ -102,6 +112,7 @@ describe('CodexV4ClientRegistry', () => {
             createClient: async () => clients[createIndex++],
             isEligible: () => eligible,
             onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
         });
 
         registry.reconcile([session]);
@@ -131,6 +142,7 @@ describe('CodexV4ClientRegistry', () => {
             createClient: async () => client,
             isEligible: () => true,
             onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
         });
         registry.reconcile([session]);
 

@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
     applyCodexV4ProjectionUpdate,
     createCodexV4Projection,
+    resetCodexV4Projection,
     type CodexV4Projection,
 } from './codexV4Projection';
 
@@ -88,6 +89,34 @@ function part(content: string, kind: CodexPartEntityV4['kind'] = 'text'): CodexP
 }
 
 describe('Codex v4 projection', () => {
+    it('clears snapshot-derived state without falling back after activation', () => {
+        const runtime: CodexRuntimeEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.runtime',
+            providerId: 'runtime-reset',
+            createdAt: 1,
+            updatedAt: 1,
+            threadId: 'thread-1',
+            connection: 'connected',
+            execution: { type: 'idle' },
+            statusUnknown: false,
+            protocolVersion: 'v2',
+            codexCliVersion: '0.145.0',
+            syncState: 'ready',
+            pendingApprovalCount: 0,
+            pendingUserInputCount: 0,
+            activeSubagentCount: 0,
+            lastError: null,
+            lastKnownAt: 1,
+        };
+        const projection = resetCodexV4Projection(apply(createCodexV4Projection(), runtime));
+
+        expect(projection.activated).toBe(true);
+        expect(projection.runtime).toBeNull();
+        expect(projection.messages).toEqual([]);
+        expect(projection.revisions).toEqual({});
+    });
+
     it('updates one message in place when a streaming part revision advances', () => {
         let projection = createCodexV4Projection();
         projection = apply(projection, turn);

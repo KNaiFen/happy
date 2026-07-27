@@ -165,18 +165,22 @@ class Sync {
 
     constructor() {
         this.codexV4Clients = new CodexV4ClientRegistry({
-            createClient: ({ sessionId, sessionKey, onEntity }) => AppSyncV4Client.create({
+            createClient: ({ sessionId, sessionKey, onEntity, onSnapshotReset }) => AppSyncV4Client.create({
                 sessionId,
                 sessionKey,
                 persistence: syncV4Persistence,
                 transport: new HttpAppSyncV4Transport(),
                 onEntity,
+                onSnapshotReset,
             }),
             isEligible: (sessionId) => (
                 storage.getState().sessions[sessionId]?.metadata?.flavor === 'codex'
             ),
             onEntity: async (sessionId, event) => {
                 storage.getState().applyCodexV4Entity(sessionId, event);
+            },
+            onSnapshotReset: async (sessionId) => {
+                storage.getState().resetCodexV4Projection(sessionId);
             },
             onStartError: () => {
                 log.log('Codex Sync v4 client start failed; retrying after session refresh');

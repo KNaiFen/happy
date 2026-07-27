@@ -17,6 +17,12 @@ import {
     type AppSyncV4Crypto,
     type AppSyncV4Transport,
 } from './syncV4Client';
+import {
+    applyCodexV4ProjectionUpdate,
+    createCodexV4Projection,
+    resetCodexV4Projection,
+    type CodexV4Projection,
+} from './codexV4Projection';
 import { SyncV4Persistence, type SyncV4KeyValueStorage } from './syncV4Persistence';
 
 vi.mock('./syncV4Crypto', () => ({
@@ -112,6 +118,7 @@ async function client(
     transport: FakeTransport,
     applied: AppSyncV4AppliedEntity[] = [],
     handler?: (event: AppSyncV4AppliedEntity) => Promise<void>,
+    snapshotReset?: () => Promise<void>,
 ): Promise<AppSyncV4Client> {
     return AppSyncV4Client.create({
         sessionId: 'session-1',
@@ -121,6 +128,7 @@ async function client(
         crypto: fakeCrypto,
         generateMutationId: () => `00000000-0000-4000-8000-${String(++mutationCounter).padStart(12, '0')}`,
         onEntity: handler ?? (async (event) => { applied.push(event); }),
+        onSnapshotReset: snapshotReset ?? (async () => undefined),
     });
 }
 
@@ -275,5 +283,69 @@ describe('AppSyncV4Client', () => {
         const hydrated: AppSyncV4AppliedEntity[] = [];
         await (await client(storage, transport, hydrated)).hydrate();
         expect(hydrated.map((event) => event.source)).toEqual(['cache', 'cache']);
+    });
+
+    it('removes entities omitted from a replacement snapshot projection', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const stale = await publisher.publishEntity(command('stale-command'));
+        transport.changes = [toChange(stale, 1)];
+
+        let projection: CodexV4Projection = createCodexV4Projection();
+        const receiver = await client(
+            storage,
+            transport,
+            [],
+            async (event) => {
+                projection = applyCodexV4ProjectionUpdate(projection, event);
+            },
+            async () => {
+                projection = resetCodexV4Projection(projection);
+            },
+        );
+        await receiver.pullChangesOnce();
+        expect(projection.entities['codex.command']['stale-command']).toBeDefined();
+
+        const fresh = await publisher.publishEntity(command('fresh-command'));
+        const { mutationId: _mutationId, ...snapshot } = fresh;
+        transport.requireSnapshot = true;
+        transport.snapshots = [{
+            entities: [{ ...snapshot, updatedSeq: 1, createdAt: 101, updatedAt: 101 }],
+            highWatermark: 1,
+            nextCursor: null,
+        }];
+        await receiver.pullChangesOnce();
+
+        expect(projection.entities['codex.command']['stale-command']).toBeUndefined();
+        expect(projection.entities['codex.command']['fresh-command']).toBeDefined();
+    });
+
+    it('reprojects unacknowledged outbox entities after a snapshot reset', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        let projection: CodexV4Projection = createCodexV4Projection();
+        let resetCount = 0;
+        const receiver = await client(
+            storage,
+            transport,
+            [],
+            async (event) => {
+                projection = applyCodexV4ProjectionUpdate(projection, event);
+            },
+            async () => {
+                resetCount += 1;
+                projection = resetCodexV4Projection(projection);
+            },
+        );
+        await receiver.publishEntity(command('pending-command'));
+
+        transport.requireSnapshot = true;
+        transport.snapshots = [{ entities: [], highWatermark: 0, nextCursor: null }];
+        await receiver.pullChangesOnce();
+
+        expect(resetCount).toBe(1);
+        expect(projection.entities['codex.command']['pending-command']).toBeDefined();
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
     });
 });

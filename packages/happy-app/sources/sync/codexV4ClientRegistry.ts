@@ -11,12 +11,14 @@ export interface CodexV4RegistrySession {
 
 interface CodexV4ClientFactoryOptions<TEvent> extends CodexV4RegistrySession {
     onEntity: (event: TEvent) => Promise<void>;
+    onSnapshotReset: () => Promise<void>;
 }
 
 interface CodexV4ClientRegistryOptions<TClient extends CodexV4RegistryClient, TEvent> {
     createClient: (options: CodexV4ClientFactoryOptions<TEvent>) => Promise<TClient>;
     isEligible: (sessionId: string) => boolean;
     onEntity: (sessionId: string, event: TEvent) => Promise<void>;
+    onSnapshotReset: (sessionId: string) => Promise<void>;
     onStartError?: (sessionId: string) => void;
 }
 
@@ -101,6 +103,10 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             onEntity: async (event) => {
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
                 await this.options.onEntity(session.sessionId, event);
+            },
+            onSnapshotReset: async () => {
+                if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
+                await this.options.onSnapshotReset(session.sessionId);
             },
         });
         record = {

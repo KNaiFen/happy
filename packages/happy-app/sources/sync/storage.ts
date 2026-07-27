@@ -38,6 +38,7 @@ import { indexSessionsById } from './sessionIdentity';
 import {
     applyCodexV4ProjectionUpdate,
     createCodexV4Projection,
+    resetCodexV4Projection,
     type CodexV4Projection,
     type CodexV4ProjectionUpdate,
 } from './codexV4Projection';
@@ -208,6 +209,7 @@ interface StorageState {
     applyReady: () => void;
     applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[], hasReadyEvent: boolean, enteredPlanMode: boolean };
     applyCodexV4Entity: (sessionId: string, update: CodexV4ProjectionUpdate) => void;
+    resetCodexV4Projection: (sessionId: string) => void;
     applyMessagesLoaded: (sessionId: string) => void;
     applyOlderMessagesPagination: (sessionId: string, info: { hasMore: boolean }) => void;
     applyOlderMessagesLoading: (sessionId: string, isLoading: boolean) => void;
@@ -824,6 +826,33 @@ export const storage = create<StorageState>()((set, get) => {
                     [sessionId]: projection,
                 },
                 sessionListViewData: buildSessionListViewData(sessions, state.unreadSessionIds),
+            };
+        }),
+        resetCodexV4Projection: (sessionId: string) => set((state) => {
+            const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
+            const projection = resetCodexV4Projection(previous);
+            let sessionMessages = state.sessionMessages;
+            if (projection.activated) {
+                const existing = state.sessionMessages[sessionId];
+                sessionMessages = {
+                    ...state.sessionMessages,
+                    [sessionId]: {
+                        messages: [],
+                        messagesMap: {},
+                        reducerState: existing?.reducerState ?? createReducer(),
+                        isLoaded: true,
+                        hasMoreOlder: false,
+                        isLoadingOlder: false,
+                    },
+                };
+            }
+            return {
+                ...state,
+                sessionMessages,
+                codexV4Sessions: {
+                    ...state.codexV4Sessions,
+                    [sessionId]: projection,
+                },
             };
         }),
         applyMessagesLoaded: (sessionId: string) => set((state) => {

@@ -56,6 +56,13 @@ export function createCodexV4Projection(): CodexV4Projection {
     };
 }
 
+export function resetCodexV4Projection(current: CodexV4Projection): CodexV4Projection {
+    return {
+        ...createCodexV4Projection(),
+        activated: current.activated,
+    };
+}
+
 export function applyCodexV4ProjectionUpdate(
     current: CodexV4Projection,
     update: CodexV4ProjectionUpdate,

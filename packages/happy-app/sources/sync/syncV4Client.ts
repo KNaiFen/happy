@@ -68,6 +68,7 @@ interface AppSyncV4ClientOptions {
     persistence: SyncV4Persistence;
     transport: AppSyncV4Transport;
     onEntity: (event: AppSyncV4AppliedEntity) => Promise<void>;
+    onSnapshotReset: () => Promise<void>;
     crypto?: AppSyncV4Crypto;
     generateMutationId?: () => string;
     pollIntervalMs?: number;
@@ -85,6 +86,7 @@ export class AppSyncV4Client {
             options.transport,
             crypto,
             options.onEntity,
+            options.onSnapshotReset,
             options.generateMutationId ?? defaultRandomUUID,
             options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
         );
@@ -104,6 +106,7 @@ export class AppSyncV4Client {
         private readonly transport: AppSyncV4Transport,
         private readonly crypto: AppSyncV4Crypto,
         private readonly onEntity: (event: AppSyncV4AppliedEntity) => Promise<void>,
+        private readonly onSnapshotReset: () => Promise<void>,
         private readonly generateMutationId: () => string,
         private readonly pollIntervalMs: number,
     ) {
@@ -283,8 +286,10 @@ export class AppSyncV4Client {
 
     private async rebuildFromSnapshot(): Promise<void> {
         this.persistence.beginSnapshot(this.sessionId);
+        await this.onSnapshotReset();
         let cursor: string | null = null;
         let highWatermark: number | null = null;
+        const snapshotRevisions = new Map<string, number>();
         const seenCursors = new Set<string>();
         do {
             const page = await this.transport.getSnapshot(this.sessionId, cursor, SNAPSHOT_PAGE_SIZE);
@@ -301,6 +306,10 @@ export class AppSyncV4Client {
             }
             this.persistence.applySnapshotPage(this.sessionId, page.entities);
             for (const { snapshot, entity } of decrypted) {
+                snapshotRevisions.set(
+                    snapshot.entityId,
+                    Math.max(snapshotRevisions.get(snapshot.entityId) ?? 0, snapshot.revision),
+                );
                 await this.onEntity({
                     entity,
                     source: 'snapshot',
@@ -314,6 +323,18 @@ export class AppSyncV4Client {
             if (cursor) seenCursors.add(cursor);
         } while (cursor);
         this.persistence.finishSnapshot(this.sessionId, highWatermark ?? 0);
+
+        for (const mutation of this.persistence.getPendingOutbox(this.sessionId)) {
+            if ((snapshotRevisions.get(mutation.entityId) ?? 0) >= mutation.revision) continue;
+            const entity = await this.crypto.decryptEntity(toAad(this.sessionId, mutation), mutation.ciphertext);
+            await this.onEntity({
+                entity,
+                source: 'cache',
+                op: mutation.op,
+                revision: mutation.revision,
+                seq: null,
+            });
+        }
     }
 }
 
