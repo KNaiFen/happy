@@ -1204,6 +1204,7 @@ export async function runCodex(opts: {
                 closed = true;
                 commandProcessor!.close();
                 try {
+                    await requestBroker!.failPending('brokerClosed');
                     await mapper!.close();
                     await syncClient.flushOutboundOnce();
                 } finally {

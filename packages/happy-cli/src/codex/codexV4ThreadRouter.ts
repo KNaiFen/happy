@@ -7,6 +7,7 @@ import {
 import type { SyncV4Client } from '@/api/syncV4Client';
 import type {
     CodexConnectionEvent,
+    CodexManagedServerResponse,
     CodexServerRequest,
 } from './codexAppServerClient';
 import type { CodexSyncV4Mapper } from './codexSyncV4Mapper';
@@ -71,7 +72,7 @@ export class CodexV4ThreadRouter {
             .catch((error) => { this.options.onError?.(error); });
     }
 
-    async handleRequest(request: CodexServerRequest): Promise<unknown> {
+    async handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse> {
         if (this.closed) throw new Error('Codex v4 thread router is closed');
         const threadId = requestThreadId(request);
         const binding = await this.bindingForThread(threadId);
@@ -84,6 +85,10 @@ export class CodexV4ThreadRouter {
                 statusUnknown: event.statusUnknown,
                 error: event.error,
             }).catch((error) => this.options.onError?.(error));
+            if (event.connection === 'disconnected' || event.connection === 'error') {
+                void binding.requestBroker.failPending('transportDisconnected')
+                    .catch((error) => this.options.onError?.(error));
+            }
         }
     }
 
@@ -140,6 +145,12 @@ export class CodexV4ThreadRouter {
         }
 
         binding.mapper.handleNotification(notification);
+        if (notification.method === 'serverRequest/resolved') {
+            await binding.requestBroker.markProviderResolved(
+                notification.params.threadId,
+                String(notification.params.requestId),
+            );
+        }
         if (snapshot) await this.discoverChildren(snapshot);
         await this.discoverChildrenFromNotification(notification);
         await this.updateChildRelation(threadId, notification);

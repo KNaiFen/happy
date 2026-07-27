@@ -47,12 +47,16 @@ describe('CodexV4RequestBroker', () => {
             options: { command: 'git status', cwd: '/workspace' },
         });
 
-        await broker.resolve({
+        const resolution = broker.resolve({
             requestId: 'rpc-7',
             threadId: 'thread-1',
             response: { decision: 'acceptForSession' },
         });
-        expect(await providerResponse).toEqual({ decision: 'acceptForSession' });
+        const managed = await providerResponse;
+        expect(managed.response).toEqual({ decision: 'acceptForSession' });
+        expect(mapper.requests.at(-1)?.status).toBe('pending');
+        await managed.markDelivered();
+        await expect(resolution).resolves.toEqual({ providerRequestId: 'rpc-7' });
         expect(mapper.requests.at(-1)).toMatchObject({
             status: 'accepted',
             response: { decision: 'acceptForSession' },
@@ -78,8 +82,11 @@ describe('CodexV4RequestBroker', () => {
         await waitForRequest(mapper);
 
         const response = { answers: { choice: { answers: ['safe', 'fast'] } } };
-        await broker.resolve({ requestId: 'rpc-8', threadId: 'thread-1', response });
-        expect(await providerResponse).toEqual(response);
+        const resolution = broker.resolve({ requestId: 'rpc-8', threadId: 'thread-1', response });
+        const managed = await providerResponse;
+        expect(managed.response).toEqual(response);
+        await managed.markDelivered();
+        await resolution;
         expect(mapper.requests.at(-1)).toMatchObject({ requestType: 'toolUserInput', status: 'resolved', response });
     });
 
@@ -100,5 +107,77 @@ describe('CodexV4RequestBroker', () => {
         })).rejects.toThrow('Invalid Codex approval decision');
         expect(broker.pendingCount()).toBe(1);
         expect(mapper.requests).toHaveLength(1);
+    });
+
+    it('marks unresolved provider requests as errors when their transport is lost', async () => {
+        const mapper = new RecordingMapper();
+        const broker = new CodexV4RequestBroker({ mapper, now: () => 200 });
+        const providerResponse = broker.handle({
+            requestId: 'rpc-10',
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-4' },
+        });
+        const settled = providerResponse.then(
+            () => 'resolved',
+            (error: unknown) => error,
+        );
+        await waitForRequest(mapper);
+
+        await broker.failPending('transportDisconnected');
+
+        expect(await settled).toBeInstanceOf(Error);
+        expect(mapper.requests.at(-1)).toMatchObject({
+            status: 'error',
+            response: { error: 'transportDisconnected' },
+            resolvedAt: 200,
+        });
+        expect(broker.pendingCount()).toBe(0);
+    });
+
+    it('fails command resolution when the response cannot reach the provider', async () => {
+        const mapper = new RecordingMapper();
+        const broker = new CodexV4RequestBroker({ mapper });
+        const providerResponse = broker.handle({
+            requestId: 'rpc-11',
+            method: 'item/commandExecution/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-5' },
+        });
+        await waitForRequest(mapper);
+        const resolution = broker.resolve({
+            requestId: 'rpc-11',
+            threadId: 'thread-1',
+            response: { decision: 'accept' },
+        });
+        const managed = await providerResponse;
+
+        await managed.markAbandoned();
+
+        await expect(resolution).rejects.toThrow('transportDisconnected');
+        expect(mapper.requests.at(-1)).toMatchObject({ status: 'error' });
+    });
+
+    it('closes a request that Codex resolves before the App responds', async () => {
+        const mapper = new RecordingMapper();
+        const broker = new CodexV4RequestBroker({ mapper, now: () => 300 });
+        const providerResponse = broker.handle({
+            requestId: 'rpc-12',
+            method: 'item/tool/requestUserInput',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-6', questions: [] },
+        });
+        const settled = providerResponse.then(
+            () => 'resolved',
+            (error: unknown) => error,
+        );
+        await waitForRequest(mapper);
+
+        await broker.markProviderResolved('thread-1', 'rpc-12');
+
+        expect(await settled).toBeInstanceOf(Error);
+        expect(mapper.requests.at(-1)).toMatchObject({
+            status: 'resolved',
+            response: null,
+            resolvedAt: 300,
+        });
+        expect(broker.pendingCount()).toBe(0);
     });
 });

@@ -2468,9 +2468,15 @@ describe('CodexAppServerClient sandbox integration', () => {
         const { CodexAppServerClient } = await import('./codexAppServerClient');
         const client = new CodexAppServerClient();
         const handled: Array<Record<string, unknown>> = [];
+        const markDelivered = vi.fn(async () => {});
+        const markAbandoned = vi.fn(async () => {});
         client.setServerRequestHandler(async (request) => {
             handled.push(request as unknown as Record<string, unknown>);
-            return { answers: { mode: { answers: ['safe'] } } };
+            return {
+                response: { answers: { mode: { answers: ['safe'] } } },
+                markDelivered,
+                markAbandoned,
+            };
         });
 
         await client.connect();
@@ -2496,6 +2502,76 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(requests.find((message) => message.id === 88)?.result).toEqual({
             answers: { mode: { answers: ['safe'] } },
         });
+        expect(markDelivered).toHaveBeenCalledOnce();
+        expect(markAbandoned).not.toHaveBeenCalled();
+        await client.disconnect();
+    });
+
+    it('never writes a stale provider response into a reconnected transport', async () => {
+        const firstRequests: MockRpcMessage[] = [];
+        const secondRequests: MockRpcMessage[] = [];
+        const first = createMockProcess({ onRequest: (message) => firstRequests.push(message) });
+        const second = createMockProcess({ onRequest: (message) => secondRequests.push(message) });
+        mockSpawn
+            .mockImplementationOnce(() => first)
+            .mockImplementationOnce(() => second);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        let provideManagedResponse!: () => void;
+        const responseGate = new Promise<void>((resolve) => { provideManagedResponse = resolve; });
+        const markDelivered = vi.fn(async () => {});
+        const markAbandoned = vi.fn(async () => {});
+        client.setServerRequestHandler(async () => {
+            await responseGate;
+            return {
+                response: { decision: 'accept' },
+                markDelivered,
+                markAbandoned,
+            };
+        });
+
+        await client.connect();
+        pushJsonLine(first.stdout, {
+            id: 91,
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await client.disconnect();
+        await client.connect();
+        provideManagedResponse();
+        await waitFor(() => markAbandoned.mock.calls.length === 1);
+
+        expect(markDelivered).not.toHaveBeenCalled();
+        expect(secondRequests.some((message) => message.id === 91)).toBe(false);
+        expect(firstRequests.some((message) => message.id === 91 && message.result)).toBe(false);
+        await client.disconnect();
+    });
+
+    it('ignores duplicate provider request ids within one transport generation', async () => {
+        const proc = createMockProcess();
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const handler = vi.fn(async () => ({
+            response: { decision: 'decline' },
+            markDelivered: vi.fn(async () => {}),
+            markAbandoned: vi.fn(async () => {}),
+        }));
+        client.setServerRequestHandler(handler);
+        await client.connect();
+        const request = {
+            id: 92,
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+        };
+
+        pushJsonLine(proc.stdout, request);
+        pushJsonLine(proc.stdout, request);
+        await waitFor(() => handler.mock.calls.length === 1);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(handler).toHaveBeenCalledOnce();
         await client.disconnect();
     });
 

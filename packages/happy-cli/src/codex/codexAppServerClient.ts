@@ -147,7 +147,15 @@ export interface CodexServerRequest {
     params: unknown;
 }
 
-export type CodexServerRequestHandler = (request: CodexServerRequest) => Promise<unknown>;
+export interface CodexManagedServerResponse {
+    response: unknown;
+    markDelivered(): Promise<void>;
+    markAbandoned(): Promise<void>;
+}
+
+export type CodexServerRequestHandler = (
+    request: CodexServerRequest,
+) => Promise<CodexManagedServerResponse>;
 
 export interface CodexConnectionEvent {
     connection: 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -335,6 +343,7 @@ export class CodexAppServerClient {
     // tool-call join works, and only a concurrent second approval for the
     // same item gets a disambiguating suffix.
     private pendingApprovalCallIds = new Set<string>();
+    private readonly seenServerRequestIds = new Set<number>();
 
     // Handlers set by the consumer (runCodex.ts)
     private eventHandler: ((msg: EventMsg) => void) | null = null;
@@ -883,6 +892,7 @@ export class CodexAppServerClient {
         logger.debug(`[CodexAppServer] Spawning app-server transport; sandbox=${this.sandboxEnabled}`);
 
         const epoch = ++this.processEpoch;
+        this.seenServerRequestIds.clear();
         this.intentionalTransportClose = false;
         // Use cross-spawn so npm-installed wrappers (codex.cmd / codex.ps1) resolve on Windows.
         // Native child_process.spawn fails with ENOENT for .cmd shims (issues #980, #1016).
@@ -1760,12 +1770,17 @@ export class CodexAppServerClient {
         logger.debug(`[CodexAppServer] → ${msg.method} (notification)`);
     }
 
-    private respond(id: number, result: unknown): void {
-        if (!this.process?.stdin?.writable) return;
+    private respond(id: number, result: unknown, sourceEpoch: number = this.processEpoch): boolean {
+        if (sourceEpoch !== this.processEpoch || !this.process?.stdin?.writable) return false;
         const msg: CodexWireResponse = { id, result };
-        this.recordProtocolTrace('outbound', msg);
-        this.process.stdin.write(JSON.stringify(msg) + '\n');
-        logger.debug(`[CodexAppServer] → response (id=${id})`);
+        try {
+            this.recordProtocolTrace('outbound', msg);
+            this.process.stdin.write(JSON.stringify(msg) + '\n');
+            logger.debug(`[CodexAppServer] → response (id=${id})`);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     private handleLine(line: string, sourceEpoch: number = this.processEpoch): void {
@@ -1812,7 +1827,12 @@ export class CodexAppServerClient {
 
         // Server → client request (approvals)
         if (msg.id != null && msg.method) {
-            this.handleServerRequest(msg.id, msg.method, msg.params).catch((err) => {
+            if (this.seenServerRequestIds.has(msg.id)) {
+                logger.debug(`[CodexAppServer] Ignoring duplicate server request id=${msg.id}`);
+                return;
+            }
+            this.seenServerRequestIds.add(msg.id);
+            this.handleServerRequest(msg.id, msg.method, msg.params, sourceEpoch).catch((err) => {
                 logger.debug(`[CodexAppServer] Error handling server request (${errorKind(err)})`);
             });
             return;
@@ -1932,14 +1952,23 @@ export class CodexAppServerClient {
         };
     }
 
-    private async handleServerRequest(id: number, method: string, params: any): Promise<void> {
+    private async handleServerRequest(
+        id: number,
+        method: string,
+        params: any,
+        sourceEpoch: number,
+    ): Promise<void> {
         if (this.serverRequestHandler && isStableServerRequestMethod(method)) {
-            const result = await this.serverRequestHandler({
+            const managed = await this.serverRequestHandler({
                 requestId: String(id),
                 method,
                 params,
             });
-            this.respond(id, result);
+            if (!this.respond(id, managed.response, sourceEpoch)) {
+                await managed.markAbandoned();
+                return;
+            }
+            await managed.markDelivered();
             return;
         }
 
@@ -1961,7 +1990,7 @@ export class CodexAppServerClient {
                 serverName,
                 message: params?.message,
             });
-            this.respond(id, this.mapDecisionToMcpElicitationResponse(decision, params));
+            this.respond(id, this.mapDecisionToMcpElicitationResponse(decision, params), sourceEpoch);
             return;
         }
 
@@ -1995,7 +2024,7 @@ export class CodexAppServerClient {
                     cwd: params.cwd,
                     reason: params.reason,
                 });
-                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) });
+                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) }, sourceEpoch);
             } finally {
                 this.pendingApprovalCallIds.delete(callId);
             }
@@ -2023,7 +2052,7 @@ export class CodexAppServerClient {
                         : undefined),
                     reason: params.reason,
                 });
-                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) });
+                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) }, sourceEpoch);
             } finally {
                 this.pendingApprovalCallIds.delete(callId);
             }
@@ -2032,7 +2061,7 @@ export class CodexAppServerClient {
 
         // Unknown server request — respond so server doesn't hang
         logger.debug(`[CodexAppServer] Unknown server request: ${method}`);
-        this.respond(id, {});
+        this.respond(id, {}, sourceEpoch);
     }
 
     // The bare scoped key keeps the app's permission ↔ tool-call join for the

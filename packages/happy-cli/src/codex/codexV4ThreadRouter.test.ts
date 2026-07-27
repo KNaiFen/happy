@@ -36,7 +36,15 @@ class FakeMapper {
 
 function binding(sessionId: string) {
     const mapper = new FakeMapper();
-    const requestBroker = { handle: vi.fn(async () => ({ decision: 'accept' })) };
+    const requestBroker = {
+        handle: vi.fn(async () => ({
+            response: { decision: 'accept' },
+            markDelivered: vi.fn(async () => {}),
+            markAbandoned: vi.fn(async () => {}),
+        })),
+        failPending: vi.fn(async () => {}),
+        markProviderResolved: vi.fn(async () => {}),
+    };
     const close = vi.fn(async () => {});
     const value = {
         sessionId,
@@ -194,7 +202,9 @@ describe('CodexV4ThreadRouter', () => {
             method: 'item/tool/requestUserInput',
             params: { threadId: 'thread-child', turnId: 'turn-child', itemId: 'item-1', questions: [] },
         } as const;
-        await expect(router.handleRequest(request)).resolves.toEqual({ decision: 'accept' });
+        await expect(router.handleRequest(request)).resolves.toMatchObject({
+            response: { decision: 'accept' },
+        });
 
         expect(root.requestBroker.handle).not.toHaveBeenCalled();
         expect(child.requestBroker.handle).toHaveBeenCalledWith(request);
@@ -288,5 +298,47 @@ describe('CodexV4ThreadRouter', () => {
 
         expect(createChildBinding).toHaveBeenCalledOnce();
         expect(root.mapper.relations).toHaveLength(1);
+    });
+
+    it('expires pending requests in every thread binding when the transport disconnects', async () => {
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-child', 'thread-root'),
+            createChildBinding: async () => child.value,
+        });
+        router.registerRootThread('thread-root');
+        await router.handleRequest({
+            requestId: 'request-1',
+            method: 'item/tool/requestUserInput',
+            params: { threadId: 'thread-child', turnId: 'turn-child', itemId: 'item-1', questions: [] },
+        });
+
+        router.setConnection({ connection: 'disconnected', statusUnknown: true, error: null });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(root.requestBroker.failPending).toHaveBeenCalledWith('transportDisconnected');
+        expect(child.requestBroker.failPending).toHaveBeenCalledWith('transportDisconnected');
+    });
+
+    it('routes provider-side request completion to the owning broker', async () => {
+        const root = binding('happy-root');
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-root', null),
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+        });
+        router.registerRootThread('thread-root');
+
+        router.handleNotification({
+            method: 'serverRequest/resolved',
+            params: { threadId: 'thread-root', requestId: 42 },
+        });
+        await router.flush();
+
+        expect(root.requestBroker.markProviderResolved).toHaveBeenCalledWith('thread-root', '42');
     });
 });
