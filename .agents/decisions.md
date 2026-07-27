@@ -31,3 +31,7 @@
 - [2026-07-27] Increment affected distributables by one minor version for every completed code-change task.
   - Why: Locally built APP and CLI artifacts need unambiguous filenames and in-product versions.
   - Impact: This task advances the APP to 1.8.0 and the CLI npm package to 1.3.0; each future task that changes either distributable resets its patch component while incrementing its minor component.
+
+- [2026-07-27] Bundle the workspace `@slopus/happy-wire` implementation into the CLI distribution.
+  - Why: A local CLI tgz must not resolve an older npm-published wire package that lacks exports used by the current workspace source.
+  - Impact: `@slopus/happy-wire` is a CLI build dependency rather than a runtime dependency, so pkgroll inlines it and users still install only the `happy` package.
