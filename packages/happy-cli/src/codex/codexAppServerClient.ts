@@ -13,7 +13,7 @@
  * app-server wrapper or approval callbacks. See docs/plans/codex-app-server-migration.md.
  */
 
-import { execSync, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { spawn as crossSpawn } from 'cross-spawn';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import { logger } from '@/ui/logger';
@@ -53,6 +53,11 @@ import type {
 import type { SandboxConfig } from '@/persistence';
 import { initializeSandbox, wrapForMcpTransport } from '@/sandbox/manager';
 import packageJson from '../../package.json';
+import {
+    assertMinimumCodexCliVersion,
+    isCodexCliVersionAtLeast,
+    readCodexCliVersion,
+} from './codexCliVersion';
 
 type PendingRequest = {
     resolve: (result: unknown) => void;
@@ -93,58 +98,12 @@ function formatScopedItemKey(threadId: string | null, itemId: string): string {
     return threadId ? `${threadId}:${itemId}` : itemId;
 }
 
-/**
- * Check that `codex app-server` is available.
- */
-function parseCodexCliVersion(version: string): { major: number; minor: number; patch: number } | null {
-    const match = version.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/);
-    if (!match) return null;
-    const major = Number(match[1]);
-    const minor = Number(match[2]);
-    const patch = Number(match[3]);
-    if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) {
-        return null;
-    }
-    return { major, minor, patch };
-}
-
-function readCodexCliVersion(): { major: number; minor: number; patch: number } | null {
-    try {
-        const version = execSync('codex --version', { encoding: 'utf8', windowsHide: true }).trim();
-        return parseCodexCliVersion(version);
-    } catch {
-        return null;
-    }
-}
-
-function isAppServerAvailable(): boolean {
-    const version = readCodexCliVersion();
-    if (!version) {
-        return false;
-    }
-    const { major, minor } = version;
-    // app-server available in recent versions
-    return major > 0 || minor >= 100;
-}
-
 function isGoalActionsAvailable(): boolean {
-    const version = readCodexCliVersion();
-    if (!version) {
-        return false;
-    }
-    const { major, minor } = version;
-    // thread/goal/set and thread/goal/clear are present in Codex 0.140+.
-    return major > 0 || minor >= 140;
+    return isCodexCliVersionAtLeast(readCodexCliVersion(), { major: 0, minor: 140, patch: 0 });
 }
 
 function isTurnSteeringAvailable(): boolean {
-    const version = readCodexCliVersion();
-    if (!version) {
-        return false;
-    }
-    const { major, minor } = version;
-    // turn/steer is part of the stable app-server protocol in Codex 0.145+.
-    return major > 0 || minor >= 145;
+    return isCodexCliVersionAtLeast(readCodexCliVersion(), { major: 0, minor: 145, patch: 0 });
 }
 
 function normalizeRawFileChangeList(changes: unknown): LegacyPatchChanges | undefined {
@@ -611,16 +570,7 @@ export class CodexAppServerClient {
 
     async connect(): Promise<void> {
         if (this.connected) return;
-
-        if (!isAppServerAvailable()) {
-            throw new Error(
-                'Codex CLI is not installed\n\n' +
-                'Please install Codex CLI using one of these methods:\n\n' +
-                'Option 1 - npm (recommended):\n  npm install -g @openai/codex\n\n' +
-                'Option 2 - Homebrew (macOS):\n  brew install --cask codex\n\n' +
-                'Alternatively, use Claude Code:\n  happy claude',
-            );
-        }
+        assertMinimumCodexCliVersion();
 
         let command = 'codex';
         let args = ['app-server', '--listen', 'stdio://'];
@@ -712,7 +662,7 @@ export class CodexAppServerClient {
                 version: packageJson.version,
             },
             capabilities: {
-                experimentalApi: true,
+                experimentalApi: false,
             },
         };
         await this.request('initialize', initParams);

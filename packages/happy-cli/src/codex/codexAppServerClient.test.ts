@@ -118,7 +118,7 @@ describe('CodexAppServerClient sandbox integration', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         process.env.RUST_LOG = originalRustLog;
-        mockExecSync.mockReturnValue('codex-cli 0.107.0');
+        mockExecSync.mockReturnValue('codex-cli 0.145.0');
         mockInitializeSandbox.mockResolvedValue(mockSandboxCleanup);
         mockWrapForMcpTransport.mockResolvedValue({ command: 'sh', args: ['-c', 'wrapped codex app-server'] });
         mockSpawn.mockImplementation(() => createMockProcess());
@@ -146,6 +146,14 @@ describe('CodexAppServerClient sandbox integration', () => {
 
         mockExecSync.mockReturnValue('codex-cli 0.144.9');
         expect(new CodexAppServerClient().supportsTurnSteering()).toBe(false);
+    });
+
+    it('refuses to connect to Codex versions older than 0.145.0', async () => {
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        mockExecSync.mockReturnValue('codex-cli 0.144.9');
+
+        await expect(new CodexAppServerClient().connect()).rejects.toThrow('found 0.144.9');
+        expect(mockSpawn).not.toHaveBeenCalled();
     });
 
     it('steers the active turn without interrupting it', async () => {

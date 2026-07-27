@@ -9,7 +9,6 @@ import { CodexPermissionHandler } from './utils/permissionHandler';
 import { ReasoningProcessor } from './utils/reasoningProcessor';
 import { DiffProcessor } from './utils/diffProcessor';
 import { randomUUID } from 'node:crypto';
-import { execSync } from 'node:child_process';
 import { logger } from '@/ui/logger';
 import { Credentials, readSettings } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/run';
@@ -62,6 +61,7 @@ import {
     mergeCodexSessionModels,
 } from './codexModelCapabilities';
 import { resolveCodexEffortForModel } from './codexEffortValidation';
+import { assertMinimumCodexCliVersion } from './codexCliVersion';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -112,11 +112,12 @@ export async function runCodex(opts: {
     model?: string;
     effort?: ReasoningEffort;
 }): Promise<void> {
-    // Early check: ensure Codex CLI is installed before proceeding
+    // Fail before creating remote state when the local protocol is unsupported.
     try {
-        execSync('codex --version', { encoding: 'utf8', stdio: 'pipe', windowsHide: true });
-    } catch {
-        console.error('\n\x1b[1m\x1b[33mCodex CLI is not installed\x1b[0m\n');
+        assertMinimumCodexCliVersion();
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Codex CLI version check failed.';
+        console.error(`\n\x1b[1m\x1b[33m${message}\x1b[0m\n`);
         console.error('Please install Codex CLI using one of these methods:\n');
         console.error('\x1b[1mOption 1 - npm (recommended):\x1b[0m');
         console.error('  \x1b[36mnpm install -g @openai/codex\x1b[0m\n');

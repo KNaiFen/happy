@@ -60,6 +60,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "codex:protocol:generate": "node scripts/generate-codex-app-server-types.cjs",
     "bundle:server": "node scripts/bundle-server.cjs",
     "bundle:server:all": "node scripts/bundle-server.cjs --all-platforms",
     "bundle:webapp": "node scripts/bundle-webapp.cjs",
