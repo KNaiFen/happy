@@ -1,6 +1,7 @@
 const { execFileSync } = require('node:child_process');
 
 const variant = process.env.APP_ENV || 'development';
+const disableOtaUpdates = process.env.HAPPY_DISABLE_OTA === '1';
 const name = {
     development: "Happy (dev)",
     preview: "Happy (preview)",
@@ -207,12 +208,14 @@ export default {
                 }
             ]
         ],
-        updates: {
-            url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
-            requestHeaders: {
-                "expo-channel-name": "production"
-            }
-        },
+        updates: disableOtaUpdates
+            ? { enabled: false }
+            : {
+                url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
+                requestHeaders: {
+                    "expo-channel-name": "production"
+                }
+            },
         experiments: {
             typedRoutes: true
         },

@@ -30,6 +30,7 @@
     "android:dev": "cross-env APP_ENV=development expo run:android",
     "android:preview": "cross-env APP_ENV=preview expo run:android",
     "android:production": "cross-env APP_ENV=production expo run:android --variant release",
+    "android:local-release": "cross-env APP_ENV=production HAPPY_DISABLE_OTA=1 expo prebuild --platform android --no-install && cross-env APP_ENV=production HAPPY_DISABLE_OTA=1 ./android/gradlew -p android assembleRelease",
     "start:dev": "cross-env APP_ENV=development expo start",
     "start:preview": "cross-env APP_ENV=preview expo start",
     "start:production": "cross-env APP_ENV=production expo start",

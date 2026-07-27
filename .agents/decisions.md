@@ -15,3 +15,7 @@
 - [2026-07-27] Treat the installed Codex app-server model catalog as the reasoning-effort source of truth.
   - Why: Effort values are forward-compatible strings, while valid values and defaults differ by model and can change independently of Happy.
   - Impact: Machine and session metadata carry encrypted per-model levels plus the provider default marker; the synthetic `default model` continues to mean Happy's configured launch model, catalog pagination has a total timeout and page cap, and the CLI revalidates every turn with an `xhigh` compatibility fallback when discovery is unavailable.
+
+- [2026-07-27] Disable Expo OTA only for self-contained local Android release builds.
+  - Why: The official production channel shares runtime version 21 and replaces the custom embedded bundle on the next cold launch.
+  - Impact: `HAPPY_DISABLE_OTA=1` removes the update endpoint during prebuild; `android:local-release` always sets the flag before assembling the APK, while normal upstream build profiles keep their existing OTA behavior.
