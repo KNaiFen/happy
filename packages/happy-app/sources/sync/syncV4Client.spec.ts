@@ -1,0 +1,225 @@
+import {
+    SyncChangesResponseV4Schema,
+    SyncSnapshotResponseV4Schema,
+    type CodexCommandEntityV4,
+    type CodexEntityV4,
+    type SyncChangeV4,
+    type SyncMutationBatchResponseV4,
+    type SyncMutationV4,
+    type SyncSnapshotResponseV4,
+    type SyncV4Aad,
+} from '@slopus/happy-wire';
+import { describe, expect, it, vi } from 'vitest';
+import {
+    AppSyncV4Client,
+    AppSyncV4SnapshotRequiredError,
+    type AppSyncV4AppliedEntity,
+    type AppSyncV4Crypto,
+    type AppSyncV4Transport,
+} from './syncV4Client';
+import { SyncV4Persistence, type SyncV4KeyValueStorage } from './syncV4Persistence';
+
+vi.mock('./syncV4Crypto', () => ({
+    SyncV4Crypto: { create: vi.fn() },
+}));
+
+class MemoryStorage implements SyncV4KeyValueStorage {
+    readonly values = new Map<string, string | number | boolean>();
+    getString(key: string) { const value = this.values.get(key); return typeof value === 'string' ? value : undefined; }
+    getNumber(key: string) { const value = this.values.get(key); return typeof value === 'number' ? value : undefined; }
+    set(key: string, value: string | number | boolean) { this.values.set(key, value); }
+    delete(key: string) { this.values.delete(key); }
+    getAllKeys() { return [...this.values.keys()]; }
+}
+
+const fakeCrypto: AppSyncV4Crypto = {
+    opaqueEntityId: async (entityType, providerId) => `opaque:${entityType}:${providerId}`,
+    encryptEntity: async (_aad, entity) => JSON.stringify(entity),
+    decryptEntity: async (_aad, ciphertext) => JSON.parse(ciphertext) as CodexEntityV4,
+};
+
+class FakeTransport implements AppSyncV4Transport {
+    readonly posted: SyncMutationV4[][] = [];
+    readonly committed = new Map<string, number>();
+    changes: SyncChangeV4[] = [];
+    snapshots: SyncSnapshotResponseV4[] = [];
+    requireSnapshot = false;
+    failAfterCommit = false;
+
+    async postMutations(_sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4> {
+        this.posted.push(mutations);
+        const acknowledgements = mutations.map((mutation) => {
+            const previous = this.committed.get(mutation.mutationId);
+            if (previous) {
+                return { mutationId: mutation.mutationId, seq: previous, revision: mutation.revision, status: 'duplicate' as const };
+            }
+            const seq = this.committed.size + 1;
+            this.committed.set(mutation.mutationId, seq);
+            return { mutationId: mutation.mutationId, seq, revision: mutation.revision, status: 'accepted' as const };
+        });
+        if (this.failAfterCommit) {
+            this.failAfterCommit = false;
+            throw new Error('network lost');
+        }
+        return { acknowledgements };
+    }
+
+    async getChanges(_sessionId: string, afterSeq: number, limit: number) {
+        if (this.requireSnapshot) {
+            this.requireSnapshot = false;
+            throw new AppSyncV4SnapshotRequiredError(1, this.changes.at(-1)?.seq ?? 0);
+        }
+        const remaining = this.changes.filter((change) => change.seq > afterSeq);
+        const page = remaining.slice(0, limit);
+        return SyncChangesResponseV4Schema.parse({
+            changes: page,
+            hasMore: remaining.length > page.length,
+            highWatermark: this.changes.at(-1)?.seq ?? afterSeq,
+        });
+    }
+
+    async getSnapshot(): Promise<SyncSnapshotResponseV4> {
+        const page = this.snapshots.shift();
+        if (!page) throw new Error('missing snapshot');
+        return SyncSnapshotResponseV4Schema.parse(page);
+    }
+}
+
+function command(commandId: string): CodexCommandEntityV4 {
+    return {
+        schemaVersion: 1,
+        entityType: 'codex.command',
+        providerId: commandId,
+        createdAt: 10,
+        updatedAt: 10,
+        commandId,
+        threadId: 'thread-1',
+        expectedTurnId: null,
+        command: 'turn.start',
+        payload: { text: commandId },
+        clientUserMessageId: commandId,
+        replacesCommandId: null,
+    };
+}
+
+function persistence(storage: MemoryStorage): SyncV4Persistence {
+    return new SyncV4Persistence(storage, () => '00000000-0000-4000-8000-000000000001');
+}
+
+let mutationCounter = 0;
+async function client(
+    storage: MemoryStorage,
+    transport: FakeTransport,
+    applied: AppSyncV4AppliedEntity[] = [],
+    handler?: (event: AppSyncV4AppliedEntity) => Promise<void>,
+): Promise<AppSyncV4Client> {
+    return AppSyncV4Client.create({
+        sessionId: 'session-1',
+        sessionKey: new Uint8Array(32),
+        persistence: persistence(storage),
+        transport,
+        crypto: fakeCrypto,
+        generateMutationId: () => `00000000-0000-4000-8000-${String(++mutationCounter).padStart(12, '0')}`,
+        onEntity: handler ?? (async (event) => { applied.push(event); }),
+    });
+}
+
+function toChange(mutation: SyncMutationV4, seq: number): SyncChangeV4 {
+    return { ...mutation, seq, createdAt: 100 + seq };
+}
+
+describe('AppSyncV4Client', () => {
+    it('keeps consecutive revisions for one entity across a batch and its ACK', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const sender = await client(storage, transport);
+        const batched = await sender.publishEntities([
+            { entity: command('same-command') },
+            { entity: { ...command('same-command'), updatedAt: 11 } },
+        ]);
+
+        expect(batched.map((mutation) => mutation.revision)).toEqual([1, 2]);
+        await sender.flushOutboundOnce();
+        const afterAck = await sender.publishEntity({ ...command('same-command'), updatedAt: 12 });
+        expect(afterAck.revision).toBe(3);
+    });
+
+    it('keeps a command in outbox across an uncertain POST and retries the same ID', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const first = await client(storage, transport);
+        const mutation = await first.publishEntity(command('command-1'));
+        transport.failAfterCommit = true;
+        await expect(first.flushOutboundOnce()).rejects.toThrow('network lost');
+
+        const reopened = await client(storage, transport);
+        await reopened.flushOutboundOnce();
+        expect(transport.posted[1][0].mutationId).toBe(mutation.mutationId);
+        expect(transport.committed.size).toBe(1);
+    });
+
+    it('stages encrypted cache before handler success and advances cursor only afterward', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('remote-1'));
+        transport.changes = [toChange(mutation, 1)];
+        const failing = await client(storage, transport, [], async () => { throw new Error('render failed'); });
+        await expect(failing.pullChangesOnce()).rejects.toThrow('render failed');
+        expect(failing.receiveCursor).toBe(0);
+        expect(persistence(storage).loadSession('session-1').entities).toHaveLength(1);
+
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const reopened = await client(storage, transport, applied);
+        await reopened.hydrate();
+        await reopened.pullChangesOnce();
+        expect(applied.map((event) => event.source)).toEqual(['cache', 'change']);
+        expect(reopened.receiveCursor).toBe(1);
+    });
+
+    it('pulls 225 changes in pages when every socket invalidation is lost', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        for (let index = 0; index < 225; index += 1) {
+            transport.changes.push(toChange(await publisher.publishEntity(command(`remote-${index}`)), index + 1));
+        }
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const receiver = await client(storage, transport, applied);
+        await receiver.pullChangesOnce();
+        expect(applied).toHaveLength(225);
+        expect(receiver.receiveCursor).toBe(225);
+    });
+
+    it('rebuilds a paginated snapshot after 410 and hydrates it after restart', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const first = await publisher.publishEntity(command('snapshot-1'));
+        const second = await publisher.publishEntity(command('snapshot-2'));
+        const { mutationId: _firstId, ...firstSnapshot } = first;
+        const { mutationId: _secondId, ...secondSnapshot } = second;
+        transport.requireSnapshot = true;
+        transport.snapshots = [
+            {
+                entities: [{ ...firstSnapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+                highWatermark: 2,
+                nextCursor: 'next',
+            },
+            {
+                entities: [{ ...secondSnapshot, updatedSeq: 2, createdAt: 101, updatedAt: 101 }],
+                highWatermark: 2,
+                nextCursor: null,
+            },
+        ];
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const receiver = await client(storage, transport, applied);
+        await receiver.pullChangesOnce();
+        expect(applied.map((event) => event.source)).toEqual(['snapshot', 'snapshot']);
+        expect(receiver.receiveCursor).toBe(2);
+
+        const hydrated: AppSyncV4AppliedEntity[] = [];
+        await (await client(storage, transport, hydrated)).hydrate();
+        expect(hydrated.map((event) => event.source)).toEqual(['cache', 'cache']);
+    });
+});

@@ -5,6 +5,7 @@ import {
     ApiUpdateNewMessageSchema,
     ApiUpdateSessionStateSchema,
     type ApiMessage,
+    SyncInvalidationV4Schema,
 } from '@slopus/happy-wire';
 import { GitHubProfileSchema, ImageRefSchema } from './profile';
 import { RelationshipStatusSchema, UserProfileSchema } from './friendTypes';
@@ -222,11 +223,16 @@ export const ApiEphemeralSessionEventUpdateSchema = z.object({
     timestamp: z.number(),
 });
 
+export const ApiEphemeralSyncV4InvalidationSchema = SyncInvalidationV4Schema.extend({
+    type: z.literal('sync-v4-invalidate'),
+});
+
 export const ApiEphemeralUpdateSchema = z.union([
     ApiEphemeralActivityUpdateSchema,
     ApiEphemeralUsageUpdateSchema,
     ApiEphemeralMachineActivityUpdateSchema,
     ApiEphemeralSessionEventUpdateSchema,
+    ApiEphemeralSyncV4InvalidationSchema,
 ]);
 
 export type ApiEphemeralActivityUpdate = z.infer<typeof ApiEphemeralActivityUpdateSchema>;

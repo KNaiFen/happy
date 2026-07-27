@@ -31,18 +31,21 @@ export class Encryption {
 
     private readonly legacyEncryption: SecretBoxEncryption;
     private readonly contentKeyPair: sodium.KeyPair;
+    private readonly masterSecret: Uint8Array;
     private readonly masterBlobKey: Uint8Array;
     readonly anonID: string;
     readonly contentDataKey: Uint8Array;
 
     // Session and machine encryption management
     private sessionEncryptions = new Map<string, SessionEncryption>();
+    private sessionDataKeys = new Map<string, Uint8Array>();
     private machineEncryptions = new Map<string, MachineEncryption>();
     private sessionBlobKeys = new Map<string, Uint8Array>();
     private cache: EncryptionCache;
 
     private constructor(anonID: string, masterSecret: Uint8Array, contentKeyPair: sodium.KeyPair, masterBlobKey: Uint8Array) {
         this.anonID = anonID;
+        this.masterSecret = masterSecret;
         this.contentKeyPair = contentKeyPair;
         this.legacyEncryption = new SecretBoxEncryption(masterSecret);
         this.masterBlobKey = masterBlobKey;
@@ -86,6 +89,7 @@ export class Encryption {
                 this.cache
             );
             this.sessionEncryptions.set(sessionId, sessionEnc);
+            this.sessionDataKeys.set(sessionId, dataKey ?? this.masterSecret);
 
             // Derive blob key for this session.
             // Legacy sessions (null dataKey) use the master blob key.
@@ -107,10 +111,19 @@ export class Encryption {
     }
 
     /**
+     * Returns the session content key for domain-separated Sync v4 derivation.
+     */
+    getSessionDataKey(sessionId: string): Uint8Array | null {
+        const key = this.sessionDataKeys.get(sessionId);
+        return key ? key.slice() : null;
+    }
+
+    /**
      * Remove session encryption from memory when session is deleted
      */
     removeSessionEncryption(sessionId: string): void {
         this.sessionEncryptions.delete(sessionId);
+        this.sessionDataKeys.delete(sessionId);
         this.sessionBlobKeys.delete(sessionId);
         // Also clear any cached data for this session
         this.cache.clearSessionCache(sessionId);
