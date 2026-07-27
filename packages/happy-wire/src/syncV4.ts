@@ -6,7 +6,7 @@ export const MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH = 4 * 1024 * 1024;
 
 const utf8Encoder = new TextEncoder();
 
-function utf8ByteLength(value: string): number {
+export function syncV4Utf8ByteLength(value: string): number {
   return utf8Encoder.encode(value).byteLength;
 }
 
@@ -14,7 +14,7 @@ const SyncCiphertextV4Schema = z.string()
   .min(1)
   .max(MAX_SYNC_V4_CIPHERTEXT_LENGTH)
   .refine(
-    (value) => utf8ByteLength(value) <= MAX_SYNC_V4_CIPHERTEXT_LENGTH,
+    (value) => syncV4Utf8ByteLength(value) <= MAX_SYNC_V4_CIPHERTEXT_LENGTH,
     `ciphertext exceeds ${MAX_SYNC_V4_CIPHERTEXT_LENGTH} UTF-8 bytes`,
   );
 
@@ -62,7 +62,7 @@ export const SyncMutationBatchV4Schema = z.object({
   }
 
   const ciphertextLength = value.mutations.reduce(
-    (total, mutation) => total + utf8ByteLength(mutation.ciphertext),
+    (total, mutation) => total + syncV4Utf8ByteLength(mutation.ciphertext),
     0,
   );
   if (ciphertextLength > MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH) {
