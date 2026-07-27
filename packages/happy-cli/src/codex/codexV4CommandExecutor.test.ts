@@ -99,6 +99,22 @@ describe('CodexV4CommandExecutor', () => {
         expect(result).toEqual({ threadId: 'thread-1', result: { started: true } });
     });
 
+    it('propagates interrupt failures so uncertain outcomes can be reconciled', async () => {
+        const client = fakeClient({
+            interruptTurnOnThread: vi.fn(async () => {
+                throw new Error('transport closed');
+            }),
+        });
+        await expect(executor(client).execute(command(
+            'turn.interrupt',
+            {},
+            { expectedTurnId: 'turn-active' },
+        ))).rejects.toThrow('transport closed');
+        expect(client.interruptTurnOnThread).toHaveBeenCalledWith('thread-1', 'turn-active', {
+            propagateErrors: true,
+        });
+    });
+
     it('reconciles turn submission through official UserMessage.clientId', async () => {
         const client = fakeClient({
             readThread: vi.fn(async () => ({

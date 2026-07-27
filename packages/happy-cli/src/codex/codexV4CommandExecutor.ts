@@ -136,7 +136,9 @@ export class CodexV4CommandExecutor {
                     payload.expectedTurnId,
                     'turn.interrupt requires expectedTurnId',
                 );
-                await this.options.client.interruptTurnOnThread(threadId, expectedTurnId);
+                await this.options.client.interruptTurnOnThread(threadId, expectedTurnId, {
+                    propagateErrors: true,
+                });
                 return { threadId, turnId: expectedTurnId };
             }
             case 'review.start': {

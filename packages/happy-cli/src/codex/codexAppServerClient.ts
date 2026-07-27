@@ -1670,7 +1670,7 @@ export class CodexAppServerClient {
     async interruptTurnOnThread(
         threadId: string,
         turnId: string,
-        opts?: { timeoutMs?: number },
+        opts?: { timeoutMs?: number; propagateErrors?: boolean },
     ): Promise<void> {
         const params: TurnInterruptParams = {
             threadId,
@@ -1685,8 +1685,8 @@ export class CodexAppServerClient {
             try {
                 await this.request('turn/interrupt', params, opts?.timeoutMs);
             } catch (err) {
-                // Ignore if no turn is active
                 logger.debug(`[CodexAppServer] interruptTurn error (may be expected; ${errorKind(err)})`);
+                if (opts?.propagateErrors) throw err;
             } finally {
                 if (this.pendingInterrupts.get(interruptKey) === interrupt) {
                     this.pendingInterrupts.delete(interruptKey);
