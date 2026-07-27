@@ -61,6 +61,7 @@ Data persists in the `happy-data` Docker volume across container restarts.
 | `PORT` | No | `3005` | Server port |
 | `DATA_DIR` | No | `/data` | Base data directory |
 | `PGLITE_DIR` | No | `/data/pglite` | PGlite database directory |
+| `HAPPY_CODEX_SYNC_V4_ENABLED` | No | `false` | Register Codex Sync v4 routes; set to `true` only for a coordinated App/CLI cutover |
 
 ### Optional: External Services
 

@@ -43,9 +43,11 @@ continue to use v3. Codex does not dual-write v3 and v4 canonical state.
 The four distributables are upgraded as one coordinated compatibility set.
 The Server routes may be deployed before the clients, but Codex v4 is enabled
 only after the matching App and CLI are available and no old Codex turn is
-running. The disabled legacy Codex adapter is retained for one patch cycle as
-an emergency code rollback. Database changes are additive and rollback never
-deletes Sync v4 data.
+running. Server route registration is opt-in through
+`HAPPY_CODEX_SYNC_V4_ENABLED=true` and remains off by default. The disabled
+legacy Codex adapter is retained for one patch cycle as an emergency code
+rollback. Database changes are additive and rollback never deletes Sync v4
+data.
 
 ### Outer synchronization protocol
 

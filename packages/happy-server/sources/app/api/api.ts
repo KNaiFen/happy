@@ -22,7 +22,7 @@ import { userRoutes } from "./routes/userRoutes";
 import { feedRoutes } from "./routes/feedRoutes";
 import { kvRoutes } from "./routes/kvRoutes";
 import { v3SessionRoutes } from "./routes/v3SessionRoutes";
-import { v4SessionRoutes } from "./routes/v4SessionRoutes";
+import { isCodexSyncV4Enabled, v4SessionRoutes } from "./routes/v4SessionRoutes";
 import { attachmentRoutes } from "./routes/attachmentRoutes";
 import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
 import * as path from "path";
@@ -112,7 +112,11 @@ export async function startApi(opts: StartApiOptions = {}) {
     feedRoutes(typed);
     kvRoutes(typed);
     v3SessionRoutes(typed);
-    v4SessionRoutes(typed);
+    if (isCodexSyncV4Enabled()) {
+        v4SessionRoutes(typed);
+    } else {
+        log('Codex Sync v4 routes are disabled');
+    }
     attachmentRoutes(typed);
 
     // Static webapp (self-host mode)

@@ -18,6 +18,12 @@ const JOURNAL_MINIMUM_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
 const JOURNAL_CLEANUP_INTERVAL = 1_024;
 
+export function isCodexSyncV4Enabled(
+    value: string | undefined = process.env.HAPPY_CODEX_SYNC_V4_ENABLED,
+): boolean {
+    return value === "true" || value === "1";
+}
+
 const changesQuerySchema = z.object({
     after_seq: z.coerce.number().int().min(0).default(0),
     limit: z.coerce.number().int().min(1).max(500).default(100),

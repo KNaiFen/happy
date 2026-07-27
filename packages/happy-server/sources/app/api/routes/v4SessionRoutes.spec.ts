@@ -192,7 +192,7 @@ vi.mock("@/app/events/eventRouter", () => ({
     eventRouter: { emitEphemeral: emitEphemeralMock },
 }));
 
-import { v4SessionRoutes } from "./v4SessionRoutes";
+import { isCodexSyncV4Enabled, v4SessionRoutes } from "./v4SessionRoutes";
 
 const mutation = {
     mutationId: "mutation-1",
@@ -220,6 +220,14 @@ async function createApp(): Promise<Fastify> {
 }
 
 describe("v4SessionRoutes", () => {
+    it("keeps Codex Sync v4 disabled unless explicitly enabled", () => {
+        expect(isCodexSyncV4Enabled(undefined)).toBe(false);
+        expect(isCodexSyncV4Enabled("false")).toBe(false);
+        expect(isCodexSyncV4Enabled("0")).toBe(false);
+        expect(isCodexSyncV4Enabled("true")).toBe(true);
+        expect(isCodexSyncV4Enabled("1")).toBe(true);
+    });
+
     let app: Fastify;
 
     beforeEach(() => {

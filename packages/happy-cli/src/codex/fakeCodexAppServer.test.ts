@@ -37,10 +37,25 @@ describe('fake Codex app-server', () => {
             });
             await waitFor(() => fake.messages.some((message) => message.method === 'turn/completed'));
 
+            send(fake, { id: 4, method: 'thread/compact/start', params: { threadId } });
+            await waitFor(() => fake.messages.some((message) => (
+                message.method === 'item/completed'
+                && (message.params as Record<string, unknown>)?.threadId === threadId
+                && ((message.params as Record<string, unknown>)?.item as Record<string, unknown>)?.type === 'contextCompaction'
+            )));
+
             expect(response(fake, 1)?.result).toMatchObject({ userAgent: 'happy-fake-codex/0.145.0' });
             expect(response(fake, 3)?.result).toMatchObject({ turn: { status: 'inProgress' } });
             expect(fake.messages.filter((message) => message.method === 'item/agentMessage/delta')).toHaveLength(1);
-            expect(fake.messages.at(-1)).toMatchObject({ method: 'turn/completed' });
+            expect(response(fake, 4)?.result).toEqual({});
+            expect(fake.messages.filter((message) => (
+                message.method === 'item/started'
+                && ((message.params as Record<string, unknown>)?.item as Record<string, unknown>)?.type === 'contextCompaction'
+            ))).toHaveLength(1);
+            expect(fake.messages.at(-1)).toMatchObject({
+                method: 'item/completed',
+                params: { threadId, item: { type: 'contextCompaction' } },
+            });
             expect(fake.stderr).toEqual([]);
         } finally {
             fake.child.kill('SIGTERM');

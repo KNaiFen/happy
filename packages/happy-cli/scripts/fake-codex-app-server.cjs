@@ -202,9 +202,20 @@ function handleDefault(message) {
         case 'turn/interrupt':
             interruptDefaultTurn(message, params);
             return;
-        case 'thread/compact/start':
+        case 'thread/compact/start': {
             respond(message, {});
+            const item = { type: 'contextCompaction', id: `fake-item-${nextItem++}` };
+            const turnId = `fake-turn-${nextTurn++}`;
+            schedule(0, () => send({
+                method: 'item/started',
+                params: { threadId: params.threadId, turnId, item, startedAtMs: Date.now() },
+            }));
+            schedule(2, () => send({
+                method: 'item/completed',
+                params: { threadId: params.threadId, turnId, item, completedAtMs: Date.now() },
+            }));
             return;
+        }
         case 'review/start': {
             const turn = createTurn();
             respond(message, { turn, reviewThreadId: params.threadId });
