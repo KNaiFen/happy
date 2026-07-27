@@ -182,6 +182,39 @@ describe('CodexAppServerClient sandbox integration', () => {
         ]);
     });
 
+    it('records both JSON-RPC directions through the redacted trace sink', async () => {
+        const proc = createMockProcess();
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const record = vi.fn();
+        client.setProtocolTraceSink({ record });
+
+        await client.connect();
+
+        expect(record).toHaveBeenCalledWith('outbound', expect.objectContaining({ method: 'initialize' }));
+        expect(record).toHaveBeenCalledWith('inbound', expect.objectContaining({ result: { userAgent: 'test' } }));
+        expect(record).toHaveBeenCalledWith('outbound', expect.objectContaining({ method: 'initialized' }));
+        await client.disconnect();
+    });
+
+    it('rejects pending RPC immediately when stdout closes without a process exit', async () => {
+        const proc = createMockProcess();
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient, CodexRpcOutcomeUnknownError } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const states: string[] = [];
+        client.setConnectionHandler((event) => states.push(event.connection));
+        await client.connect();
+
+        const pending = client.listModels({ timeoutMs: 10_000 });
+        proc.stdout.push(null);
+
+        await expect(pending).rejects.toBeInstanceOf(CodexRpcOutcomeUnknownError);
+        expect(states.at(-1)).toBe('disconnected');
+        expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
     it('steers the active turn without interrupting it', async () => {
         mockExecSync.mockReturnValue('codex-cli 0.145.0');
         const requests: MockRpcMessage[] = [];

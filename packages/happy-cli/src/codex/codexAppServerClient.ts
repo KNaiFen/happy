@@ -61,6 +61,7 @@ import {
     readCodexCliVersion,
 } from './codexCliVersion';
 import { CodexThreadRegistry } from './codexThreadRegistry';
+import type { CodexProtocolTraceDirection, CodexProtocolTraceSink } from './codexProtocolTrace';
 import type {
     ServerNotification,
     ListMcpServerStatusParams,
@@ -258,6 +259,7 @@ export class CodexAppServerClient {
     private pending = new Map<number, PendingRequest>();
     private processEpoch = 0;
     private connected = false;
+    private intentionalTransportClose = false;
     private sandboxConfig?: SandboxConfig;
     private sandboxCleanup: (() => Promise<void>) | null = null;
     public sandboxEnabled = false;
@@ -285,6 +287,7 @@ export class CodexAppServerClient {
     private stableNotificationHandler: ((notification: ServerNotification) => void) | null = null;
     private serverRequestHandler: CodexServerRequestHandler | null = null;
     private connectionHandler: CodexConnectionHandler | null = null;
+    private protocolTraceSink: CodexProtocolTraceSink | null = null;
     private connectionEvent: CodexConnectionEvent = {
         connection: 'disconnected',
         statusUnknown: true,
@@ -330,6 +333,10 @@ export class CodexAppServerClient {
     setConnectionHandler(handler: CodexConnectionHandler | null): void {
         this.connectionHandler = handler;
         handler?.(this.connectionEvent);
+    }
+
+    setProtocolTraceSink(sink: CodexProtocolTraceSink | null): void {
+        this.protocolTraceSink = sink;
     }
 
     private updateConnection(event: CodexConnectionEvent): void {
@@ -821,6 +828,7 @@ export class CodexAppServerClient {
         logger.debug(`[CodexAppServer] Spawning app-server transport; sandbox=${this.sandboxEnabled}`);
 
         const epoch = ++this.processEpoch;
+        this.intentionalTransportClose = false;
         // Use cross-spawn so npm-installed wrappers (codex.cmd / codex.ps1) resolve on Windows.
         // Native child_process.spawn fails with ENOENT for .cmd shims (issues #980, #1016).
         const proc = crossSpawn(command, args, {
@@ -876,6 +884,11 @@ export class CodexAppServerClient {
             if (this.process !== proc || this.processEpoch !== epoch) return;
             this.handleLine(line, epoch);
         });
+        this.readline.on('close', () => {
+            if (this.intentionalTransportClose || this.process !== proc || this.processEpoch !== epoch) return;
+            logger.debug('[CodexAppServer] Stdout transport closed unexpectedly');
+            this.handleUnexpectedTransportClose(proc, epoch);
+        });
 
         // Perform initialize handshake
         const initParams: InitializeParams = {
@@ -918,6 +931,7 @@ export class CodexAppServerClient {
         const epoch = this.processEpoch;
         logger.debug(`[CodexAppServer] Disconnecting; pid=${pid ?? 'none'}`);
 
+        this.intentionalTransportClose = true;
         this.readline?.close();
         this.readline = null;
 
@@ -964,6 +978,7 @@ export class CodexAppServerClient {
         this.sandboxEnabled = false;
 
         logger.debug('[CodexAppServer] Disconnected');
+        this.intentionalTransportClose = false;
     }
 
     async disconnect(): Promise<void> {
@@ -1688,6 +1703,7 @@ export class CodexAppServerClient {
             const msg: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
             const line = JSON.stringify(msg) + '\n';
             logger.debug(`[CodexAppServer] → ${method} (id=${id})`);
+            this.recordProtocolTrace('outbound', msg);
             this.process.stdin.write(line);
         });
     }
@@ -1695,6 +1711,7 @@ export class CodexAppServerClient {
     private notify(method: string, params?: unknown): void {
         if (!this.process?.stdin?.writable) return;
         const msg: JsonRpcRequest = { jsonrpc: '2.0', method, params };
+        this.recordProtocolTrace('outbound', msg);
         this.process.stdin.write(JSON.stringify(msg) + '\n');
         logger.debug(`[CodexAppServer] → ${method} (notification)`);
     }
@@ -1702,6 +1719,7 @@ export class CodexAppServerClient {
     private respond(id: number, result: unknown): void {
         if (!this.process?.stdin?.writable) return;
         const msg: JsonRpcResponse = { jsonrpc: '2.0', id, result };
+        this.recordProtocolTrace('outbound', msg);
         this.process.stdin.write(JSON.stringify(msg) + '\n');
         logger.debug(`[CodexAppServer] → response (id=${id})`);
     }
@@ -1719,6 +1737,7 @@ export class CodexAppServerClient {
             logger.debug(`[CodexAppServer] Non-JSON stdout suppressed; chars=${line.length}`);
             return;
         }
+        this.recordProtocolTrace('inbound', msg);
 
         // Response to our request
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
@@ -1765,6 +1784,37 @@ export class CodexAppServerClient {
             ? Object.keys(msg).sort().join(',')
             : typeof msg;
         logger.debug(`[CodexAppServer] Unhandled message shape; keys=${keys}`);
+    }
+
+    private recordProtocolTrace(direction: CodexProtocolTraceDirection, message: unknown): void {
+        try {
+            this.protocolTraceSink?.record(direction, message);
+        } catch (error) {
+            logger.debug(`[CodexAppServer] Protocol trace sink failed (${errorKind(error)})`);
+        }
+    }
+
+    private handleUnexpectedTransportClose(proc: ChildProcess, epoch: number): void {
+        if (this.process !== proc || this.processEpoch !== epoch) return;
+        this.connected = false;
+        this.process = null;
+        this.readline = null;
+        this.updateConnection({ connection: 'disconnected', statusUnknown: true, error: null });
+        for (const [id, request] of this.pending) {
+            if (request.epoch !== epoch) continue;
+            request.reject(new CodexRpcOutcomeUnknownError(
+                request.method,
+                `Codex transport closed while waiting for ${request.method}; outcome is unknown`,
+            ));
+            this.pending.delete(id);
+        }
+        try {
+            proc.kill('SIGTERM');
+        } catch { /* process already unavailable */ }
+        const threadId = this.threadId;
+        if (threadId && this.threads.hasPendingTurn(threadId)) {
+            void this.recoverThreadAfterUnexpectedExit(threadId);
+        }
     }
 
     /**

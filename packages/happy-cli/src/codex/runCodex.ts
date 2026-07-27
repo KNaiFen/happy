@@ -72,6 +72,7 @@ import {
     type CodexV4SessionBinding,
 } from './codexV4ThreadRouter';
 import { deriveCodexV4ChildSessionIdentity } from './codexV4ChildIdentity';
+import { CodexProtocolTraceRecorder } from './codexProtocolTrace';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -163,6 +164,7 @@ export async function runCodex(opts: {
     let machineId = settings?.machineId;
     const sandboxConfig = opts.noSandbox ? undefined : settings?.sandboxConfig;
     const client = new CodexAppServerClient(sandboxConfig);
+    let protocolTraceRecorder: CodexProtocolTraceRecorder | null = null;
     const supportsQueueSteering = client.supportsTurnSteering();
     if (!machineId) {
         console.error(`[START] No machine ID found in settings, which is unexpected since authAndSetupMachineIfNeeded should have created it. Please report this issue on https://github.com/slopus/happy-cli/issues`);
@@ -1291,6 +1293,19 @@ export async function runCodex(opts: {
         if (!requiresCodexV4Migration) codexV4CanonicalActive = true;
     };
 
+    const protocolTracePath = process.env.HAPPY_CODEX_TRACE_PATH;
+    if (protocolTracePath) {
+        try {
+            protocolTraceRecorder = await CodexProtocolTraceRecorder.open(protocolTracePath);
+            client.setProtocolTraceSink(protocolTraceRecorder);
+            logger.info('[Codex] Redacted protocol trace enabled');
+        } catch (error) {
+            logger.warn('[Codex] Failed to open redacted protocol trace', {
+                errorName: error instanceof Error ? error.name : typeof error,
+            });
+        }
+    }
+
     try {
         logger.debug('[codex]: client.connect begin');
         await client.connect();
@@ -1595,8 +1610,19 @@ export async function runCodex(opts: {
             logger.debug('[codex]: Error while closing session', e);
         }
         logger.debug('[codex]: client.disconnect begin');
-        await client.disconnect();
-        logger.debug('[codex]: client.disconnect done');
+        try {
+            await client.disconnect();
+            logger.debug('[codex]: client.disconnect done');
+        } finally {
+            client.setProtocolTraceSink(null);
+            try {
+                await protocolTraceRecorder?.close();
+            } catch (error) {
+                logger.warn('[Codex] Failed to close redacted protocol trace', {
+                    errorName: error instanceof Error ? error.name : typeof error,
+                });
+            }
+        }
         // Stop Happy MCP server
         logger.debug('[codex]: happyServer.stop');
         happyServer.stop();
