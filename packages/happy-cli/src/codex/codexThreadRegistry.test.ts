@@ -1,0 +1,139 @@
+import { describe, expect, it } from 'vitest';
+import type { Thread, ThreadStatus, Turn, TurnStatus } from './protocol';
+import { CodexThreadRegistry } from './codexThreadRegistry';
+
+function turn(id: string, status: TurnStatus = 'inProgress'): Turn {
+    return {
+        id,
+        items: [],
+        itemsView: 'full',
+        status,
+        error: null,
+        startedAt: 1,
+        completedAt: status === 'inProgress' ? null : 2,
+        durationMs: status === 'inProgress' ? null : 1_000,
+    };
+}
+
+function thread(id: string, status: ThreadStatus, turns: Turn[] = []): Thread {
+    return {
+        id,
+        sessionId: id,
+        forkedFromId: null,
+        parentThreadId: null,
+        preview: '',
+        ephemeral: false,
+        modelProvider: 'openai',
+        createdAt: 1,
+        updatedAt: 1,
+        recencyAt: 1,
+        status,
+        path: null,
+        cwd: '/tmp',
+        cliVersion: '0.145.0',
+        source: 'appServer',
+        threadSource: null,
+        agentNickname: null,
+        agentRole: null,
+        gitInfo: null,
+        name: null,
+        turns,
+    };
+}
+
+describe('CodexThreadRegistry', () => {
+    it('keeps parent and child active turns isolated under interleaved notifications', async () => {
+        const registry = new CodexThreadRegistry();
+        registry.selectThread('parent');
+        const parentWait = registry.beginTurn('parent');
+        const childWait = registry.beginTurn('child');
+
+        registry.registerTurn('child', turn('child-turn'));
+        registry.registerTurn('parent', turn('parent-turn'));
+        registry.registerTurn('child', turn('child-turn', 'completed'));
+
+        await expect(childWait.promise).resolves.toMatchObject({ threadId: 'child', turnId: 'child-turn' });
+        expect(registry.selectedThreadIdValue).toBe('parent');
+        expect(registry.selectedTurnId).toBe('parent-turn');
+        expect(registry.hasPendingTurn('parent')).toBe(true);
+
+        registry.registerTurn('parent', turn('parent-turn', 'completed'));
+        await expect(parentWait.promise).resolves.toMatchObject({ threadId: 'parent', turnId: 'parent-turn' });
+    });
+
+    it('does not time out a long turn and resolves only on an authoritative boundary', async () => {
+        const registry = new CodexThreadRegistry();
+        const wait = registry.beginTurn('thread-1');
+        registry.registerTurn('thread-1', turn('turn-1'));
+        let settled = false;
+        void wait.promise.then(() => { settled = true; });
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(settled).toBe(false);
+
+        registry.updateThreadStatus('thread-1', { type: 'idle' });
+        await expect(wait.promise).resolves.toMatchObject({
+            status: 'completed',
+            source: 'threadStatus',
+        });
+    });
+
+    it('recovers an in-flight completion from a resumed thread snapshot', async () => {
+        const registry = new CodexThreadRegistry();
+        const wait = registry.beginTurn('thread-1');
+        registry.registerTurn('thread-1', turn('turn-1'));
+
+        registry.registerThread(
+            thread('thread-1', { type: 'idle' }, [turn('turn-1', 'completed')]),
+            'snapshot',
+        );
+
+        await expect(wait.promise).resolves.toMatchObject({
+            turnId: 'turn-1',
+            status: 'completed',
+            source: 'snapshot',
+        });
+    });
+
+    it('does not bind a pending start to an older turn in a resume snapshot', async () => {
+        const registry = new CodexThreadRegistry();
+        registry.registerThread(thread('thread-1', { type: 'idle' }, [turn('old-turn', 'completed')]));
+        const wait = registry.beginTurn('thread-1');
+
+        registry.registerThread(
+            thread('thread-1', { type: 'idle' }, [
+                turn('old-turn', 'completed'),
+                turn('new-turn', 'completed'),
+            ]),
+            'snapshot',
+        );
+
+        await expect(wait.promise).resolves.toMatchObject({
+            turnId: 'new-turn',
+            status: 'completed',
+            source: 'snapshot',
+        });
+    });
+
+    it('creates one placeholder and one hydration request for an unknown thread', () => {
+        const registry = new CodexThreadRegistry();
+
+        expect(registry.ensureThread('unknown').created).toBe(true);
+        expect(registry.ensureThread('unknown').created).toBe(false);
+        expect(registry.markHydrationRequested('unknown')).toBe(true);
+        expect(registry.markHydrationRequested('unknown')).toBe(false);
+        expect(registry.getThread('unknown')).toMatchObject({ placeholder: true, hydrationRequested: true });
+    });
+
+    it('forgets only the selected thread without affecting a child runtime', () => {
+        const registry = new CodexThreadRegistry();
+        registry.selectThread('parent');
+        registry.ensureThread('child');
+
+        registry.forgetThread('parent', new Error('cleared'));
+
+        expect(registry.selectedThreadIdValue).toBeNull();
+        expect(registry.getThread('parent')).toBeNull();
+        expect(registry.getThread('child')).not.toBeNull();
+    });
+});

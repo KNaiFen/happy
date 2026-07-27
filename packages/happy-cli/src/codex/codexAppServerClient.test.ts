@@ -235,6 +235,242 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it('keeps child lifecycle notifications out of the selected parent session', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: { id: 'thread-parent', path: '/tmp/thread-parent' },
+                            model: 'gpt-test',
+                        },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    setTimeout(() => {
+                        pushJsonLine(stdout, {
+                            id: msg.id,
+                            result: { turn: { id: 'turn-parent', items: [], status: 'inProgress', error: null } },
+                        });
+                        pushJsonLine(stdout, {
+                            method: 'turn/started',
+                            params: {
+                                threadId: 'thread-parent',
+                                turn: { id: 'turn-parent', items: [], status: 'inProgress', error: null },
+                            },
+                        });
+                    }, 0);
+                }
+                if (msg.method === 'thread/read' && msg.id != null && msg.params?.threadId === 'thread-child') {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: {
+                                id: 'thread-child',
+                                status: { type: 'idle' },
+                                turns: [{ id: 'turn-child', items: [], status: 'completed', error: null }],
+                            },
+                        },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const events: Array<Record<string, unknown>> = [];
+        client.setEventHandler((event) => events.push(event as Record<string, unknown>));
+        await client.connect();
+        await client.startThread({ model: 'gpt-test' });
+
+        let parentSettled = false;
+        const parentTurn = client.sendTurnAndWait('parent work');
+        void parentTurn.then(() => { parentSettled = true; });
+        await waitFor(() => client.turnId === 'turn-parent');
+
+        pushJsonLine(proc.stdout, {
+            method: 'turn/started',
+            params: {
+                threadId: 'thread-child',
+                turn: { id: 'turn-child', items: [], status: 'inProgress', error: null },
+            },
+        });
+        pushJsonLine(proc.stdout, {
+            method: 'turn/completed',
+            params: {
+                threadId: 'thread-child',
+                turn: { id: 'turn-child', items: [], status: 'completed', error: null },
+            },
+        });
+        pushJsonLine(proc.stdout, {
+            method: 'codex/event',
+            params: {
+                threadId: 'thread-child',
+                msg: { type: 'task_complete', turn_id: 'turn-child' },
+            },
+        });
+
+        await waitFor(() => requests.some((request) => request.method === 'thread/read'));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(parentSettled).toBe(false);
+        expect(client.threadId).toBe('thread-parent');
+        expect(client.turnId).toBe('turn-parent');
+        expect(requests.filter((request) => request.method === 'thread/read')).toHaveLength(1);
+        expect(events.filter((event) => event.type === 'task_complete')).toHaveLength(0);
+
+        pushJsonLine(proc.stdout, {
+            method: 'turn/completed',
+            params: {
+                threadId: 'thread-parent',
+                turn: { id: 'turn-parent', items: [], status: 'completed', error: null },
+            },
+        });
+        pushJsonLine(proc.stdout, {
+            method: 'codex/event',
+            params: {
+                threadId: 'thread-parent',
+                msg: { type: 'task_complete', turn_id: 'turn-parent' },
+            },
+        });
+        await expect(parentTurn).resolves.toEqual({ aborted: false });
+        expect(events.filter((event) => event.type === 'task_complete')).toHaveLength(1);
+
+        await client.disconnect();
+    });
+
+    it('ignores the legacy turn timeout option and waits for an authoritative boundary', async () => {
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: { thread: { id: 'thread-long' }, model: 'gpt-test' },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: { turn: { id: 'turn-long', items: [], status: 'inProgress', error: null } },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        await client.startThread({ model: 'gpt-test' });
+
+        let settled = false;
+        const pending = client.sendTurnAndWait('long task', { turnTimeoutMs: 5 });
+        void pending.then(() => { settled = true; });
+        await waitFor(() => client.turnId === 'turn-long');
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(settled).toBe(false);
+
+        pushJsonLine(proc.stdout, {
+            method: 'thread/status/changed',
+            params: { threadId: 'thread-long', status: { type: 'idle' } },
+        });
+        await expect(pending).resolves.toEqual({ aborted: false });
+        await client.disconnect();
+    });
+
+    it('reconciles an unknown turn/start outcome after an app-server exit', async () => {
+        const firstRequests: MockRpcMessage[] = [];
+        const secondRequests: MockRpcMessage[] = [];
+        const proc1 = createMockProcess({
+            pid: 4101,
+            onRequest: (msg, stdout) => {
+                firstRequests.push(msg);
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: { thread: { id: 'thread-recover' }, model: 'gpt-test' },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start') {
+                    setTimeout(() => proc1.emit('exit', 1, null), 0);
+                }
+            },
+        });
+        const proc2 = createMockProcess({
+            pid: 4102,
+            onRequest: (msg, stdout) => {
+                secondRequests.push(msg);
+                if (msg.method === 'thread/resume' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: {
+                                id: 'thread-recover',
+                                status: { type: 'idle' },
+                                turns: [{
+                                    id: 'turn-recovered',
+                                    items: [],
+                                    status: 'completed',
+                                    error: null,
+                                }],
+                            },
+                            model: 'gpt-test',
+                        },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn
+            .mockImplementationOnce(() => proc1)
+            .mockImplementationOnce(() => proc2);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        await client.startThread({ model: 'gpt-test' });
+
+        await expect(client.sendTurnAndWait('survive restart')).resolves.toEqual({ aborted: false });
+        expect(firstRequests.some((request) => request.method === 'turn/start')).toBe(true);
+        expect(secondRequests.some((request) => request.method === 'thread/resume')).toBe(true);
+        expect(client.threadId).toBe('thread-recover');
+        await client.disconnect();
+    });
+
+    it('cleans up a pending start after a definitive turn/start error', async () => {
+        let turnStarts = 0;
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: { thread: { id: 'thread-error' }, model: 'gpt-test' },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    turnStarts += 1;
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        error: { code: -32602, message: 'invalid turn input' },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        await client.startThread({ model: 'gpt-test' });
+
+        await expect(client.sendTurnAndWait('invalid')).rejects.toThrow('turn/start failed (code=-32602)');
+        await expect(client.sendTurnAndWait('invalid again')).rejects.toThrow('turn/start failed (code=-32602)');
+        expect(turnStarts).toBe(2);
+        await client.disconnect();
+    });
+
     it('lists every visible model page from app-server', async () => {
         const requests: MockRpcMessage[] = [];
         const proc = createMockProcess({
@@ -449,10 +685,16 @@ describe('CodexAppServerClient sandbox integration', () => {
 
                 if (msg.method === 'turn/start' && msg.id != null) {
                     setTimeout(() => {
-                        pushJsonLine(stdout, { id: msg.id, result: {} });
                         pushJsonLine(stdout, {
-                            method: 'codex/event',
-                            params: { msg: { type: 'task_started', turn_id: 'turn-1' } },
+                            id: msg.id,
+                            result: { turn: { id: 'turn-1', items: [], status: 'inProgress', error: null } },
+                        });
+                        pushJsonLine(stdout, {
+                            method: 'turn/started',
+                            params: {
+                                threadId: 'thread-1',
+                                turn: { id: 'turn-1', items: [], status: 'inProgress', error: null },
+                            },
                         });
                     }, 0);
                 }
@@ -489,14 +731,23 @@ describe('CodexAppServerClient sandbox integration', () => {
 
                 if (msg.method === 'turn/start' && msg.id != null) {
                     setTimeout(() => {
-                        pushJsonLine(stdout, { id: msg.id, result: {} });
                         pushJsonLine(stdout, {
-                            method: 'codex/event',
-                            params: { msg: { type: 'task_started', turn_id: 'turn-2' } },
+                            id: msg.id,
+                            result: { turn: { id: 'turn-2', items: [], status: 'inProgress', error: null } },
                         });
                         pushJsonLine(stdout, {
-                            method: 'codex/event',
-                            params: { msg: { type: 'task_complete', turn_id: 'turn-2' } },
+                            method: 'turn/started',
+                            params: {
+                                threadId: 'thread-1',
+                                turn: { id: 'turn-2', items: [], status: 'inProgress', error: null },
+                            },
+                        });
+                        pushJsonLine(stdout, {
+                            method: 'turn/completed',
+                            params: {
+                                threadId: 'thread-1',
+                                turn: { id: 'turn-2', items: [], status: 'completed', error: null },
+                            },
                         });
                     }, 0);
                 }
@@ -588,10 +839,28 @@ describe('CodexAppServerClient sandbox integration', () => {
 
                 if (msg.method === 'turn/start' && msg.id != null) {
                     setTimeout(() => {
-                        pushJsonLine(stdout, { id: msg.id, result: {} });
                         pushJsonLine(stdout, {
-                            method: 'codex/event',
-                            params: { msg: { type: 'task_started', turn_id: 'turn-stuck-interrupt' } },
+                            id: msg.id,
+                            result: {
+                                turn: {
+                                    id: 'turn-stuck-interrupt',
+                                    items: [],
+                                    status: 'inProgress',
+                                    error: null,
+                                },
+                            },
+                        });
+                        pushJsonLine(stdout, {
+                            method: 'turn/started',
+                            params: {
+                                threadId: 'thread-stuck-interrupt',
+                                turn: {
+                                    id: 'turn-stuck-interrupt',
+                                    items: [],
+                                    status: 'inProgress',
+                                    error: null,
+                                },
+                            },
                         });
                     }, 0);
                 }
@@ -1498,6 +1767,13 @@ describe('CodexAppServerClient sandbox integration', () => {
                                 },
                             },
                         });
+                        pushJsonLine(stdout, {
+                            method: 'turn/completed',
+                            params: {
+                                threadId: 'thread-raw-3',
+                                turn: { id: 'turn-raw-3', items: [], status: 'completed', error: null },
+                            },
+                        });
                     }, 0);
                 }
             },
@@ -1656,6 +1932,13 @@ describe('CodexAppServerClient sandbox integration', () => {
                             },
                         });
                         pushJsonLine(stdout, {
+                            method: 'codex/event',
+                            params: {
+                                threadId: 'thread-a',
+                                msg: { type: 'legacy_coverage_probe' },
+                            },
+                        });
+                        pushJsonLine(stdout, {
                             method: 'item/started',
                             params: {
                                 threadId: 'thread-a',
@@ -1784,7 +2067,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
-    it('falls back to final answer completion when raw turn/completed is missing', async () => {
+    it('does not treat a final answer item as authoritative turn completion', async () => {
         const proc = createMockProcess({
             pid: 3002,
             onRequest: (msg, stdout) => {
@@ -1855,7 +2138,21 @@ describe('CodexAppServerClient sandbox integration', () => {
             sandbox: 'danger-full-access',
         });
 
-        await expect(client.sendTurnAndWait('say hi')).resolves.toEqual({ aborted: false });
+        let settled = false;
+        const pendingTurn = client.sendTurnAndWait('say hi');
+        void pendingTurn.then(() => { settled = true; });
+        await waitFor(() => events.some((event) => event.type === 'agent_message'));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(settled).toBe(false);
+
+        pushJsonLine(proc.stdout, {
+            method: 'turn/completed',
+            params: {
+                threadId: 'thread-raw-2',
+                turn: { id: 'turn-raw-2', items: [], status: 'completed', error: null },
+            },
+        });
+        await expect(pendingTurn).resolves.toEqual({ aborted: false });
         expect(events).toEqual(expect.arrayContaining([
             expect.objectContaining({ type: 'task_started', turn_id: 'turn-raw-2' }),
             expect.objectContaining({ type: 'agent_message', message: 'still works' }),

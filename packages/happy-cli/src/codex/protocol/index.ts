@@ -52,6 +52,7 @@ export type {
     TurnStartParams,
     TurnStartResponse,
     TurnStartedNotification,
+    TurnStatus,
     TurnSteerParams,
     TurnSteerResponse,
     UserInput,
