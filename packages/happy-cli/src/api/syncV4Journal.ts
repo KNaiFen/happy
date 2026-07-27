@@ -65,6 +65,31 @@ const journalRecordSchema = z.discriminatedUnion("kind", [
         updatedAt: z.number().int().nonnegative(),
         command: CodexCommandEntityV4Schema.optional(),
     }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("inboundComplete"),
+        entityId: z.string().min(1).max(200),
+        revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("snapshotComplete"),
+        revisions: z.array(z.object({
+            entityId: z.string().min(1).max(200),
+            revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        }).strict()),
+        seq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("commandTransition"),
+        commandId: z.string().min(1).max(512),
+        status: SyncV4CommandJournalStatusSchema,
+        updatedAt: z.number().int().nonnegative(),
+        mutation: SyncMutationV4Schema,
+        command: CodexCommandEntityV4Schema.optional(),
+    }).strict(),
 ]);
 type JournalRecord = z.infer<typeof journalRecordSchema>;
 
@@ -146,17 +171,11 @@ export class SyncV4Journal {
 
     async appendOutbound(mutations: SyncMutationV4[]): Promise<void> {
         if (mutations.length === 0) return;
-        const records: JournalRecord[] = [];
-        for (const mutation of mutations) {
-            records.push({ version: JOURNAL_VERSION, kind: "outbound", mutation });
-            records.push({
-                version: JOURNAL_VERSION,
-                kind: "revision",
-                entityId: mutation.entityId,
-                revision: mutation.revision,
-            });
-        }
-        await this.appendRecords(records);
+        await this.appendRecords(mutations.map((mutation) => ({
+            version: JOURNAL_VERSION,
+            kind: "outbound",
+            mutation,
+        })));
     }
 
     async appendAcknowledgements(acknowledgements: SyncAckV4[]): Promise<void> {
@@ -196,10 +215,28 @@ export class SyncV4Journal {
         if (!Number.isSafeInteger(seq) || seq < this.receiveCursor) {
             throw new Error("Sync v4 receive cursor must advance monotonically");
         }
-        await this.appendRecords([
-            { version: JOURNAL_VERSION, kind: "revision", entityId, revision },
-            { version: JOURNAL_VERSION, kind: "cursor", seq },
-        ]);
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "inboundComplete",
+            entityId,
+            revision,
+            seq,
+        }]);
+    }
+
+    async completeSnapshot(
+        revisions: Array<{ entityId: string; revision: number }>,
+        seq: number,
+    ): Promise<void> {
+        if (!Number.isSafeInteger(seq) || seq < this.receiveCursor) {
+            throw new Error("Sync v4 receive cursor must advance monotonically");
+        }
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "snapshotComplete",
+            revisions,
+            seq,
+        }]);
     }
 
     async setCommandStatus(
@@ -223,23 +260,15 @@ export class SyncV4Journal {
         mutation: SyncMutationV4,
         command?: CodexCommandEntityV4,
     ): Promise<void> {
-        await this.appendRecords([
-            { version: JOURNAL_VERSION, kind: "outbound", mutation },
-            {
-                version: JOURNAL_VERSION,
-                kind: "revision",
-                entityId: mutation.entityId,
-                revision: mutation.revision,
-            },
-            {
-                version: JOURNAL_VERSION,
-                kind: "command",
-                commandId,
-                status,
-                updatedAt: Date.now(),
-                ...(command ? { command } : {}),
-            },
-        ]);
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "commandTransition",
+            commandId,
+            status,
+            updatedAt: Date.now(),
+            mutation,
+            ...(command ? { command } : {}),
+        }]);
     }
 
     async compactIfNeeded(): Promise<void> {
@@ -308,6 +337,7 @@ export class SyncV4Journal {
         switch (record.kind) {
             case "outbound":
                 this.pendingOutbound.set(record.mutation.mutationId, record.mutation);
+                this.applyRevision(record.mutation.entityId, record.mutation.revision);
                 return;
             case "ack":
                 this.pendingOutbound.delete(record.acknowledgement.mutationId);
@@ -322,14 +352,39 @@ export class SyncV4Journal {
                 }
                 return;
             case "revision":
-                this.entityRevisions.set(
-                    record.entityId,
-                    Math.max(this.entityRevisions.get(record.entityId) ?? 0, record.revision),
-                );
+                this.applyRevision(record.entityId, record.revision);
                 return;
             case "command":
                 this.commandStatuses.set(record.commandId, record.status);
                 if (record.command) this.commands.set(record.commandId, record.command);
+                return;
+            case "inboundComplete":
+                this.applyRevision(record.entityId, record.revision);
+                this.applyCursor(record.seq);
+                return;
+            case "snapshotComplete":
+                for (const revision of record.revisions) this.applyRevision(revision.entityId, revision.revision);
+                this.applyCursor(record.seq);
+                return;
+            case "commandTransition":
+                this.pendingOutbound.set(record.mutation.mutationId, record.mutation);
+                this.applyRevision(record.mutation.entityId, record.mutation.revision);
+                this.commandStatuses.set(record.commandId, record.status);
+                if (record.command) this.commands.set(record.commandId, record.command);
+        }
+    }
+
+    private applyRevision(entityId: string, revision: number): void {
+        this.entityRevisions.set(
+            entityId,
+            Math.max(this.entityRevisions.get(entityId) ?? 0, revision),
+        );
+    }
+
+    private applyCursor(seq: number): void {
+        this.receiveCursor = Math.max(this.receiveCursor, seq);
+        for (const pendingSeq of this.pendingInbound.keys()) {
+            if (pendingSeq <= this.receiveCursor) this.pendingInbound.delete(pendingSeq);
         }
     }
 }

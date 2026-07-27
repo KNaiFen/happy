@@ -164,6 +164,25 @@ describe('AppSyncV4Client', () => {
         }]);
     });
 
+    it('recovers a durable command when optimistic projection stops the process', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const beforeCrash = await client(storage, transport, [], async () => {
+            throw new Error('projection stopped');
+        });
+        await expect(beforeCrash.publishEntity(command('projection-crash')))
+            .rejects.toThrow('projection stopped');
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+
+        const recovered: AppSyncV4AppliedEntity[] = [];
+        await (await client(storage, transport, recovered)).hydrate();
+        expect(recovered).toMatchObject([{
+            entity: { commandId: 'projection-crash' },
+            source: 'cache',
+            revision: 1,
+        }]);
+    });
+
     it('keeps consecutive revisions for one entity across a batch and its ACK', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();

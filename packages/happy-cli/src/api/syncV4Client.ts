@@ -399,13 +399,13 @@ export class SyncV4Client {
         let cursor: string | null = null;
         let highWatermark: number | null = null;
         const seenCursors = new Set<string>();
+        const appliedRevisions: Array<{ entityId: string; revision: number }> = [];
         do {
             const page = await this.transport.getSnapshot(this.sessionId, cursor, SNAPSHOT_PAGE_SIZE);
             if (highWatermark === null) highWatermark = page.highWatermark;
             if (page.highWatermark !== highWatermark) {
                 throw new Error("Sync v4 snapshot watermark changed during pagination");
             }
-            const appliedRevisions: Array<{ entityId: string; revision: number }> = [];
             for (const snapshotEntity of page.entities) {
                 const currentRevision = this.journal.snapshot().entityRevisions.get(snapshotEntity.entityId) ?? 0;
                 if (snapshotEntity.revision <= currentRevision) continue;
@@ -422,12 +422,11 @@ export class SyncV4Client {
                 });
                 appliedRevisions.push({ entityId: snapshotEntity.entityId, revision: snapshotEntity.revision });
             }
-            await this.journal.recordEntityRevisions(appliedRevisions);
             cursor = page.nextCursor;
             if (cursor && seenCursors.has(cursor)) throw new Error("Sync v4 snapshot pagination stalled");
             if (cursor) seenCursors.add(cursor);
         } while (cursor);
-        await this.journal.advanceReceiveCursor(highWatermark ?? 0);
+        await this.journal.completeSnapshot(appliedRevisions, highWatermark ?? 0);
     }
 }
 

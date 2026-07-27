@@ -31,6 +31,25 @@ class MemoryStorage implements SyncV4KeyValueStorage {
     }
 }
 
+class CrashStorage extends MemoryStorage {
+    failAfterSet: ((key: string) => boolean) | null = null;
+    failAfterDelete: ((key: string) => boolean) | null = null;
+
+    override set(key: string, value: string | number | boolean): void {
+        super.set(key, value);
+        if (!this.failAfterSet?.(key)) return;
+        this.failAfterSet = null;
+        throw new Error('simulated process stop after set');
+    }
+
+    override delete(key: string): void {
+        super.delete(key);
+        if (!this.failAfterDelete?.(key)) return;
+        this.failAfterDelete = null;
+        throw new Error('simulated process stop after delete');
+    }
+}
+
 const mutation = {
     mutationId: 'mutation-1',
     producerId: 'producer-1',
@@ -174,5 +193,84 @@ describe('SyncV4Persistence', () => {
         const mutationKey = [...storage.values.keys()].find((key) => key.includes(':mutation:'))!;
         storage.set(mutationKey, '{broken');
         expect(() => persistence.loadSession('session-1')).toThrow(SyncV4OutboxCorruptionError);
+    });
+
+    it('recovers an outbox record when the process stops before its index write', () => {
+        const storage = new CrashStorage();
+        const beforeCrash = new SyncV4Persistence(storage);
+        storage.failAfterSet = (key) => key.includes(':mutation:');
+        expect(() => beforeCrash.enqueueMutations('session-1', [mutation]))
+            .toThrow('simulated process stop after set');
+
+        const recovered = new SyncV4Persistence(storage);
+        expect(recovered.getPendingOutbox('session-1')).toEqual([mutation]);
+    });
+
+    it('recovers an ACK when the process stops before its stale index is rewritten', () => {
+        const storage = new CrashStorage();
+        const beforeCrash = new SyncV4Persistence(storage);
+        beforeCrash.enqueueMutations('session-1', [mutation]);
+        storage.failAfterDelete = (key) => key.includes(':mutation:');
+        expect(() => beforeCrash.acknowledgeMutations('session-1', [{
+            mutationId: mutation.mutationId,
+            seq: 1,
+            revision: 1,
+            status: 'accepted',
+        }])).toThrow('simulated process stop after delete');
+
+        expect(new SyncV4Persistence(storage).getPendingOutbox('session-1')).toEqual([]);
+    });
+
+    it('hydrates a staged entity and replays its change when the cursor was not written', () => {
+        const storage = new CrashStorage();
+        const beforeCrash = new SyncV4Persistence(storage);
+        storage.failAfterSet = (key) => key.includes(':entity:');
+        expect(() => beforeCrash.stageChanges('session-1', [{
+            ...mutation,
+            mutationId: 'remote-1',
+            seq: 1,
+            createdAt: 100,
+        }])).toThrow('simulated process stop after set');
+
+        const recovered = new SyncV4Persistence(storage);
+        expect(recovered.loadSession('session-1')).toMatchObject({
+            receiveCursor: 0,
+            entities: [expect.objectContaining({ entityId: mutation.entityId, revision: 1 })],
+        });
+        expect(recovered.applyChanges('session-1', [{
+            ...mutation,
+            mutationId: 'remote-1',
+            seq: 1,
+            createdAt: 100,
+        }])).toEqual([]);
+        expect(recovered.getReceiveCursor('session-1')).toBe(1);
+    });
+
+    it('keeps an interrupted snapshot marked for a full rebuild when only its cursor was written', () => {
+        const storage = new CrashStorage();
+        const beforeCrash = new SyncV4Persistence(storage);
+        beforeCrash.enqueueMutations('session-1', [mutation]);
+        beforeCrash.beginSnapshot('session-1');
+        beforeCrash.applySnapshotPage('session-1', [{
+            producerId: mutation.producerId,
+            entityId: mutation.entityId,
+            entityType: mutation.entityType,
+            revision: mutation.revision,
+            op: mutation.op,
+            ciphertext: mutation.ciphertext,
+            updatedSeq: 4,
+            createdAt: 100,
+            updatedAt: 100,
+        }]);
+        storage.failAfterSet = (key) => key.endsWith(':cursor');
+        expect(() => beforeCrash.finishSnapshot('session-1', 4))
+            .toThrow('simulated process stop after set');
+
+        expect(new SyncV4Persistence(storage).loadSession('session-1')).toMatchObject({
+            receiveCursor: 0,
+            entities: [],
+            outbox: [mutation],
+            snapshotRequired: true,
+        });
     });
 });

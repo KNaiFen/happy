@@ -148,6 +148,61 @@ describe("SyncV4Journal", () => {
         expect(snapshot.entityRevisions.get("command-result-1")).toBe(1);
     });
 
+    it("drops an interrupted command transition as one logical record", async () => {
+        const rootDir = await createRoot();
+        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        await journal.setCommandStatus("command-1", "received", command);
+        const resultMutation = {
+            ...mutation,
+            mutationId: "executing-result",
+            entityType: "codex.commandResult" as const,
+            entityId: "command-result-1",
+        };
+        const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
+        const journalPath = join(rootDir, journalFile);
+        const incomplete = JSON.stringify({
+            version: 1,
+            kind: "commandTransition",
+            commandId: "command-1",
+            status: "executing",
+            updatedAt: 200,
+            mutation: resultMutation,
+            command,
+        }).slice(0, -12);
+        await appendFile(journalPath, incomplete, "utf8");
+
+        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        expect(reopened.snapshot().commandStatuses.get("command-1")).toBe("received");
+        expect(reopened.snapshot().pendingOutbound).toEqual([]);
+        expect(reopened.nextRevision("command-result-1")).toBe(1);
+    });
+
+    it("commits inbound revision with its cursor and snapshot revisions with their watermark", async () => {
+        const rootDir = await createRoot();
+        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        await journal.appendInbound([{ ...mutation, mutationId: "remote-1", seq: 1, createdAt: 100 }]);
+        const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
+        const journalPath = join(rootDir, journalFile);
+        await appendFile(
+            journalPath,
+            '{"version":1,"kind":"inboundComplete","entityId":"entity-1","revision":1',
+            "utf8",
+        );
+
+        const interrupted = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        expect(interrupted.snapshot().receiveCursor).toBe(0);
+        expect(interrupted.snapshot().entityRevisions.get("entity-1")).toBeUndefined();
+        expect(interrupted.snapshot().pendingInbound).toHaveLength(1);
+        await interrupted.completeInbound("entity-1", 1, 1);
+        await interrupted.completeSnapshot([{ entityId: "snapshot-entity", revision: 4 }], 7);
+
+        const completed = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        expect(completed.snapshot().receiveCursor).toBe(7);
+        expect(completed.snapshot().pendingInbound).toEqual([]);
+        expect(completed.snapshot().entityRevisions.get("entity-1")).toBe(1);
+        expect(completed.snapshot().entityRevisions.get("snapshot-entity")).toBe(4);
+    });
+
     it("uses one stable producer ID across session journals", async () => {
         const rootDir = await createRoot();
         const first = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });

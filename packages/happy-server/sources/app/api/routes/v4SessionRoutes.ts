@@ -1,3 +1,8 @@
+import {
+    classifySyncV4Mutations,
+    MutationConflictError,
+    RevisionConflictError,
+} from "@/app/api/routes/syncV4MutationClassifier";
 import { eventRouter } from "@/app/events/eventRouter";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
@@ -5,8 +10,6 @@ import {
     MAX_SYNC_V4_MUTATIONS_PER_BATCH,
     SyncMutationBatchV4Schema,
     SyncMutationV4Schema,
-    type SyncAckStatusV4,
-    type SyncMutationV4,
 } from "@slopus/happy-wire";
 import { z } from "zod";
 import { type Fastify } from "../types";
@@ -28,47 +31,6 @@ const snapshotQuerySchema = z.object({
 const mutationsBodySchema = z.object({
     mutations: z.array(SyncMutationV4Schema).min(1).max(MAX_SYNC_V4_MUTATIONS_PER_BATCH),
 }).strict();
-
-interface RevisionConflictDetails {
-    entityId: string;
-    revision: number;
-}
-
-class RevisionConflictError extends Error {
-    readonly details: RevisionConflictDetails;
-
-    constructor(details: RevisionConflictDetails) {
-        super("Sync v4 entity revision conflict");
-        this.details = details;
-    }
-}
-
-class MutationConflictError extends Error {
-    readonly mutationId: string;
-
-    constructor(mutationId: string) {
-        super("Sync v4 mutation id conflict");
-        this.mutationId = mutationId;
-    }
-}
-
-interface ComparableMutation {
-    producerId: string;
-    entityId: string;
-    entityType: string;
-    revision: number;
-    op: string;
-    ciphertext: string;
-}
-
-function hasSameMutationContent(left: ComparableMutation, right: ComparableMutation): boolean {
-    return left.producerId === right.producerId
-        && left.entityId === right.entityId
-        && left.entityType === right.entityType
-        && left.revision === right.revision
-        && left.op === right.op
-        && left.ciphertext === right.ciphertext;
-}
 
 function encodeSnapshotCursor(highWatermark: number, entityId: string): string {
     return `${highWatermark}:${entityId}`;
@@ -143,42 +105,11 @@ export function v4SessionRoutes(app: Fastify): void {
                     op: entity.op,
                     ciphertext: entity.ciphertext,
                 }]));
-                const classifications: Array<{
-                    mutation: SyncMutationV4;
-                    status: SyncAckStatusV4;
-                    existingSeq?: number;
-                }> = [];
-
-                for (const mutation of mutations) {
-                    const existingMutation = mutationsById.get(mutation.mutationId);
-                    if (existingMutation) {
-                        if (!hasSameMutationContent(existingMutation, mutation)) {
-                            throw new MutationConflictError(mutation.mutationId);
-                        }
-                        classifications.push({ mutation, status: "duplicate", existingSeq: existingMutation.seq });
-                        continue;
-                    }
-
-                    const currentEntity = entitiesById.get(mutation.entityId);
-                    if (currentEntity && currentEntity.revision === mutation.revision) {
-                        if (!hasSameMutationContent(currentEntity, mutation)) {
-                            throw new RevisionConflictError({
-                                entityId: mutation.entityId,
-                                revision: mutation.revision,
-                            });
-                        }
-                        classifications.push({ mutation, status: "superseded" });
-                        continue;
-                    }
-
-                    const status: SyncAckStatusV4 = currentEntity && currentEntity.revision > mutation.revision
-                        ? "superseded"
-                        : "accepted";
-                    classifications.push({ mutation, status });
-                    if (status === "accepted") {
-                        entitiesById.set(mutation.entityId, mutation);
-                    }
-                }
+                const classifications = classifySyncV4Mutations({
+                    mutations,
+                    existingMutations: mutationsById,
+                    currentEntities: entitiesById,
+                });
 
                 const newClassifications = classifications.filter((classification) => classification.status !== "duplicate");
                 let nextSeq = session.syncV4Seq + 1;

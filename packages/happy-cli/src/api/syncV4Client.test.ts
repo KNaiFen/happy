@@ -28,6 +28,8 @@ class FakeTransport implements SyncV4Transport {
     snapshots: SyncSnapshotResponseV4[] = [];
     requireSnapshot = false;
     failAfterCommit = false;
+    snapshotCallCount = 0;
+    failSnapshotCall: number | null = null;
 
     async postMutations(_sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4> {
         this.postedBatches.push(mutations);
@@ -62,6 +64,8 @@ class FakeTransport implements SyncV4Transport {
     }
 
     async getSnapshot(): Promise<SyncSnapshotResponseV4> {
+        this.snapshotCallCount += 1;
+        if (this.snapshotCallCount === this.failSnapshotCall) throw new Error("snapshot transport lost");
         const page = this.snapshots.shift();
         if (!page) throw new Error("missing fake snapshot page");
         return SyncSnapshotResponseV4Schema.parse(page);
@@ -180,15 +184,20 @@ describe("SyncV4Client", () => {
         const publisher = await createClient(await createRoot(), transport);
         const mutation = await publisher.publishEntity(part("remote-1"));
         transport.changes = [{ ...mutation, seq: 1, createdAt: 100 }];
+        const appliedBeforeCrash: SyncV4AppliedEntity[] = [];
         const failing = await SyncV4Client.create({
             sessionId: "session-1",
             sessionKey,
             journalRoot: root,
             transport,
-            onEntity: async () => { throw new Error("handler stopped"); },
+            onEntity: async (event) => {
+                appliedBeforeCrash.push(event);
+                throw new Error("handler stopped");
+            },
         });
         await expect(failing.pullChangesOnce()).rejects.toThrow("handler stopped");
         expect(failing.receiveCursor).toBe(0);
+        expect(appliedBeforeCrash).toHaveLength(1);
 
         const applied: SyncV4AppliedEntity[] = [];
         const reopened = await createClient(root, transport, applied);
@@ -234,5 +243,47 @@ describe("SyncV4Client", () => {
 
         expect(applied.map((event) => event.source)).toEqual(["snapshot", "snapshot"]);
         expect(client.receiveCursor).toBe(2);
+    });
+
+    it("restarts a snapshot from page one when the process stops before its watermark commit", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const publisher = await createClient(await createRoot(), transport);
+        const first = await publisher.publishEntity(part("snapshot-crash-1"));
+        const second = await publisher.publishEntity(part("snapshot-crash-2"));
+        const { mutationId: _firstMutationId, ...firstSnapshot } = first;
+        const { mutationId: _secondMutationId, ...secondSnapshot } = second;
+        const pages: SyncSnapshotResponseV4[] = [
+            {
+                entities: [{ ...firstSnapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+                highWatermark: 2,
+                nextCursor: "page-2",
+            },
+            {
+                entities: [{ ...secondSnapshot, updatedSeq: 2, createdAt: 101, updatedAt: 101 }],
+                highWatermark: 2,
+                nextCursor: null,
+            },
+        ];
+        transport.requireSnapshot = true;
+        transport.snapshots = structuredClone(pages);
+        transport.failSnapshotCall = 2;
+        const beforeCrash: SyncV4AppliedEntity[] = [];
+        await expect((await createClient(root, transport, beforeCrash)).pullChangesOnce())
+            .rejects.toThrow("snapshot transport lost");
+        expect(beforeCrash.map((event) => event.entity.providerId)).toEqual(["snapshot-crash-1"]);
+
+        transport.requireSnapshot = true;
+        transport.snapshots = structuredClone(pages);
+        transport.snapshotCallCount = 0;
+        transport.failSnapshotCall = null;
+        const recovered: SyncV4AppliedEntity[] = [];
+        const reopened = await createClient(root, transport, recovered);
+        await reopened.pullChangesOnce();
+        expect(recovered.map((event) => event.entity.providerId)).toEqual([
+            "snapshot-crash-1",
+            "snapshot-crash-2",
+        ]);
+        expect(reopened.receiveCursor).toBe(2);
     });
 });
