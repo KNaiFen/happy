@@ -99,6 +99,8 @@ export class AppSyncV4Client {
     private readonly receiveSync: InvalidateSync;
     private pollTimer: ReturnType<typeof setInterval> | null = null;
     private started = false;
+    private disposed = false;
+    private lifecycleGeneration = 0;
 
     private constructor(
         readonly sessionId: string,
@@ -120,19 +122,31 @@ export class AppSyncV4Client {
 
     async start(): Promise<void> {
         if (this.started) return;
+        if (this.disposed) throw new Error('Sync v4 client has been stopped');
+        const generation = this.lifecycleGeneration;
         this.started = true;
         try {
-            await this.hydrate();
-            await Promise.all([this.flushOutboundOnce(), this.pullChangesOnce()]);
+            await this.hydrateForGeneration(generation);
+            await Promise.all([
+                this.flushOutboundForGeneration(generation),
+                this.pullChangesForGeneration(generation),
+            ]);
+            this.assertCurrentGeneration(generation);
         } catch (error) {
-            this.started = false;
+            if (this.isCurrentGeneration(generation)) {
+                this.started = false;
+                this.lifecycleGeneration += 1;
+            }
             throw error;
         }
         this.pollTimer = setInterval(() => this.receiveSync.invalidate(), this.pollIntervalMs);
     }
 
     stop(): void {
+        if (this.disposed) return;
+        this.disposed = true;
         this.started = false;
+        this.lifecycleGeneration += 1;
         if (this.pollTimer) clearInterval(this.pollTimer);
         this.pollTimer = null;
         this.sendSync.stop();
@@ -145,10 +159,16 @@ export class AppSyncV4Client {
     }
 
     async hydrate(): Promise<void> {
+        await this.hydrateForGeneration(this.lifecycleGeneration);
+    }
+
+    private async hydrateForGeneration(generation: number): Promise<void> {
+        if (!this.isCurrentGeneration(generation)) return;
         const persistent = this.persistence.loadSession(this.sessionId);
         const cachedRevisions = new Map(persistent.entities.map((entity) => [entity.entityId, entity.revision]));
         for (const cached of persistent.entities) {
             const entity = await this.crypto.decryptEntity(toAad(this.sessionId, cached), cached.ciphertext);
+            if (!this.isCurrentGeneration(generation)) return;
             await this.onEntity({
                 entity,
                 source: 'cache',
@@ -156,10 +176,12 @@ export class AppSyncV4Client {
                 revision: cached.revision,
                 seq: cached.updatedSeq,
             });
+            if (!this.isCurrentGeneration(generation)) return;
         }
         for (const mutation of persistent.outbox) {
             if ((cachedRevisions.get(mutation.entityId) ?? 0) >= mutation.revision) continue;
             const entity = await this.crypto.decryptEntity(toAad(this.sessionId, mutation), mutation.ciphertext);
+            if (!this.isCurrentGeneration(generation)) return;
             await this.onEntity({
                 entity,
                 source: 'cache',
@@ -167,8 +189,9 @@ export class AppSyncV4Client {
                 revision: mutation.revision,
                 seq: null,
             });
+            if (!this.isCurrentGeneration(generation)) return;
         }
-        if (persistent.snapshotRequired) await this.rebuildFromSnapshot();
+        if (persistent.snapshotRequired) await this.rebuildFromSnapshot(generation);
     }
 
     async publishEntity(
@@ -180,11 +203,15 @@ export class AppSyncV4Client {
 
     async publishEntities(entries: AppSyncV4PublishEntity[]): Promise<SyncMutationV4[]> {
         if (entries.length === 0) return [];
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
         const mutations = await this.publishLock.inLock(async () => {
+            this.assertCurrentGeneration(generation);
             const pendingRevisions = new Map<string, number>();
             const nextMutations: SyncMutationV4[] = [];
             for (const entry of entries) {
                 const entityId = await this.crypto.opaqueEntityId(entry.entity.entityType, entry.entity.providerId);
+                this.assertCurrentGeneration(generation);
                 const revision = (
                     pendingRevisions.get(entityId)
                     ?? this.persistence.nextRevision(this.sessionId, entityId) - 1
@@ -207,11 +234,13 @@ export class AppSyncV4Client {
                     op,
                     ciphertext: await this.crypto.encryptEntity(aad, entry.entity),
                 }));
+                this.assertCurrentGeneration(generation);
             }
             this.persistence.enqueueMutations(this.sessionId, nextMutations);
             return nextMutations;
         });
         for (let index = 0; index < mutations.length; index += 1) {
+            this.assertCurrentGeneration(generation);
             const entry = entries[index];
             const mutation = mutations[index];
             await this.onEntity({
@@ -221,18 +250,25 @@ export class AppSyncV4Client {
                 revision: mutation.revision,
                 seq: null,
             });
+            this.assertCurrentGeneration(generation);
         }
         if (this.started) this.sendSync.invalidate();
         return mutations;
     }
 
     async flushOutboundOnce(): Promise<void> {
+        await this.flushOutboundForGeneration(this.lifecycleGeneration);
+    }
+
+    private async flushOutboundForGeneration(generation: number): Promise<void> {
         await this.sendLock.inLock(async () => {
             while (true) {
+                if (!this.isCurrentGeneration(generation)) return;
                 const pending = this.persistence.getPendingOutbox(this.sessionId);
                 if (pending.length === 0) return;
                 const batch = takeMutationBatch(pending);
                 const response = await this.transport.postMutations(this.sessionId, batch);
+                if (!this.isCurrentGeneration(generation)) return;
                 validateAcknowledgements(batch, response.acknowledgements);
                 this.persistence.acknowledgeMutations(this.sessionId, response.acknowledgements);
             }
@@ -240,19 +276,26 @@ export class AppSyncV4Client {
     }
 
     async pullChangesOnce(): Promise<void> {
+        await this.pullChangesForGeneration(this.lifecycleGeneration);
+    }
+
+    private async pullChangesForGeneration(generation: number): Promise<void> {
         await this.receiveLock.inLock(async () => {
             while (true) {
+                if (!this.isCurrentGeneration(generation)) return;
                 const cursor = this.receiveCursor;
                 let response: SyncChangesResponseV4;
                 try {
                     response = await this.transport.getChanges(this.sessionId, cursor, CHANGES_PAGE_SIZE);
                 } catch (error) {
+                    if (!this.isCurrentGeneration(generation)) return;
                     if (error instanceof AppSyncV4SnapshotRequiredError) {
-                        await this.rebuildFromSnapshot();
+                        await this.rebuildFromSnapshot(generation);
                         continue;
                     }
                     throw error;
                 }
+                if (!this.isCurrentGeneration(generation)) return;
                 if (response.highWatermark < cursor) throw new Error('Sync v4 server watermark moved backwards');
                 if (response.changes.length === 0) {
                     if (response.hasMore || cursor < response.highWatermark) {
@@ -267,9 +310,11 @@ export class AppSyncV4Client {
                         change,
                         entity: await this.crypto.decryptEntity(toAad(this.sessionId, change), change.ciphertext),
                     });
+                    if (!this.isCurrentGeneration(generation)) return;
                 }
                 this.persistence.stageChanges(this.sessionId, response.changes);
                 for (const { change, entity } of decrypted) {
+                    if (!this.isCurrentGeneration(generation)) return;
                     await this.onEntity({
                         entity,
                         source: 'change',
@@ -277,6 +322,7 @@ export class AppSyncV4Client {
                         revision: change.revision,
                         seq: change.seq,
                     });
+                    if (!this.isCurrentGeneration(generation)) return;
                 }
                 this.persistence.advanceReceiveCursor(this.sessionId, response.changes.at(-1)!.seq);
                 if (!response.hasMore && this.receiveCursor >= response.highWatermark) return;
@@ -284,15 +330,18 @@ export class AppSyncV4Client {
         });
     }
 
-    private async rebuildFromSnapshot(): Promise<void> {
+    private async rebuildFromSnapshot(generation: number): Promise<void> {
+        if (!this.isCurrentGeneration(generation)) return;
         this.persistence.beginSnapshot(this.sessionId);
         await this.onSnapshotReset();
+        if (!this.isCurrentGeneration(generation)) return;
         let cursor: string | null = null;
         let highWatermark: number | null = null;
         const snapshotRevisions = new Map<string, number>();
         const seenCursors = new Set<string>();
         do {
             const page = await this.transport.getSnapshot(this.sessionId, cursor, SNAPSHOT_PAGE_SIZE);
+            if (!this.isCurrentGeneration(generation)) return;
             if (highWatermark === null) highWatermark = page.highWatermark;
             if (page.highWatermark !== highWatermark) {
                 throw new Error('Sync v4 snapshot watermark changed during pagination');
@@ -303,9 +352,11 @@ export class AppSyncV4Client {
                     snapshot,
                     entity: await this.crypto.decryptEntity(toAad(this.sessionId, snapshot), snapshot.ciphertext),
                 });
+                if (!this.isCurrentGeneration(generation)) return;
             }
             this.persistence.applySnapshotPage(this.sessionId, page.entities);
             for (const { snapshot, entity } of decrypted) {
+                if (!this.isCurrentGeneration(generation)) return;
                 snapshotRevisions.set(
                     snapshot.entityId,
                     Math.max(snapshotRevisions.get(snapshot.entityId) ?? 0, snapshot.revision),
@@ -317,16 +368,19 @@ export class AppSyncV4Client {
                     revision: snapshot.revision,
                     seq: snapshot.updatedSeq,
                 });
+                if (!this.isCurrentGeneration(generation)) return;
             }
             cursor = page.nextCursor;
             if (cursor && seenCursors.has(cursor)) throw new Error('Sync v4 snapshot pagination stalled');
             if (cursor) seenCursors.add(cursor);
         } while (cursor);
+        if (!this.isCurrentGeneration(generation)) return;
         this.persistence.finishSnapshot(this.sessionId, highWatermark ?? 0);
 
         for (const mutation of this.persistence.getPendingOutbox(this.sessionId)) {
             if ((snapshotRevisions.get(mutation.entityId) ?? 0) >= mutation.revision) continue;
             const entity = await this.crypto.decryptEntity(toAad(this.sessionId, mutation), mutation.ciphertext);
+            if (!this.isCurrentGeneration(generation)) return;
             await this.onEntity({
                 entity,
                 source: 'cache',
@@ -334,6 +388,17 @@ export class AppSyncV4Client {
                 revision: mutation.revision,
                 seq: null,
             });
+            if (!this.isCurrentGeneration(generation)) return;
+        }
+    }
+
+    private isCurrentGeneration(generation: number): boolean {
+        return !this.disposed && this.lifecycleGeneration === generation;
+    }
+
+    private assertCurrentGeneration(generation: number): void {
+        if (!this.isCurrentGeneration(generation)) {
+            throw new Error('Sync v4 client has been stopped');
         }
     }
 }

@@ -38,6 +38,17 @@ class MemoryStorage implements SyncV4KeyValueStorage {
     getAllKeys() { return [...this.values.keys()]; }
 }
 
+class Deferred<T> {
+    readonly promise: Promise<T>;
+    resolve!: (value: T) => void;
+
+    constructor() {
+        this.promise = new Promise<T>((resolve) => {
+            this.resolve = resolve;
+        });
+    }
+}
+
 const fakeCrypto: AppSyncV4Crypto = {
     opaqueEntityId: async (entityType, providerId) => `opaque:${entityType}:${providerId}`,
     encryptEntity: async (_aad, entity) => JSON.stringify(entity),
@@ -115,7 +126,7 @@ function persistence(storage: MemoryStorage): SyncV4Persistence {
 let mutationCounter = 0;
 async function client(
     storage: MemoryStorage,
-    transport: FakeTransport,
+    transport: AppSyncV4Transport,
     applied: AppSyncV4AppliedEntity[] = [],
     handler?: (event: AppSyncV4AppliedEntity) => Promise<void>,
     snapshotReset?: () => Promise<void>,
@@ -347,5 +358,98 @@ describe('AppSyncV4Client', () => {
         expect(resetCount).toBe(1);
         expect(projection.entities['codex.command']['pending-command']).toBeDefined();
         expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+    });
+
+    it('does not acknowledge an in-flight POST after stop and session cleanup', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const sender = await client(storage, transport);
+        const mutation = await sender.publishEntity(command('pending-command'));
+        const postStarted = new Deferred<void>();
+        const postResponse = new Deferred<SyncMutationBatchResponseV4>();
+        transport.postMutations = async () => {
+            postStarted.resolve();
+            return await postResponse.promise;
+        };
+
+        const flush = sender.flushOutboundOnce();
+        await postStarted.promise;
+        sender.stop();
+        persistence(storage).clearSession('session-1');
+        postResponse.resolve({
+            acknowledgements: [{
+                mutationId: mutation.mutationId,
+                seq: 1,
+                revision: mutation.revision,
+                status: 'accepted',
+            }],
+        });
+        await flush;
+
+        expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:session:'))).toEqual([]);
+    });
+
+    it('does not stage changes or advance the cursor after stop and session cleanup', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('late-change'));
+        const changeStarted = new Deferred<void>();
+        const changeResponse = new Deferred<ReturnType<typeof SyncChangesResponseV4Schema.parse>>();
+        transport.getChanges = async () => {
+            changeStarted.resolve();
+            return await changeResponse.promise;
+        };
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const receiver = await client(storage, transport, applied);
+
+        const pull = receiver.pullChangesOnce();
+        await changeStarted.promise;
+        receiver.stop();
+        persistence(storage).clearSession('session-1');
+        changeResponse.resolve(SyncChangesResponseV4Schema.parse({
+            changes: [toChange(mutation, 1)],
+            hasMore: false,
+            highWatermark: 1,
+        }));
+        await pull;
+
+        expect(applied).toEqual([]);
+        expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:session:'))).toEqual([]);
+    });
+
+    it('does not finish an in-flight snapshot after stop and session cleanup', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('late-snapshot'));
+        const { mutationId: _mutationId, ...snapshot } = mutation;
+        transport.requireSnapshot = true;
+        const snapshotStarted = new Deferred<void>();
+        const snapshotResponse = new Deferred<SyncSnapshotResponseV4>();
+        transport.getSnapshot = async () => {
+            snapshotStarted.resolve();
+            return await snapshotResponse.promise;
+        };
+        const applied: AppSyncV4AppliedEntity[] = [];
+        let resetCount = 0;
+        const receiver = await client(storage, transport, applied, undefined, async () => {
+            resetCount += 1;
+        });
+
+        const pull = receiver.pullChangesOnce();
+        await snapshotStarted.promise;
+        receiver.stop();
+        persistence(storage).clearSession('session-1');
+        snapshotResponse.resolve(SyncSnapshotResponseV4Schema.parse({
+            entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+            highWatermark: 1,
+            nextCursor: null,
+        }));
+        await pull;
+
+        expect(resetCount).toBe(1);
+        expect(applied).toEqual([]);
+        expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:session:'))).toEqual([]);
     });
 });
