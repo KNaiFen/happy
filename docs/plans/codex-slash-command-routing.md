@@ -1,5 +1,9 @@
 # Codex Slash-Command Routing
 
+> Historical plan. Its CLI-only scope, bounded compact timeout, deprecated
+> compact-completion fallback, and single-package release assumptions are
+> superseded by `docs/decisions/ADR-001-codex-sync-v4.md`.
+
 ## Status
 
 Proposed (deferred)

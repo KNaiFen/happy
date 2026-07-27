@@ -1,5 +1,9 @@
 # Codex: app-server integration
 
+> Historical plan. Its CLI-only transport assumptions, Codex 0.100 minimum,
+> legacy-event projection, and fixed turn timeout are superseded by
+> `docs/decisions/ADR-001-codex-sync-v4.md`.
+
 ## How we run Codex
 
 Codex is a **system-wide CLI** (`npm install -g @openai/codex`). We don't bundle it.
