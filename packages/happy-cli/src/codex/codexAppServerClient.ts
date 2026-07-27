@@ -60,6 +60,7 @@ import {
 } from './codexCliVersion';
 import { CodexThreadRegistry } from './codexThreadRegistry';
 import type {
+    ServerNotification,
     Thread as ProtocolThread,
     ThreadStatus as ProtocolThreadStatus,
     Turn as ProtocolTurn,
@@ -243,6 +244,7 @@ export class CodexAppServerClient {
     // Handlers set by the consumer (runCodex.ts)
     private eventHandler: ((msg: EventMsg) => void) | null = null;
     private approvalHandler: ApprovalHandler | null = null;
+    private stableNotificationHandler: ((notification: ServerNotification) => void) | null = null;
 
     constructor(sandboxConfig?: SandboxConfig) {
         this.sandboxConfig = sandboxConfig;
@@ -270,6 +272,14 @@ export class CodexAppServerClient {
 
     setApprovalHandler(handler: ApprovalHandler): void {
         this.approvalHandler = handler;
+    }
+
+    setStableNotificationHandler(handler: ((notification: ServerNotification) => void) | null): void {
+        this.stableNotificationHandler = handler;
+    }
+
+    private emitStableNotification(method: string, params: unknown): void {
+        this.stableNotificationHandler?.({ method, params } as ServerNotification);
     }
 
     private normalizeProtocolTurn(value: unknown): ProtocolTurn | null {
@@ -333,7 +343,10 @@ export class CodexAppServerClient {
 
     private registerThreadSnapshot(value: unknown, source: 'response' | 'snapshot' = 'response'): ProtocolThread | null {
         const thread = this.normalizeProtocolThread(value);
-        if (thread) this.threads.registerThread(thread, source);
+        if (thread) {
+            this.threads.registerThread(thread, source);
+            this.emitStableNotification('thread/started', { thread });
+        }
         return thread;
     }
 
@@ -1311,7 +1324,10 @@ export class CodexAppServerClient {
         // tracks task_complete / turn_aborted.
         const result = await this.request('turn/start', params) as { turn?: unknown };
         const turn = this.normalizeProtocolTurn(result?.turn);
-        if (turn) this.threads.registerTurn(threadId, turn);
+        if (turn) {
+            this.threads.registerTurn(threadId, turn);
+            this.emitStableNotification('turn/started', { threadId, turn });
+        }
     }
 
     /**
@@ -1776,6 +1792,13 @@ export class CodexAppServerClient {
         }
 
         const statusCompletionTurnId = this.trackStableNotification(method, params);
+
+        // thread/started is emitted by registerThreadSnapshot after the registry
+        // has accepted the snapshot. Every other stable notification is tapped
+        // here before the legacy selected-thread projection can filter it.
+        if (method !== 'thread/started') {
+            this.emitStableNotification(method, params);
+        }
 
         if (this.handleRawNotification(method, params, statusCompletionTurnId)) {
             logger.debug(`[CodexAppServer] Raw notification: ${method}`);
