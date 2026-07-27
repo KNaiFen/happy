@@ -369,6 +369,8 @@ export type Metadata = {
    * inside the parent session's sidebar panel.
    */
   isSideChat?: boolean
+  /** Provider-created Codex child session; direct prompts and control commands are disabled. */
+  codexReadOnly?: boolean
 };
 
 export type UsageLimitWindowStatus = 'allowed' | 'allowed_warning' | 'rejected'

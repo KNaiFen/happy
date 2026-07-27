@@ -156,6 +156,8 @@ export const MetadataSchema = z.object({
      * inside the parent session's sidebar panel (see `useSideChatSession`).
      */
     isSideChat: z.boolean().optional(),
+    /** Provider-created Codex child session. Its transcript and approvals are visible, but direct input is hidden. */
+    codexReadOnly: z.boolean().optional(),
     /**
      * Per-session permission / model / effort picks made in any client.
      * Synced through session metadata so every device shows the same

@@ -1,6 +1,7 @@
 import type {
     CodexEntityV4,
     CodexPartEntityV4,
+    CodexRelationEntityV4,
     SyncMutationOperationV4,
     SyncMutationV4,
 } from '@slopus/happy-wire';
@@ -288,6 +289,35 @@ describe('CodexSyncV4Mapper', () => {
         expect(parts.every((part) => part.kind === 'reasoningSummary')).toBe(true);
         expect(new Set(parts.map((part) => part.providerId)).size).toBe(2);
         expect(publisher.latest('codex.item').map((item) => item.threadId).sort()).toEqual(['child', 'parent']);
+        await mapper.close();
+    });
+
+    it('derives active subagent count from isolated relation lifecycle updates', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        mapper.importThread(thread('parent'));
+        await mapper.flush();
+        const relation: CodexRelationEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.relation',
+            providerId: 'parent\0relation\0child',
+            createdAt: 1_800_000_000_000,
+            updatedAt: 1_800_000_000_000,
+            parentThreadId: 'parent',
+            childThreadId: 'child',
+            parentTurnId: 'turn-parent',
+            delegationItemId: 'delegate-1',
+            parentSessionId: 'happy-parent',
+            childSessionId: 'happy-child',
+            depth: 1,
+            status: 'active',
+        };
+
+        await mapper.upsertRelation(relation);
+        expect(publisher.latest('codex.runtime')[0].activeSubagentCount).toBe(1);
+
+        await mapper.upsertRelation({ ...relation, status: 'completed', updatedAt: relation.updatedAt + 1 });
+        expect(publisher.latest('codex.runtime')[0].activeSubagentCount).toBe(0);
         await mapper.close();
     });
 });

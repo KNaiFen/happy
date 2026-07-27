@@ -42,6 +42,8 @@ export interface CreateSessionMetadataOptions {
     forkedFromMessageId?: string;
     /** Marks this session as a hidden side chat of `parentSessionId`. */
     isSideChat?: boolean;
+    /** Hides direct input while preserving approval controls for provider-owned child threads. */
+    codexReadOnly?: boolean;
 }
 
 /**
@@ -117,6 +119,7 @@ export function createSessionMetadata(opts: CreateSessionMetadataOptions): Sessi
         ...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
         ...(opts.forkedFromMessageId ? { forkedFromMessageId: opts.forkedFromMessageId } : {}),
         ...(opts.isSideChat ? { isSideChat: true } : {}),
+        ...(opts.codexReadOnly ? { codexReadOnly: true } : {}),
     };
 
     return { state, metadata };

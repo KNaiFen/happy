@@ -380,6 +380,10 @@ export class ApiSessionClient extends EventEmitter {
         this.socket.connect();
     }
 
+    get syncV4SessionKey(): Uint8Array {
+        return new Uint8Array(this.encryptionKey);
+    }
+
     onUserMessage(callback: (data: UserMessage) => void) {
         this.pendingMessageCallback = callback;
         while (this.pendingMessages.length > 0) {

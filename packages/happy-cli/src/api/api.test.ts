@@ -28,7 +28,14 @@ vi.mock('./encryption', () => ({
     decodeBase64: vi.fn((data: string) => data),
     encodeBase64: vi.fn((data: any) => data),
     decrypt: vi.fn((data: any) => data),
-    encrypt: vi.fn((data: any) => data)
+    encrypt: vi.fn((_: any, __: any, data: any) => data),
+    libsodiumEncryptForPublicKey: vi.fn(() => new Uint8Array(48)),
+    libsodiumPublicKeyFromSecretKey: vi.fn(() => new Uint8Array(32)),
+    getRandomBytes: vi.fn((size: number) => new Uint8Array(size)),
+}));
+
+vi.mock('@/utils/deriveKey', () => ({
+    deriveKey: vi.fn(async () => new Uint8Array(32)),
 }));
 
 // Mock configuration
@@ -82,6 +89,43 @@ describe('Api server error handling', () => {
     });
 
     describe('getOrCreateSession', () => {
+        it('uses a caller-provided independent data key for a recoverable child session', async () => {
+            const childKey = new Uint8Array(32).fill(7);
+            mockPost.mockResolvedValue({
+                data: {
+                    session: {
+                        id: 'child-session',
+                        seq: 0,
+                        metadata: testMetadata,
+                        metadataVersion: 0,
+                        agentState: null,
+                        agentStateVersion: 0,
+                    },
+                },
+            });
+
+            const result = await api.getOrCreateSession({
+                tag: 'opaque-child-tag',
+                metadata: testMetadata,
+                state: null,
+                dataEncryptionKey: childKey,
+            });
+
+            expect(result).toMatchObject({
+                id: 'child-session',
+                encryptionVariant: 'dataKey',
+                encryptionKey: childKey,
+            });
+            expect(mockPost).toHaveBeenCalledWith(
+                expect.stringContaining('/v1/sessions'),
+                expect.objectContaining({
+                    tag: 'opaque-child-tag',
+                    dataEncryptionKey: expect.any(Uint8Array),
+                }),
+                expect.anything(),
+            );
+        });
+
         it('should return null when Happy server is unreachable (ECONNREFUSED)', async () => {
             const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 

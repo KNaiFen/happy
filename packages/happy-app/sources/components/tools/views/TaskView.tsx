@@ -1,11 +1,12 @@
 import * as React from 'react';
 import { ToolViewProps } from './_all';
-import { Text, View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
+import { Text, View, ActivityIndicator, StyleSheet, Platform, Pressable } from 'react-native';
 import { knownTools } from '../../tools/knownTools';
 import { Ionicons } from '@expo/vector-icons';
 import { ToolCall } from '@/sync/typesMessage';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
+import { useRouter } from 'expo-router';
 
 interface FilteredTool {
     tool: ToolCall;
@@ -15,7 +16,11 @@ interface FilteredTool {
 
 export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages }) => {
     const { theme } = useUnistyles();
+    const router = useRouter();
     const filtered: FilteredTool[] = [];
+    const childSessionId = typeof tool.input?.childSessionId === 'string'
+        ? tool.input.childSessionId
+        : null;
 
     for (let m of messages) {
         if (m.kind === 'tool-call') {
@@ -90,9 +95,24 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages })
             fontStyle: 'italic',
             opacity: 0.7,
         },
+        childLink: {
+            minHeight: 34,
+            paddingHorizontal: 8,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: theme.colors.divider,
+            borderRadius: 6,
+        },
+        childLinkText: {
+            flex: 1,
+            fontSize: 13,
+            color: theme.colors.text,
+        },
     });
 
-    if (filtered.length === 0) {
+    if (filtered.length === 0 && !childSessionId) {
         return null;
     }
 
@@ -101,6 +121,18 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages })
 
     return (
         <View style={styles.container}>
+            {childSessionId && (
+                <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t('sideChat.panelTitle')}
+                    onPress={() => router.push(`/session/${childSessionId}`)}
+                    style={({ pressed }) => [styles.childLink, pressed && { opacity: 0.7 }]}
+                >
+                    <Ionicons name="git-branch-outline" size={15} color={theme.colors.textSecondary} />
+                    <Text style={styles.childLinkText} numberOfLines={1}>{t('sideChat.panelTitle')}</Text>
+                    <Ionicons name="chevron-forward" size={14} color={theme.colors.textSecondary} />
+                </Pressable>
+            )}
             {visibleTools.map((item, index) => (
                 <View key={`${item.tool.name}-${index}`} style={styles.toolItem}>
                     <Text style={styles.toolTitle}>{item.title}</Text>

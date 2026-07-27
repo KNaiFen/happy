@@ -3,12 +3,21 @@ import { logger } from '@/ui/logger'
 import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState } from '@/api/types'
 import { ApiSessionClient } from './apiSession';
 import { ApiMachineClient } from './apiMachine';
-import { decodeBase64, encodeBase64, getRandomBytes, encrypt, decrypt, libsodiumEncryptForPublicKey } from './encryption';
+import {
+  decodeBase64,
+  encodeBase64,
+  getRandomBytes,
+  encrypt,
+  decrypt,
+  libsodiumEncryptForPublicKey,
+  libsodiumPublicKeyFromSecretKey,
+} from './encryption';
 import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
 import chalk from 'chalk';
 import { Credentials } from '@/persistence';
 import { connectionState, isNetworkError } from '@/utils/serverConnectionErrors';
+import { deriveKey } from '@/utils/deriveKey';
 
 export class ApiClient {
 
@@ -30,14 +39,28 @@ export class ApiClient {
   async getOrCreateSession(opts: {
     tag: string,
     metadata: Metadata,
-    state: AgentState | null
+    state: AgentState | null,
+    /** Stable per-session key used by recoverable child sessions. */
+    dataEncryptionKey?: Uint8Array,
   }): Promise<Session | null> {
 
     // Resolve encryption key
     let dataEncryptionKey: Uint8Array | null = null;
     let encryptionKey: Uint8Array;
     let encryptionVariant: 'legacy' | 'dataKey';
-    if (this.credential.encryption.type === 'dataKey') {
+    if (opts.dataEncryptionKey) {
+      encryptionKey = new Uint8Array(opts.dataEncryptionKey);
+      encryptionVariant = 'dataKey';
+      const recipientPublicKey = this.credential.encryption.type === 'dataKey'
+        ? this.credential.encryption.publicKey
+        : libsodiumPublicKeyFromSecretKey(
+          await deriveKey(this.credential.encryption.secret, 'Happy EnCoder', ['content'])
+        );
+      const encryptedDataKey = libsodiumEncryptForPublicKey(encryptionKey, recipientPublicKey);
+      dataEncryptionKey = new Uint8Array(encryptedDataKey.length + 1);
+      dataEncryptionKey.set([0], 0);
+      dataEncryptionKey.set(encryptedDataKey, 1);
+    } else if (this.credential.encryption.type === 'dataKey') {
 
       // Generate new encryption key
       encryptionKey = getRandomBytes(32);

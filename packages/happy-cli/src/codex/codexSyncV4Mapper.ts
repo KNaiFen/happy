@@ -11,6 +11,7 @@ import {
     type CodexItemEntityV4,
     type CodexPartEntityV4,
     type CodexPartKindV4,
+    type CodexRelationEntityV4,
     type CodexRequestEntityV4,
     type CodexRuntimeEntityV4,
     type CodexThreadEntityV4,
@@ -77,6 +78,7 @@ export class CodexSyncV4Mapper {
     private readonly turns = new Map<string, CodexTurnEntityV4>();
     private readonly items = new Map<string, CodexItemEntityV4>();
     private readonly requests = new Map<string, CodexRequestEntityV4>();
+    private readonly relations = new Map<string, CodexRelationEntityV4>();
     private readonly streams = new Map<string, PartStream>();
     private readonly activeTurnByThread = new Map<string, string>();
     private readonly diagnosticSequenceByTurn = new Map<string, number>();
@@ -90,11 +92,14 @@ export class CodexSyncV4Mapper {
     private connection: CodexRuntimeEntityV4['connection'] = 'connected';
     private connectionStatusUnknown = false;
     private connectionError: string | null = null;
+    private syncState: CodexRuntimeEntityV4['syncState'];
 
     constructor(
         private readonly publisher: SyncPublisher,
         private readonly options: MapperOptions,
-    ) {}
+    ) {
+        this.syncState = options.initialSyncState ?? 'ready';
+    }
 
     handleNotification(notification: ServerNotification): void {
         if (this.closed) return;
@@ -134,6 +139,7 @@ export class CodexSyncV4Mapper {
     async setSyncState(syncState: CodexRuntimeEntityV4['syncState']): Promise<void> {
         if (this.closed) return;
         await this.enqueue(async () => {
+            this.syncState = syncState;
             const now = this.now();
             for (const [threadId, current] of this.runtimes) {
                 const runtime = { ...current, syncState, updatedAt: now };
@@ -143,11 +149,26 @@ export class CodexSyncV4Mapper {
         });
     }
 
+    async prepareMigration(threadId: string): Promise<void> {
+        if (this.closed) return;
+        await this.enqueue(async () => {
+            await this.ensureThread(threadId, this.now());
+        });
+    }
+
     async upsertRequest(request: CodexRequestEntityV4): Promise<void> {
         await this.enqueue(async () => {
             this.requests.set(request.providerId, request);
             await this.publisher.publishEntity(request);
             await this.publishRuntimeRequestCounts(request.threadId);
+        });
+    }
+
+    async upsertRelation(relation: CodexRelationEntityV4): Promise<void> {
+        await this.enqueue(async () => {
+            this.relations.set(relation.childThreadId, relation);
+            await this.publisher.publishEntity(relation);
+            await this.publishRuntimeRelationCount(relation.parentThreadId);
         });
     }
 
@@ -790,7 +811,7 @@ export class CodexSyncV4Mapper {
             statusUnknown: this.connection !== 'connected' || (!authoritative && this.connectionStatusUnknown),
             protocolVersion: this.options.protocolVersion ?? 'stable-v2',
             codexCliVersion: this.options.codexCliVersion,
-            syncState: previous?.syncState ?? this.options.initialSyncState ?? 'ready',
+            syncState: this.syncState,
             pendingApprovalCount: previous?.pendingApprovalCount ?? 0,
             pendingUserInputCount: previous?.pendingUserInputCount ?? 0,
             activeSubagentCount: previous?.activeSubagentCount ?? 0,
@@ -819,6 +840,24 @@ export class CodexSyncV4Mapper {
             updatedAt: now,
             lastKnownAt: now,
         };
+        this.runtimes.set(threadId, runtime);
+        await this.publisher.publishEntity(runtime);
+    }
+
+    private async publishRuntimeRelationCount(threadId: string): Promise<void> {
+        const now = this.now();
+        const thread = await this.ensureThread(threadId, now);
+        const current = this.runtimes.get(threadId) ?? this.runtimeFor(threadId, thread.status, now);
+        let activeSubagentCount = 0;
+        for (const relation of this.relations.values()) {
+            if (
+                relation.parentThreadId === threadId
+                && (relation.status === 'starting' || relation.status === 'active')
+            ) {
+                activeSubagentCount += 1;
+            }
+        }
+        const runtime = { ...current, activeSubagentCount, updatedAt: now, lastKnownAt: now };
         this.runtimes.set(threadId, runtime);
         await this.publisher.publishEntity(runtime);
     }

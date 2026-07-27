@@ -4,6 +4,7 @@ import type {
     CodexItemEntityV4,
     CodexPartEntityV4,
     CodexRequestEntityV4,
+    CodexRelationEntityV4,
     CodexRuntimeEntityV4,
     CodexThreadEntityV4,
     CodexTurnEntityV4,
@@ -103,6 +104,7 @@ function projectMessages(entities: CodexV4EntityBuckets): Message[] {
     const turns = new Map(Object.values(entities['codex.turn']).map((turn) => [turn.turnId, turn]));
     const parts = Object.values(entities['codex.part']);
     const requests = Object.values(entities['codex.request']);
+    const relations = Object.values(entities['codex.relation']);
     const messages: Message[] = [];
 
     for (const item of Object.values(entities['codex.item'])) {
@@ -114,7 +116,12 @@ function projectMessages(entities: CodexV4EntityBuckets): Message[] {
             && request.turnId === item.turnId
             && request.itemId === item.itemId
         ));
-        const projected = projectItem(item, itemParts, itemRequests, turns.get(item.turnId));
+        const relation = relations.find((candidate) => (
+            candidate.parentThreadId === item.threadId
+            && candidate.parentTurnId === item.turnId
+            && candidate.delegationItemId === item.itemId
+        ));
+        const projected = projectItem(item, itemParts, itemRequests, turns.get(item.turnId), relation);
         if (projected) messages.push(projected);
     }
 
@@ -138,6 +145,7 @@ function projectItem(
     parts: CodexPartEntityV4[],
     requests: CodexRequestEntityV4[],
     turn: CodexTurnEntityV4 | undefined,
+    relation: CodexRelationEntityV4 | undefined,
 ): Message | null {
     const itemType = item.itemType.toLowerCase();
     const createdAt = item.startedAt ?? item.createdAt;
@@ -166,7 +174,7 @@ function projectItem(
         };
     }
 
-    const tool = projectTool(item, parts, requests, turn);
+    const tool = projectTool(item, parts, requests, turn, relation);
     return tool ? {
         kind: 'tool-call',
         id: `codex-v4:item:${item.providerId}`,
@@ -182,6 +190,7 @@ function projectTool(
     parts: CodexPartEntityV4[],
     requests: CodexRequestEntityV4[],
     turn: CodexTurnEntityV4 | undefined,
+    relation: CodexRelationEntityV4 | undefined,
 ): ToolCall | null {
     const itemType = item.itemType.toLowerCase();
     const content = contentForKinds(parts, [
@@ -245,7 +254,12 @@ function projectTool(
         return {
             ...base,
             name: 'Task',
-            input: { prompt: content, description: item.tool ?? undefined },
+            input: {
+                prompt: content,
+                description: item.tool ?? undefined,
+                childSessionId: relation?.childSessionId,
+                childStatus: relation?.status,
+            },
             result: content || undefined,
         };
     }

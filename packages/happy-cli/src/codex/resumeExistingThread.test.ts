@@ -2,12 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { resumeExistingThread } from './resumeExistingThread';
 
+const resumedThread = {
+    id: '019ccca2-1a77-7481-9873-de72f3464372',
+    turns: [],
+} as never;
+
 describe('resumeExistingThread', () => {
     it('resumes the thread and updates session metadata', async () => {
         const client = {
             resumeThread: vi.fn().mockResolvedValue({
                 threadId: '019ccca2-1a77-7481-9873-de72f3464372',
                 model: 'gpt-5.4',
+                thread: resumedThread,
             }),
         };
         const metadataHandlers: Array<(metadata: any) => any> = [];
@@ -31,11 +37,13 @@ describe('resumeExistingThread', () => {
         expect(result).toEqual({
             threadId: '019ccca2-1a77-7481-9873-de72f3464372',
             model: 'gpt-5.4',
+            thread: resumedThread,
         });
         expect(client.resumeThread).toHaveBeenCalledWith({
             threadId: '019ccca2-1a77-7481-9873-de72f3464372',
             cwd: '/tmp/project',
             mcpServers: { happy: { command: 'happy-mcp' } },
+            emitSnapshot: undefined,
         });
         expect(metadataHandlers).toHaveLength(1);
         expect(metadataHandlers[0]({ existing: true })).toEqual({

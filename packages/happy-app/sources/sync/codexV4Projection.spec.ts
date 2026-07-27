@@ -2,6 +2,7 @@ import type {
     CodexEntityV4,
     CodexItemEntityV4,
     CodexPartEntityV4,
+    CodexRelationEntityV4,
     CodexRuntimeEntityV4,
     CodexTurnEntityV4,
 } from '@slopus/happy-wire';
@@ -148,6 +149,43 @@ describe('Codex v4 projection', () => {
             tool: {
                 name: 'CodexReasoningSummary',
                 result: { content: 'Checked the transport.' },
+            },
+        });
+    });
+
+    it('links a delegation item to its isolated child Happy session', () => {
+        const relation: CodexRelationEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.relation',
+            providerId: 'relation-1',
+            createdAt: 12,
+            updatedAt: 12,
+            parentThreadId: 'thread-1',
+            childThreadId: 'thread-child',
+            parentTurnId: 'turn-1',
+            delegationItemId: 'item-1',
+            parentSessionId: 'happy-parent',
+            childSessionId: 'happy-child',
+            depth: 1,
+            status: 'active',
+        };
+        let projection = apply(createCodexV4Projection(), turn);
+        projection = apply(projection, {
+            ...item,
+            itemType: 'collabAgentToolCall',
+            tool: 'spawnAgent',
+        });
+        projection = apply(projection, part('Investigate transport'));
+        projection = apply(projection, relation);
+
+        expect(projection.messages[0]).toMatchObject({
+            kind: 'tool-call',
+            tool: {
+                name: 'Task',
+                input: {
+                    childSessionId: 'happy-child',
+                    childStatus: 'active',
+                },
             },
         });
     });

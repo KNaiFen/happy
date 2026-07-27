@@ -66,7 +66,12 @@ import { CodexSyncV4Mapper } from './codexSyncV4Mapper';
 import { CodexV4CommandProcessor } from './codexV4CommandProcessor';
 import { CodexV4CommandExecutor } from './codexV4CommandExecutor';
 import { CodexV4RequestBroker } from './codexV4RequestBroker';
-import type { SyncV4Client } from '@/api/syncV4Client';
+import { CodexV4Migrator } from './codexV4Migration';
+import {
+    CodexV4ThreadRouter,
+    type CodexV4SessionBinding,
+} from './codexV4ThreadRouter';
+import { deriveCodexV4ChildSessionIdentity } from './codexV4ChildIdentity';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -233,20 +238,28 @@ export async function runCodex(opts: {
     let reasoningProcessor!: ReasoningProcessor;
     let abortInProgress: Promise<void> | null = null;
     const codexV4Runtime = {
-        mapper: null as CodexSyncV4Mapper | null,
-        commandProcessor: null as CodexV4CommandProcessor | null,
-        syncClient: null as SyncV4Client | null,
+        rootBinding: null as CodexV4SessionBinding | null,
+        router: null as CodexV4ThreadRouter | null,
     };
+    let boundCodexV4SessionId: string | null = null;
     let bindCodexV4Session: ((target: ApiSessionClient) => Promise<void>) | null = null;
     let pendingCodexV4Session: ApiSessionClient | null = null;
-    const codexV4Migration = {
-        finalizer: null as (() => Promise<void>) | null,
-    };
-    const finalizeCodexV4Migration = async (): Promise<void> => {
-        const finalizer = codexV4Migration.finalizer;
-        if (finalizer) await finalizer();
-    };
     let codexV4CanonicalActive = false;
+    const closeCodexV4Runtime = async (): Promise<void> => {
+        client.setStableNotificationHandler(null);
+        client.setServerRequestHandler(null);
+        client.setConnectionHandler(null);
+        const router = codexV4Runtime.router;
+        const rootBinding = codexV4Runtime.rootBinding;
+        codexV4Runtime.router = null;
+        codexV4Runtime.rootBinding = null;
+        boundCodexV4SessionId = null;
+        try {
+            await router?.close();
+        } finally {
+            await rootBinding?.close();
+        }
+    };
     const { session: initialSession, reconnectionHandle } = setupOfflineReconnection({
         api,
         sessionTag,
@@ -612,6 +625,8 @@ export async function runCodex(opts: {
         logger.debug('[Codex] Abort completed, proceeding with termination');
 
         try {
+            await closeCodexV4Runtime();
+
             // Update lifecycle state to archived before closing
             if (session) {
                 session.updateMetadata((currentMetadata) => ({
@@ -1045,8 +1060,105 @@ export async function runCodex(opts: {
     } as const;
     let first = true;
     let appendSystemPromptInjected = false;
-    const requiresCodexV4Migration = Boolean(reconnectSessionId || opts.resumeThreadId);
-    let boundCodexV4SessionId: string | null = null;
+    const requiresCodexV4Migration = Boolean(opts.resumeThreadId);
+
+    const createCodexV4Binding = async (bindingOptions: {
+        target: ApiSessionClient;
+        initialSyncState: 'pending' | 'ready';
+        readOnly: boolean;
+        closeSession: boolean;
+        ownedThreadId?: string;
+    }): Promise<CodexV4SessionBinding> => {
+        let mapper: CodexSyncV4Mapper | null = null;
+        let commandProcessor: CodexV4CommandProcessor | null = null;
+        let requestBroker: CodexV4RequestBroker | null = null;
+        const syncClient = await bindingOptions.target.enableSyncV4((sync) => {
+            mapper = new CodexSyncV4Mapper(sync, {
+                codexCliVersion: formatCodexCliVersion(codexCliVersion),
+                initialSyncState: bindingOptions.initialSyncState,
+                onError: (error) => {
+                    logger.warn('[Codex v4] Entity projection failed', {
+                        errorName: error instanceof Error ? error.name : typeof error,
+                    });
+                },
+            });
+            requestBroker = new CodexV4RequestBroker({ mapper });
+            const commandExecutor = new CodexV4CommandExecutor({
+                client,
+                requestBroker,
+                defaultCwd: process.cwd(),
+                mcpServers,
+            });
+            const childAllowedCommands = new Set([
+                'thread.read',
+                'request.resolve',
+                'skills.list',
+                'mcp.status.list',
+                'model.list',
+            ]);
+            commandProcessor = new CodexV4CommandProcessor({
+                store: sync,
+                execute: async (command) => {
+                    if (bindingOptions.readOnly && !childAllowedCommands.has(command.command)) {
+                        throw new Error('Provider-created Codex child sessions are read-only');
+                    }
+                    if (
+                        bindingOptions.ownedThreadId
+                        && command.threadId
+                        && command.threadId !== bindingOptions.ownedThreadId
+                    ) {
+                        throw new Error('Codex command targets a thread owned by another Happy session');
+                    }
+                    const outcome = await commandExecutor.execute(command);
+                    if (outcome.threadId && (
+                        command.command === 'thread.start'
+                        || command.command === 'thread.resume'
+                        || command.command === 'turn.start'
+                    )) {
+                        bindingOptions.target.updateMetadata((currentMetadata) => ({
+                            ...currentMetadata,
+                            codexThreadId: outcome.threadId ?? undefined,
+                        }));
+                    }
+                    return outcome;
+                },
+                reconcile: (command) => commandExecutor.reconcile(command),
+                onError: (error) => {
+                    logger.warn('[Codex v4] Command reconciliation failed', {
+                        errorName: error instanceof Error ? error.name : typeof error,
+                    });
+                },
+            });
+            return (event) => commandProcessor!.handle(event);
+        });
+        if (!mapper || !commandProcessor || !requestBroker) {
+            throw new Error('Codex Sync v4 binding was not initialized');
+        }
+
+        let closed = false;
+        const binding: CodexV4SessionBinding = {
+            sessionId: bindingOptions.target.sessionId,
+            sessionKey: bindingOptions.target.syncV4SessionKey,
+            mapper,
+            syncClient,
+            commandProcessor,
+            requestBroker,
+            close: async () => {
+                if (closed) return;
+                closed = true;
+                commandProcessor!.close();
+                try {
+                    await mapper!.close();
+                    await syncClient.flushOutboundOnce();
+                } finally {
+                    syncClient.stop();
+                    if (bindingOptions.closeSession) await bindingOptions.target.close();
+                }
+            },
+        };
+        await binding.commandProcessor.recoverPending();
+        return binding;
+    };
 
     bindCodexV4Session = async (target) => {
         // The offline session stub intentionally has no encryption material or
@@ -1057,85 +1169,70 @@ export async function runCodex(opts: {
             return;
         }
         if (boundCodexV4SessionId === target.sessionId) return;
-        codexV4Runtime.commandProcessor?.close();
-        if (codexV4Runtime.mapper) await codexV4Runtime.mapper.close();
-        codexV4Runtime.syncClient?.stop();
+        await closeCodexV4Runtime();
 
-        const syncClient = await target.enableSyncV4((sync) => {
-            const mapper = new CodexSyncV4Mapper(sync, {
-                codexCliVersion: formatCodexCliVersion(codexCliVersion),
-                initialSyncState: requiresCodexV4Migration && !codexV4CanonicalActive ? 'importing' : 'ready',
-                onError: (error) => {
-                    logger.warn('[Codex v4] Entity projection failed', {
-                        errorName: error instanceof Error ? error.name : typeof error,
-                    });
-                },
-            });
-            const requestBroker = new CodexV4RequestBroker({ mapper });
-            const commandExecutor = new CodexV4CommandExecutor({
-                client,
-                requestBroker,
-                defaultCwd: process.cwd(),
-                mcpServers,
-            });
-            let migrationFinalized = codexV4CanonicalActive || !requiresCodexV4Migration;
-            const finalizeMigration = async () => {
-                if (migrationFinalized) return;
-                await mapper.flush();
-                await sync.flushOutboundOnce();
-                await mapper.setSyncState('ready');
-                await mapper.flush();
-                await sync.flushOutboundOnce();
-                migrationFinalized = true;
-                codexV4CanonicalActive = true;
-            };
-            const commandProcessor = new CodexV4CommandProcessor({
-                store: sync,
-                execute: async (command) => {
-                    const outcome = await commandExecutor.execute(command);
-                    if (outcome.threadId && (
-                        command.command === 'thread.start'
-                        || command.command === 'thread.resume'
-                        || command.command === 'turn.start'
-                    )) {
-                        target.updateMetadata((currentMetadata) => ({
-                            ...currentMetadata,
-                            codexThreadId: outcome.threadId ?? undefined,
-                        }));
-                    }
-                    if (outcome.threadId) await finalizeMigration();
-                    return outcome;
-                },
-                reconcile: (command) => commandExecutor.reconcile(command),
-                onError: (error) => {
-                    logger.warn('[Codex v4] Command reconciliation failed', {
-                        errorName: error instanceof Error ? error.name : typeof error,
-                    });
-                },
-            });
-
-            codexV4Runtime.mapper = mapper;
-            codexV4Runtime.commandProcessor = commandProcessor;
-            codexV4Migration.finalizer = finalizeMigration;
-            client.setStableNotificationHandler((notification) => mapper.handleNotification(notification));
-            client.setServerRequestHandler((request) => requestBroker.handle(request));
-            client.setConnectionHandler((event) => {
-                void mapper.setConnection(event.connection, {
-                    statusUnknown: event.statusUnknown,
-                    error: event.error,
-                }).catch((error) => {
-                    logger.warn('[Codex v4] Failed to publish connection state', {
-                        errorName: error instanceof Error ? error.name : typeof error,
-                    });
+        const rootBinding = await createCodexV4Binding({
+            target,
+            initialSyncState: requiresCodexV4Migration && !codexV4CanonicalActive ? 'pending' : 'ready',
+            readOnly: false,
+            closeSession: false,
+            ...(opts.resumeThreadId ? { ownedThreadId: opts.resumeThreadId } : {}),
+        });
+        const router = new CodexV4ThreadRouter({
+            rootBinding,
+            readThread: async (threadId) => (
+                await client.readThread({ threadId, includeTurns: true, emitSnapshot: false })
+            ).thread,
+            createChildBinding: async (route, parentBinding) => {
+                const identity = await deriveCodexV4ChildSessionIdentity({
+                    parentSessionId: parentBinding.sessionId,
+                    parentSessionKey: parentBinding.sessionKey,
+                    childThreadId: route.thread.id,
                 });
-            });
-            return (event) => commandProcessor.handle(event);
+                const child = createSessionMetadata({
+                    flavor: 'codex',
+                    machineId,
+                    startedBy: opts.startedBy,
+                    sandbox: sandboxConfig,
+                    dangerouslySkipPermissions: initialPermissionMode === 'yolo'
+                        || initialPermissionMode === 'bypassPermissions',
+                    parentSessionId: parentBinding.sessionId,
+                    isSideChat: true,
+                    codexReadOnly: true,
+                });
+                child.metadata.codexThreadId = route.thread.id;
+                child.metadata.codexCapabilities = { queueSteering: false };
+                const childResponse = await api.getOrCreateSession({
+                    tag: identity.tag,
+                    metadata: child.metadata,
+                    state: child.state,
+                    dataEncryptionKey: identity.sessionKey,
+                });
+                if (!childResponse) throw new Error('Happy Server is unavailable while creating a Codex child session');
+                const childTarget = api.sessionSyncClient(childResponse);
+                childTarget.skipExistingMessages();
+                return await createCodexV4Binding({
+                    target: childTarget,
+                    initialSyncState: 'pending',
+                    readOnly: true,
+                    closeSession: true,
+                    ownedThreadId: route.thread.id,
+                });
+            },
+            onError: (error) => {
+                logger.warn('[Codex v4] Thread routing failed', {
+                    errorName: error instanceof Error ? error.name : typeof error,
+                });
+            },
         });
 
-        codexV4Runtime.syncClient = syncClient;
+        codexV4Runtime.rootBinding = rootBinding;
+        codexV4Runtime.router = router;
+        client.setStableNotificationHandler((notification) => router.handleNotification(notification));
+        client.setServerRequestHandler((request) => router.handleRequest(request));
+        client.setConnectionHandler((event) => router.setConnection(event));
         boundCodexV4SessionId = target.sessionId;
         pendingCodexV4Session = null;
-        await codexV4Runtime.commandProcessor?.recoverPending();
         if (!requiresCodexV4Migration) codexV4CanonicalActive = true;
     };
 
@@ -1154,19 +1251,32 @@ export async function runCodex(opts: {
         }
 
         if (opts.resumeThreadId) {
-            await resumeExistingThread({
+            const router = codexV4Runtime.router;
+            if (!router) throw new Error('Codex Sync v4 router is unavailable during migration');
+            router.registerRootThread(opts.resumeThreadId);
+            const migrator = new CodexV4Migrator({
+                rootSink: router.migrationSinkForRoot(),
+                readThread: async (threadId) => (
+                    await client.readThread({ threadId, includeTurns: true, emitSnapshot: false })
+                ).thread,
+                resolveChildSink: (route) => router.migrationSinkForChild(route),
+            });
+            await migrator.prepareRoot(opts.resumeThreadId);
+            const resumed = await resumeExistingThread({
                 client,
                 session,
                 messageBuffer,
                 threadId: opts.resumeThreadId,
                 cwd: process.cwd(),
                 mcpServers,
+                emitSnapshot: false,
                 // Side chats start empty — keep the resume notice out of the UI.
                 announce: !isSideChat,
             });
             first = false;
             appendSystemPromptInjected = true;
-            await finalizeCodexV4Migration();
+            await migrator.migrate(resumed.thread);
+            codexV4CanonicalActive = true;
         }
 
         const forkCodexThreadId = process.env.HAPPY_FORK_CODEX_THREAD_ID;
@@ -1304,7 +1414,6 @@ export async function runCodex(opts: {
                         ...currentMetadata,
                         codexThreadId: startedThread.threadId,
                     }));
-                    await finalizeCodexV4Migration();
                 }
 
                 const goalCommand = parseCodexGoalCommand(message.message);
@@ -1409,19 +1518,12 @@ export async function runCodex(opts: {
             reconnectionHandle.cancel();
         }
 
-        codexV4Runtime.commandProcessor?.close();
-        client.setStableNotificationHandler(null);
-        client.setServerRequestHandler(null);
-        client.setConnectionHandler(null);
         try {
-            await codexV4Runtime.mapper?.close();
-            await codexV4Runtime.syncClient?.flushOutboundOnce();
+            await closeCodexV4Runtime();
         } catch (error) {
             logger.warn('[Codex v4] Failed to flush during shutdown', {
                 errorName: error instanceof Error ? error.name : typeof error,
             });
-        } finally {
-            codexV4Runtime.syncClient?.stop();
         }
 
         try {

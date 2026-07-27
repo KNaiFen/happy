@@ -398,11 +398,15 @@ export class CodexAppServerClient {
         return null;
     }
 
-    private registerThreadSnapshot(value: unknown, source: 'response' | 'snapshot' = 'response'): ProtocolThread | null {
+    private registerThreadSnapshot(
+        value: unknown,
+        source: 'response' | 'snapshot' = 'response',
+        emitNotification = true,
+    ): ProtocolThread | null {
         const thread = this.normalizeProtocolThread(value);
         if (thread) {
             this.threads.registerThread(thread, source);
-            this.emitStableNotification('thread/started', { thread });
+            if (emitNotification) this.emitStableNotification('thread/started', { thread });
         }
         return thread;
     }
@@ -1098,7 +1102,8 @@ export class CodexAppServerClient {
         approvalPolicy?: ApprovalPolicy;
         sandbox?: SandboxMode;
         mcpServers?: Record<string, unknown>;
-    }): Promise<{ threadId: string; model: string }> {
+        emitSnapshot?: boolean;
+    }): Promise<{ threadId: string; model: string; thread: ProtocolThread }> {
         const threadId = opts?.threadId ?? this.threadId;
         if (!threadId) {
             throw new Error('No thread available to resume.');
@@ -1125,14 +1130,21 @@ export class CodexAppServerClient {
             sandbox: opts?.sandbox ?? defaults.sandbox,
             mcpServers: opts?.mcpServers ?? defaults.mcpServers,
         };
+        let resumedSnapshot: ProtocolThread | null = null;
         const result = await this.request('thread/resume', params, undefined, (value) => {
             const response = value as ResumeConversationResponse;
-            this.registerThreadSnapshot(response.thread, 'snapshot');
+            resumedSnapshot = this.registerThreadSnapshot(
+                response.thread,
+                'snapshot',
+                opts?.emitSnapshot !== false,
+            );
             this.threads.selectThread(response.thread.id);
             this.rememberThreadDefaults(response.thread.id, nextDefaults);
         }) as ResumeConversationResponse;
+        const thread = resumedSnapshot ?? this.normalizeProtocolThread(result.thread);
+        if (!thread) throw new Error('thread/resume returned an invalid thread snapshot');
         logger.debug('[CodexAppServer] Thread resumed');
-        return { threadId: result.thread.id, model: result.model };
+        return { threadId: thread.id, model: result.model, thread };
     }
 
     async forkThread(opts: {
@@ -1178,14 +1190,16 @@ export class CodexAppServerClient {
     async readThread(opts: {
         threadId: string;
         includeTurns?: boolean;
-    }): Promise<ReadConversationResponse> {
+        emitSnapshot?: boolean;
+    }): Promise<{ thread: ProtocolThread }> {
         const params: ReadConversationParams = {
             threadId: opts.threadId,
             includeTurns: opts.includeTurns ?? true,
         };
         const result = await this.request('thread/read', params) as ReadConversationResponse;
-        this.registerThreadSnapshot(result.thread, 'snapshot');
-        return result;
+        const thread = this.registerThreadSnapshot(result.thread, 'snapshot', opts.emitSnapshot !== false);
+        if (!thread) throw new Error('thread/read returned an invalid thread snapshot');
+        return { thread };
     }
 
     async rollbackThread(opts: {

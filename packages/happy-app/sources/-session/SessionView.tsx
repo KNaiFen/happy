@@ -180,7 +180,9 @@ export const SessionView = React.memo((props: { id: string }) => {
     // is no separate per-tab add button. Which side chat is focused lives here
     // (not in the panel) so the picker can create-and-focus a new one in one go.
     const rawSideChats = useSideChatSessions(sessionId);
-    const sideChatForkSource = session ? getSessionForkSource(session) : null;
+    const sideChatForkSource = session && session.metadata?.codexReadOnly !== true
+        ? getSessionForkSource(session)
+        : null;
     const [activeSideChatId, setActiveSideChatId] = React.useState<string | null>(null);
     // Optimistically hide a side chat the instant it's closed. The server's
     // /archive only flips active=false (not lifecycleState), so if the CLI is
@@ -637,6 +639,7 @@ export function SessionViewLoaded({
     const deviceType = useDeviceType();
     const isTablet = useIsTablet();
     const realtimeStatus = useRealtimeStatus();
+    const isCodexReadOnly = session.metadata?.codexReadOnly === true;
     const { messages, isLoaded } = useSessionMessages(sessionId);
     const acknowledgedCliVersions = useLocalSetting('acknowledgedCliVersions');
     const zenMode = useLocalSetting('zenMode');
@@ -962,7 +965,7 @@ export function SessionViewLoaded({
         </>
     ) : null;
 
-    const composer = (
+    const composer = isCodexReadOnly ? null : (
         <ChatComposer
             composerHandleRef={composerHandleRef}
             placeholder={t('session.inputPlaceholder')}
@@ -1046,7 +1049,7 @@ export function SessionViewLoaded({
     const input = (
         <>
             {inactiveHint}
-            {visibleAgentGoal && (
+            {!isCodexReadOnly && visibleAgentGoal && (
                 <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
                     <AgentGoalBar
                         goal={visibleAgentGoal}
@@ -1057,7 +1060,7 @@ export function SessionViewLoaded({
             )}
             {sessionStatusBarPosition === 'above' ? sessionStatusBar : null}
             <RigActivityBar metadata={session.metadata} />
-            {codexQueuedMessages.length > 0 && (
+            {!isCodexReadOnly && codexQueuedMessages.length > 0 && (
                 <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
                     <CodexQueuedMessages
                         sessionId={sessionId}
