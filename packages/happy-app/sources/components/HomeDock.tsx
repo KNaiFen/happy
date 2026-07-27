@@ -40,6 +40,7 @@ import {
 import type { NewSessionAgentType } from '@/sync/persistence';
 import { useImagePicker } from '@/hooks/useImagePicker';
 import { Modal } from '@/modal';
+import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
 
 export const MOBILE_HOME_DOCK_CONTENT_INSET = 108;
 
@@ -233,15 +234,12 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 20,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: theme.colors.button.subtle.background,
+        backgroundColor: 'transparent',
         borderWidth: 1,
-        borderColor: theme.colors.button.subtle.border,
+        borderColor: 'transparent',
     },
     focusedSendButton: {
         marginLeft: 8,
-    },
-    sendButtonActive: {
-        backgroundColor: theme.colors.button.subtle.background,
     },
     modalRoot: {
         flex: 1,
@@ -629,6 +627,7 @@ export const HomeDock = React.memo(({
     const canSubmit = !isSubmitting && (
         prompt.trim().length > 0 || (expImageUpload && selectedImages.length > 0)
     );
+    const sendButtonVisuals = resolveMobileSendButtonVisuals(canSubmit);
     const focusedComposerHeight = selectedImages.length > 0 ? 206 : 126;
     const keyboardStyle = useAnimatedStyle(() => ({
         // Keyboard height includes the bottom safe area on iOS. The resting
@@ -998,20 +997,20 @@ export const HomeDock = React.memo(({
                 <BubblePressable
                     onPress={onSend}
                     disabled={!canSubmit}
-                    style={[styles.sendButton, canSubmit && styles.sendButtonActive]}
+                    style={[styles.sendButton, sendButtonVisuals.buttonStyle]}
                     accessibilityRole="button"
                     accessibilityLabel="Send"
                 >
                     {isSubmitting ? (
                         <ActivityIndicator
                             size="small"
-                            color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
+                            color={sendButtonVisuals.iconColor}
                         />
                     ) : (
                         <Ionicons
                             name="arrow-up"
                             size={19}
-                            color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
+                            color={sendButtonVisuals.iconColor}
                         />
                     )}
                 </BubblePressable>
@@ -1112,20 +1111,20 @@ export const HomeDock = React.memo(({
                         <BubblePressable
                             onPress={submitFromFocusMode}
                             disabled={!canSubmit}
-                            style={[styles.sendButton, styles.focusedSendButton, canSubmit && styles.sendButtonActive]}
+                            style={[styles.sendButton, styles.focusedSendButton, sendButtonVisuals.buttonStyle]}
                             accessibilityRole="button"
                             accessibilityLabel="Send"
                         >
                         {isSubmitting ? (
                             <ActivityIndicator
                                 size="small"
-                                color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
+                                color={sendButtonVisuals.iconColor}
                             />
                         ) : (
                             <Ionicons
                                 name="arrow-up"
                                 size={19}
-                                color={canSubmit ? theme.colors.button.subtle.tint : theme.colors.textSecondary}
+                                color={sendButtonVisuals.iconColor}
                             />
                         )}
                         </BubblePressable>

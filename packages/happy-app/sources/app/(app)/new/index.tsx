@@ -64,6 +64,7 @@ import { MobileGlassSurface } from '@/components/MobileGlass';
 import { BubblePressable } from '@/components/BubblePressable';
 import { Header } from '@/components/navigation/Header';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
+import { resolveMobileSendButtonVisuals } from '@/components/mobileSendButtonVisuals';
 import {
     AnimatedClickAwayBackdrop,
     AnimatedPopup,
@@ -1789,22 +1790,22 @@ function NewSessionScreen() {
 
     const composerPlaceholder = selectedAgent === 'codex' ? 'Ask Codex' : `Ask ${agent.label}`;
     const mobilePrimaryActionActive = isNativeMobile && (canSend || isSpawning);
-    const sendButtonIconColor = mobilePrimaryActionActive
-        ? theme.colors.button.subtle.tint
-        : isNativeMobile
-            ? theme.colors.text
-            : theme.colors.button.primary.tint;
+    const mobileSendButtonVisuals = resolveMobileSendButtonVisuals(mobilePrimaryActionActive);
+    const sendButtonIconColor = isNativeMobile
+        ? mobileSendButtonVisuals.iconColor
+        : theme.colors.button.primary.tint;
     const sendButtonNode = (
         <MobileGlassSurface
-            enabled={isNativeMobile && !mobilePrimaryActionActive}
+            enabled={false}
             interactive={!!canSend}
             style={[
                 styles.sendButton,
                 isNativeMobile && styles.mobileSendButton,
-                isSpawning || canSend
-                    ? (isNativeMobile ? styles.mobileSendButtonActive : styles.sendButtonActive)
-                    : styles.sendButtonInactive,
-                isNativeMobile && !mobilePrimaryActionActive && styles.mobileSendButtonInactive,
+                isNativeMobile
+                    ? mobileSendButtonVisuals.buttonStyle
+                    : isSpawning || canSend
+                        ? styles.sendButtonActive
+                        : styles.sendButtonInactive,
             ]}
         >
             <Pressable
@@ -2529,21 +2530,10 @@ const styles = StyleSheet.create((theme) => ({
         height: 38,
         borderRadius: 19,
         marginLeft: 0,
-        backgroundColor: Platform.select({
-            ios: 'transparent',
-            android: theme.colors.button.subtle.background,
-            default: 'transparent',
-        }),
+        backgroundColor: 'transparent',
         borderWidth: 1,
-        borderColor: theme.colors.button.subtle.border,
+        borderColor: 'transparent',
         overflow: 'hidden',
-    },
-    mobileSendButtonActive: {
-        backgroundColor: theme.colors.button.subtle.background,
-        borderColor: theme.colors.button.subtle.border,
-    },
-    mobileSendButtonInactive: {
-        opacity: 0.56,
     },
     sendButtonInner: {
         width: '100%',
