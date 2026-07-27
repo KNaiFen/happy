@@ -428,9 +428,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     sendButtonInnerPressed: {
         opacity: 0.7,
     },
-    sendButtonIcon: {
-        color: theme.colors.button.primary.tint,
-    },
 }));
 
 const getContextWarning = (contextSize: number, alwaysShow: boolean = false, theme: Theme, contextWindow?: number) => {
@@ -1360,7 +1357,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     name="arrow-up"
                                     size={16}
                                     color={theme.colors.button.primary.tint}
-                                    style={[styles.sendButtonIcon, { marginTop: Platform.OS === 'web' ? 2 : 0 }]}
+                                    style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
                                 />
                             ) : props.onMicPress && !props.isMicActive ? (
                                 <Image
@@ -1373,7 +1370,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     name="arrow-up"
                                     size={16}
                                     color={theme.colors.button.primary.tint}
-                                    style={[styles.sendButtonIcon, { marginTop: Platform.OS === 'web' ? 2 : 0 }]}
+                                    style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
                                 />
                             )}
                         </Pressable>
@@ -2110,10 +2107,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             name="arrow-up"
                                             size={16}
                                             color={activeSendIconColor}
-                                            style={[
-                                                styles.sendButtonIcon,
-                                                { marginTop: Platform.OS === 'web' ? 2 : 0 },
-                                            ]}
+                                            style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
                                         />
                                     )}
                                 </BubblePressable>

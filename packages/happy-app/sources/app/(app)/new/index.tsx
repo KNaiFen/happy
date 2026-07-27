@@ -1822,10 +1822,7 @@ function NewSessionScreen() {
                         name="arrow-up"
                         size={isNativeMobile ? 18 : 16}
                         color={sendButtonIconColor}
-                        style={[
-                            styles.sendButtonIcon,
-                            { marginTop: Platform.OS === 'web' ? 2 : 0 },
-                        ]}
+                        style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
                     />
                 )}
             </Pressable>
@@ -2552,9 +2549,6 @@ const styles = StyleSheet.create((theme) => ({
     },
     sendButtonInnerPressed: {
         opacity: 0.7,
-    },
-    sendButtonIcon: {
-        color: theme.colors.button.primary.tint,
     },
     offlineHelp: {
         flexDirection: 'row',
