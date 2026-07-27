@@ -394,14 +394,21 @@ export class ApiSessionClient extends EventEmitter {
         }
     }
 
-    async enableSyncV4(onEntity: (event: SyncV4AppliedEntity) => Promise<void>): Promise<SyncV4Client> {
+    async enableSyncV4(
+        createEntityHandler: (client: SyncV4Client) => (event: SyncV4AppliedEntity) => Promise<void>,
+    ): Promise<SyncV4Client> {
         if (this.syncV4Client) return this.syncV4Client;
+        let onEntity: ((event: SyncV4AppliedEntity) => Promise<void>) | null = null;
         const client = await SyncV4Client.create({
             sessionId: this.sessionId,
             sessionKey: this.encryptionKey,
             token: this.token,
-            onEntity,
+            onEntity: async (event) => {
+                if (!onEntity) throw new Error('Sync v4 entity handler was not initialized');
+                await onEntity(event);
+            },
         });
+        onEntity = createEntityHandler(client);
         this.syncV4Client = client;
         try {
             await client.start();

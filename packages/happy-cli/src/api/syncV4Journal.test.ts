@@ -22,6 +22,21 @@ const mutation = {
     ciphertext: "ciphertext-1",
 };
 
+const command = {
+    schemaVersion: 1 as const,
+    entityType: "codex.command" as const,
+    providerId: "command-1",
+    createdAt: 100,
+    updatedAt: 100,
+    commandId: "command-1",
+    threadId: "thread-1",
+    expectedTurnId: null,
+    command: "turn.start",
+    payload: { text: "hello" },
+    clientUserMessageId: "command-1",
+    replacesCommandId: null,
+};
+
 afterEach(async () => {
     await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -102,7 +117,7 @@ describe("SyncV4Journal", () => {
             createdAt: 102,
         }]);
         await journal.advanceReceiveCursor(1);
-        await journal.setCommandStatus("command-1", "resultUnknown");
+        await journal.setCommandStatus("command-1", "resultUnknown", command);
         await journal.compactIfNeeded();
 
         const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
@@ -112,6 +127,25 @@ describe("SyncV4Journal", () => {
         expect(snapshot.receiveCursor).toBe(1);
         expect(snapshot.entityRevisions.get("entity-1")).toBe(1);
         expect(snapshot.commandStatuses.get("command-1")).toBe("resultUnknown");
+        expect(snapshot.commands.get("command-1")).toEqual(command);
+    });
+
+    it("persists a command transition and its result mutation in one journal append", async () => {
+        const rootDir = await createRoot();
+        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const resultMutation = {
+            ...mutation,
+            entityType: "codex.commandResult" as const,
+            entityId: "command-result-1",
+        };
+        await journal.appendCommandTransition("command-1", "executing", resultMutation, command);
+
+        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const snapshot = reopened.snapshot();
+        expect(snapshot.commandStatuses.get("command-1")).toBe("executing");
+        expect(snapshot.commands.get("command-1")).toEqual(command);
+        expect(snapshot.pendingOutbound).toEqual([resultMutation]);
+        expect(snapshot.entityRevisions.get("command-result-1")).toBe(1);
     });
 
     it("uses one stable producer ID across session journals", async () => {

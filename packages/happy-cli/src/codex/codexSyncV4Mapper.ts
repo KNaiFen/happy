@@ -11,6 +11,7 @@ import {
     type CodexItemEntityV4,
     type CodexPartEntityV4,
     type CodexPartKindV4,
+    type CodexRequestEntityV4,
     type CodexRuntimeEntityV4,
     type CodexThreadEntityV4,
     type CodexThreadStatusV4,
@@ -75,6 +76,7 @@ export class CodexSyncV4Mapper {
     private readonly runtimes = new Map<string, CodexRuntimeEntityV4>();
     private readonly turns = new Map<string, CodexTurnEntityV4>();
     private readonly items = new Map<string, CodexItemEntityV4>();
+    private readonly requests = new Map<string, CodexRequestEntityV4>();
     private readonly streams = new Map<string, PartStream>();
     private readonly activeTurnByThread = new Map<string, string>();
     private readonly diagnosticSequenceByTurn = new Map<string, number>();
@@ -101,12 +103,12 @@ export class CodexSyncV4Mapper {
         void this.enqueue(() => this.applyThreadSnapshot(thread)).catch(() => undefined);
     }
 
-    setConnection(
+    async setConnection(
         connection: CodexRuntimeEntityV4['connection'],
         opts?: { statusUnknown?: boolean; error?: string | null },
-    ): void {
+    ): Promise<void> {
         if (this.closed) return;
-        void this.enqueue(async () => {
+        await this.enqueue(async () => {
             const now = this.now();
             for (const [threadId, current] of this.runtimes) {
                 const runtime: CodexRuntimeEntityV4 = {
@@ -120,19 +122,27 @@ export class CodexSyncV4Mapper {
                 this.runtimes.set(threadId, runtime);
                 await this.publisher.publishEntity(runtime);
             }
-        }).catch(() => undefined);
+        });
     }
 
-    setSyncState(syncState: CodexRuntimeEntityV4['syncState']): void {
+    async setSyncState(syncState: CodexRuntimeEntityV4['syncState']): Promise<void> {
         if (this.closed) return;
-        void this.enqueue(async () => {
+        await this.enqueue(async () => {
             const now = this.now();
             for (const [threadId, current] of this.runtimes) {
                 const runtime = { ...current, syncState, updatedAt: now };
                 this.runtimes.set(threadId, runtime);
                 await this.publisher.publishEntity(runtime);
             }
-        }).catch(() => undefined);
+        });
+    }
+
+    async upsertRequest(request: CodexRequestEntityV4): Promise<void> {
+        await this.enqueue(async () => {
+            this.requests.set(request.providerId, request);
+            await this.publisher.publishEntity(request);
+            await this.publishRuntimeRequestCounts(request.threadId);
+        });
     }
 
     async flush(): Promise<void> {
@@ -780,6 +790,28 @@ export class CodexSyncV4Mapper {
             lastError: execution.type === 'systemError' ? previous?.lastError ?? 'systemError' : null,
             lastKnownAt: now,
         };
+    }
+
+    private async publishRuntimeRequestCounts(threadId: string): Promise<void> {
+        const now = this.now();
+        const thread = await this.ensureThread(threadId, now);
+        const current = this.runtimes.get(threadId) ?? this.runtimeFor(threadId, thread.status, now);
+        let pendingApprovalCount = 0;
+        let pendingUserInputCount = 0;
+        for (const request of this.requests.values()) {
+            if (request.threadId !== threadId || request.status !== 'pending') continue;
+            if (request.requestType === 'toolUserInput') pendingUserInputCount += 1;
+            else pendingApprovalCount += 1;
+        }
+        const runtime: CodexRuntimeEntityV4 = {
+            ...current,
+            pendingApprovalCount,
+            pendingUserInputCount,
+            updatedAt: now,
+            lastKnownAt: now,
+        };
+        this.runtimes.set(threadId, runtime);
+        await this.publisher.publishEntity(runtime);
     }
 
     private ensureStream(input: {

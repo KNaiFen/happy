@@ -2253,4 +2253,108 @@ describe('CodexAppServerClient sandbox integration', () => {
 
         await client.disconnect();
     });
+
+    it('routes stable server requests through the v4 request handler by JSON-RPC id', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg) => { requests.push(msg); },
+        });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const handled: Array<Record<string, unknown>> = [];
+        client.setServerRequestHandler(async (request) => {
+            handled.push(request as unknown as Record<string, unknown>);
+            return { answers: { mode: { answers: ['safe'] } } };
+        });
+
+        await client.connect();
+        pushJsonLine(proc.stdout, {
+            id: 88,
+            method: 'item/tool/requestUserInput',
+            params: {
+                threadId: 'thread-1',
+                turnId: 'turn-1',
+                itemId: 'item-1',
+                questions: [{ id: 'mode', header: 'Mode', question: 'Choose', options: null }],
+                autoResolutionMs: null,
+            },
+        });
+
+        await waitFor(() => handled.length === 1);
+        await waitFor(() => requests.some((message) => message.id === 88 && message.result));
+        expect(handled[0]).toMatchObject({
+            requestId: '88',
+            method: 'item/tool/requestUserInput',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+        });
+        expect(requests.find((message) => message.id === 88)?.result).toEqual({
+            answers: { mode: { answers: ['safe'] } },
+        });
+        await client.disconnect();
+    });
+
+    it('uses stable-v2 RPCs for compact, review, skills, and paginated MCP status', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.id == null) return;
+                if (msg.method === 'thread/compact/start') {
+                    setTimeout(() => pushJsonLine(stdout, { id: msg.id, result: {} }), 0);
+                } else if (msg.method === 'review/start') {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            reviewThreadId: 'thread-1',
+                            turn: {
+                                id: 'review-turn-1',
+                                items: [],
+                                itemsView: 'full',
+                                status: 'inProgress',
+                                error: null,
+                                startedAt: 100,
+                                completedAt: null,
+                                durationMs: null,
+                            },
+                        },
+                    }), 0);
+                } else if (msg.method === 'skills/list') {
+                    setTimeout(() => pushJsonLine(stdout, { id: msg.id, result: { data: [{ name: 'test-skill' }] } }), 0);
+                } else if (msg.method === 'mcpServerStatus/list') {
+                    const cursor = msg.params?.cursor ?? null;
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            data: [{ name: cursor ? 'second' : 'first' }],
+                            nextCursor: cursor ? null : 'page-2',
+                        },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+
+        await client.compactThread('thread-1');
+        const review = await client.startReview({
+            threadId: 'thread-1',
+            target: { type: 'uncommittedChanges' },
+            delivery: 'inline',
+        });
+        const skills = await client.listSkills({ cwds: ['/workspace'], forceReload: true });
+        const mcp = await client.listMcpServerStatus({ threadId: 'thread-1', pageSize: 1 });
+
+        expect(review).toMatchObject({ reviewThreadId: 'thread-1', turn: { id: 'review-turn-1' } });
+        expect(skills.data).toEqual([{ name: 'test-skill' }]);
+        expect(mcp).toEqual([{ name: 'first' }, { name: 'second' }]);
+        expect(requests.filter((message) => message.method === 'thread/compact/start')).toMatchObject([
+            { params: { threadId: 'thread-1' } },
+        ]);
+        expect(requests.filter((message) => message.method === 'mcpServerStatus/list').map((message) => message.params.cursor))
+            .toEqual([null, 'page-2']);
+        await client.disconnect();
+    });
 });

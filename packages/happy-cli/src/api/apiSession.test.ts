@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiSessionClient } from './apiSession';
 import { decodeBase64, decrypt, decryptBlob, encodeBase64, encrypt } from './encryption';
+import { SyncV4Client } from './syncV4Client';
 import type { Update } from './types';
 import { logger } from '@/ui/logger';
 
@@ -191,6 +192,26 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(mockSocket.on).toHaveBeenCalledWith('disconnect', expect.any(Function));
         expect(mockSocket.on).toHaveBeenCalledWith('update', expect.any(Function));
         expect(mockSocket.connect).toHaveBeenCalledTimes(1);
+    });
+
+    it('installs the Sync v4 entity handler before the client starts', async () => {
+        const order: string[] = [];
+        const syncV4 = {
+            start: vi.fn(async () => { order.push('start'); }),
+            stop: vi.fn(),
+        } as unknown as SyncV4Client;
+        vi.spyOn(SyncV4Client, 'create').mockResolvedValue(syncV4);
+        const client = new ApiSessionClient('fake-token', session);
+
+        const result = await client.enableSyncV4(() => {
+            order.push('handler');
+            return async () => undefined;
+        });
+
+        expect(result).toBe(syncV4);
+        expect(order).toEqual(['handler', 'start']);
+        await client.close();
+        expect(syncV4.stop).toHaveBeenCalledTimes(1);
     });
 
     it('retries after initial socket connection error', async () => {

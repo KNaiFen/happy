@@ -6,9 +6,11 @@
  */
 
 import {
+    CodexCommandEntityV4Schema,
     SyncAckV4Schema,
     SyncChangeV4Schema,
     SyncMutationV4Schema,
+    type CodexCommandEntityV4,
     type SyncAckV4,
     type SyncChangeV4,
     type SyncMutationV4,
@@ -61,6 +63,7 @@ const journalRecordSchema = z.discriminatedUnion("kind", [
         commandId: z.string().min(1).max(512),
         status: SyncV4CommandJournalStatusSchema,
         updatedAt: z.number().int().nonnegative(),
+        command: CodexCommandEntityV4Schema.optional(),
     }).strict(),
 ]);
 type JournalRecord = z.infer<typeof journalRecordSchema>;
@@ -78,6 +81,7 @@ export interface SyncV4JournalSnapshot {
     pendingInbound: SyncChangeV4[];
     entityRevisions: ReadonlyMap<string, number>;
     commandStatuses: ReadonlyMap<string, SyncV4CommandJournalStatus>;
+    commands: ReadonlyMap<string, CodexCommandEntityV4>;
 }
 
 export class SyncV4JournalCorruptionError extends Error {
@@ -112,6 +116,7 @@ export class SyncV4Journal {
     private readonly pendingInbound = new Map<number, SyncChangeV4>();
     private readonly entityRevisions = new Map<string, number>();
     private readonly commandStatuses = new Map<string, SyncV4CommandJournalStatus>();
+    private readonly commands = new Map<string, CodexCommandEntityV4>();
 
     private constructor(
         private readonly journalPath: string,
@@ -131,6 +136,7 @@ export class SyncV4Journal {
             pendingInbound: [...this.pendingInbound.values()].sort((left, right) => left.seq - right.seq),
             entityRevisions: new Map(this.entityRevisions),
             commandStatuses: new Map(this.commandStatuses),
+            commands: new Map(this.commands),
         };
     }
 
@@ -196,14 +202,44 @@ export class SyncV4Journal {
         ]);
     }
 
-    async setCommandStatus(commandId: string, status: SyncV4CommandJournalStatus): Promise<void> {
+    async setCommandStatus(
+        commandId: string,
+        status: SyncV4CommandJournalStatus,
+        command?: CodexCommandEntityV4,
+    ): Promise<void> {
         await this.appendRecords([{
             version: JOURNAL_VERSION,
             kind: "command",
             commandId,
             status,
             updatedAt: Date.now(),
+            ...(command ? { command } : {}),
         }]);
+    }
+
+    async appendCommandTransition(
+        commandId: string,
+        status: SyncV4CommandJournalStatus,
+        mutation: SyncMutationV4,
+        command?: CodexCommandEntityV4,
+    ): Promise<void> {
+        await this.appendRecords([
+            { version: JOURNAL_VERSION, kind: "outbound", mutation },
+            {
+                version: JOURNAL_VERSION,
+                kind: "revision",
+                entityId: mutation.entityId,
+                revision: mutation.revision,
+            },
+            {
+                version: JOURNAL_VERSION,
+                kind: "command",
+                commandId,
+                status,
+                updatedAt: Date.now(),
+                ...(command ? { command } : {}),
+            },
+        ]);
     }
 
     async compactIfNeeded(): Promise<void> {
@@ -229,7 +265,14 @@ export class SyncV4Journal {
                 records.push({ version: JOURNAL_VERSION, kind: "revision", entityId, revision });
             }
             for (const [commandId, status] of this.commandStatuses) {
-                records.push({ version: JOURNAL_VERSION, kind: "command", commandId, status, updatedAt: Date.now() });
+                records.push({
+                    version: JOURNAL_VERSION,
+                    kind: "command",
+                    commandId,
+                    status,
+                    updatedAt: Date.now(),
+                    ...(this.commands.get(commandId) ? { command: this.commands.get(commandId) } : {}),
+                });
             }
             if (this.receiveCursor > 0) {
                 records.push({ version: JOURNAL_VERSION, kind: "cursor", seq: this.receiveCursor });
@@ -286,6 +329,7 @@ export class SyncV4Journal {
                 return;
             case "command":
                 this.commandStatuses.set(record.commandId, record.status);
+                if (record.command) this.commands.set(record.commandId, record.command);
         }
     }
 }

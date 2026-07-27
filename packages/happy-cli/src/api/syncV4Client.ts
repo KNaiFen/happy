@@ -16,6 +16,8 @@ import {
     SyncSnapshotResponseV4Schema,
     syncV4Utf8ByteLength,
     type CodexEntityV4,
+    type CodexCommandEntityV4,
+    type CodexCommandResultEntityV4,
     type SyncAckV4,
     type SyncChangeV4,
     type SyncEntitySnapshotV4,
@@ -259,6 +261,37 @@ export class SyncV4Client {
         return mutations;
     }
 
+    async publishCommandTransition(
+        command: CodexCommandEntityV4,
+        result: CodexCommandResultEntityV4,
+        status: SyncV4CommandJournalStatus,
+    ): Promise<SyncMutationV4> {
+        const mutation = await this.publishLock.inLock(async () => {
+            const entityId = await this.crypto.opaqueEntityId(result.entityType, result.providerId);
+            const revision = this.journal.nextRevision(entityId);
+            const aad = {
+                sessionId: this.sessionId,
+                entityId,
+                entityType: result.entityType,
+                revision,
+                op: "upsert" as const,
+            };
+            const next = SyncMutationV4Schema.parse({
+                mutationId: randomUUID(),
+                producerId: this.producerId,
+                entityId,
+                entityType: result.entityType,
+                revision,
+                op: aad.op,
+                ciphertext: await this.crypto.encryptEntity(aad, result),
+            });
+            await this.journal.appendCommandTransition(command.commandId, status, next, command);
+            return next;
+        });
+        if (this.started) this.sendSync.invalidate();
+        return mutation;
+    }
+
     async flushOutboundOnce(): Promise<void> {
         await this.sendLock.inLock(async () => {
             while (true) {
@@ -310,8 +343,30 @@ export class SyncV4Client {
         return this.journal.snapshot().commandStatuses.get(commandId);
     }
 
-    async setCommandStatus(commandId: string, status: SyncV4CommandJournalStatus): Promise<void> {
-        await this.journal.setCommandStatus(commandId, status);
+    getPendingCommands(): Array<{
+        command: CodexCommandEntityV4;
+        status: SyncV4CommandJournalStatus;
+    }> {
+        const snapshot = this.journal.snapshot();
+        const pending: Array<{ command: CodexCommandEntityV4; status: SyncV4CommandJournalStatus }> = [];
+        for (const [commandId, command] of snapshot.commands) {
+            const status = snapshot.commandStatuses.get(commandId);
+            if (status === "received" || status === "executing" || status === "resultUnknown") {
+                pending.push({ command, status });
+            }
+        }
+        return pending.sort((left, right) => (
+            left.command.createdAt - right.command.createdAt
+            || left.command.commandId.localeCompare(right.command.commandId)
+        ));
+    }
+
+    async setCommandStatus(
+        commandId: string,
+        status: SyncV4CommandJournalStatus,
+        command?: CodexCommandEntityV4,
+    ): Promise<void> {
+        await this.journal.setCommandStatus(commandId, status, command);
     }
 
     private async processPendingInbound(): Promise<void> {

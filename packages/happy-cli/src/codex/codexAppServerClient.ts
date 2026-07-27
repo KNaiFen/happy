@@ -61,6 +61,13 @@ import {
 import { CodexThreadRegistry } from './codexThreadRegistry';
 import type {
     ServerNotification,
+    ListMcpServerStatusParams,
+    ListMcpServerStatusResponse,
+    ReviewStartParams,
+    ReviewStartResponse,
+    SkillsListParams,
+    SkillsListResponse,
+    ThreadCompactStartResponse,
     Thread as ProtocolThread,
     ThreadStatus as ProtocolThreadStatus,
     Turn as ProtocolTurn,
@@ -112,12 +119,33 @@ export type ApprovalHandler = (params: {
     message?: string;
 }) => Promise<ReviewDecision>;
 
+export interface CodexServerRequest {
+    requestId: string;
+    method:
+        | 'item/commandExecution/requestApproval'
+        | 'item/fileChange/requestApproval'
+        | 'item/permissions/requestApproval'
+        | 'item/tool/requestUserInput'
+        | 'mcpServer/elicitation/request';
+    params: unknown;
+}
+
+export type CodexServerRequestHandler = (request: CodexServerRequest) => Promise<unknown>;
+
 function stringOrNull(value: unknown): string | null {
     return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function errorKind(error: unknown): string {
     return error instanceof Error ? error.name : typeof error;
+}
+
+function isStableServerRequestMethod(method: string): method is CodexServerRequest['method'] {
+    return method === 'item/commandExecution/requestApproval'
+        || method === 'item/fileChange/requestApproval'
+        || method === 'item/permissions/requestApproval'
+        || method === 'item/tool/requestUserInput'
+        || method === 'mcpServer/elicitation/request';
 }
 
 // Codex item ids are per-thread counters, so items from collab subagent
@@ -245,6 +273,7 @@ export class CodexAppServerClient {
     private eventHandler: ((msg: EventMsg) => void) | null = null;
     private approvalHandler: ApprovalHandler | null = null;
     private stableNotificationHandler: ((notification: ServerNotification) => void) | null = null;
+    private serverRequestHandler: CodexServerRequestHandler | null = null;
 
     constructor(sandboxConfig?: SandboxConfig) {
         this.sandboxConfig = sandboxConfig;
@@ -276,6 +305,10 @@ export class CodexAppServerClient {
 
     setStableNotificationHandler(handler: ((notification: ServerNotification) => void) | null): void {
         this.stableNotificationHandler = handler;
+    }
+
+    setServerRequestHandler(handler: CodexServerRequestHandler | null): void {
+        this.serverRequestHandler = handler;
     }
 
     private emitStableNotification(method: string, params: unknown): void {
@@ -943,6 +976,46 @@ export class CodexAppServerClient {
         return models;
     }
 
+    async listSkills(opts?: SkillsListParams): Promise<SkillsListResponse> {
+        return await this.request('skills/list', {
+            cwds: opts?.cwds ?? [process.cwd()],
+            forceReload: opts?.forceReload ?? false,
+        }) as SkillsListResponse;
+    }
+
+    async listMcpServerStatus(opts?: {
+        threadId?: string | null;
+        detail?: ListMcpServerStatusParams['detail'];
+        timeoutMs?: number;
+        pageSize?: number;
+    }): Promise<ListMcpServerStatusResponse['data']> {
+        const data: ListMcpServerStatusResponse['data'] = [];
+        const seenCursors = new Set<string>();
+        const timeoutMs = opts?.timeoutMs ?? CodexAppServerClient.REQUEST_TIMEOUT_MS;
+        const deadline = Date.now() + timeoutMs;
+        let cursor: string | null = null;
+        let pageCount = 0;
+        do {
+            pageCount += 1;
+            if (pageCount > 100) throw new Error('mcpServerStatus/list exceeded 100 pages');
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) throw new Error(`mcpServerStatus/list timed out after ${timeoutMs}ms`);
+            const response = await this.request('mcpServerStatus/list', {
+                cursor,
+                limit: opts?.pageSize ?? 100,
+                detail: opts?.detail ?? 'toolsAndAuthOnly',
+                threadId: opts?.threadId ?? this.threadId,
+            } satisfies ListMcpServerStatusParams, remainingMs) as ListMcpServerStatusResponse;
+            data.push(...response.data);
+            cursor = response.nextCursor;
+            if (cursor && seenCursors.has(cursor)) {
+                throw new Error('mcpServerStatus/list returned a repeated cursor');
+            }
+            if (cursor) seenCursors.add(cursor);
+        } while (cursor);
+        return data;
+    }
+
     // ─── Thread management ──────────────────────────────────────
 
     async startThread(opts: {
@@ -1123,6 +1196,25 @@ export class CodexAppServerClient {
         return await this.request('thread/goal/clear', params) as ThreadGoalClearResponse;
     }
 
+    async compactThread(threadId: string): Promise<ThreadCompactStartResponse> {
+        return await this.request('thread/compact/start', { threadId }) as ThreadCompactStartResponse;
+    }
+
+    async startReview(params: ReviewStartParams): Promise<ReviewStartResponse> {
+        const result = await this.request('review/start', params) as ReviewStartResponse;
+        const turn = this.normalizeProtocolTurn(result.turn);
+        if (turn) {
+            this.threads.registerTurn(result.reviewThreadId, turn);
+            this.emitStableNotification('turn/started', {
+                threadId: result.reviewThreadId,
+                turn,
+            });
+        }
+        const reviewRuntime = this.threads.ensureThread(result.reviewThreadId).runtime;
+        if (reviewRuntime.placeholder) this.scheduleThreadHydration(result.reviewThreadId);
+        return result;
+    }
+
     async reconnectAndResumeThread(): Promise<boolean> {
         const threadId = this.threadId;
         if (!threadId) return false;
@@ -1273,10 +1365,10 @@ export class CodexAppServerClient {
         if (!threadId) {
             throw new Error('No active thread. Call startThread first.');
         }
-        await this.sendTurnToThread(threadId, prompt, opts);
+        await this.startTurnOnThread(threadId, prompt, opts);
     }
 
-    private async sendTurnToThread(threadId: string, prompt: string, opts?: {
+    async startTurnOnThread(threadId: string, prompt: string, opts?: {
         model?: string;
         cwd?: string;
         approvalPolicy?: ApprovalPolicy;
@@ -1284,7 +1376,7 @@ export class CodexAppServerClient {
         effort?: ReasoningEffort;
         extraInputItems?: InputItem[];
         clientUserMessageId?: string;
-    }): Promise<void> {
+    }): Promise<{ turnId: string | null }> {
 
         const extraInputItems = opts?.extraInputItems ?? [];
         const input: InputItem[] = [];
@@ -1328,6 +1420,7 @@ export class CodexAppServerClient {
             this.threads.registerTurn(threadId, turn);
             this.emitStableNotification('turn/started', { threadId, turn });
         }
+        return { turnId: turn?.id ?? null };
     }
 
     /**
@@ -1366,7 +1459,7 @@ export class CodexAppServerClient {
         const wait = this.threads.beginTurn(threadId);
 
         try {
-            await this.sendTurnToThread(threadId, prompt, opts);
+            await this.startTurnOnThread(threadId, prompt, opts);
         } catch (error) {
             if (error instanceof CodexRpcOutcomeUnknownError) {
                 logger.warn('[CodexAppServer] turn/start outcome is unknown; reconciling from authoritative state');
@@ -1397,6 +1490,22 @@ export class CodexAppServerClient {
             throw new Error('No active Codex turn to steer');
         }
 
+        await this.steerTurnOnThread(threadId, turnId, prompt, opts);
+    }
+
+    async steerTurnOnThread(
+        threadId: string,
+        expectedTurnId: string,
+        prompt: string,
+        opts?: {
+            extraInputItems?: InputItem[];
+            clientUserMessageId?: string;
+        },
+    ): Promise<void> {
+        if (!this.supportsTurnSteering()) {
+            throw new Error('The installed Codex version does not support turn steering');
+        }
+
         const extraInputItems = opts?.extraInputItems ?? [];
         const input: InputItem[] = [];
         if (prompt.length > 0 || extraInputItems.length === 0) {
@@ -1406,7 +1515,7 @@ export class CodexAppServerClient {
 
         await this.request('turn/steer', {
             threadId,
-            expectedTurnId: turnId,
+            expectedTurnId,
             input,
             ...(opts?.clientUserMessageId
                 ? { clientUserMessageId: opts.clientUserMessageId }
@@ -1422,6 +1531,14 @@ export class CodexAppServerClient {
             logger.debug('[CodexAppServer] interruptTurn: no active turnId, skipping');
             return;
         }
+        await this.interruptTurnOnThread(threadId, turnId, opts);
+    }
+
+    async interruptTurnOnThread(
+        threadId: string,
+        turnId: string,
+        opts?: { timeoutMs?: number },
+    ): Promise<void> {
         const params: InterruptConversationParams = {
             threadId,
             turnId,
@@ -1659,6 +1776,16 @@ export class CodexAppServerClient {
     }
 
     private async handleServerRequest(id: number, method: string, params: any): Promise<void> {
+        if (this.serverRequestHandler && isStableServerRequestMethod(method)) {
+            const result = await this.serverRequestHandler({
+                requestId: String(id),
+                method,
+                params,
+            });
+            this.respond(id, result);
+            return;
+        }
+
         if (method === 'mcpServer/elicitation/request') {
             const threadId = stringOrNull(params?.threadId) ?? this.threadId;
             const turnId = stringOrNull(params?.turnId);

@@ -61,7 +61,12 @@ import {
     mergeCodexSessionModels,
 } from './codexModelCapabilities';
 import { resolveCodexEffortForModel } from './codexEffortValidation';
-import { assertMinimumCodexCliVersion } from './codexCliVersion';
+import { assertMinimumCodexCliVersion, formatCodexCliVersion } from './codexCliVersion';
+import { CodexSyncV4Mapper } from './codexSyncV4Mapper';
+import { CodexV4CommandProcessor } from './codexV4CommandProcessor';
+import { CodexV4CommandExecutor } from './codexV4CommandExecutor';
+import { CodexV4RequestBroker } from './codexV4RequestBroker';
+import type { SyncV4Client } from '@/api/syncV4Client';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -113,8 +118,9 @@ export async function runCodex(opts: {
     effort?: ReasoningEffort;
 }): Promise<void> {
     // Fail before creating remote state when the local protocol is unsupported.
+    let codexCliVersion: ReturnType<typeof assertMinimumCodexCliVersion>;
     try {
-        assertMinimumCodexCliVersion();
+        codexCliVersion = assertMinimumCodexCliVersion();
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Codex CLI version check failed.';
         console.error(`\n\x1b[1m\x1b[33m${message}\x1b[0m\n`);
@@ -226,6 +232,21 @@ export async function runCodex(opts: {
     let permissionHandler: CodexPermissionHandler;
     let reasoningProcessor!: ReasoningProcessor;
     let abortInProgress: Promise<void> | null = null;
+    const codexV4Runtime = {
+        mapper: null as CodexSyncV4Mapper | null,
+        commandProcessor: null as CodexV4CommandProcessor | null,
+        syncClient: null as SyncV4Client | null,
+    };
+    let bindCodexV4Session: ((target: ApiSessionClient) => Promise<void>) | null = null;
+    let pendingCodexV4Session: ApiSessionClient | null = null;
+    const codexV4Migration = {
+        finalizer: null as (() => Promise<void>) | null,
+    };
+    const finalizeCodexV4Migration = async (): Promise<void> => {
+        const finalizer = codexV4Migration.finalizer;
+        if (finalizer) await finalizer();
+    };
+    let codexV4CanonicalActive = false;
     const { session: initialSession, reconnectionHandle } = setupOfflineReconnection({
         api,
         sessionTag,
@@ -237,6 +258,15 @@ export async function runCodex(opts: {
             // Update permission handler with new session to avoid stale reference
             if (permissionHandler) {
                 permissionHandler.updateSession(newSession);
+            }
+            if (bindCodexV4Session) {
+                void bindCodexV4Session(newSession).catch((error) => {
+                    logger.warn('[Codex v4] Failed to bind reconnected session', {
+                        errorName: error instanceof Error ? error.name : typeof error,
+                    });
+                });
+            } else {
+                pendingCodexV4Session = newSession;
             }
         }
     });
@@ -664,19 +694,21 @@ export async function runCodex(opts: {
     // call in claudeRemoteLauncher for the full rationale.
     permissionHandler.reset('Previous CLI process exited before responding');
     reasoningProcessor = new ReasoningProcessor((message) => {
+        if (codexV4CanonicalActive) return;
         const envelopes = mapCodexProcessorMessageToSessionEnvelopes(message, { currentTurnId });
         for (const envelope of envelopes) {
             session.sendSessionProtocolMessage(envelope);
         }
     });
     const diffProcessor = new DiffProcessor((message) => {
+        if (codexV4CanonicalActive) return;
         const envelopes = mapCodexProcessorMessageToSessionEnvelopes(message, { currentTurnId });
         for (const envelope of envelopes) {
             session.sendSessionProtocolMessage(envelope);
         }
     });
     const sendTrackedUserMessageToSession = async (item: QueueItem<EnhancedMode>) => {
-        if (!item.id) return;
+        if (!item.id || codexV4CanonicalActive) return;
 
         const emittedAt = Date.now();
         for (const [index, attachment] of (item.attachments ?? []).entries()) {
@@ -872,7 +904,7 @@ export async function runCodex(opts: {
 
     // Event handler: same EventMsg types as the legacy MCP server — no changes needed
     client.setEventHandler((msg) => {
-        logger.debug(`[Codex] Event: ${JSON.stringify(msg)}`);
+        logger.debug(`[Codex] Event type: ${typeof msg.type === 'string' ? msg.type : 'unknown'}`);
         const isSubagentScopedEvent = hasCodexSubagentReference(msg as Record<string, unknown>);
 
         // Add messages to the ink UI buffer based on message type
@@ -973,7 +1005,9 @@ export async function runCodex(opts: {
             || msg.type === 'agent_reasoning'
             || msg.type === 'agent_reasoning_section_break';
         const isForwardableSubagentReasoning = isSubagentScopedEvent && msg.type === 'agent_reasoning';
-        if (msg.type !== 'turn_diff' && (!isReasoningEvent || isForwardableSubagentReasoning)) {
+        if (!codexV4CanonicalActive
+            && msg.type !== 'turn_diff'
+            && (!isReasoningEvent || isForwardableSubagentReasoning)) {
             const mapped = mapCodexMcpMessageToSessionEnvelopes(msg, {
                 currentTurnId,
                 startedSubagents: codexStartedSubagents,
@@ -1011,11 +1045,95 @@ export async function runCodex(opts: {
     } as const;
     let first = true;
     let appendSystemPromptInjected = false;
+    const requiresCodexV4Migration = Boolean(reconnectSessionId || opts.resumeThreadId);
+    let boundCodexV4SessionId: string | null = null;
+
+    bindCodexV4Session = async (target) => {
+        // The offline session stub intentionally has no encryption material or
+        // Sync v4 transport. The reconnection callback will bind the real
+        // session once Happy Server is reachable again.
+        if (typeof target.enableSyncV4 !== 'function') {
+            pendingCodexV4Session = target;
+            return;
+        }
+        if (boundCodexV4SessionId === target.sessionId) return;
+        codexV4Runtime.commandProcessor?.close();
+        if (codexV4Runtime.mapper) await codexV4Runtime.mapper.close();
+        codexV4Runtime.syncClient?.stop();
+
+        const syncClient = await target.enableSyncV4((sync) => {
+            const mapper = new CodexSyncV4Mapper(sync, {
+                codexCliVersion: formatCodexCliVersion(codexCliVersion),
+                initialSyncState: requiresCodexV4Migration && !codexV4CanonicalActive ? 'importing' : 'ready',
+                onError: (error) => {
+                    logger.warn('[Codex v4] Entity projection failed', {
+                        errorName: error instanceof Error ? error.name : typeof error,
+                    });
+                },
+            });
+            const requestBroker = new CodexV4RequestBroker({ mapper });
+            const commandExecutor = new CodexV4CommandExecutor({
+                client,
+                requestBroker,
+                defaultCwd: process.cwd(),
+                mcpServers,
+            });
+            let migrationFinalized = codexV4CanonicalActive || !requiresCodexV4Migration;
+            const finalizeMigration = async () => {
+                if (migrationFinalized) return;
+                await mapper.flush();
+                await sync.flushOutboundOnce();
+                await mapper.setSyncState('ready');
+                await mapper.flush();
+                await sync.flushOutboundOnce();
+                migrationFinalized = true;
+                codexV4CanonicalActive = true;
+            };
+            const commandProcessor = new CodexV4CommandProcessor({
+                store: sync,
+                execute: async (command) => {
+                    const outcome = await commandExecutor.execute(command);
+                    if (outcome.threadId && (
+                        command.command === 'thread.start'
+                        || command.command === 'thread.resume'
+                        || command.command === 'turn.start'
+                    )) {
+                        target.updateMetadata((currentMetadata) => ({
+                            ...currentMetadata,
+                            codexThreadId: outcome.threadId ?? undefined,
+                        }));
+                    }
+                    if (outcome.threadId) await finalizeMigration();
+                    return outcome;
+                },
+                reconcile: (command) => commandExecutor.reconcile(command),
+                onError: (error) => {
+                    logger.warn('[Codex v4] Command reconciliation failed', {
+                        errorName: error instanceof Error ? error.name : typeof error,
+                    });
+                },
+            });
+
+            codexV4Runtime.mapper = mapper;
+            codexV4Runtime.commandProcessor = commandProcessor;
+            codexV4Migration.finalizer = finalizeMigration;
+            client.setStableNotificationHandler((notification) => mapper.handleNotification(notification));
+            client.setServerRequestHandler((request) => requestBroker.handle(request));
+            return (event) => commandProcessor.handle(event);
+        });
+
+        codexV4Runtime.syncClient = syncClient;
+        boundCodexV4SessionId = target.sessionId;
+        pendingCodexV4Session = null;
+        await codexV4Runtime.commandProcessor?.recoverPending();
+        if (!requiresCodexV4Migration) codexV4CanonicalActive = true;
+    };
 
     try {
         logger.debug('[codex]: client.connect begin');
         await client.connect();
         logger.debug('[codex]: client.connect done');
+        await bindCodexV4Session(pendingCodexV4Session ?? session);
 
         const discoveredModels = await loadCodexModelCapabilities(client);
         codexModelCapabilities = discoveredModels;
@@ -1038,6 +1156,7 @@ export async function runCodex(opts: {
             });
             first = false;
             appendSystemPromptInjected = true;
+            await finalizeCodexV4Migration();
         }
 
         const forkCodexThreadId = process.env.HAPPY_FORK_CODEX_THREAD_ID;
@@ -1046,7 +1165,7 @@ export async function runCodex(opts: {
             // (thread/fork copies it), but we deliberately do NOT replay the
             // pre-fork history into the UI: a side chat starts empty from the
             // moment it was opened, so the user only sees the aside they began.
-            if (!isSideChat) {
+            if (!isSideChat && !codexV4CanonicalActive) {
                 try {
                     const { thread } = await client.readThread({
                         threadId: forkCodexThreadId,
@@ -1175,6 +1294,7 @@ export async function runCodex(opts: {
                         ...currentMetadata,
                         codexThreadId: startedThread.threadId,
                     }));
+                    await finalizeCodexV4Migration();
                 }
 
                 const goalCommand = parseCodexGoalCommand(message.message);
@@ -1233,6 +1353,7 @@ export async function runCodex(opts: {
                     sandbox: executionPolicy.sandbox,
                     effort: turnMode.effort,
                     extraInputItems: imageInputs.inputItems,
+                    ...(message.id ? { clientUserMessageId: message.id } : {}),
                 });
                 first = false;
                 if (includeAppendSystemPrompt) {
@@ -1276,6 +1397,20 @@ export async function runCodex(opts: {
         if (reconnectionHandle) {
             logger.debug('[codex]: Cancelling offline reconnection');
             reconnectionHandle.cancel();
+        }
+
+        codexV4Runtime.commandProcessor?.close();
+        client.setStableNotificationHandler(null);
+        client.setServerRequestHandler(null);
+        try {
+            await codexV4Runtime.mapper?.close();
+            await codexV4Runtime.syncClient?.flushOutboundOnce();
+        } catch (error) {
+            logger.warn('[Codex v4] Failed to flush during shutdown', {
+                errorName: error instanceof Error ? error.name : typeof error,
+            });
+        } finally {
+            codexV4Runtime.syncClient?.stop();
         }
 
         try {
