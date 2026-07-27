@@ -172,6 +172,8 @@ export class SyncV4Client {
     private readonly receiveSync: InvalidateSync;
     private pollTimer: NodeJS.Timeout | null = null;
     private started = false;
+    private disposed = false;
+    private lifecycleGeneration = 0;
 
     private constructor(
         readonly sessionId: string,
@@ -181,8 +183,8 @@ export class SyncV4Client {
         private readonly onEntity: (event: SyncV4AppliedEntity) => Promise<void>,
         private readonly pollIntervalMs: number,
     ) {
-        this.sendSync = new InvalidateSync(() => this.flushOutboundOnce());
-        this.receiveSync = new InvalidateSync(() => this.pullChangesOnce());
+        this.sendSync = new InvalidateSync(() => this.flushOutboundForGeneration(this.lifecycleGeneration));
+        this.receiveSync = new InvalidateSync(() => this.pullChangesForGeneration(this.lifecycleGeneration));
     }
 
     get producerId(): string {
@@ -195,12 +197,21 @@ export class SyncV4Client {
 
     async start(): Promise<void> {
         if (this.started) return;
+        if (this.disposed) throw new Error("Sync v4 client has been stopped");
+        const generation = this.lifecycleGeneration;
         this.started = true;
         try {
-            await this.processPendingInbound();
-            await Promise.all([this.flushOutboundOnce(), this.pullChangesOnce()]);
+            await this.processPendingInbound(generation);
+            await Promise.all([
+                this.flushOutboundForGeneration(generation),
+                this.pullChangesForGeneration(generation),
+            ]);
+            this.assertCurrentGeneration(generation);
         } catch (error) {
-            this.started = false;
+            if (this.isCurrentGeneration(generation)) {
+                this.started = false;
+                this.lifecycleGeneration += 1;
+            }
             throw error;
         }
         this.pollTimer = setInterval(() => this.receiveSync.invalidate(), this.pollIntervalMs);
@@ -208,7 +219,10 @@ export class SyncV4Client {
     }
 
     stop(): void {
+        if (this.disposed) return;
+        this.disposed = true;
         this.started = false;
+        this.lifecycleGeneration += 1;
         if (this.pollTimer) clearInterval(this.pollTimer);
         this.pollTimer = null;
         this.sendSync.stop();
@@ -229,11 +243,15 @@ export class SyncV4Client {
 
     async publishEntities(entries: SyncV4PublishEntity[]): Promise<SyncMutationV4[]> {
         if (entries.length === 0) return [];
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
         const mutations = await this.publishLock.inLock(async () => {
+            this.assertCurrentGeneration(generation);
             const pendingRevisions = new Map<string, number>();
             const nextMutations: SyncMutationV4[] = [];
             for (const entry of entries) {
                 const entityId = await this.crypto.opaqueEntityId(entry.entity.entityType, entry.entity.providerId);
+                this.assertCurrentGeneration(generation);
                 const revision = (pendingRevisions.get(entityId) ?? this.journal.nextRevision(entityId) - 1) + 1;
                 pendingRevisions.set(entityId, revision);
                 const op = entry.op ?? "upsert";
@@ -253,6 +271,7 @@ export class SyncV4Client {
                     op,
                     ciphertext: await this.crypto.encryptEntity(aad, entry.entity),
                 }));
+                this.assertCurrentGeneration(generation);
             }
             await this.journal.appendOutbound(nextMutations);
             return nextMutations;
@@ -266,8 +285,12 @@ export class SyncV4Client {
         result: CodexCommandResultEntityV4,
         status: SyncV4CommandJournalStatus,
     ): Promise<SyncMutationV4> {
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
         const mutation = await this.publishLock.inLock(async () => {
+            this.assertCurrentGeneration(generation);
             const entityId = await this.crypto.opaqueEntityId(result.entityType, result.providerId);
+            this.assertCurrentGeneration(generation);
             const revision = this.journal.nextRevision(entityId);
             const aad = {
                 sessionId: this.sessionId,
@@ -285,6 +308,7 @@ export class SyncV4Client {
                 op: aad.op,
                 ciphertext: await this.crypto.encryptEntity(aad, result),
             });
+            this.assertCurrentGeneration(generation);
             await this.journal.appendCommandTransition(command.commandId, status, next, command);
             return next;
         });
@@ -293,34 +317,49 @@ export class SyncV4Client {
     }
 
     async flushOutboundOnce(): Promise<void> {
+        await this.flushOutboundForGeneration(this.lifecycleGeneration);
+    }
+
+    private async flushOutboundForGeneration(generation: number): Promise<void> {
         await this.sendLock.inLock(async () => {
             while (true) {
+                if (!this.isCurrentGeneration(generation)) return;
                 const pending = this.journal.snapshot().pendingOutbound;
                 if (pending.length === 0) break;
                 const batch = takeMutationBatch(pending);
                 const response = await this.transport.postMutations(this.sessionId, batch);
+                if (!this.isCurrentGeneration(generation)) return;
                 validateAcknowledgements(batch, response.acknowledgements);
                 await this.journal.appendAcknowledgements(response.acknowledgements);
             }
+            if (!this.isCurrentGeneration(generation)) return;
             await this.journal.compactIfNeeded();
         });
     }
 
     async pullChangesOnce(): Promise<void> {
+        await this.pullChangesForGeneration(this.lifecycleGeneration);
+    }
+
+    private async pullChangesForGeneration(generation: number): Promise<void> {
         await this.receiveLock.inLock(async () => {
-            await this.processPendingInbound();
+            if (!this.isCurrentGeneration(generation)) return;
+            await this.processPendingInbound(generation);
             while (true) {
+                if (!this.isCurrentGeneration(generation)) return;
                 const cursor = this.receiveCursor;
                 let response: ReturnType<typeof SyncChangesResponseV4Schema.parse>;
                 try {
                     response = await this.transport.getChanges(this.sessionId, cursor, CHANGES_PAGE_SIZE);
                 } catch (error) {
+                    if (!this.isCurrentGeneration(generation)) return;
                     if (error instanceof SyncV4SnapshotRequiredError) {
-                        await this.rebuildFromSnapshot();
+                        await this.rebuildFromSnapshot(generation);
                         continue;
                     }
                     throw error;
                 }
+                if (!this.isCurrentGeneration(generation)) return;
                 if (response.highWatermark < cursor) {
                     throw new Error("Sync v4 server watermark moved backwards");
                 }
@@ -332,9 +371,11 @@ export class SyncV4Client {
                 }
                 assertContiguousChanges(response.changes, cursor);
                 await this.journal.appendInbound(response.changes);
-                await this.processPendingInbound();
+                if (!this.isCurrentGeneration(generation)) return;
+                await this.processPendingInbound(generation);
                 if (!response.hasMore && this.receiveCursor >= response.highWatermark) break;
             }
+            if (!this.isCurrentGeneration(generation)) return;
             await this.journal.compactIfNeeded();
         });
     }
@@ -366,13 +407,16 @@ export class SyncV4Client {
         status: SyncV4CommandJournalStatus,
         command?: CodexCommandEntityV4,
     ): Promise<void> {
+        this.assertCurrentGeneration(this.lifecycleGeneration);
         await this.journal.setCommandStatus(commandId, status, command);
     }
 
-    private async processPendingInbound(): Promise<void> {
+    private async processPendingInbound(generation: number): Promise<void> {
+        if (!this.isCurrentGeneration(generation)) return;
         const snapshot = this.journal.snapshot();
         let expectedSeq = snapshot.receiveCursor + 1;
         for (const change of snapshot.pendingInbound) {
+            if (!this.isCurrentGeneration(generation)) return;
             if (change.seq !== expectedSeq) {
                 throw new Error(`Sync v4 inbound journal has a gap before sequence ${change.seq}`);
             }
@@ -383,6 +427,7 @@ export class SyncV4Client {
                 continue;
             }
             const entity = await this.crypto.decryptEntity(toAad(this.sessionId, change), change.ciphertext);
+            if (!this.isCurrentGeneration(generation)) return;
             await this.onEntity({
                 entity,
                 source: "change",
@@ -390,18 +435,21 @@ export class SyncV4Client {
                 revision: change.revision,
                 seq: change.seq,
             });
+            if (!this.isCurrentGeneration(generation)) return;
             await this.journal.completeInbound(change.entityId, change.revision, change.seq);
             expectedSeq += 1;
         }
     }
 
-    private async rebuildFromSnapshot(): Promise<void> {
+    private async rebuildFromSnapshot(generation: number): Promise<void> {
+        if (!this.isCurrentGeneration(generation)) return;
         let cursor: string | null = null;
         let highWatermark: number | null = null;
         const seenCursors = new Set<string>();
         const appliedRevisions: Array<{ entityId: string; revision: number }> = [];
         do {
             const page = await this.transport.getSnapshot(this.sessionId, cursor, SNAPSHOT_PAGE_SIZE);
+            if (!this.isCurrentGeneration(generation)) return;
             if (highWatermark === null) highWatermark = page.highWatermark;
             if (page.highWatermark !== highWatermark) {
                 throw new Error("Sync v4 snapshot watermark changed during pagination");
@@ -413,6 +461,7 @@ export class SyncV4Client {
                     toAad(this.sessionId, snapshotEntity),
                     snapshotEntity.ciphertext,
                 );
+                if (!this.isCurrentGeneration(generation)) return;
                 await this.onEntity({
                     entity,
                     source: "snapshot",
@@ -420,13 +469,25 @@ export class SyncV4Client {
                     revision: snapshotEntity.revision,
                     seq: null,
                 });
+                if (!this.isCurrentGeneration(generation)) return;
                 appliedRevisions.push({ entityId: snapshotEntity.entityId, revision: snapshotEntity.revision });
             }
             cursor = page.nextCursor;
             if (cursor && seenCursors.has(cursor)) throw new Error("Sync v4 snapshot pagination stalled");
             if (cursor) seenCursors.add(cursor);
         } while (cursor);
+        if (!this.isCurrentGeneration(generation)) return;
         await this.journal.completeSnapshot(appliedRevisions, highWatermark ?? 0);
+    }
+
+    private isCurrentGeneration(generation: number): boolean {
+        return !this.disposed && this.lifecycleGeneration === generation;
+    }
+
+    private assertCurrentGeneration(generation: number): void {
+        if (!this.isCurrentGeneration(generation)) {
+            throw new Error("Sync v4 client has been stopped");
+        }
     }
 }
 

@@ -21,6 +21,21 @@ import {
 const sessionKey = Uint8Array.from({ length: 32 }, (_, index) => index);
 const temporaryDirectories: string[] = [];
 
+class Deferred<T> {
+    readonly promise: Promise<T>;
+    private resolvePromise!: (value: T | PromiseLike<T>) => void;
+
+    constructor() {
+        this.promise = new Promise<T>((resolve) => {
+            this.resolvePromise = resolve;
+        });
+    }
+
+    resolve(value: T): void {
+        this.resolvePromise(value);
+    }
+}
+
 class FakeTransport implements SyncV4Transport {
     readonly postedBatches: SyncMutationV4[][] = [];
     readonly committed = new Map<string, { mutation: SyncMutationV4; seq: number }>();
@@ -285,5 +300,94 @@ describe("SyncV4Client", () => {
             "snapshot-crash-2",
         ]);
         expect(reopened.receiveCursor).toBe(2);
+    });
+
+    it("does not acknowledge an in-flight POST after stop", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const client = await createClient(root, transport);
+        const mutation = await client.publishEntity(part("pending-after-stop"));
+        const postStarted = new Deferred<void>();
+        const postResponse = new Deferred<SyncMutationBatchResponseV4>();
+        transport.postMutations = async () => {
+            postStarted.resolve();
+            return await postResponse.promise;
+        };
+
+        const flush = client.flushOutboundOnce();
+        await postStarted.promise;
+        client.stop();
+        postResponse.resolve({
+            acknowledgements: [{
+                mutationId: mutation.mutationId,
+                seq: 1,
+                revision: mutation.revision,
+                status: "accepted",
+            }],
+        });
+        await flush;
+
+        const retryTransport = new FakeTransport();
+        await (await createClient(root, retryTransport)).flushOutboundOnce();
+        expect(retryTransport.postedBatches).toHaveLength(1);
+        expect(retryTransport.postedBatches[0][0].mutationId).toBe(mutation.mutationId);
+    });
+
+    it("does not apply changes or advance the cursor after stop", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const publisher = await createClient(await createRoot(), transport);
+        const mutation = await publisher.publishEntity(part("late-change"));
+        const changeStarted = new Deferred<void>();
+        const changeResponse = new Deferred<ReturnType<typeof SyncChangesResponseV4Schema.parse>>();
+        transport.getChanges = async () => {
+            changeStarted.resolve();
+            return await changeResponse.promise;
+        };
+        const applied: SyncV4AppliedEntity[] = [];
+        const client = await createClient(root, transport, applied);
+
+        const pull = client.pullChangesOnce();
+        await changeStarted.promise;
+        client.stop();
+        changeResponse.resolve(SyncChangesResponseV4Schema.parse({
+            changes: [{ ...mutation, seq: 1, createdAt: 100 }],
+            hasMore: false,
+            highWatermark: 1,
+        }));
+        await pull;
+
+        expect(applied).toEqual([]);
+        expect(client.receiveCursor).toBe(0);
+    });
+
+    it("does not complete an in-flight snapshot after stop", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const publisher = await createClient(await createRoot(), transport);
+        const mutation = await publisher.publishEntity(part("late-snapshot"));
+        const { mutationId: _mutationId, ...snapshot } = mutation;
+        transport.requireSnapshot = true;
+        const snapshotStarted = new Deferred<void>();
+        const snapshotResponse = new Deferred<SyncSnapshotResponseV4>();
+        transport.getSnapshot = async () => {
+            snapshotStarted.resolve();
+            return await snapshotResponse.promise;
+        };
+        const applied: SyncV4AppliedEntity[] = [];
+        const client = await createClient(root, transport, applied);
+
+        const pull = client.pullChangesOnce();
+        await snapshotStarted.promise;
+        client.stop();
+        snapshotResponse.resolve(SyncSnapshotResponseV4Schema.parse({
+            entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+            highWatermark: 1,
+            nextCursor: null,
+        }));
+        await pull;
+
+        expect(applied).toEqual([]);
+        expect(client.receiveCursor).toBe(0);
     });
 });
