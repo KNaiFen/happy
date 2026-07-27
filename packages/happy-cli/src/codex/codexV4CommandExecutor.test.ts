@@ -220,4 +220,42 @@ describe('CodexV4CommandExecutor', () => {
             .rejects.toThrow('skills.list does not accept arguments');
         expect(client.startTurnOnThread).not.toHaveBeenCalled();
     });
+
+    it('rejects malformed execution policy fields instead of silently using defaults', async () => {
+        const client = fakeClient();
+        await expect(executor(client).execute(command('turn.start', {
+            text: 'hello',
+            approvalPolicy: 'sometimes',
+        }))).rejects.toThrow('Invalid Codex approval policy');
+        await expect(executor(client).execute(command('turn.start', {
+            text: 'hello',
+            sandbox: 'host-write',
+        }))).rejects.toThrow('Invalid Codex sandbox mode');
+        expect(client.startTurnOnThread).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed review and goal fields before invoking Codex', async () => {
+        const client = fakeClient();
+        await expect(executor(client).execute(command('review.start', {
+            target: { type: 'uncommittedChanges' },
+            delivery: 'background',
+        }))).rejects.toThrow('Invalid Codex review delivery');
+        await expect(executor(client).execute(command('goal.set', {
+            objective: 'finish',
+            status: 'finished',
+        }))).rejects.toThrow('Invalid Codex goal status');
+        await expect(executor(client).execute(command('goal.set', {
+            objective: 'finish',
+            tokenBudget: 1.5,
+        }))).rejects.toThrow('Codex goal tokenBudget must be a nonnegative integer or null');
+        expect(client.startReview).not.toHaveBeenCalled();
+        expect(client.setGoal).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-object command payload', async () => {
+        const client = fakeClient();
+        await expect(executor(client).execute(command('turn.start', 'hello')))
+            .rejects.toThrow('Codex command payload must be an object');
+        expect(client.startTurnOnThread).not.toHaveBeenCalled();
+    });
 });

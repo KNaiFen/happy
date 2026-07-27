@@ -47,7 +47,7 @@ export class CodexV4CommandExecutor {
     constructor(private readonly options: CommandExecutorOptions) {}
 
     async execute(command: CodexCommandEntityV4): Promise<CodexV4CommandOutcome> {
-        const payload = asRecord(command.payload);
+        const payload = commandPayload(command.payload);
         switch (command.command) {
             case 'thread.start': {
                 const result = await this.options.client.startThread({
@@ -143,7 +143,7 @@ export class CodexV4CommandExecutor {
                 const threadId = commandThreadId(command, payload);
                 assertNoUnsupportedInput(payload, 'review.start');
                 const target = reviewTarget(payload.target);
-                const delivery = payload.delivery === 'detached' ? 'detached' : 'inline';
+                const delivery = reviewDelivery(payload.delivery);
                 const result = await this.options.client.startReview({ threadId, target, delivery });
                 return {
                     threadId: result.reviewThreadId,
@@ -167,7 +167,7 @@ export class CodexV4CommandExecutor {
                 const result = await this.options.client.setGoal({
                     threadId,
                     objective: requiredString(payload.objective, 'goal.set requires objective'),
-                    status: optionalString(payload.status) as Parameters<CodexAppServerClient['setGoal']>[0]['status'],
+                    status: goalStatus(payload.status),
                     tokenBudget: nullableNonnegativeInt(payload.tokenBudget),
                 });
                 return { threadId, result: { goal: result.goal } };
@@ -209,7 +209,7 @@ export class CodexV4CommandExecutor {
 
     async reconcile(command: CodexCommandEntityV4): Promise<CodexV4CommandReconciliation> {
         if (command.command === 'turn.start' || command.command === 'turn.steer') {
-            const payload = asRecord(command.payload);
+            const payload = commandPayload(command.payload);
             const threadId = commandThreadId(command, payload);
             const snapshot = await this.options.client.readThread({ threadId, includeTurns: true });
             const submittedTurnId = findClientUserMessage(snapshot.thread, command.commandId);
@@ -323,15 +323,38 @@ function reviewTarget(value: unknown): ReviewStartParams['target'] {
 }
 
 function approvalPolicy(value: unknown): ApprovalPolicy | undefined {
-    return value === 'untrusted' || value === 'on-request' || value === 'never'
-        ? value
-        : undefined;
+    if (value === undefined || value === null) return undefined;
+    if (value === 'untrusted' || value === 'on-request' || value === 'never') return value;
+    throw new Error('Invalid Codex approval policy');
 }
 
 function sandboxMode(value: unknown): SandboxMode | undefined {
-    return value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access'
-        ? value
-        : undefined;
+    if (value === undefined || value === null) return undefined;
+    if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value;
+    throw new Error('Invalid Codex sandbox mode');
+}
+
+function reviewDelivery(value: unknown): NonNullable<ReviewStartParams['delivery']> {
+    if (value === undefined || value === null || value === 'inline') return 'inline';
+    if (value === 'detached') return 'detached';
+    throw new Error('Invalid Codex review delivery');
+}
+
+function goalStatus(
+    value: unknown,
+): Parameters<CodexAppServerClient['setGoal']>[0]['status'] {
+    if (value === undefined || value === null) return value;
+    if (
+        value === 'active'
+        || value === 'paused'
+        || value === 'blocked'
+        || value === 'usageLimited'
+        || value === 'budgetLimited'
+        || value === 'complete'
+    ) {
+        return value;
+    }
+    throw new Error('Invalid Codex goal status');
 }
 
 function commandThreadId(command: CodexCommandEntityV4, payload: Record<string, unknown>): string {
@@ -341,6 +364,13 @@ function commandThreadId(command: CodexCommandEntityV4, payload: Record<string, 
 
 function asRecord(value: unknown): Record<string, unknown> {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return value as Record<string, unknown>;
+}
+
+function commandPayload(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Codex command payload must be an object');
+    }
     return value as Record<string, unknown>;
 }
 
@@ -360,12 +390,16 @@ function positiveInt(value: unknown, message: string): number {
 }
 
 function nullableNonnegativeInt(value: unknown): number | null | undefined {
+    if (value === undefined) return undefined;
     if (value === null) return null;
-    return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return value;
+    throw new Error('Codex goal tokenBudget must be a nonnegative integer or null');
 }
 
 function stringArray(value: unknown): string[] | null {
-    return Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? value : null;
+    if (value === undefined || value === null) return null;
+    if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) return value;
+    throw new Error('Codex command field must be an array of strings');
 }
 
 function attachmentReferences(value: unknown): CodexV4AttachmentReference[] {
