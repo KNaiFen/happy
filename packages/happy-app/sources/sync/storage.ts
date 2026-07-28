@@ -36,13 +36,18 @@ import { FeedItem } from "./feedTypes";
 import { getRigActivityIndicators, getRigIdentity } from './rig';
 import { indexSessionsById } from './sessionIdentity';
 import {
+    applyCodexV4SyncState,
     applyCodexV4ProjectionUpdates,
     createCodexV4Projection,
+    replaceCodexV4Projection,
     resetCodexV4Projection,
     type CodexV4Projection,
     type CodexV4ProjectionUpdate,
 } from './codexV4Projection';
-import { isCodexV4SyncActive } from './codexV4ClientRegistry';
+import {
+    isCodexV4SyncActive,
+    type CodexV4RegistrySyncState,
+} from './codexV4ClientRegistry';
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +130,10 @@ function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): 
         !isOnline
         || session.codexState.connection !== 'connected'
         || session.codexState.statusUnknown
+        || (
+            session.codexState.appSyncStatus !== undefined
+            && session.codexState.appSyncStatus !== 'ready'
+        )
     );
 
     let state: SessionState;
@@ -221,6 +230,8 @@ interface StorageState {
     applyMessages: (sessionId: string, messages: NormalizedMessage[]) => { changed: string[], hasReadyEvent: boolean, enteredPlanMode: boolean };
     applyCodexV4Entity: (sessionId: string, update: CodexV4ProjectionUpdate) => void;
     applyCodexV4Entities: (sessionId: string, updates: readonly CodexV4ProjectionUpdate[]) => void;
+    replaceCodexV4Entities: (sessionId: string, updates: readonly CodexV4ProjectionUpdate[]) => void;
+    applyCodexV4SyncState: (sessionId: string, syncState: CodexV4RegistrySyncState) => void;
     resetCodexV4Projection: (sessionId: string) => void;
     resetSessionMessages: (sessionId: string) => void;
     applyMessagesLoaded: (sessionId: string) => void;
@@ -494,7 +505,7 @@ export const storage = create<StorageState>()((set, get) => {
                 const codexV4Active = isCodexV4SyncActive(session.metadata, codexProjection);
                 const codexState = codexV4Active
                     ? (codexProjection?.runtime
-                        ? toCodexSessionState(codexProjection.runtime)
+                        ? toCodexSessionState(codexProjection)
                         : state.sessions[session.id]?.codexState)
                     : undefined;
                 const codexThinking = codexV4Active
@@ -805,52 +816,21 @@ export const storage = create<StorageState>()((set, get) => {
             const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
             const projection = applyCodexV4ProjectionUpdates(previous, updates);
             if (projection === previous) return state;
-
-            let sessions = state.sessions;
-            const session = state.sessions[sessionId];
-            const codexV4Active = isCodexV4SyncActive(session?.metadata, projection);
-            if (session && projection.runtime && codexV4Active) {
-                const thinking = projection.runtime.execution.type === 'active';
-                sessions = {
-                    ...state.sessions,
-                    [sessionId]: {
-                        ...session,
-                        thinking,
-                        thinkingAt: thinking && !session.thinking
-                            ? projection.runtime.lastKnownAt
-                            : session.thinkingAt,
-                        codexState: toCodexSessionState(projection.runtime),
-                    },
-                };
-            }
-
-            let sessionMessages = state.sessionMessages;
-            if (codexV4Active) {
-                const existing = state.sessionMessages[sessionId];
-                const messagesMap = Object.fromEntries(projection.messages.map((message) => [message.id, message]));
-                sessionMessages = {
-                    ...state.sessionMessages,
-                    [sessionId]: {
-                        messages: projection.messages,
-                        messagesMap,
-                        reducerState: existing?.reducerState ?? createReducer(),
-                        isLoaded: true,
-                        hasMoreOlder: false,
-                        isLoadingOlder: false,
-                    },
-                };
-            }
-
-            return {
-                ...state,
-                sessions,
-                sessionMessages,
-                codexV4Sessions: {
-                    ...state.codexV4Sessions,
-                    [sessionId]: projection,
-                },
-                sessionListViewData: buildSessionListViewData(sessions, state.unreadSessionIds),
-            };
+            return withCodexV4Projection(state, sessionId, projection);
+        }),
+        replaceCodexV4Entities: (sessionId: string, updates: readonly CodexV4ProjectionUpdate[]) => set((state) => {
+            const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
+            return withCodexV4Projection(
+                state,
+                sessionId,
+                replaceCodexV4Projection(previous, updates),
+            );
+        }),
+        applyCodexV4SyncState: (sessionId: string, syncState: CodexV4RegistrySyncState) => set((state) => {
+            const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
+            const projection = applyCodexV4SyncState(previous, syncState);
+            if (projection === previous) return state;
+            return withCodexV4Projection(state, sessionId, projection);
         }),
         resetCodexV4Projection: (sessionId: string) => set((state) => {
             const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
@@ -1521,7 +1501,64 @@ export function useCodexV4Session(sessionId: string): CodexV4Projection | null {
     return storage(useShallow((state) => state.codexV4Sessions[sessionId] ?? null));
 }
 
-function toCodexSessionState(runtime: NonNullable<CodexV4Projection['runtime']>): CodexSessionStateV4 {
+function withCodexV4Projection(
+    state: StorageState,
+    sessionId: string,
+    projection: CodexV4Projection,
+): StorageState {
+    let sessions = state.sessions;
+    const session = state.sessions[sessionId];
+    const codexV4Active = isCodexV4SyncActive(session?.metadata, projection);
+    if (session && projection.runtime && codexV4Active) {
+        const thinking = projection.runtime.execution.type === 'active';
+        sessions = {
+            ...state.sessions,
+            [sessionId]: {
+                ...session,
+                thinking,
+                thinkingAt: thinking && !session.thinking
+                    ? projection.runtime.lastKnownAt
+                    : session.thinkingAt,
+                codexState: toCodexSessionState(projection),
+            },
+        };
+    }
+
+    let sessionMessages = state.sessionMessages;
+    if (codexV4Active) {
+        const existing = state.sessionMessages[sessionId];
+        if (existing?.messages !== projection.messages) {
+            const messagesMap = Object.fromEntries(projection.messages.map((message) => [message.id, message]));
+            sessionMessages = {
+                ...state.sessionMessages,
+                [sessionId]: {
+                    messages: projection.messages,
+                    messagesMap,
+                    reducerState: existing?.reducerState ?? createReducer(),
+                    isLoaded: true,
+                    hasMoreOlder: false,
+                    isLoadingOlder: false,
+                },
+            };
+        }
+    }
+
+    return {
+        ...state,
+        sessions,
+        sessionMessages,
+        codexV4Sessions: {
+            ...state.codexV4Sessions,
+            [sessionId]: projection,
+        },
+        sessionListViewData: sessions === state.sessions
+            ? state.sessionListViewData
+            : buildSessionListViewData(sessions, state.unreadSessionIds),
+    };
+}
+
+function toCodexSessionState(projection: CodexV4Projection): CodexSessionStateV4 {
+    const runtime = projection.runtime!;
     return {
         connection: runtime.connection,
         execution: runtime.execution,
@@ -1532,6 +1569,9 @@ function toCodexSessionState(runtime: NonNullable<CodexV4Projection['runtime']>)
         activeSubagentCount: runtime.activeSubagentCount,
         lastError: runtime.lastError,
         lastKnownAt: runtime.lastKnownAt,
+        appSyncStatus: projection.syncHealth?.type ?? 'unknown',
+        appSyncNextRetryAt: projection.syncHealth?.nextRetryAt ?? null,
+        appSyncLastErrorAt: projection.syncHealth?.lastErrorAt ?? null,
     };
 }
 

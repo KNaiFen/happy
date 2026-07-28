@@ -46,6 +46,7 @@ export function resolveSessionStatus(session: Session, vibingMessage: string): S
         !isOnline
         || codexState.connection !== 'connected'
         || codexState.statusUnknown
+        || (codexState.appSyncStatus !== undefined && codexState.appSyncStatus !== 'ready')
     );
 
     if (codexStatusUnknown) {

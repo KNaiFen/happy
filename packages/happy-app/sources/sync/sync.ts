@@ -169,7 +169,14 @@ class Sync {
 
     constructor() {
         this.codexV4Clients = new CodexV4ClientRegistry({
-            createClient: ({ sessionId, sessionKey, onEntity, onEntities, onSnapshotReset }) => AppSyncV4Client.create({
+            createClient: ({
+                sessionId,
+                sessionKey,
+                onEntity,
+                onEntities,
+                onSnapshotReset,
+                onSnapshotReplace,
+            }) => AppSyncV4Client.create({
                 sessionId,
                 sessionKey,
                 appVersion: Constants.expoConfig?.version || '0.0.0',
@@ -178,6 +185,7 @@ class Sync {
                 onEntity,
                 onEntities,
                 onSnapshotReset,
+                onSnapshotReplace,
             }),
             isEligible: (sessionId) => isCodexV4SyncEligible(
                 storage.getState().sessions[sessionId]?.metadata,
@@ -191,8 +199,14 @@ class Sync {
             onSnapshotReset: async (sessionId) => {
                 storage.getState().resetCodexV4Projection(sessionId);
             },
+            onSnapshotReplace: async (sessionId, events) => {
+                storage.getState().replaceCodexV4Entities(sessionId, events);
+            },
+            onSyncState: (sessionId, state) => {
+                storage.getState().applyCodexV4SyncState(sessionId, state);
+            },
             onStartError: () => {
-                log.log('Codex Sync v4 client start failed; retrying after session refresh');
+                log.log('Codex Sync v4 client start failed; retry scheduled');
             },
         });
         this.sessionsSync = new InvalidateSync(this.fetchSessions);

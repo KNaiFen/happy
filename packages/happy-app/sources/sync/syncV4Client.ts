@@ -74,6 +74,7 @@ interface AppSyncV4ClientOptions {
     onEntity: (event: AppSyncV4AppliedEntity) => Promise<void>;
     onEntities?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>;
     onSnapshotReset: () => Promise<void>;
+    onSnapshotReplace?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>;
     crypto?: AppSyncV4Crypto;
     generateMutationId?: () => string;
     pollIntervalMs?: number;
@@ -94,6 +95,7 @@ export class AppSyncV4Client {
             options.onEntity,
             options.onEntities ?? null,
             options.onSnapshotReset,
+            options.onSnapshotReplace ?? null,
             options.generateMutationId ?? defaultRandomUUID,
             options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
         );
@@ -118,6 +120,7 @@ export class AppSyncV4Client {
         private readonly onEntity: (event: AppSyncV4AppliedEntity) => Promise<void>,
         private readonly onEntities: ((events: readonly AppSyncV4AppliedEntity[]) => Promise<void>) | null,
         private readonly onSnapshotReset: () => Promise<void>,
+        private readonly onSnapshotReplace: ((events: readonly AppSyncV4AppliedEntity[]) => Promise<void>) | null,
         private readonly generateMutationId: () => string,
         private readonly pollIntervalMs: number,
     ) {
@@ -330,8 +333,10 @@ export class AppSyncV4Client {
                     return;
                 }
                 assertContiguousChanges(response.changes, cursor);
+                const classified = this.persistence.classifyChanges(this.sessionId, response.changes);
                 const decrypted: Array<{ change: SyncChangesResponseV4['changes'][number]; entity: CodexEntityV4 }> = [];
-                for (const change of response.changes) {
+                for (const { kind, change } of classified) {
+                    if (kind === 'superseded') continue;
                     decrypted.push({
                         change,
                         entity: await this.crypto.decryptEntity(toAad(this.sessionId, change), change.ciphertext),
@@ -355,13 +360,13 @@ export class AppSyncV4Client {
 
     private async rebuildFromSnapshot(generation: number): Promise<void> {
         if (!this.isCurrentGeneration(generation)) return;
-        this.persistence.beginSnapshot(this.sessionId);
-        await this.onSnapshotReset();
-        if (!this.isCurrentGeneration(generation)) return;
+        const snapshotGeneration = this.persistence.beginSnapshot(this.sessionId);
         let cursor: string | null = null;
         let highWatermark: number | null = null;
         const snapshotRevisions = new Map<string, number>();
+        const snapshotEntityIds = new Set<string>();
         const seenCursors = new Set<string>();
+        const replacement: AppSyncV4AppliedEntity[] = [];
         do {
             const page = await this.transport.getSnapshot(this.sessionId, cursor, SNAPSHOT_PAGE_SIZE);
             if (!this.isCurrentGeneration(generation)) return;
@@ -371,40 +376,44 @@ export class AppSyncV4Client {
             }
             const decrypted: Array<{ snapshot: SyncEntitySnapshotV4; entity: CodexEntityV4 }> = [];
             for (const snapshot of page.entities) {
+                if (snapshotEntityIds.has(snapshot.entityId)) {
+                    throw new Error(`Sync v4 snapshot repeated entity ${snapshot.entityId}`);
+                }
+                if (snapshot.updatedSeq > page.highWatermark) {
+                    throw new Error('Sync v4 snapshot entity exceeds its high watermark');
+                }
+                snapshotEntityIds.add(snapshot.entityId);
                 decrypted.push({
                     snapshot,
                     entity: await this.crypto.decryptEntity(toAad(this.sessionId, snapshot), snapshot.ciphertext),
                 });
                 if (!this.isCurrentGeneration(generation)) return;
             }
-            this.persistence.applySnapshotPage(this.sessionId, page.entities);
+            this.persistence.applySnapshotPage(this.sessionId, snapshotGeneration, page.entities);
             for (const { snapshot } of decrypted) {
                 snapshotRevisions.set(
                     snapshot.entityId,
                     Math.max(snapshotRevisions.get(snapshot.entityId) ?? 0, snapshot.revision),
                 );
             }
-            await this.deliverEntitiesForGeneration(decrypted.map(({ snapshot, entity }) => ({
+            replacement.push(...decrypted.map(({ snapshot, entity }) => ({
                 entity,
                 source: 'snapshot' as const,
                 op: snapshot.op,
                 revision: snapshot.revision,
                 seq: snapshot.updatedSeq,
-            })), generation);
-            if (!this.isCurrentGeneration(generation)) return;
+            })));
             cursor = page.nextCursor;
             if (cursor && seenCursors.has(cursor)) throw new Error('Sync v4 snapshot pagination stalled');
             if (cursor) seenCursors.add(cursor);
         } while (cursor);
         if (!this.isCurrentGeneration(generation)) return;
-        this.persistence.finishSnapshot(this.sessionId, highWatermark ?? 0);
 
-        const optimistic: AppSyncV4AppliedEntity[] = [];
         for (const mutation of this.persistence.getPendingOutbox(this.sessionId)) {
             if ((snapshotRevisions.get(mutation.entityId) ?? 0) >= mutation.revision) continue;
             const entity = await this.crypto.decryptEntity(toAad(this.sessionId, mutation), mutation.ciphertext);
             if (!this.isCurrentGeneration(generation)) return;
-            optimistic.push({
+            replacement.push({
                 entity,
                 source: 'cache',
                 op: mutation.op,
@@ -412,8 +421,9 @@ export class AppSyncV4Client {
                 seq: null,
             });
         }
-        await this.deliverEntitiesForGeneration(optimistic, generation);
+        await this.replaceSnapshotForGeneration(replacement, generation);
         if (!this.isCurrentGeneration(generation)) return;
+        this.persistence.finishSnapshot(this.sessionId, snapshotGeneration, highWatermark ?? 0);
     }
 
     private async deliverEntitiesForGeneration(
@@ -429,6 +439,20 @@ export class AppSyncV4Client {
             if (!this.isCurrentGeneration(generation)) return;
             await this.onEntity(event);
         }
+    }
+
+    private async replaceSnapshotForGeneration(
+        events: readonly AppSyncV4AppliedEntity[],
+        generation: number,
+    ): Promise<void> {
+        if (!this.isCurrentGeneration(generation)) return;
+        if (this.onSnapshotReplace) {
+            await this.onSnapshotReplace(events);
+            return;
+        }
+        await this.onSnapshotReset();
+        if (!this.isCurrentGeneration(generation)) return;
+        await this.deliverEntitiesForGeneration(events, generation);
     }
 
     private isCurrentGeneration(generation: number): boolean {

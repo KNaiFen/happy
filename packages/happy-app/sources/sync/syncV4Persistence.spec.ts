@@ -161,14 +161,17 @@ describe('SyncV4Persistence', () => {
         const persistence = new SyncV4Persistence(storage);
         persistence.enqueueMutations('session-1', [mutation]);
         persistence.applyChanges('session-1', [{ ...mutation, seq: 1, createdAt: 100 }]);
-        persistence.beginSnapshot('session-1');
+        const generation = persistence.beginSnapshot('session-1');
 
         const interrupted = persistence.loadSession('session-1');
         expect(interrupted.snapshotRequired).toBe(true);
-        expect(interrupted.entities).toEqual([]);
+        expect(interrupted.entities).toEqual([
+            expect.objectContaining({ entityId: mutation.entityId, revision: 1 }),
+        ]);
+        expect(interrupted.receiveCursor).toBe(1);
         expect(interrupted.outbox).toEqual([mutation]);
 
-        persistence.applySnapshotPage('session-1', [{
+        persistence.applySnapshotPage('session-1', generation, [{
             producerId: mutation.producerId,
             entityId: mutation.entityId,
             entityType: mutation.entityType,
@@ -179,7 +182,7 @@ describe('SyncV4Persistence', () => {
             createdAt: 100,
             updatedAt: 100,
         }]);
-        persistence.finishSnapshot('session-1', 4);
+        persistence.finishSnapshot('session-1', generation, 4);
         expect(persistence.loadSession('session-1')).toMatchObject({
             snapshotRequired: false,
             receiveCursor: 4,
@@ -246,12 +249,74 @@ describe('SyncV4Persistence', () => {
         expect(recovered.getReceiveCursor('session-1')).toBe(1);
     });
 
+    it('classifies changes before decryption and rejects same-revision conflicts', () => {
+        const persistence = new SyncV4Persistence(new MemoryStorage());
+        const original = {
+            ...mutation,
+            mutationId: 'remote-1',
+            revision: 2,
+            seq: 1,
+            createdAt: 100,
+        };
+        persistence.stageChanges('session-1', [original]);
+
+        expect(persistence.classifyChanges('session-1', [original]).map((entry) => entry.kind))
+            .toEqual(['exactReplay']);
+        expect(persistence.classifyChanges('session-1', [{
+            ...original,
+            mutationId: 'remote-2',
+            revision: 1,
+            seq: 1,
+        }]).map((entry) => entry.kind)).toEqual(['superseded']);
+        expect(persistence.classifyChanges('session-1', [{
+            ...original,
+            mutationId: 'remote-3',
+            revision: 3,
+            seq: 1,
+        }]).map((entry) => entry.kind)).toEqual(['new']);
+        expect(() => persistence.classifyChanges('session-1', [{
+            ...original,
+            ciphertext: 'conflicting-ciphertext',
+        }])).toThrow('same revision');
+    });
+
+    it('rebuilds corrupt derived indexes from independent entity and outbox records', () => {
+        const storage = new MemoryStorage();
+        const persistence = new SyncV4Persistence(storage);
+        persistence.enqueueMutations('session-1', [mutation]);
+        persistence.applyChanges('session-1', [{
+            ...mutation,
+            mutationId: 'remote-1',
+            seq: 1,
+            createdAt: 100,
+        }]);
+        for (const key of storage.getAllKeys()) {
+            if (key.includes(':entity-index:') || key.includes(':outbox-index:')) {
+                storage.set(key, '{broken');
+            }
+        }
+
+        const recovered = new SyncV4Persistence(storage);
+        expect(recovered.loadSession('session-1')).toMatchObject({
+            receiveCursor: 1,
+            entities: [expect.objectContaining({ entityId: mutation.entityId })],
+            outbox: [mutation],
+            snapshotRequired: false,
+        });
+        const repairedIndexes = storage.getAllKeys()
+            .filter((key) => key.includes(':entity-index:') || key.includes(':outbox-index:'));
+        expect(repairedIndexes.length).toBeGreaterThan(0);
+        for (const key of repairedIndexes) {
+            expect(() => JSON.parse(storage.getString(key)!)).not.toThrow();
+        }
+    });
+
     it('keeps an interrupted snapshot marked for a full rebuild when only its cursor was written', () => {
         const storage = new CrashStorage();
         const beforeCrash = new SyncV4Persistence(storage);
         beforeCrash.enqueueMutations('session-1', [mutation]);
-        beforeCrash.beginSnapshot('session-1');
-        beforeCrash.applySnapshotPage('session-1', [{
+        const generation = beforeCrash.beginSnapshot('session-1');
+        beforeCrash.applySnapshotPage('session-1', generation, [{
             producerId: mutation.producerId,
             entityId: mutation.entityId,
             entityType: mutation.entityType,
@@ -263,7 +328,7 @@ describe('SyncV4Persistence', () => {
             updatedAt: 100,
         }]);
         storage.failAfterSet = (key) => key.endsWith(':cursor');
-        expect(() => beforeCrash.finishSnapshot('session-1', 4))
+        expect(() => beforeCrash.finishSnapshot('session-1', generation, 4))
             .toThrow('simulated process stop after set');
 
         expect(new SyncV4Persistence(storage).loadSession('session-1')).toMatchObject({
@@ -271,6 +336,42 @@ describe('SyncV4Persistence', () => {
             entities: [],
             outbox: [mutation],
             snapshotRequired: true,
+        });
+    });
+
+    it('keeps the old generation visible until a complete snapshot commits', () => {
+        const storage = new MemoryStorage();
+        const persistence = new SyncV4Persistence(storage);
+        persistence.applyChanges('session-1', [{
+            ...mutation,
+            mutationId: 'old-change',
+            seq: 1,
+            createdAt: 100,
+        }]);
+        const generation = persistence.beginSnapshot('session-1');
+        persistence.applySnapshotPage('session-1', generation, [{
+            producerId: mutation.producerId,
+            entityId: 'replacement-entity',
+            entityType: mutation.entityType,
+            revision: 1,
+            op: mutation.op,
+            ciphertext: 'replacement-ciphertext',
+            updatedSeq: 2,
+            createdAt: 101,
+            updatedAt: 101,
+        }]);
+
+        expect(persistence.loadSession('session-1')).toMatchObject({
+            snapshotRequired: true,
+            receiveCursor: 1,
+            entities: [expect.objectContaining({ entityId: mutation.entityId })],
+        });
+
+        persistence.finishSnapshot('session-1', generation, 2);
+        expect(persistence.loadSession('session-1')).toMatchObject({
+            snapshotRequired: false,
+            receiveCursor: 2,
+            entities: [expect.objectContaining({ entityId: 'replacement-entity' })],
         });
     });
 });

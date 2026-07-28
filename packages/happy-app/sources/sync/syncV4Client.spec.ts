@@ -145,6 +145,8 @@ async function client(
     handler?: (event: AppSyncV4AppliedEntity) => Promise<void>,
     snapshotReset?: () => Promise<void>,
     batchHandler?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>,
+    snapshotReplace?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>,
+    crypto: AppSyncV4Crypto = fakeCrypto,
 ): Promise<AppSyncV4Client> {
     return AppSyncV4Client.create({
         sessionId: 'session-1',
@@ -152,11 +154,12 @@ async function client(
         appVersion: '1.11.4',
         persistence: persistence(storage),
         transport,
-        crypto: fakeCrypto,
+        crypto,
         generateMutationId: () => `00000000-0000-4000-8000-${String(++mutationCounter).padStart(12, '0')}`,
         onEntity: handler ?? (async (event) => { applied.push(event); }),
         onEntities: batchHandler,
         onSnapshotReset: snapshotReset ?? (async () => undefined),
+        onSnapshotReplace: snapshotReplace,
     });
 }
 
@@ -313,6 +316,67 @@ describe('AppSyncV4Client', () => {
         expect(reopened.receiveCursor).toBe(1);
     });
 
+    it('classifies superseded changes before decryption and still consumes their sequence', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const current = {
+            ...(await (await client(new MemoryStorage(), transport)).publishEntity(command('current'))),
+            revision: 2,
+        };
+        persistence(storage).applyChanges('session-1', [toChange(current, 1)]);
+        transport.changes = [
+            toChange(current, 1),
+            {
+                ...toChange(current, 2),
+                mutationId: 'stale-change',
+                revision: 1,
+                ciphertext: 'must-not-be-decrypted',
+            },
+        ];
+        let decryptCount = 0;
+        const crypto: AppSyncV4Crypto = {
+            ...fakeCrypto,
+            decryptEntity: async (aad, ciphertext) => {
+                decryptCount += 1;
+                return fakeCrypto.decryptEntity(aad, ciphertext);
+            },
+        };
+        const receiver = await client(storage, transport, [], undefined, undefined, undefined, undefined, crypto);
+
+        await receiver.pullChangesOnce();
+
+        expect(decryptCount).toBe(0);
+        expect(receiver.receiveCursor).toBe(2);
+    });
+
+    it('rejects a same-revision conflict before decrypting untrusted ciphertext', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const current = await (await client(new MemoryStorage(), transport)).publishEntity(command('current'));
+        persistence(storage).applyChanges('session-1', [toChange(current, 1)]);
+        transport.changes = [
+            toChange(current, 1),
+            {
+                ...toChange(current, 2),
+                mutationId: 'conflicting-change',
+                ciphertext: 'conflicting-ciphertext',
+            },
+        ];
+        let decryptCount = 0;
+        const crypto: AppSyncV4Crypto = {
+            ...fakeCrypto,
+            decryptEntity: async (aad, ciphertext) => {
+                decryptCount += 1;
+                return fakeCrypto.decryptEntity(aad, ciphertext);
+            },
+        };
+        const receiver = await client(storage, transport, [], undefined, undefined, undefined, undefined, crypto);
+
+        await expect(receiver.pullChangesOnce()).rejects.toThrow('same revision');
+        expect(decryptCount).toBe(0);
+        expect(receiver.receiveCursor).toBe(1);
+    });
+
     it('pulls 225 changes in pages when every socket invalidation is lost', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();
@@ -357,6 +421,54 @@ describe('AppSyncV4Client', () => {
         const hydrated: AppSyncV4AppliedEntity[] = [];
         await (await client(storage, transport, hydrated)).hydrate();
         expect(hydrated.map((event) => event.source)).toEqual(['cache', 'cache']);
+    });
+
+    it('keeps the previous cache and projection when a shadow snapshot fails mid-page', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const old = await publisher.publishEntity(command('old-command'));
+        transport.changes = [toChange(old, 1)];
+        let projection: CodexV4Projection = createCodexV4Projection();
+        let replacementCount = 0;
+        const receiver = await client(
+            storage,
+            transport,
+            [],
+            async (event) => {
+                projection = applyCodexV4ProjectionUpdate(projection, event);
+            },
+            undefined,
+            undefined,
+            async (events) => {
+                replacementCount += 1;
+                projection = resetCodexV4Projection(projection);
+                for (const event of events) {
+                    projection = applyCodexV4ProjectionUpdate(projection, event);
+                }
+            },
+        );
+        await receiver.pullChangesOnce();
+        expect(projection.entities['codex.command']['old-command']).toBeDefined();
+
+        const replacement = await publisher.publishEntity(command('replacement-command'));
+        const { mutationId: _mutationId, ...snapshot } = replacement;
+        transport.requireSnapshot = true;
+        transport.snapshots = [{
+            entities: [{ ...snapshot, updatedSeq: 2, createdAt: 101, updatedAt: 101 }],
+            highWatermark: 2,
+            nextCursor: 'missing-page',
+        }];
+
+        await expect(receiver.pullChangesOnce()).rejects.toThrow('missing snapshot');
+
+        expect(replacementCount).toBe(0);
+        expect(projection.entities['codex.command']['old-command']).toBeDefined();
+        expect(persistence(storage).loadSession('session-1')).toMatchObject({
+            snapshotRequired: true,
+            receiveCursor: 1,
+            entities: [expect.objectContaining({ entityId: old.entityId })],
+        });
     });
 
     it('rebuilds from snapshot when an authenticated cache entity cannot be decrypted', async () => {
@@ -543,7 +655,7 @@ describe('AppSyncV4Client', () => {
         }));
         await pull;
 
-        expect(resetCount).toBe(1);
+        expect(resetCount).toBe(0);
         expect(applied).toEqual([]);
         expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:session:'))).toEqual([]);
     });

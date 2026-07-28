@@ -306,7 +306,11 @@ export type CodexSessionStateV4 = Pick<
     | 'activeSubagentCount'
     | 'lastError'
     | 'lastKnownAt'
->;
+> & {
+    appSyncStatus?: 'starting' | 'retrying' | 'ready' | 'unknown';
+    appSyncNextRetryAt?: number | null;
+    appSyncLastErrorAt?: number | null;
+};
 
 export interface Session {
     id: string,

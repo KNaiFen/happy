@@ -13,6 +13,7 @@ import type {
     SyncMutationOperationV4,
 } from '@slopus/happy-wire';
 import type { Message, ToolCall, ToolCallMessage } from './typesMessage';
+import type { CodexV4RegistrySyncState } from './codexV4ClientRegistry';
 
 type EntityOfType<T extends CodexEntityType> = Extract<CodexEntityV4, { entityType: T }>;
 
@@ -26,6 +27,7 @@ export interface CodexV4Projection {
     thread: CodexThreadEntityV4 | null;
     runtime: CodexRuntimeEntityV4 | null;
     activated: boolean;
+    syncHealth: CodexV4RegistrySyncState | null;
     messages: Message[];
 }
 
@@ -52,6 +54,7 @@ export function createCodexV4Projection(): CodexV4Projection {
         thread: null,
         runtime: null,
         activated: false,
+        syncHealth: null,
         messages: [],
     };
 }
@@ -60,7 +63,28 @@ export function resetCodexV4Projection(current: CodexV4Projection): CodexV4Proje
     return {
         ...createCodexV4Projection(),
         activated: current.activated,
+        syncHealth: current.syncHealth,
     };
+}
+
+export function replaceCodexV4Projection(
+    current: CodexV4Projection,
+    updates: readonly CodexV4ProjectionUpdate[],
+): CodexV4Projection {
+    return applyCodexV4ProjectionUpdates(resetCodexV4Projection(current), updates);
+}
+
+export function applyCodexV4SyncState(
+    current: CodexV4Projection,
+    syncHealth: CodexV4RegistrySyncState,
+): CodexV4Projection {
+    if (
+        current.syncHealth?.type === syncHealth.type
+        && current.syncHealth.attempt === syncHealth.attempt
+        && current.syncHealth.nextRetryAt === syncHealth.nextRetryAt
+        && current.syncHealth.lastErrorAt === syncHealth.lastErrorAt
+    ) return current;
+    return { ...current, syncHealth };
 }
 
 export function applyCodexV4ProjectionUpdate(
@@ -113,6 +137,7 @@ export function applyCodexV4ProjectionUpdates(
         runtime,
         thread,
         activated,
+        syncHealth: current.syncHealth,
         messages: projectMessages(entities),
     };
 }

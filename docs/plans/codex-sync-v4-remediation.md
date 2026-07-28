@@ -358,10 +358,10 @@ reasoning 脱敏、结构化诊断和 stream/batch 内存治理。
 
 ### R4 App
 
-- [ ] v4 client 启动失败后指数退避自动恢复，并显示 sync unknown。
-- [ ] changes 在解密前分类为 new/exactReplay/superseded。
-- [ ] snapshot 使用 shadow generation，完整验证后原子切换。
-- [ ] 损坏的派生 MMKV index 可以由独立记录重建。
+- [x] v4 client 启动失败后指数退避自动恢复，并显示 sync unknown。
+- [x] changes 在解密前分类为 new/exactReplay/superseded。
+- [x] snapshot 使用 shadow generation，完整验证后原子切换。
+- [x] 损坏的派生 MMKV index 可以由独立记录重建。
 - [ ] entity、outbox 和 projection 使用分桶或增量索引。
 - [ ] delta 只重投影受影响 item/turn，不全量重建历史。
 - [ ] 同一 item 的每个 pending request 都可独立显示和操作。
@@ -369,6 +369,69 @@ reasoning 脱敏、结构化诊断和 stream/batch 内存治理。
       subagent activity 接入 UI。
 - [ ] child readOnly 贯穿 MessageView、ToolView、审批、用户输入和 MCP。
 - [ ] command publish 边界再次拒绝 child 写操作和跨 owned-thread 目标。
+
+R4 分为三个可独立验证的提交：
+
+1. App client 与 MMKV 持久状态机：
+   - registry 持有 desired session，不依赖下一次 session refresh 才重试；
+   - 启动失败进入有上限且带抖动的指数退避，前台恢复和 socket 重连可提前
+     唤醒；本地 projection 明确区分 `starting/ready/retrying/unknown`；
+   - changes 在解密前顺序分类为 `new/exactReplay/superseded`。同 revision
+     但 ciphertext、op 或 entity metadata 不一致必须 fail closed；
+   - superseded 只消费 seq，不解密或投影；exact replay 不重复写 cache，但在
+     cursor 尚未推进时允许幂等重投影，覆盖“cache 已写、projection 未完成”
+     的崩溃边界，最终由 entity revision 去重；
+   - snapshot 写入独立 generation。全部分页、解密、schema 和 watermark
+     校验通过后，先通过单次 store transaction 替换 UI projection，再以
+     generation pointer 提交 cache/cursor；构建失败时旧 cache 和旧 UI 保留；
+   - entity/outbox index 使用固定分桶。派生 index 损坏时从独立 record
+     扫描重建，只有独立 outbox record 损坏才 fail closed。
+2. 增量 projection 与结构化状态：
+   - 建立 item/turn/part/request/relation/command 的增量反向索引；
+   - part delta 只重建所属 item message，turn 变化只重建该 turn 的 item，
+     不再遍历和排序全部历史 entity；
+   - message 通过稳定 ID 原位替换，并以增量有序列表维护显示顺序；
+   - 同一 item 的多个 request 使用各自稳定 message/control ID，不共享
+     `requests[0]`；每个 pending request 均可独立结算；
+   - thread/turn token usage 映射到 composer/status bar；connection、
+     execution、approval、user-input、subagent activity 和本地 sync health
+     保持独立，不回退为单一 thinking 真值。
+3. child 双层只读与 UI：
+   - provider child 继续使用真实、隐藏的 side session；
+   - `SessionView`、`MessageView`、`ToolView`、审批、用户输入、MCP、
+     goal/mode/interrupt 控件全部读取统一 readOnly capability；
+   - `publishCodexV4Command` 在持久 outbox 前再次校验 session ownership、
+     readOnly 和 command/payload thread target；UI 漏网也不能产生 mutation；
+   - parent delegation 卡片仅导航 child，child 完成只更新自己的 projection。
+
+R4 client/snapshot 权威提交顺序：
+
+```txt
+changes page
+│
+├─ validate contiguous seq + classify metadata
+├─ new only: decrypt + canonical entity validation
+├─ persist changed entity records
+├─ atomically apply affected projection messages
+└─ persist receive cursor
+```
+
+```txt
+snapshotRequired
+│
+├─ begin shadow generation (old generation remains active)
+├─ page loop: validate -> decrypt -> persist shadow records
+├─ build replacement projection + optimistic outbox
+├─ one store transaction swaps visible projection
+├─ write shadow cursor
+├─ atomically switch active generation pointer
+└─ delete marker and lazily reclaim old generation
+```
+
+R4 本地门禁至少包括：App typecheck/build、App 全量 unit、client/persistence
+逐写入边界崩溃测试、snapshot 中途失败保持旧视图、坏 index 重建、相同
+revision 冲突、10,000 entity 增量投影计数、同 item 多 request，以及 child
+从 UI 事件到 outbox 的双层只读测试。
 
 ### R5 HTTP 平台支持
 
@@ -485,6 +548,16 @@ reasoning 脱敏、结构化诊断和 stream/batch 内存治理。
   测试文件和 `993/993` 单元测试通过；`10` 个定向文件、`127/127` 覆盖
   canonical 出站、route 注册竞态、live/orphan FIFO、无 orphan child 恢复、
   ownership、迁移、请求恢复和离线重连。
+- 2026-07-28：R3-4 提交 `78d2638` 的 CLI Smoke `30354064576`、Push CI
+  `30354064557` 和 PR CI `30354062407` 全部通过；四包构建、PostgreSQL
+  migration、stable-v2 drift、跨组件 transport 和生产依赖审计均为绿色。
+- 2026-07-28：R4 第一切片完成 App client/MMKV 恢复状态机。registry 在
+  session refresh 之外自行指数退避并可由前台/重连提前唤醒；changes 在
+  解密前区分 new、exact replay、superseded 并拒绝同 revision 冲突；
+  snapshot 使用 shadow generation，完整验证后以一次 store transaction
+  替换 projection，再提交 active generation/cursor。entity/outbox 派生
+  index 改为固定分桶且可从独立 record 重建，恶意 legacy marker 不能删除
+  outbox。App typecheck 通过，`77/77` 测试文件、`869/869` 单元测试通过。
 - 2026-07-28：R2 完成。CLI session 初始化和关闭使用 generation 隔离；
   journal 增加单 writer lease、durability poison、可回收字节压缩和终态
   command receipt；显式 outbound flush 固定调用时集合，后台 outbound 使用

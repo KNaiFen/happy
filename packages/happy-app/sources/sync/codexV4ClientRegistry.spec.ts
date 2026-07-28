@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     CodexV4ClientRegistry,
     isCodexV4SyncActive,
@@ -13,10 +13,12 @@ interface TestEvent {
 class Deferred<T> {
     readonly promise: Promise<T>;
     resolve!: (value: T) => void;
+    reject!: (error: unknown) => void;
 
     constructor() {
-        this.promise = new Promise<T>((resolve) => {
+        this.promise = new Promise<T>((resolve, reject) => {
             this.resolve = resolve;
+            this.reject = reject;
         });
     }
 }
@@ -200,5 +202,83 @@ describe('CodexV4ClientRegistry', () => {
         client.started.resolve();
         await client.started.promise;
         await Promise.resolve();
+    });
+
+    it('retries failed startup with bounded backoff and exposes sync health', async () => {
+        vi.useFakeTimers();
+        try {
+            const clients = [new TestClient(), new TestClient()];
+            let createIndex = 0;
+            const states: string[] = [];
+            const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+                createClient: async () => clients[createIndex++],
+                isEligible: () => true,
+                onEntity: async () => undefined,
+                onSnapshotReset: async () => undefined,
+                onSyncState: (_sessionId, state) => {
+                    states.push(state.type);
+                },
+                retryBaseMs: 100,
+                retryMaxMs: 1_000,
+                random: () => 0.5,
+            });
+
+            registry.reconcile([session]);
+            await Promise.resolve();
+            clients[0].started.reject(new Error('relay unavailable'));
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(states).toEqual(['starting', 'unknown']);
+            expect(registry.hasClient(session.sessionId)).toBe(false);
+
+            await vi.advanceTimersByTimeAsync(100);
+            expect(states).toEqual(['starting', 'unknown', 'retrying']);
+            clients[1].started.resolve();
+            await clients[1].started.promise;
+            await Promise.resolve();
+
+            expect(states).toEqual(['starting', 'unknown', 'retrying', 'ready']);
+            expect(registry.hasClient(session.sessionId)).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('wakes a failed startup on foreground invalidation and cancels retry after removal', async () => {
+        vi.useFakeTimers();
+        try {
+            const clients = [new TestClient(), new TestClient()];
+            let createIndex = 0;
+            const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+                createClient: async () => clients[createIndex++],
+                isEligible: () => true,
+                onEntity: async () => undefined,
+                onSnapshotReset: async () => undefined,
+                retryBaseMs: 60_000,
+                random: () => 0.5,
+            });
+
+            registry.reconcile([session]);
+            await Promise.resolve();
+            clients[0].started.reject(new Error('offline'));
+            await Promise.resolve();
+            await Promise.resolve();
+
+            registry.invalidateAll();
+            await Promise.resolve();
+            expect(createIndex).toBe(2);
+
+            registry.reconcile([]);
+            clients[1].started.resolve();
+            await Promise.resolve();
+            await vi.runAllTimersAsync();
+
+            expect(registry.hasClient(session.sessionId)).toBe(false);
+            expect(registry.hasStartingClient(session.sessionId)).toBe(false);
+            expect(clients[1].stopCount).toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

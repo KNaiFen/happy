@@ -9,6 +9,13 @@ export interface CodexV4RegistrySession {
     sessionKey: Uint8Array;
 }
 
+export interface CodexV4RegistrySyncState {
+    type: 'starting' | 'retrying' | 'ready' | 'unknown';
+    attempt: number;
+    nextRetryAt: number | null;
+    lastErrorAt: number | null;
+}
+
 export function isCodexV4SyncEligible(metadata: {
     flavor?: string | null;
     codexSyncVersion?: number;
@@ -27,6 +34,7 @@ interface CodexV4ClientFactoryOptions<TEvent> extends CodexV4RegistrySession {
     onEntity: (event: TEvent) => Promise<void>;
     onEntities: (events: readonly TEvent[]) => Promise<void>;
     onSnapshotReset: () => Promise<void>;
+    onSnapshotReplace?: (events: readonly TEvent[]) => Promise<void>;
 }
 
 interface CodexV4ClientRegistryOptions<TClient extends CodexV4RegistryClient, TEvent> {
@@ -35,12 +43,18 @@ interface CodexV4ClientRegistryOptions<TClient extends CodexV4RegistryClient, TE
     onEntity: (sessionId: string, event: TEvent) => Promise<void>;
     onEntities?: (sessionId: string, events: readonly TEvent[]) => Promise<void>;
     onSnapshotReset: (sessionId: string) => Promise<void>;
+    onSnapshotReplace?: (sessionId: string, events: readonly TEvent[]) => Promise<void>;
     onStartError?: (sessionId: string) => void;
+    onSyncState?: (sessionId: string, state: CodexV4RegistrySyncState) => void;
+    retryBaseMs?: number;
+    retryMaxMs?: number;
+    random?: () => number;
 }
 
 interface StartingClient<TClient extends CodexV4RegistryClient> {
     generation: number;
     client: TClient | null;
+    stopped: boolean;
     created: Promise<TClient>;
     promise: Promise<void>;
 }
@@ -49,36 +63,63 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
     private readonly clients = new Map<string, TClient>();
     private readonly starts = new Map<string, StartingClient<TClient>>();
     private readonly generations = new Map<string, number>();
+    private readonly desired = new Map<string, CodexV4RegistrySession>();
+    private readonly retryAttempts = new Map<string, number>();
+    private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
     constructor(private readonly options: CodexV4ClientRegistryOptions<TClient, TEvent>) {}
 
     reconcile(sessions: CodexV4RegistrySession[]): void {
         const desired = new Map(sessions.map((session) => [session.sessionId, session]));
-        const knownSessionIds = new Set([...this.clients.keys(), ...this.starts.keys()]);
+        const knownSessionIds = new Set([
+            ...this.desired.keys(),
+            ...this.clients.keys(),
+            ...this.starts.keys(),
+            ...this.retryTimers.keys(),
+        ]);
         for (const sessionId of knownSessionIds) {
             if (!desired.has(sessionId)) this.stop(sessionId);
         }
         for (const session of desired.values()) {
-            if (this.clients.has(session.sessionId) || this.starts.has(session.sessionId)) continue;
-            this.start(session);
+            this.desired.set(session.sessionId, session);
+            if (
+                this.clients.has(session.sessionId)
+                || this.starts.has(session.sessionId)
+                || this.retryTimers.has(session.sessionId)
+            ) continue;
+            this.start(session, false);
         }
     }
 
     invalidate(sessionId: string, highWatermark?: number): void {
-        this.clients.get(sessionId)?.invalidate(highWatermark);
+        const client = this.clients.get(sessionId);
+        if (client) {
+            client.invalidate(highWatermark);
+            return;
+        }
+        this.wakeRetry(sessionId);
     }
 
     invalidateAll(): void {
-        for (const client of this.clients.values()) client.invalidate();
+        for (const sessionId of this.desired.keys()) this.invalidate(sessionId);
     }
 
     stop(sessionId: string): void {
+        this.desired.delete(sessionId);
+        this.retryAttempts.delete(sessionId);
+        const retryTimer = this.retryTimers.get(sessionId);
+        if (retryTimer) clearTimeout(retryTimer);
+        this.retryTimers.delete(sessionId);
         this.generations.set(sessionId, (this.generations.get(sessionId) ?? 0) + 1);
         const activeClient = this.clients.get(sessionId);
-        const startingClient = this.starts.get(sessionId)?.client;
+        const startingRecord = this.starts.get(sessionId);
+        const startingClient = startingRecord?.client;
         activeClient?.stop();
         this.clients.delete(sessionId);
-        if (startingClient && startingClient !== activeClient) startingClient.stop();
+        if (startingClient && startingClient !== activeClient && !startingRecord?.stopped) {
+            startingClient.stop();
+            startingRecord!.stopped = true;
+        }
         this.starts.delete(sessionId);
     }
 
@@ -106,9 +147,16 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         return await operation(client);
     }
 
-    private start(session: CodexV4RegistrySession): void {
+    private start(session: CodexV4RegistrySession, retrying: boolean): void {
         const generation = (this.generations.get(session.sessionId) ?? 0) + 1;
         this.generations.set(session.sessionId, generation);
+        const attempt = this.retryAttempts.get(session.sessionId) ?? 0;
+        this.emitSyncState(session.sessionId, {
+            type: retrying ? 'retrying' : 'starting',
+            attempt,
+            nextRetryAt: null,
+            lastErrorAt: null,
+        });
         let record!: StartingClient<TClient>;
         const isCurrent = () => (
             this.generations.get(session.sessionId) === generation
@@ -135,10 +183,17 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
                 await this.options.onSnapshotReset(session.sessionId);
             },
+            onSnapshotReplace: this.options.onSnapshotReplace
+                ? async (events) => {
+                    if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
+                    await this.options.onSnapshotReplace!(session.sessionId, events);
+                }
+                : undefined,
         });
         record = {
             generation,
             client: null,
+            stopped: false,
             created,
             promise: Promise.resolve(),
         };
@@ -148,22 +203,86 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                 const client = await created;
                 record.client = client;
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) {
-                    client.stop();
+                    if (!record.stopped) {
+                        client.stop();
+                        record.stopped = true;
+                    }
                     return;
                 }
                 await client.start();
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) {
-                    client.stop();
+                    if (!record.stopped) {
+                        client.stop();
+                        record.stopped = true;
+                    }
                     return;
                 }
                 this.clients.set(session.sessionId, client);
+                this.retryAttempts.delete(session.sessionId);
+                this.emitSyncState(session.sessionId, {
+                    type: 'ready',
+                    attempt: 0,
+                    nextRetryAt: null,
+                    lastErrorAt: null,
+                });
             } catch {
-                record.client?.stop();
-                if (isCurrent()) this.options.onStartError?.(session.sessionId);
+                if (record.client && !record.stopped) {
+                    record.client.stop();
+                    record.stopped = true;
+                }
+                if (isCurrent()) {
+                    this.options.onStartError?.(session.sessionId);
+                    this.scheduleRetry(session.sessionId);
+                }
             } finally {
                 if (this.starts.get(session.sessionId) === record) this.starts.delete(session.sessionId);
             }
         })();
         void record.promise;
+    }
+
+    private scheduleRetry(sessionId: string): void {
+        if (!this.desired.has(sessionId) || !this.options.isEligible(sessionId)) return;
+        const attempt = (this.retryAttempts.get(sessionId) ?? 0) + 1;
+        this.retryAttempts.set(sessionId, attempt);
+        const base = this.options.retryBaseMs ?? 1_000;
+        const maximum = this.options.retryMaxMs ?? 60_000;
+        const exponential = Math.min(maximum, base * (2 ** Math.min(attempt - 1, 20)));
+        const jitter = 0.8 + (this.options.random ?? Math.random)() * 0.4;
+        const delay = Math.max(1, Math.round(exponential * jitter));
+        const nextRetryAt = Date.now() + delay;
+        this.emitSyncState(sessionId, {
+            type: 'unknown',
+            attempt,
+            nextRetryAt,
+            lastErrorAt: Date.now(),
+        });
+        const timer = setTimeout(() => {
+            if (this.retryTimers.get(sessionId) !== timer) return;
+            this.retryTimers.delete(sessionId);
+            const desired = this.desired.get(sessionId);
+            if (!desired || !this.options.isEligible(sessionId)) return;
+            if (this.clients.has(sessionId) || this.starts.has(sessionId)) return;
+            this.start(desired, true);
+        }, delay);
+        this.retryTimers.set(sessionId, timer);
+    }
+
+    private wakeRetry(sessionId: string): void {
+        const timer = this.retryTimers.get(sessionId);
+        if (timer) clearTimeout(timer);
+        this.retryTimers.delete(sessionId);
+        const desired = this.desired.get(sessionId);
+        if (
+            !desired
+            || !this.options.isEligible(sessionId)
+            || this.clients.has(sessionId)
+            || this.starts.has(sessionId)
+        ) return;
+        this.start(desired, this.retryAttempts.has(sessionId));
+    }
+
+    private emitSyncState(sessionId: string, state: CodexV4RegistrySyncState): void {
+        this.options.onSyncState?.(sessionId, state);
     }
 }

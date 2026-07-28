@@ -28,6 +28,20 @@ const outboxRecordSchema = z.object({
     mutation: SyncMutationV4Schema,
 }).strict();
 
+const snapshotMarkerSchema = z.object({
+    generation: z.string().startsWith('snapshot-'),
+}).strict();
+
+const LEGACY_GENERATION = 'legacy';
+const INDEX_BUCKET_COUNT = 64;
+
+export type SyncV4ChangeClassificationKind = 'new' | 'exactReplay' | 'superseded';
+
+export interface SyncV4ClassifiedChange {
+    kind: SyncV4ChangeClassificationKind;
+    change: SyncChangeV4;
+}
+
 export interface SyncV4PersistentSession {
     producerId: string;
     receiveCursor: number;
@@ -50,24 +64,21 @@ export class SyncV4Persistence {
 
     loadSession(sessionId: string): SyncV4PersistentSession {
         const producerId = this.loadProducerId();
-        let snapshotRequired = this.storage.getString(snapshotMarkerKey(sessionId)) !== undefined;
+        const activeGeneration = this.readActiveGeneration(sessionId);
+        let snapshotRequired = this.recoverSnapshotMarker(sessionId, activeGeneration);
         let entities: SyncEntitySnapshotV4[] = [];
         let receiveCursor = 0;
-        if (!snapshotRequired) {
-            try {
-                entities = this.readEntities(sessionId);
-                receiveCursor = this.readCursor(sessionId);
-                snapshotRequired = this.storage.getString(snapshotMarkerKey(sessionId)) !== undefined;
-                if (snapshotRequired) entities = [];
-            } catch {
-                this.beginSnapshot(sessionId);
-                entities = [];
-                snapshotRequired = true;
-            }
+        try {
+            entities = this.readEntities(sessionId, activeGeneration);
+            receiveCursor = this.readCursor(sessionId, activeGeneration);
+        } catch {
+            this.beginSnapshot(sessionId);
+            entities = [];
+            snapshotRequired = true;
         }
         return {
             producerId,
-            receiveCursor: snapshotRequired ? 0 : receiveCursor,
+            receiveCursor,
             entities,
             outbox: this.readOutbox(sessionId),
             snapshotRequired,
@@ -83,11 +94,15 @@ export class SyncV4Persistence {
     }
 
     getReceiveCursor(sessionId: string): number {
-        return this.readCursor(sessionId);
+        return this.readCursor(sessionId, this.readActiveGeneration(sessionId));
     }
 
     nextRevision(sessionId: string, entityId: string): number {
-        const cached = this.storage.getString(entityKey(sessionId, entityId));
+        const cached = this.storage.getString(entityKey(
+            sessionId,
+            this.readActiveGeneration(sessionId),
+            entityId,
+        ));
         let currentRevision = this.readRevisionWatermark(sessionId, entityId);
         if (cached) {
             currentRevision = Math.max(
@@ -104,24 +119,36 @@ export class SyncV4Persistence {
     enqueueMutations(sessionId: string, mutations: SyncMutationV4[]): void {
         if (mutations.length === 0) return;
         let order = this.storage.getNumber(outboxOrderKey(sessionId)) ?? 0;
-        const index = new Set(this.readStringIndex(outboxIndexKey(sessionId)));
+        const indexes = new Map<number, Set<string>>();
         for (const mutation of mutations) {
             order += 1;
             this.storage.set(outboxOrderKey(sessionId), order);
             this.storage.set(outboxMutationKey(sessionId, mutation.mutationId), JSON.stringify({ order, mutation }));
             this.writeRevisionWatermark(sessionId, mutation.entityId, mutation.revision);
+            const bucket = indexBucket(mutation.mutationId);
+            const index = indexes.get(bucket)
+                ?? new Set(this.readStringIndexSafe(outboxIndexBucketKey(sessionId, bucket)));
             index.add(mutation.mutationId);
+            indexes.set(bucket, index);
         }
-        this.writeStringIndex(outboxIndexKey(sessionId), [...index]);
+        for (const [bucket, index] of indexes) {
+            this.writeStringIndex(outboxIndexBucketKey(sessionId, bucket), [...index]);
+        }
     }
 
     acknowledgeMutations(sessionId: string, acknowledgements: SyncAckV4[]): void {
-        const index = new Set(this.readStringIndex(outboxIndexKey(sessionId)));
+        const indexes = new Map<number, Set<string>>();
         for (const acknowledgement of acknowledgements) {
             this.storage.delete(outboxMutationKey(sessionId, acknowledgement.mutationId));
+            const bucket = indexBucket(acknowledgement.mutationId);
+            const index = indexes.get(bucket)
+                ?? new Set(this.readStringIndexSafe(outboxIndexBucketKey(sessionId, bucket)));
             index.delete(acknowledgement.mutationId);
+            indexes.set(bucket, index);
         }
-        this.writeStringIndex(outboxIndexKey(sessionId), [...index]);
+        for (const [bucket, index] of indexes) {
+            this.writeStringIndex(outboxIndexBucketKey(sessionId, bucket), [...index]);
+        }
     }
 
     getPendingOutbox(sessionId: string): SyncMutationV4[] {
@@ -129,52 +156,87 @@ export class SyncV4Persistence {
     }
 
     getEntityRevision(sessionId: string, entityId: string): number {
-        const raw = this.storage.getString(entityKey(sessionId, entityId));
+        const raw = this.storage.getString(entityKey(
+            sessionId,
+            this.readActiveGeneration(sessionId),
+            entityId,
+        ));
         const cachedRevision = raw ? SyncEntitySnapshotV4Schema.parse(JSON.parse(raw)).revision : 0;
         return Math.max(cachedRevision, this.readRevisionWatermark(sessionId, entityId));
     }
 
-    stageChanges(sessionId: string, changes: SyncChangeV4[]): SyncEntitySnapshotV4[] {
+    classifyChanges(sessionId: string, changes: SyncChangeV4[]): SyncV4ClassifiedChange[] {
         if (changes.length === 0) return [];
-        let expectedSeq = this.readCursor(sessionId) + 1;
-        const applied: SyncEntitySnapshotV4[] = [];
-        const index = new Set(this.readStringIndex(entityIndexKey(sessionId)));
+        const generation = this.readActiveGeneration(sessionId);
+        let expectedSeq = this.readCursor(sessionId, generation) + 1;
+        const virtual = new Map<string, SyncEntitySnapshotV4 | null>();
+        const classified: SyncV4ClassifiedChange[] = [];
         for (const change of changes) {
             if (change.seq !== expectedSeq) {
                 throw new Error(`Sync v4 changes have a gap before sequence ${change.seq}`);
             }
             expectedSeq += 1;
-            const key = entityKey(sessionId, change.entityId);
+            let current = virtual.get(change.entityId);
+            if (current === undefined) {
+                current = this.readEntity(sessionId, generation, change.entityId);
+            }
+            if (!current || change.revision > current.revision) {
+                const next = snapshotFromChange(change, current);
+                virtual.set(change.entityId, next);
+                classified.push({ kind: 'new', change });
+                continue;
+            }
+            if (change.revision < current.revision) {
+                classified.push({ kind: 'superseded', change });
+                continue;
+            }
+            if (!isExactReplay(current, change)) {
+                throw new Error(`Sync v4 change has conflicting ciphertext for the same revision: ${change.entityId}`);
+            }
+            classified.push({ kind: 'exactReplay', change });
+        }
+        return classified;
+    }
+
+    stageChanges(sessionId: string, changes: SyncChangeV4[]): SyncEntitySnapshotV4[] {
+        if (changes.length === 0) return [];
+        const generation = this.readActiveGeneration(sessionId);
+        let expectedSeq = this.readCursor(sessionId, generation) + 1;
+        const applied: SyncEntitySnapshotV4[] = [];
+        const indexes = new Map<number, Set<string>>();
+        for (const change of changes) {
+            if (change.seq !== expectedSeq) {
+                throw new Error(`Sync v4 changes have a gap before sequence ${change.seq}`);
+            }
+            expectedSeq += 1;
+            const key = entityKey(sessionId, generation, change.entityId);
             const currentRaw = this.storage.getString(key);
             const current = currentRaw ? SyncEntitySnapshotV4Schema.parse(JSON.parse(currentRaw)) : null;
             if (!current || change.revision > current.revision) {
-                const next = SyncEntitySnapshotV4Schema.parse({
-                    producerId: change.producerId,
-                    entityId: change.entityId,
-                    entityType: change.entityType,
-                    revision: change.revision,
-                    op: change.op,
-                    ciphertext: change.ciphertext,
-                    updatedSeq: change.seq,
-                    createdAt: current?.createdAt ?? change.createdAt,
-                    updatedAt: change.createdAt,
-                });
+                const next = snapshotFromChange(change, current);
                 this.storage.set(key, JSON.stringify(next));
                 this.writeRevisionWatermark(sessionId, change.entityId, change.revision);
+                const bucket = indexBucket(change.entityId);
+                const index = indexes.get(bucket)
+                    ?? new Set(this.readStringIndexSafe(entityIndexBucketKey(sessionId, generation, bucket)));
                 index.add(change.entityId);
+                indexes.set(bucket, index);
                 applied.push(next);
             }
         }
-        this.writeStringIndex(entityIndexKey(sessionId), [...index]);
+        for (const [bucket, index] of indexes) {
+            this.writeStringIndex(entityIndexBucketKey(sessionId, generation, bucket), [...index]);
+        }
         return applied;
     }
 
     advanceReceiveCursor(sessionId: string, seq: number): void {
-        const current = this.readCursor(sessionId);
+        const generation = this.readActiveGeneration(sessionId);
+        const current = this.readCursor(sessionId, generation);
         if (!Number.isSafeInteger(seq) || seq < current) {
             throw new Error('Sync v4 receive cursor must advance monotonically');
         }
-        this.storage.set(cursorKey(sessionId), seq);
+        this.storage.set(cursorKey(sessionId, generation), seq);
     }
 
     applyChanges(sessionId: string, changes: SyncChangeV4[]): SyncEntitySnapshotV4[] {
@@ -183,28 +245,46 @@ export class SyncV4Persistence {
         return applied;
     }
 
-    beginSnapshot(sessionId: string): void {
-        this.storage.set(snapshotMarkerKey(sessionId), 'rebuilding');
-        for (const key of this.storage.getAllKeys()) {
-            if (key.startsWith(entityPrefix(sessionId))) this.storage.delete(key);
+    beginSnapshot(sessionId: string): string {
+        const activeGeneration = this.readActiveGeneration(sessionId);
+        const previousMarker = this.readSnapshotMarker(sessionId);
+        if (previousMarker && previousMarker.generation !== activeGeneration) {
+            this.deleteGeneration(sessionId, previousMarker.generation);
         }
-        this.storage.delete(entityIndexKey(sessionId));
-        this.storage.delete(cursorKey(sessionId));
+        let generation = `snapshot-${this.generateId()}`;
+        while (generation === activeGeneration || generation === previousMarker?.generation) {
+            generation = `${generation}-next`;
+        }
+        this.deleteGeneration(sessionId, generation);
+        this.storage.set(snapshotMarkerKey(sessionId), JSON.stringify({ generation }));
+        return generation;
     }
 
-    applySnapshotPage(sessionId: string, entities: SyncEntitySnapshotV4[]): void {
-        const index = new Set(this.readStringIndex(entityIndexKey(sessionId)));
+    applySnapshotPage(sessionId: string, generation: string, entities: SyncEntitySnapshotV4[]): void {
+        this.assertSnapshotGeneration(sessionId, generation);
+        const indexes = new Map<number, Set<string>>();
         for (const entity of entities) {
             const parsed = SyncEntitySnapshotV4Schema.parse(entity);
-            this.storage.set(entityKey(sessionId, parsed.entityId), JSON.stringify(parsed));
+            this.storage.set(entityKey(sessionId, generation, parsed.entityId), JSON.stringify(parsed));
             this.writeRevisionWatermark(sessionId, parsed.entityId, parsed.revision);
+            const bucket = indexBucket(parsed.entityId);
+            const index = indexes.get(bucket)
+                ?? new Set(this.readStringIndexSafe(entityIndexBucketKey(sessionId, generation, bucket)));
             index.add(parsed.entityId);
+            indexes.set(bucket, index);
         }
-        this.writeStringIndex(entityIndexKey(sessionId), [...index]);
+        for (const [bucket, index] of indexes) {
+            this.writeStringIndex(entityIndexBucketKey(sessionId, generation, bucket), [...index]);
+        }
     }
 
-    finishSnapshot(sessionId: string, highWatermark: number): void {
-        this.storage.set(cursorKey(sessionId), highWatermark);
+    finishSnapshot(sessionId: string, generation: string, highWatermark: number): void {
+        this.assertSnapshotGeneration(sessionId, generation);
+        if (!Number.isSafeInteger(highWatermark) || highWatermark < 0) {
+            throw new Error('Sync v4 snapshot watermark is invalid');
+        }
+        this.storage.set(cursorKey(sessionId, generation), highWatermark);
+        this.storage.set(activeGenerationKey(sessionId), generation);
         this.storage.delete(snapshotMarkerKey(sessionId));
     }
 
@@ -215,24 +295,31 @@ export class SyncV4Persistence {
         }
     }
 
-    private readEntities(sessionId: string): SyncEntitySnapshotV4[] {
-        const indexed = this.readStringIndex(entityIndexKey(sessionId));
+    private readEntities(sessionId: string, generation: string): SyncEntitySnapshotV4[] {
+        const indexed = Array.from({ length: INDEX_BUCKET_COUNT }, (_, bucket) => (
+            this.readStringIndexSafe(entityIndexBucketKey(sessionId, generation, bucket))
+        )).flat();
         const scanned = this.storage.getAllKeys()
-            .filter((key) => key.startsWith(entityPrefix(sessionId)))
-            .map((key) => decodeURIComponent(key.slice(entityPrefix(sessionId).length)));
+            .filter((key) => key.startsWith(entityPrefix(sessionId, generation)))
+            .map((key) => decodeURIComponent(key.slice(entityPrefix(sessionId, generation).length)));
         const entityIds = [...new Set([...indexed, ...scanned])].sort();
         const entities: SyncEntitySnapshotV4[] = [];
         for (const entityId of entityIds) {
-            const raw = this.storage.getString(entityKey(sessionId, entityId));
+            const raw = this.storage.getString(entityKey(sessionId, generation, entityId));
             if (!raw) continue;
             entities.push(SyncEntitySnapshotV4Schema.parse(JSON.parse(raw)));
         }
-        this.writeStringIndex(entityIndexKey(sessionId), entities.map((entity) => entity.entityId));
+        this.rebuildBucketIndexes(
+            (bucket) => entityIndexBucketKey(sessionId, generation, bucket),
+            entities.map((entity) => entity.entityId),
+        );
         return entities;
     }
 
     private readOutbox(sessionId: string): SyncMutationV4[] {
-        const indexed = this.readStringIndex(outboxIndexKey(sessionId));
+        const indexed = Array.from({ length: INDEX_BUCKET_COUNT }, (_, bucket) => (
+            this.readStringIndexSafe(outboxIndexBucketKey(sessionId, bucket))
+        )).flat();
         const scanned = this.storage.getAllKeys()
             .filter((key) => key.startsWith(outboxMutationPrefix(sessionId)))
             .map((key) => decodeURIComponent(key.slice(outboxMutationPrefix(sessionId).length)));
@@ -249,12 +336,15 @@ export class SyncV4Persistence {
             }
         }
         records.sort((left, right) => left.order - right.order);
-        this.writeStringIndex(outboxIndexKey(sessionId), records.map((record) => record.mutation.mutationId));
+        this.rebuildBucketIndexes(
+            (bucket) => outboxIndexBucketKey(sessionId, bucket),
+            records.map((record) => record.mutation.mutationId),
+        );
         return records.map((record) => record.mutation);
     }
 
-    private readCursor(sessionId: string): number {
-        const cursor = this.storage.getNumber(cursorKey(sessionId)) ?? 0;
+    private readCursor(sessionId: string, generation: string): number {
+        const cursor = this.storage.getNumber(cursorKey(sessionId, generation)) ?? 0;
         if (!Number.isSafeInteger(cursor) || cursor < 0) {
             this.beginSnapshot(sessionId);
             return 0;
@@ -276,14 +366,89 @@ export class SyncV4Persistence {
         if (revision > current) this.storage.set(revisionKey(sessionId, entityId), revision);
     }
 
-    private readStringIndex(key: string): string[] {
+    private readStringIndexSafe(key: string): string[] {
         const raw = this.storage.getString(key);
         if (!raw) return [];
-        return z.array(z.string()).parse(JSON.parse(raw));
+        try {
+            return z.array(z.string()).parse(JSON.parse(raw));
+        } catch {
+            this.storage.delete(key);
+            return [];
+        }
     }
 
     private writeStringIndex(key: string, values: string[]): void {
-        this.storage.set(key, JSON.stringify(values));
+        if (values.length === 0) {
+            this.storage.delete(key);
+            return;
+        }
+        this.storage.set(key, JSON.stringify([...new Set(values)].sort()));
+    }
+
+    private rebuildBucketIndexes(keyForBucket: (bucket: number) => string, values: string[]): void {
+        const buckets = new Map<number, string[]>();
+        for (const value of values) {
+            const bucket = indexBucket(value);
+            const entries = buckets.get(bucket) ?? [];
+            entries.push(value);
+            buckets.set(bucket, entries);
+        }
+        for (let bucket = 0; bucket < INDEX_BUCKET_COUNT; bucket += 1) {
+            this.writeStringIndex(keyForBucket(bucket), buckets.get(bucket) ?? []);
+        }
+    }
+
+    private readActiveGeneration(sessionId: string): string {
+        return this.storage.getString(activeGenerationKey(sessionId)) ?? LEGACY_GENERATION;
+    }
+
+    private readSnapshotMarker(sessionId: string): z.infer<typeof snapshotMarkerSchema> | null {
+        const raw = this.storage.getString(snapshotMarkerKey(sessionId));
+        if (!raw) return null;
+        try {
+            return snapshotMarkerSchema.parse(JSON.parse(raw));
+        } catch {
+            return null;
+        }
+    }
+
+    private recoverSnapshotMarker(sessionId: string, activeGeneration: string): boolean {
+        const raw = this.storage.getString(snapshotMarkerKey(sessionId));
+        if (!raw) return false;
+        const marker = this.readSnapshotMarker(sessionId);
+        if (!marker) {
+            this.storage.delete(snapshotMarkerKey(sessionId));
+            this.beginSnapshot(sessionId);
+            return true;
+        }
+        if (marker.generation === activeGeneration) {
+            this.storage.delete(snapshotMarkerKey(sessionId));
+            return false;
+        }
+        return true;
+    }
+
+    private assertSnapshotGeneration(sessionId: string, generation: string): void {
+        if (this.readSnapshotMarker(sessionId)?.generation !== generation) {
+            throw new Error('Sync v4 snapshot generation is no longer current');
+        }
+    }
+
+    private readEntity(
+        sessionId: string,
+        generation: string,
+        entityId: string,
+    ): SyncEntitySnapshotV4 | null {
+        const raw = this.storage.getString(entityKey(sessionId, generation, entityId));
+        return raw ? SyncEntitySnapshotV4Schema.parse(JSON.parse(raw)) : null;
+    }
+
+    private deleteGeneration(sessionId: string, generation: string): void {
+        if (generation === LEGACY_GENERATION || !generation.startsWith('snapshot-')) return;
+        const prefix = generationPrefix(sessionId, generation);
+        for (const key of this.storage.getAllKeys()) {
+            if (key.startsWith(prefix)) this.storage.delete(key);
+        }
     }
 }
 
@@ -291,32 +456,42 @@ function sessionPrefix(sessionId: string): string {
     return `sync-v4:session:${encodeURIComponent(sessionId)}:`;
 }
 
-function cursorKey(sessionId: string): string {
-    return `${sessionPrefix(sessionId)}cursor`;
+function activeGenerationKey(sessionId: string): string {
+    return `${sessionPrefix(sessionId)}active-generation`;
+}
+
+function generationPrefix(sessionId: string, generation: string): string {
+    return generation === LEGACY_GENERATION
+        ? sessionPrefix(sessionId)
+        : `${sessionPrefix(sessionId)}generation:${encodeURIComponent(generation)}:`;
+}
+
+function cursorKey(sessionId: string, generation: string): string {
+    return `${generationPrefix(sessionId, generation)}cursor`;
 }
 
 function snapshotMarkerKey(sessionId: string): string {
     return `${sessionPrefix(sessionId)}snapshot-marker`;
 }
 
-function entityIndexKey(sessionId: string): string {
-    return `${sessionPrefix(sessionId)}entities`;
+function entityIndexBucketKey(sessionId: string, generation: string, bucket: number): string {
+    return `${generationPrefix(sessionId, generation)}entity-index:${bucket}`;
 }
 
-function entityPrefix(sessionId: string): string {
-    return `${sessionPrefix(sessionId)}entity:`;
+function entityPrefix(sessionId: string, generation: string): string {
+    return `${generationPrefix(sessionId, generation)}entity:`;
 }
 
-function entityKey(sessionId: string, entityId: string): string {
-    return `${entityPrefix(sessionId)}${encodeURIComponent(entityId)}`;
+function entityKey(sessionId: string, generation: string, entityId: string): string {
+    return `${entityPrefix(sessionId, generation)}${encodeURIComponent(entityId)}`;
 }
 
 function revisionKey(sessionId: string, entityId: string): string {
     return `${sessionPrefix(sessionId)}revision:${encodeURIComponent(entityId)}`;
 }
 
-function outboxIndexKey(sessionId: string): string {
-    return `${sessionPrefix(sessionId)}outbox`;
+function outboxIndexBucketKey(sessionId: string, bucket: number): string {
+    return `${sessionPrefix(sessionId)}outbox-index:${bucket}`;
 }
 
 function outboxOrderKey(sessionId: string): string {
@@ -329,6 +504,41 @@ function outboxMutationPrefix(sessionId: string): string {
 
 function outboxMutationKey(sessionId: string, mutationId: string): string {
     return `${outboxMutationPrefix(sessionId)}${encodeURIComponent(mutationId)}`;
+}
+
+function snapshotFromChange(
+    change: SyncChangeV4,
+    current: SyncEntitySnapshotV4 | null,
+): SyncEntitySnapshotV4 {
+    return SyncEntitySnapshotV4Schema.parse({
+        producerId: change.producerId,
+        entityId: change.entityId,
+        entityType: change.entityType,
+        revision: change.revision,
+        op: change.op,
+        ciphertext: change.ciphertext,
+        updatedSeq: change.seq,
+        createdAt: current?.createdAt ?? change.createdAt,
+        updatedAt: change.createdAt,
+    });
+}
+
+function isExactReplay(current: SyncEntitySnapshotV4, change: SyncChangeV4): boolean {
+    return current.producerId === change.producerId
+        && current.entityId === change.entityId
+        && current.entityType === change.entityType
+        && current.revision === change.revision
+        && current.op === change.op
+        && current.ciphertext === change.ciphertext;
+}
+
+function indexBucket(value: string): number {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0) % INDEX_BUCKET_COUNT;
 }
 
 function defaultRandomUUID(): string {

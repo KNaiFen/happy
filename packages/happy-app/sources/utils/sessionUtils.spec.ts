@@ -70,4 +70,21 @@ describe('resolveSessionStatus', () => {
             codexState: codexState({ execution: { type: 'systemError' } }),
         }), 'working...').state).toBe('error');
     });
+
+    it('marks App sync retry as unknown without erasing the official execution state', () => {
+        const status = resolveSessionStatus(session({
+            codexState: codexState({
+                execution: { type: 'active', activeFlags: [] },
+                appSyncStatus: 'unknown',
+                appSyncLastErrorAt: 20,
+            }),
+        }), 'working...');
+
+        expect(status).toMatchObject({
+            state: 'thinking',
+            isConnected: false,
+            isPulsing: false,
+        });
+        expect(status.statusText).toContain('unknown');
+    });
 });
