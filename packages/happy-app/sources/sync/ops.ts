@@ -18,6 +18,11 @@ import {
     rigHasRpcMethod,
 } from './rig';
 import { codexV4RequestResponse, findActiveCodexV4Turn } from './codexV4Commands';
+import {
+    assertCodexSessionWritable,
+    isCodexSessionReadOnly,
+    resolveCodexV4SessionCapabilities,
+} from './codexV4Capabilities';
 
 export type { SessionAgentModesPatch };
 
@@ -425,6 +430,7 @@ export async function machineResumeSession(options: ResumeSessionOptions & { mod
     const { machineId, sessionId, model, permissionMode } = options;
 
     try {
+        assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
         const result = await apiSocket.machineRPC<SpawnSessionResult, { sessionId: string; model?: string; permissionMode?: string }>(
             machineId,
             'resume-happy-session',
@@ -651,6 +657,7 @@ async function sessionUpdateAgentModesMetadata(
 export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModesPatch): void {
     const state = storage.getState();
     const session = state.sessions[sessionId];
+    if (isCodexSessionReadOnly(session?.metadata)) return;
 
     // Only touch fields that actually change — clearing modes on a session
     // with no picks (e.g. every abort) must not cost a metadata round-trip.
@@ -699,13 +706,15 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
  */
 export async function sessionAbort(sessionId: string): Promise<void> {
     const metadata = storage.getState().sessions[sessionId]?.metadata;
+    assertCodexSessionWritable(metadata);
     if (!rigCanAbort(metadata)) {
         throw new Error('Abort is not available for this session');
     }
     if (sync.isCodexV4Activated(sessionId)) {
         const projection = storage.getState().codexV4Sessions[sessionId];
-        const activeTurn = projection ? findActiveCodexV4Turn(projection) : null;
-        if (!projection?.thread || !activeTurn) {
+        const threadId = resolveCodexV4SessionCapabilities(metadata, projection).ownedThreadId;
+        const activeTurn = projection ? findActiveCodexV4Turn(projection, threadId) : null;
+        if (!threadId || !activeTurn) {
             if (projection?.runtime?.execution.type === 'active') {
                 throw new Error('The active Codex turn identity is not available yet');
             }
@@ -713,7 +722,7 @@ export async function sessionAbort(sessionId: string): Promise<void> {
         }
         await sync.publishCodexV4Command(sessionId, {
             command: 'turn.interrupt',
-            threadId: projection.thread.threadId,
+            threadId,
             expectedTurnId: activeTurn.turnId,
             payload: { expectedTurnId: activeTurn.turnId },
         });
@@ -730,11 +739,13 @@ export async function sessionUpdateCodexQueuedMessage(
     id: string,
     text: string,
 ): Promise<void> {
+    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
     await apiSocket.sessionRPC(sessionId, 'codex-update-queued-message', { id, text });
 }
 
 /** Move one CLI-owned Codex follow-up into the currently active turn. */
 export async function sessionSteerCodexQueuedMessage(sessionId: string, id: string): Promise<void> {
+    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
     await apiSocket.sessionRPC(sessionId, 'codex-steer-queued-message', { id });
 }
 
@@ -742,6 +753,7 @@ export async function sessionSteerCodexQueuedMessage(sessionId: string, id: stri
  * Allow a permission request
  */
 export async function sessionAllow(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'approved' | 'approved_for_session', updatedInput?: Record<string, unknown>): Promise<void> {
+    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
     if (sync.isCodexV4Activated(sessionId)) {
         await resolveCodexV4Request(sessionId, id, true, decision, updatedInput);
         return;
@@ -754,6 +766,7 @@ export async function sessionAllow(sessionId: string, id: string, mode?: 'defaul
  * Deny a permission request
  */
 export async function sessionDeny(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'denied' | 'abort'): Promise<void> {
+    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
     if (sync.isCodexV4Activated(sessionId)) {
         await resolveCodexV4Request(sessionId, id, false, decision);
         return;
@@ -766,6 +779,7 @@ export async function sessionDeny(sessionId: string, id: string, mode?: 'default
  * Request mode change for a session
  */
 export async function sessionSwitch(sessionId: string, to: 'remote' | 'local'): Promise<boolean> {
+    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
     const request: SessionModeChangeRequest = { to };
     const response = await apiSocket.sessionRPC<boolean, SessionModeChangeRequest>(
         sessionId,
@@ -783,8 +797,13 @@ export async function sessionGoalAction(
     action: SessionGoalActionRequest['action'],
     objective?: string,
 ): Promise<void> {
+    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
     if (sync.isCodexV4Activated(sessionId)) {
-        const threadId = storage.getState().codexV4Sessions[sessionId]?.thread?.threadId;
+        const state = storage.getState();
+        const threadId = resolveCodexV4SessionCapabilities(
+            state.sessions[sessionId]?.metadata,
+            state.codexV4Sessions[sessionId],
+        ).ownedThreadId;
         if (!threadId) throw new Error('Codex thread is not available');
         if (action === 'clear') {
             await sync.publishCodexV4Command(sessionId, {
@@ -821,9 +840,18 @@ async function resolveCodexV4Request(
     decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort',
     updatedInput?: Record<string, unknown>,
 ): Promise<void> {
-    const projection = storage.getState().codexV4Sessions[sessionId];
+    const state = storage.getState();
+    const projection = state.codexV4Sessions[sessionId];
+    const ownedThreadId = resolveCodexV4SessionCapabilities(
+        state.sessions[sessionId]?.metadata,
+        projection,
+    ).ownedThreadId;
     const request = projection
-        ? Object.values(projection.entities['codex.request']).find((entry) => entry.requestId === requestId)
+        ? Object.values(projection.entities['codex.request']).find((entry) => (
+            entry.requestId === requestId
+            && ownedThreadId !== null
+            && entry.threadId === ownedThreadId
+        ))
         : null;
     if (!request || request.status !== 'pending') throw new Error('Codex request is no longer pending');
     await sync.publishCodexV4Command(sessionId, {
@@ -1001,6 +1029,7 @@ export async function sessionRipgrep(
  */
 export async function sessionKill(sessionId: string): Promise<SessionKillResponse> {
     try {
+        assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
         const response = await apiSocket.sessionRPC<SessionKillResponse, {}>(
             sessionId,
             'killSession',
@@ -1021,6 +1050,7 @@ export async function sessionKill(sessionId: string): Promise<SessionKillRespons
  */
 export async function sessionArchive(sessionId: string): Promise<{ success: boolean; message?: string }> {
     try {
+        assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
         const response = await apiSocket.request(`/v1/sessions/${sessionId}/archive`, {
             method: 'POST'
         });
@@ -1040,6 +1070,7 @@ export async function sessionArchive(sessionId: string): Promise<{ success: bool
  */
 export async function sessionDelete(sessionId: string): Promise<{ success: boolean; message?: string }> {
     try {
+        assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
         const response = await apiSocket.request(`/v1/sessions/${sessionId}`, {
             method: 'DELETE'
         });
@@ -1106,6 +1137,17 @@ export async function forkAndSpawn(
     opts: ForkOptions = {},
 ): Promise<SpawnSessionResult> {
     if (source.kind === 'codex') {
+        const sourceSession = storage.getState().sessions[source.sessionId];
+        assertCodexSessionWritable(sourceSession?.metadata);
+        if (
+            !sourceSession
+            || sourceSession.metadata?.flavor !== 'codex'
+            || sourceSession.metadata.codexThreadId !== source.codexThreadId
+            || sourceSession.metadata.machineId !== source.machineId
+            || sourceSession.metadata.path !== source.directory
+        ) {
+            throw new Error('Codex fork source is stale or owned by another Happy session');
+        }
         const forkResult = opts.cutAfterItemId
             ? await codexDuplicateThread({
                 machineId: source.machineId,

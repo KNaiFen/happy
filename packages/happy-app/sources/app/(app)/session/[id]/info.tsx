@@ -131,6 +131,7 @@ function SessionInfoContent({ session }: { session: Session }) {
     const devModeEnabled = __DEV__;
     const sessionName = getSessionName(session);
     const sessionStatus = useSessionStatus(session);
+    const isCodexReadOnly = session.metadata?.codexReadOnly === true;
     const {
         canShowResume,
         canFork,
@@ -414,18 +415,22 @@ function SessionInfoContent({ session }: { session: Session }) {
                             onPress={() => router.push(`/session/${session.metadata!.parentSessionId}`)}
                         />
                     )}
-                    <Item
-                        title={t('sessionInfo.archiveSession')}
-                        subtitle={t('sessionInfo.archiveSessionSubtitle')}
-                        icon={<Ionicons name="archive-outline" size={29} color="#FF3B30" />}
-                        onPress={handleArchiveSession}
-                    />
-                    <Item
-                        title={t('sessionInfo.deleteSession')}
-                        subtitle={t('sessionInfo.deleteSessionSubtitle')}
-                        icon={<Ionicons name="trash-outline" size={29} color="#FF3B30" />}
-                        onPress={handleDeleteSession}
-                    />
+                    {!isCodexReadOnly && (
+                        <Item
+                            title={t('sessionInfo.archiveSession')}
+                            subtitle={t('sessionInfo.archiveSessionSubtitle')}
+                            icon={<Ionicons name="archive-outline" size={29} color="#FF3B30" />}
+                            onPress={handleArchiveSession}
+                        />
+                    )}
+                    {!isCodexReadOnly && (
+                        <Item
+                            title={t('sessionInfo.deleteSession')}
+                            subtitle={t('sessionInfo.deleteSessionSubtitle')}
+                            icon={<Ionicons name="trash-outline" size={29} color="#FF3B30" />}
+                            onPress={handleDeleteSession}
+                        />
+                    )}
                 </ItemGroup>
 
                 {/* Metadata */}

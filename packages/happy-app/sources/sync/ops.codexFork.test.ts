@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { machineRPC, refreshSessions } = vi.hoisted(() => ({
+const { machineRPC, refreshSessions, getState } = vi.hoisted(() => ({
     machineRPC: vi.fn(),
     refreshSessions: vi.fn(),
+    getState: vi.fn(() => ({ sessions: {} })),
 }));
 
 vi.mock('./apiSocket', () => ({
@@ -16,13 +17,14 @@ vi.mock('./sync', () => ({
 // ops.ts imports storage (for sessionSetAgentModes), which transitively pulls
 // in react-native — mock it out, these tests never touch it.
 vi.mock('./storage', () => ({
-    storage: { getState: vi.fn(() => ({ sessions: {} })) },
+    storage: { getState },
 }));
 
 describe('codex fork ops', () => {
     beforeEach(() => {
         machineRPC.mockReset();
         refreshSessions.mockReset();
+        getState.mockReturnValue({ sessions: {} });
     });
 
     it('passes new-session mode defaults through spawn RPC', async () => {
@@ -53,6 +55,18 @@ describe('codex fork ops', () => {
     });
 
     it('forks a full Codex thread and spawns a Codex session resumed to the new thread', async () => {
+        getState.mockReturnValue({
+            sessions: {
+                'happy-source': {
+                    metadata: {
+                        flavor: 'codex',
+                        machineId: 'machine-1',
+                        path: '/tmp/project',
+                        codexThreadId: 'thread-source',
+                    },
+                },
+            },
+        });
         machineRPC.mockImplementation(async (_machineId: string, method: string) => {
             if (method === 'codex-fork-thread') {
                 return { type: 'success', newCodexThreadId: 'thread-forked' };
@@ -94,6 +108,18 @@ describe('codex fork ops', () => {
     });
 
     it('duplicates a Codex thread from a selected user item before spawning', async () => {
+        getState.mockReturnValue({
+            sessions: {
+                'happy-source': {
+                    metadata: {
+                        flavor: 'codex',
+                        machineId: 'machine-1',
+                        path: '/tmp/project',
+                        codexThreadId: 'thread-source',
+                    },
+                },
+            },
+        });
         machineRPC.mockImplementation(async (_machineId: string, method: string) => {
             if (method === 'codex-duplicate-thread') {
                 return { type: 'success', newCodexThreadId: 'thread-cut' };
@@ -133,5 +159,31 @@ describe('codex fork ops', () => {
                 forkedFromMessageId: 'message-2',
             }),
         );
+    });
+
+    it('rejects a provider-created child at the final fork boundary', async () => {
+        getState.mockReturnValue({
+            sessions: {
+                'happy-child': {
+                    metadata: {
+                        flavor: 'codex',
+                        machineId: 'machine-1',
+                        path: '/tmp/project',
+                        codexThreadId: 'thread-child',
+                        codexReadOnly: true,
+                    },
+                },
+            },
+        });
+        const { forkAndSpawn } = await import('./ops');
+
+        await expect(forkAndSpawn({
+            kind: 'codex',
+            sessionId: 'happy-child',
+            machineId: 'machine-1',
+            directory: '/tmp/project',
+            codexThreadId: 'thread-child',
+        })).rejects.toThrow('read-only');
+        expect(machineRPC).not.toHaveBeenCalled();
     });
 });

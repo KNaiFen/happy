@@ -30,6 +30,9 @@ export function getSessionForkSource(session: Session): ForkSource | null {
     }
 
     if (session.metadata?.flavor === 'codex') {
+        if (session.metadata.codexReadOnly === true) {
+            return null;
+        }
         const codexThreadId = session.metadata?.codexThreadId;
         if (!nonEmpty(codexThreadId)) {
             return null;

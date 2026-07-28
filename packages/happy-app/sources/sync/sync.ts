@@ -81,6 +81,10 @@ import {
     parseCodexV4Input,
     type CodexV4CommandDraft,
 } from './codexV4Commands';
+import {
+    assertCodexV4CommandPublishAllowed,
+    resolveCodexV4SessionCapabilities,
+} from './codexV4Capabilities';
 
 type V3GetSessionMessagesResponse = {
     messages: ApiMessage[];
@@ -384,7 +388,17 @@ class Sync {
             throw new Error('Codex Sync v4 is not active for this session');
         }
         const command = createCodexV4Command(draft, { commandId });
+        const assertCurrentSessionAllowsCommand = () => {
+            const state = storage.getState();
+            assertCodexV4CommandPublishAllowed({
+                command,
+                metadata: state.sessions[sessionId]?.metadata,
+                projection: state.codexV4Sessions[sessionId],
+            });
+        };
+        assertCurrentSessionAllowsCommand();
         await this.codexV4Clients.withClient(sessionId, async (client) => {
+            assertCurrentSessionAllowsCommand();
             await client.publishEntity(command);
         });
         return command;
@@ -692,6 +706,15 @@ class Sync {
 
         const flavor = session.metadata?.flavor;
         const useCodexV4 = this.isCodexV4Activated(sessionId);
+        const codexV4Capabilities = useCodexV4
+            ? resolveCodexV4SessionCapabilities(
+                session.metadata,
+                storage.getState().codexV4Sessions[sessionId],
+            )
+            : null;
+        if (codexV4Capabilities?.readOnly) {
+            throw new Error('Provider-created Codex child sessions are read-only');
+        }
         const parsedCodexV4Input = useCodexV4
             ? parseCodexV4Input(text, session.metadata?.skills ?? [])
             : null;
@@ -798,6 +821,7 @@ class Sync {
             const draft = commandForCodexV4Input({
                 parsed: parsedCodexV4Input,
                 projection: codexV4Projection,
+                threadId: codexV4Capabilities?.ownedThreadId,
                 mode: {
                     ...(modeMeta.model !== undefined ? { model: modeMeta.model } : {}),
                     ...(modeMeta.effort !== undefined ? { effort: modeMeta.effort } : {}),

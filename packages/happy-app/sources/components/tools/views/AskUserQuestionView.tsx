@@ -8,6 +8,7 @@ import { t } from '@/text';
 import { Ionicons } from '@expo/vector-icons';
 import { isMcpElicitationInput } from '@/sync/mcpElicitation';
 import { McpElicitationView } from './McpElicitationView';
+import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 import { parseToolUserInputAnswers } from '@/sync/toolUserInput';
 
 interface QuestionOption {
@@ -170,7 +171,7 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
-const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
+const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadata, readOnly = false }) => {
     const { theme } = useUnistyles();
     const [selections, setSelections] = React.useState<Map<number, Set<number>>>(new Map());
     const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -186,7 +187,8 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
     }
 
     const isRunning = tool.state === 'running';
-    const canInteract = isRunning && !isSubmitted;
+    const interactionReadOnly = readOnly || isCodexSessionReadOnly(metadata);
+    const canInteract = !interactionReadOnly && isRunning && !isSubmitted;
 
     // Check if all questions have at least one selection
     const allQuestionsAnswered = questions.every((_, qIndex) => {
@@ -220,7 +222,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
     }, [canInteract]);
 
     const handleSubmit = React.useCallback(async () => {
-        if (!sessionId || !allQuestionsAnswered || isSubmitting) return;
+        if (interactionReadOnly || !canInteract || !sessionId || !allQuestionsAnswered || isSubmitting) return;
 
         setIsSubmitting(true);
 
@@ -257,7 +259,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
         } finally {
             setIsSubmitting(false);
         }
-    }, [sessionId, questions, selections, allQuestionsAnswered, isSubmitting, tool.permission?.id]);
+    }, [interactionReadOnly, canInteract, sessionId, questions, selections, allQuestionsAnswered, isSubmitting, tool.permission?.id]);
 
     // Show submitted state
     if (isSubmitted || tool.state === 'completed') {

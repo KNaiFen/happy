@@ -16,6 +16,7 @@ import { parseToolUseError } from '@/utils/toolErrorParser';
 import { formatMCPTitle } from './views/MCPToolView';
 import { t } from '@/text';
 import { getTerminalToolCommand, shouldRenderToolCardHeader } from '@/utils/toolDisplay';
+import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 
 interface ToolViewProps {
     metadata: Metadata | null;
@@ -24,10 +25,12 @@ interface ToolViewProps {
     onPress?: () => void;
     sessionId?: string;
     messageId?: string;
+    readOnly?: boolean;
 }
 
 export const ToolView = React.memo<ToolViewProps>((props) => {
     const { tool, onPress, sessionId, messageId } = props;
+    const readOnly = props.readOnly ?? isCodexSessionReadOnly(props.metadata);
     const router = useRouter();
     const { theme } = useUnistyles();
 
@@ -170,7 +173,16 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     const renderCardHeader = shouldRenderToolCardHeader(tool.name, Platform.OS);
     const renderPermissionFooter = () => (
         tool.permission && sessionId && tool.name !== 'AskUserQuestion'
-            ? <PermissionFooter permission={tool.permission} sessionId={sessionId} toolName={tool.name} toolInput={tool.input} metadata={props.metadata} />
+            ? (
+                <PermissionFooter
+                    permission={tool.permission}
+                    sessionId={sessionId}
+                    toolName={tool.name}
+                    toolInput={tool.input}
+                    metadata={props.metadata}
+                    readOnly={readOnly}
+                />
+            )
             : null
     );
 
@@ -250,6 +262,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                                 metadata={props.metadata}
                                 messages={props.messages ?? []}
                                 sessionId={sessionId}
+                                readOnly={readOnly}
                                 permissionFooter={isInlineCodexPatch ? renderPermissionFooter() : undefined}
                             />
                             {tool.state === 'error' && tool.result &&

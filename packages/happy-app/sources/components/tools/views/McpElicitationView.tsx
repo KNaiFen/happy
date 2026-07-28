@@ -25,8 +25,9 @@ import { t } from '@/text';
 import { openExternalUrl } from '@/utils/openExternalUrl';
 import { ToolSectionView } from '../ToolSectionView';
 import type { ToolViewProps } from './_all';
+import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 
-export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
+export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, metadata, readOnly = false }) => {
     const { theme } = useUnistyles();
     const parsed = React.useMemo(() => parseMcpElicitation(tool.input), [tool.input]);
     const fields = parsed?.mode === 'form' ? parsed.fields : [];
@@ -43,13 +44,14 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId }
         () => parsed?.mode === 'json' ? parseMcpElicitationJson(jsonText) : null,
         [jsonText, parsed],
     );
-    const canInteract = tool.state === 'running' && submittedAction === null;
+    const interactionReadOnly = readOnly || isCodexSessionReadOnly(metadata);
+    const canInteract = !interactionReadOnly && tool.state === 'running' && submittedAction === null;
     const canSubmit = parsed?.mode === 'url'
         || (parsed?.mode === 'form' && formContent !== null)
         || (parsed?.mode === 'json' && jsonContent !== null);
 
     const submit = React.useCallback(async () => {
-        if (!sessionId || !tool.permission?.id || !parsed || !canInteract || !canSubmit || submitting) return;
+        if (interactionReadOnly || !sessionId || !tool.permission?.id || !parsed || !canInteract || !canSubmit || submitting) return;
         setSubmitting('accept');
         try {
             const content = parsed.mode === 'form'
@@ -62,10 +64,10 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId }
         } finally {
             setSubmitting(null);
         }
-    }, [canInteract, canSubmit, formContent, jsonContent, parsed, sessionId, submitting, tool.permission?.id]);
+    }, [interactionReadOnly, canInteract, canSubmit, formContent, jsonContent, parsed, sessionId, submitting, tool.permission?.id]);
 
     const cancel = React.useCallback(async () => {
-        if (!sessionId || !tool.permission?.id || !canInteract || submitting) return;
+        if (interactionReadOnly || !sessionId || !tool.permission?.id || !canInteract || submitting) return;
         setSubmitting('cancel');
         try {
             await sessionDeny(sessionId, tool.permission.id, undefined, undefined, 'abort');
@@ -73,7 +75,7 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId }
         } finally {
             setSubmitting(null);
         }
-    }, [canInteract, sessionId, submitting, tool.permission?.id]);
+    }, [interactionReadOnly, canInteract, sessionId, submitting, tool.permission?.id]);
 
     if (!parsed) return null;
     if (submittedAction || tool.state === 'completed') {

@@ -14,6 +14,7 @@ import {
     rigCanAbort,
     rigCanBrowseFiles,
     rigCanSearchFiles,
+    rigCanUseAttachments,
     rigCanUseShell,
     rigCanWriteFiles,
     usesControlledSessionUi,
@@ -77,6 +78,16 @@ describe('Rig metadata', () => {
             ...rigMetadataFixture,
             capabilities: { ...rigMetadataFixture.capabilities!, permissionModeSelection: false },
         })).toBe(false);
+    });
+
+    it('overrides advertised write capabilities for provider-created Codex children', () => {
+        const child = { ...rigMetadataFixture, codexReadOnly: true };
+        expect(rigCanAbort(child)).toBe(false);
+        expect(rigCanUseAttachments(child)).toBe(false);
+        expect(rigCanWriteFiles(child)).toBe(false);
+        expect(rigCanUseShell(child)).toBe(false);
+        expect(rigCanBrowseFiles(child)).toBe(true);
+        expect(rigCanSearchFiles(child)).toBe(true);
     });
 
     it('preserves activity metadata and derives only nonzero indicators', () => {

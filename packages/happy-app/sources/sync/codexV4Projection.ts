@@ -48,6 +48,7 @@ export interface CodexV4Projection {
     revisions: Record<string, number>;
     entities: CodexV4EntityBuckets;
     indexes: CodexV4ProjectionIndexes;
+    selectedThreadId: string | null;
     thread: CodexThreadEntityV4 | null;
     runtime: CodexRuntimeEntityV4 | null;
     activated: boolean;
@@ -62,7 +63,7 @@ export interface CodexV4ProjectionUpdate {
     revision: number;
 }
 
-export function createCodexV4Projection(): CodexV4Projection {
+export function createCodexV4Projection(selectedThreadId: string | null = null): CodexV4Projection {
     return {
         revisions: {},
         entities: {
@@ -77,6 +78,7 @@ export function createCodexV4Projection(): CodexV4Projection {
             'codex.relation': {},
         },
         indexes: createProjectionIndexes(),
+        selectedThreadId,
         thread: null,
         runtime: null,
         activated: false,
@@ -104,7 +106,7 @@ function createProjectionIndexes(): CodexV4ProjectionIndexes {
 
 export function resetCodexV4Projection(current: CodexV4Projection): CodexV4Projection {
     return {
-        ...createCodexV4Projection(),
+        ...createCodexV4Projection(current.selectedThreadId),
         activated: current.activated,
         syncHealth: current.syncHealth,
     };
@@ -113,8 +115,16 @@ export function resetCodexV4Projection(current: CodexV4Projection): CodexV4Proje
 export function replaceCodexV4Projection(
     current: CodexV4Projection,
     updates: readonly CodexV4ProjectionUpdate[],
+    selectedThreadId: string | null = current.selectedThreadId,
 ): CodexV4Projection {
-    return applyCodexV4ProjectionUpdates(resetCodexV4Projection(current), updates);
+    return applyCodexV4ProjectionUpdates(
+        {
+            ...resetCodexV4Projection(current),
+            selectedThreadId,
+        },
+        updates,
+        selectedThreadId,
+    );
 }
 
 export function applyCodexV4SyncState(
@@ -133,14 +143,17 @@ export function applyCodexV4SyncState(
 export function applyCodexV4ProjectionUpdate(
     current: CodexV4Projection,
     update: CodexV4ProjectionUpdate,
+    selectedThreadId: string | null = current.selectedThreadId,
 ): CodexV4Projection {
-    return applyCodexV4ProjectionUpdates(current, [update]);
+    return applyCodexV4ProjectionUpdates(current, [update], selectedThreadId);
 }
 
 export function applyCodexV4ProjectionUpdates(
     current: CodexV4Projection,
     updates: readonly CodexV4ProjectionUpdate[],
+    selectedThreadId: string | null = current.selectedThreadId,
 ): CodexV4Projection {
+    const selectionChanged = current.selectedThreadId !== selectedThreadId;
     let revisions = current.revisions;
     const changedBuckets = new Map<CodexEntityType, Record<string, CodexEntityV4>>();
     const indexBuilder = new ProjectionIndexBuilder(current.indexes);
@@ -161,7 +174,13 @@ export function applyCodexV4ProjectionUpdates(
             changedBuckets.set(entityType, bucket);
         }
         const previous = bucket[update.entity.providerId] ?? null;
-        if (previous) collectAffectedOwners(previous, indexBuilder, affected);
+        if (
+            previous
+            && !selectionChanged
+            && entityAffectsSelectedThread(previous, selectedThreadId)
+        ) {
+            collectAffectedOwners(previous, indexBuilder, affected);
+        }
         if (update.op === 'delete') {
             delete bucket[update.entity.providerId];
         } else {
@@ -172,42 +191,96 @@ export function applyCodexV4ProjectionUpdates(
             if (previous) removeEntityFromIndexes(previous, indexBuilder);
             if (next) addEntityToIndexes(next, indexBuilder);
         }
-        if (next) collectAffectedOwners(next, indexBuilder, affected);
+        if (
+            next
+            && !selectionChanged
+            && entityAffectsSelectedThread(next, selectedThreadId)
+        ) {
+            collectAffectedOwners(next, indexBuilder, affected);
+        }
     }
-    if (!changed) return current;
+    if (!changed) {
+        return selectionChanged
+            ? selectCodexV4ProjectionThread(current, selectedThreadId)
+            : current;
+    }
 
     let entities = current.entities;
     for (const [entityType, bucket] of changedBuckets) {
         entities = { ...entities, [entityType]: bucket } as CodexV4EntityBuckets;
     }
     const indexes = indexBuilder.finish();
-    const runtime = changedBuckets.has('codex.runtime')
-        ? newestEntity(Object.values(entities['codex.runtime']))
+    const runtime = selectionChanged || changedBuckets.has('codex.runtime')
+        ? currentEntityForThread(Object.values(entities['codex.runtime']), selectedThreadId)
         : current.runtime;
-    const thread = changedBuckets.has('codex.thread')
-        ? newestEntity(Object.values(entities['codex.thread']))
+    const thread = selectionChanged || changedBuckets.has('codex.thread')
+        ? currentEntityForThread(Object.values(entities['codex.thread']), selectedThreadId)
         : current.thread;
     const activated = current.activated || runtime?.syncState === 'ready';
-    const usage = changedBuckets.has('codex.thread') || changedBuckets.has('codex.turn')
-        ? projectUsage(thread, Object.values(entities['codex.turn']))
+    const projectedUsage = selectionChanged
+        || changedBuckets.has('codex.thread')
+        || changedBuckets.has('codex.turn')
+        ? projectUsage(thread, Object.values(entities['codex.turn']), selectedThreadId)
         : current.usage;
+    const usage = sameUsageProjection(projectedUsage, current.usage)
+        ? current.usage
+        : projectedUsage;
+    const messages = selectionChanged
+        ? projectAllMessages(entities, indexes, selectedThreadId)
+        : projectAffectedMessages(
+            current.messages,
+            entities,
+            indexes,
+            affected,
+            selectedThreadId,
+        );
 
     return {
         revisions,
         entities,
         indexes,
+        selectedThreadId,
         runtime,
         thread,
         activated,
         syncHealth: current.syncHealth,
         usage,
-        messages: projectAffectedMessages(current.messages, entities, indexes, affected),
+        messages,
+    };
+}
+
+export function selectCodexV4ProjectionThread(
+    current: CodexV4Projection,
+    selectedThreadId: string | null,
+): CodexV4Projection {
+    if (current.selectedThreadId === selectedThreadId) return current;
+    const thread = currentEntityForThread(
+        Object.values(current.entities['codex.thread']),
+        selectedThreadId,
+    );
+    const runtime = currentEntityForThread(
+        Object.values(current.entities['codex.runtime']),
+        selectedThreadId,
+    );
+    return {
+        ...current,
+        selectedThreadId,
+        thread,
+        runtime,
+        activated: current.activated || runtime?.syncState === 'ready',
+        usage: projectUsage(
+            thread,
+            Object.values(current.entities['codex.turn']),
+            selectedThreadId,
+        ),
+        messages: projectAllMessages(current.entities, current.indexes, selectedThreadId),
     };
 }
 
 function projectUsage(
     thread: CodexThreadEntityV4 | null,
     turns: CodexTurnEntityV4[],
+    selectedThreadId: string | null,
 ): CodexV4UsageProjection | null {
     const threadUsage = thread?.tokenUsage;
     if (threadUsage) {
@@ -220,7 +293,10 @@ function projectUsage(
             contextWindow: threadUsage.modelContextWindow,
         };
     }
-    const turn = newestEntity(turns.filter((entry) => entry.usage !== null));
+    const turn = newestEntity(turns.filter((entry) => (
+        entry.usage !== null
+        && (selectedThreadId === null || entry.threadId === selectedThreadId)
+    )));
     if (!turn?.usage) return null;
     return {
         inputTokens: turn.usage.inputTokens,
@@ -230,6 +306,32 @@ function projectUsage(
         contextSize: turn.usage.totalTokens,
         contextWindow: null,
     };
+}
+
+function sameUsageProjection(
+    left: CodexV4UsageProjection | null,
+    right: CodexV4UsageProjection | null,
+): boolean {
+    return left === right || Boolean(
+        left
+        && right
+        && left.inputTokens === right.inputTokens
+        && left.outputTokens === right.outputTokens
+        && left.cacheCreation === right.cacheCreation
+        && left.cacheRead === right.cacheRead
+        && left.contextSize === right.contextSize
+        && left.contextWindow === right.contextWindow
+    );
+}
+
+function currentEntityForThread<T extends {
+    threadId: string;
+    updatedAt: number;
+    providerId: string;
+}>(entities: T[], selectedThreadId: string | null): T | null {
+    return newestEntity(selectedThreadId === null
+        ? entities
+        : entities.filter((entity) => entity.threadId === selectedThreadId));
 }
 
 function newestEntity<T extends { updatedAt: number; providerId: string }>(entities: T[]): T | null {
@@ -344,6 +446,29 @@ function createAffectedOwners(): AffectedMessageOwners {
         commands: new Set(),
         commandResults: new Set(),
     };
+}
+
+function entityAffectsSelectedThread(
+    entity: CodexEntityV4,
+    selectedThreadId: string | null,
+): boolean {
+    if (selectedThreadId === null) return true;
+    switch (entity.entityType) {
+        case 'codex.thread':
+        case 'codex.runtime':
+        case 'codex.turn':
+        case 'codex.item':
+        case 'codex.part':
+        case 'codex.request':
+            return entity.threadId === selectedThreadId;
+        case 'codex.command':
+        case 'codex.commandResult':
+            return entity.threadId === null || entity.threadId === selectedThreadId;
+        case 'codex.relation':
+            return entity.parentThreadId === selectedThreadId;
+        default:
+            return assertNever(entity);
+    }
 }
 
 function collectAffectedOwners(
@@ -595,6 +720,7 @@ function projectAffectedMessages(
     entities: CodexV4EntityBuckets,
     indexes: CodexV4ProjectionIndexes,
     affected: AffectedMessageOwners,
+    selectedThreadId: string | null,
 ): Message[] {
     const affectedMessageIds = new Set<string>();
     const projected: Message[] = [];
@@ -603,6 +729,7 @@ function projectAffectedMessages(
         affectedMessageIds.add(itemMessageId(providerId));
         const item = entities['codex.item'][providerId];
         if (!item) continue;
+        if (!entityAffectsSelectedThread(item, selectedThreadId)) continue;
         const key = itemKey(item.threadId, item.turnId, item.itemId);
         const parts = (indexes.partProviderIdsByItem[key] ?? [])
             .map((id) => entities['codex.part'][id])
@@ -626,13 +753,16 @@ function projectAffectedMessages(
     for (const providerId of affected.requests) {
         affectedMessageIds.add(requestMessageId(providerId));
         const request = entities['codex.request'][providerId];
-        if (request) projected.push(projectRequestMessage(request));
+        if (request && entityAffectsSelectedThread(request, selectedThreadId)) {
+            projected.push(projectRequestMessage(request));
+        }
     }
 
     for (const providerId of affected.commands) {
         affectedMessageIds.add(commandMessageId(providerId));
         const command = entities['codex.command'][providerId];
         if (!command) continue;
+        if (!entityAffectsSelectedThread(command, selectedThreadId)) continue;
         const hasProviderItem = (indexes.providerUserItemProviderIdsByClientId[
             command.clientUserMessageId
         ]?.length ?? 0) > 0;
@@ -647,6 +777,7 @@ function projectAffectedMessages(
         affectedMessageIds.add(commandResultMessageId(providerId));
         const result = entities['codex.commandResult'][providerId];
         if (!result) continue;
+        if (!entityAffectsSelectedThread(result, selectedThreadId)) continue;
         const commandProviderId = indexes.commandProviderIdByCommandId[result.commandId];
         const command = commandProviderId ? entities['codex.command'][commandProviderId] : undefined;
         if (isTextTurnCommand(command) && !isCommandFailure(result.status)) continue;
@@ -657,6 +788,25 @@ function projectAffectedMessages(
     const unaffected = current.filter((message) => !affectedMessageIds.has(message.id));
     projected.sort(compareMessages);
     return mergeSortedMessages(unaffected, projected);
+}
+
+function projectAllMessages(
+    entities: CodexV4EntityBuckets,
+    indexes: CodexV4ProjectionIndexes,
+    selectedThreadId: string | null,
+): Message[] {
+    return projectAffectedMessages(
+        [],
+        entities,
+        indexes,
+        {
+            items: new Set(Object.keys(entities['codex.item'])),
+            requests: new Set(Object.keys(entities['codex.request'])),
+            commands: new Set(Object.keys(entities['codex.command'])),
+            commandResults: new Set(Object.keys(entities['codex.commandResult'])),
+        },
+        selectedThreadId,
+    );
 }
 
 function projectCommand(command: CodexCommandEntityV4, hidden: boolean): Message | null {

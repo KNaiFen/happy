@@ -60,6 +60,7 @@ export const DuplicateSheet = React.memo(function DuplicateSheet(props: Duplicat
         session?.metadata?.path,
         session?.metadata?.claudeSessionId,
         session?.metadata?.codexThreadId,
+        session?.metadata?.codexReadOnly,
     ]);
     const canFork = Boolean(source);
 

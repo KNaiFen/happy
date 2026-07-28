@@ -139,10 +139,13 @@ export function parseCodexV4Input(text: string, skillCommands: readonly string[]
 export function commandForCodexV4Input(options: {
     parsed: ParsedCodexV4Input;
     projection: CodexV4Projection;
+    threadId?: string | null;
     mode: CodexV4TurnMode;
     attachments?: CodexV4AttachmentReference[];
 }): CodexV4CommandDraft {
-    const threadId = options.projection.thread?.threadId ?? null;
+    const threadId = options.threadId !== undefined
+        ? options.threadId
+        : options.projection.thread?.threadId ?? null;
     if (options.parsed.kind === 'control') {
         return {
             command: options.parsed.command,
@@ -154,7 +157,7 @@ export function commandForCodexV4Input(options: {
         };
     }
 
-    const activeTurnId = findActiveCodexV4Turn(options.projection)?.turnId ?? null;
+    const activeTurnId = findActiveCodexV4Turn(options.projection, threadId)?.turnId ?? null;
     const payload: CodexCommandEntityV4['payload'] = {
         text: options.parsed.text,
         displayText: options.parsed.displayText,
@@ -183,11 +186,14 @@ export function commandForCodexV4Input(options: {
     };
 }
 
-export function findActiveCodexV4Turn(projection: CodexV4Projection): CodexTurnEntityV4 | null {
+export function findActiveCodexV4Turn(
+    projection: CodexV4Projection,
+    threadId: string | null = projection.thread?.threadId ?? null,
+): CodexTurnEntityV4 | null {
     let selected: CodexTurnEntityV4 | null = null;
     for (const turn of Object.values(projection.entities['codex.turn'])) {
         if (turn.status !== 'inProgress') continue;
-        if (projection.thread && turn.threadId !== projection.thread.threadId) continue;
+        if (threadId && turn.threadId !== threadId) continue;
         if (!selected || turn.updatedAt > selected.updatedAt) selected = turn;
     }
     return selected;

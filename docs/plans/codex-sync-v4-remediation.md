@@ -367,8 +367,23 @@ reasoning 脱敏、结构化诊断和 stream/batch 内存治理。
 - [x] 同一 item 的每个 pending request 都可独立显示和操作。
 - [x] v4 token usage、connection、execution、approval、user-input 和
       subagent activity 接入 UI。
-- [ ] child readOnly 贯穿 MessageView、ToolView、审批、用户输入和 MCP。
-- [ ] command publish 边界再次拒绝 child 写操作和跨 owned-thread 目标。
+- [x] child readOnly 贯穿 MessageView、ToolView、审批、用户输入和 MCP。
+- [x] command publish 边界再次拒绝 child 写操作和跨 owned-thread 目标。
+- [x] child 不显示 fork/duplicate 入口，`forkAndSpawn` 最终执行边界也必须
+      拒绝 provider child，不能依赖 UI 隐藏。
+- [x] child 不显示 resume/archive/delete 等生命周期操作；
+      resume/kill/archive/delete 最终边界拒绝 provider child，关闭 side
+      panel 只能隐藏 child 视图，不得向共享 CLI 发送 `killSession`。
+- [x] 当前 thread/runtime/usage/messages 只由加密 metadata 中的
+      `codexThreadId` 选择；同一 Happy session 内旧 root/user-fork 的迟到
+      mutation 只能更新 entity cache，不得夺回当前 UI 或执行状态。
+- [x] 当前 runtime 在 reset/snapshot 切换边界暂时缺失时保留最后 execution
+      并标记 `statusUnknown=true`，不得保留伪权威状态或自动变 idle。
+- [x] prompt/steer 的 active turn 与审批 request 必须分别按
+      `(ownedThreadId, turnId)`、`(ownedThreadId, requestId)` 对账，不能让旧
+      thread 中相同或较新的标识抢占当前操作。
+- [x] part/item delta 在 runtime 未变化时不得克隆 Session 或重建顶层会话
+      列表，避免 5 Hz 流式输出放大为全局列表重渲染。
 
 R4 分为三个可独立验证的提交：
 
@@ -402,6 +417,14 @@ R4 分为三个可独立验证的提交：
      goal/mode/interrupt 控件全部读取统一 readOnly capability；
    - `publishCodexV4Command` 在持久 outbox 前再次校验 session ownership、
      readOnly 和 command/payload thread target；UI 漏网也不能产生 mutation；
+   - fork/duplicate 在 quick actions、DuplicateSheet 和 `forkAndSpawn`
+     最终执行边界拒绝 provider child；
+   - resume/archive/delete 在详情与 quick actions 中隐藏，
+     resume/kill/archive/delete 最终边界拒绝 provider child；provider child
+     关闭仅改变本地 panel 状态；
+   - projection 以 `metadata.codexThreadId` 选择当前 thread/runtime/usage 和
+     message stream；metadata 选择改变时允许一次全量重投影，普通旧 thread
+     delta 不得触发当前 message list 替换；
    - parent delegation 卡片仅导航 child，child 完成只更新自己的 projection。
 
 R4 client/snapshot 权威提交顺序：
@@ -564,6 +587,19 @@ revision 冲突、10,000 entity 增量投影计数、同 item 多 request，以�
   v4 激活后不再读取 legacy usage。删除、跨 owner 重定位、command replacement
   恢复和 `10,001` entity 单 delta 均有回归测试，规模测试只替换目标 message
   对象。
+- 2026-07-28：R4 第二切片提交 `6f39b157` 的 CLI Smoke
+  `30357006804`、push CI `30357005987` 和 PR CI `30357002428`
+  全部通过。R4 第三切片复核发现 provider child 仍可从 fork/duplicate
+  入口进入写路径，且多 thread entity 以最新 `updatedAt` 选择会让旧 thread
+  迟到更新覆盖 metadata 当前选择；新增 UI/最终执行双层 fork 门禁，以及
+  metadata 驱动的 thread/runtime/usage/messages 投影隔离门禁。
+- 2026-07-28：R4 第三切片本地完成。provider child 从 composer、Markdown
+  option、工具审批、用户输入、MCP、goal/mode/interrupt、fork/duplicate
+  到 resume/kill/archive/delete 均为 UI 与最终执行双层只读。projection
+  由 metadata `codexThreadId` 选择当前 thread/runtime/usage/messages，旧
+  thread 迟到 delta 保持当前 message list 引用；active turn 与重复 request
+  ID 均按 owned thread 对账，runtime 缺失标记 unknown。App typecheck、
+  `78/78` 测试文件、`886/886` 单测及 Web export 全部通过。
 - 2026-07-28：R2 完成。CLI session 初始化和关闭使用 generation 隔离；
   journal 增加单 writer lease、durability poison、可回收字节压缩和终态
   command receipt；显式 outbound flush 固定调用时集合，后台 outbound 使用

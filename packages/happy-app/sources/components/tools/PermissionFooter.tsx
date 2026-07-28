@@ -14,6 +14,7 @@ import {
     type ViewStyle,
 } from 'react-native';
 import { sessionAllow, sessionDeny, sessionSetAgentModes } from '@/sync/ops';
+import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 import { useUnistyles } from 'react-native-unistyles';
 import { storage } from '@/sync/storage';
 import { t } from '@/text';
@@ -125,9 +126,10 @@ interface PermissionFooterProps {
     toolName: string;
     toolInput?: any;
     metadata?: any;
+    readOnly?: boolean;
 }
 
-export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, sessionId, toolName, toolInput, metadata }) => {
+export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, sessionId, toolName, toolInput, metadata, readOnly = false }) => {
     const { theme } = useUnistyles();
     const isTablet = useIsTablet();
     const { height: windowHeight } = useWindowDimensions();
@@ -291,6 +293,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
     const isCodexApproved = isCodex && isApproved && (permission.decision === 'approved' || !permission.decision);
     const isCodexApprovedForSession = isCodex && isApproved && permission.decision === 'approved_for_session';
     const isCodexAborted = isCodex && isDenied && permission.decision === 'abort';
+
+    if (readOnly || isCodexSessionReadOnly(metadata)) return null;
 
     const styles = StyleSheet.create({
         container: {

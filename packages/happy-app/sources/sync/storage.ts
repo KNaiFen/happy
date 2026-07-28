@@ -41,6 +41,7 @@ import {
     createCodexV4Projection,
     replaceCodexV4Projection,
     resetCodexV4Projection,
+    selectCodexV4ProjectionThread,
     type CodexV4Projection,
     type CodexV4ProjectionUpdate,
 } from './codexV4Projection';
@@ -68,6 +69,13 @@ function resolveSessionOnlineState(session: { active: boolean; activeAt: number 
 function isSessionActive(session: { active: boolean; activeAt: number }): boolean {
     // Use the active flag directly, no timeout checks
     return session.active;
+}
+
+function codexThreadIdFromMetadata(metadata: Session['metadata']): string | null {
+    const threadId = metadata?.codexThreadId;
+    return typeof threadId === 'string' && threadId.trim().length > 0
+        ? threadId
+        : null;
 }
 
 // Known entitlement IDs
@@ -469,6 +477,8 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Merge new sessions with existing ones
             const mergedSessions: Record<string, Session> = indexSessionsById(Object.values(state.sessions));
+            let codexV4Sessions = state.codexV4Sessions;
+            const reselectedCodexSessionIds = new Set<string>();
 
             // Update sessions with calculated presence using centralized resolver
             sessions.forEach(session => {
@@ -501,12 +511,27 @@ export const storage = create<StorageState>()((set, get) => {
 
                 // Local activity timestamp — preserve in-memory value, else restore from MMKV.
                 const resolvedLastMessageSentAt = state.sessions[session.id]?.lastMessageSentAt ?? savedLastMessageSentAt[session.id];
-                const codexProjection = state.codexV4Sessions[session.id];
+                const currentCodexProjection = codexV4Sessions[session.id];
+                const codexProjection = currentCodexProjection
+                    ? selectCodexV4ProjectionThread(
+                        currentCodexProjection,
+                        codexThreadIdFromMetadata(session.metadata),
+                    )
+                    : undefined;
+                if (codexProjection && codexProjection !== currentCodexProjection) {
+                    if (codexV4Sessions === state.codexV4Sessions) {
+                        codexV4Sessions = { ...state.codexV4Sessions };
+                    }
+                    codexV4Sessions[session.id] = codexProjection;
+                    reselectedCodexSessionIds.add(session.id);
+                }
                 const codexV4Active = isCodexV4SyncActive(session.metadata, codexProjection);
                 const codexState = codexV4Active
                     ? (codexProjection?.runtime
                         ? toCodexSessionState(codexProjection)
-                        : state.sessions[session.id]?.codexState)
+                        : codexProjection !== currentCodexProjection
+                            ? undefined
+                            : state.sessions[session.id]?.codexState)
                     : undefined;
                 const codexThinking = codexV4Active
                     ? codexProjection.runtime?.execution.type === 'active'
@@ -577,10 +602,30 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Process AgentState updates for sessions that already have messages loaded
             const updatedSessionMessages = { ...state.sessionMessages };
+            for (const sessionId of reselectedCodexSessionIds) {
+                const projection = codexV4Sessions[sessionId];
+                const session = mergedSessions[sessionId];
+                if (!projection || !isCodexV4SyncActive(session?.metadata, projection)) continue;
+                const existing = updatedSessionMessages[sessionId];
+                updatedSessionMessages[sessionId] = {
+                    messages: projection.messages,
+                    messagesMap: Object.fromEntries(
+                        projection.messages.map((message) => [message.id, message]),
+                    ),
+                    reducerState: existing?.reducerState ?? createReducer(),
+                    isLoaded: true,
+                    hasMoreOlder: false,
+                    isLoadingOlder: false,
+                };
+            }
 
             sessions.forEach(session => {
                 const oldSession = state.sessions[session.id];
                 const newSession = mergedSessions[session.id];
+                if (isCodexV4SyncActive(
+                    newSession.metadata,
+                    codexV4Sessions[session.id],
+                )) return;
 
                 // Check if sessionMessages exists AND agentStateVersion is newer
                 const existingSessionMessages = updatedSessionMessages[session.id];
@@ -684,6 +729,7 @@ export const storage = create<StorageState>()((set, get) => {
                 sessionsData: listData,  // Legacy - to be removed
                 sessionListViewData,
                 sessionMessages: updatedSessionMessages,
+                codexV4Sessions,
                 unreadSessionIds,
             };
         }),
@@ -814,16 +860,28 @@ export const storage = create<StorageState>()((set, get) => {
         },
         applyCodexV4Entities: (sessionId: string, updates: readonly CodexV4ProjectionUpdate[]) => set((state) => {
             const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
-            const projection = applyCodexV4ProjectionUpdates(previous, updates);
+            const session = state.sessions[sessionId];
+            const selectedThreadId = session
+                ? codexThreadIdFromMetadata(session.metadata)
+                : previous.selectedThreadId;
+            const projection = applyCodexV4ProjectionUpdates(
+                previous,
+                updates,
+                selectedThreadId,
+            );
             if (projection === previous) return state;
             return withCodexV4Projection(state, sessionId, projection);
         }),
         replaceCodexV4Entities: (sessionId: string, updates: readonly CodexV4ProjectionUpdate[]) => set((state) => {
             const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
+            const session = state.sessions[sessionId];
+            const selectedThreadId = session
+                ? codexThreadIdFromMetadata(session.metadata)
+                : previous.selectedThreadId;
             return withCodexV4Projection(
                 state,
                 sessionId,
-                replaceCodexV4Projection(previous, updates),
+                replaceCodexV4Projection(previous, updates, selectedThreadId),
             );
         }),
         applyCodexV4SyncState: (sessionId: string, syncState: CodexV4RegistrySyncState) => set((state) => {
@@ -835,29 +893,7 @@ export const storage = create<StorageState>()((set, get) => {
         resetCodexV4Projection: (sessionId: string) => set((state) => {
             const previous = state.codexV4Sessions[sessionId] ?? createCodexV4Projection();
             const projection = resetCodexV4Projection(previous);
-            let sessionMessages = state.sessionMessages;
-            if (isCodexV4SyncActive(state.sessions[sessionId]?.metadata, projection)) {
-                const existing = state.sessionMessages[sessionId];
-                sessionMessages = {
-                    ...state.sessionMessages,
-                    [sessionId]: {
-                        messages: [],
-                        messagesMap: {},
-                        reducerState: existing?.reducerState ?? createReducer(),
-                        isLoaded: true,
-                        hasMoreOlder: false,
-                        isLoadingOlder: false,
-                    },
-                };
-            }
-            return {
-                ...state,
-                sessionMessages,
-                codexV4Sessions: {
-                    ...state.codexV4Sessions,
-                    [sessionId]: projection,
-                },
-            };
+            return withCodexV4Projection(state, sessionId, projection);
         }),
         resetSessionMessages: (sessionId: string) => set((state) => {
             if (!state.sessionMessages[sessionId]) return state;
@@ -1509,19 +1545,40 @@ function withCodexV4Projection(
     let sessions = state.sessions;
     const session = state.sessions[sessionId];
     const codexV4Active = isCodexV4SyncActive(session?.metadata, projection);
-    if (session && projection.runtime && codexV4Active) {
-        const thinking = projection.runtime.execution.type === 'active';
-        sessions = {
-            ...state.sessions,
-            [sessionId]: {
-                ...session,
-                thinking,
-                thinkingAt: thinking && !session.thinking
-                    ? projection.runtime.lastKnownAt
-                    : session.thinkingAt,
-                codexState: toCodexSessionState(projection),
-            },
-        };
+    if (session && codexV4Active) {
+        if (projection.runtime) {
+            const thinking = projection.runtime.execution.type === 'active';
+            const thinkingAt = thinking && !session.thinking
+                ? projection.runtime.lastKnownAt
+                : session.thinkingAt;
+            const codexState = toCodexSessionState(projection);
+            if (
+                session.thinking !== thinking
+                || session.thinkingAt !== thinkingAt
+                || !equal(session.codexState, codexState)
+            ) {
+                sessions = {
+                    ...state.sessions,
+                    [sessionId]: {
+                        ...session,
+                        thinking,
+                        thinkingAt,
+                        codexState,
+                    },
+                };
+            }
+        } else if (session.codexState && !session.codexState.statusUnknown) {
+            sessions = {
+                ...state.sessions,
+                [sessionId]: {
+                    ...session,
+                    codexState: {
+                        ...session.codexState,
+                        statusUnknown: true,
+                    },
+                },
+            };
+        }
     }
 
     let sessionMessages = state.sessionMessages;

@@ -14,14 +14,17 @@ import { Option } from './markdown/MarkdownView';
 import { layout } from "./layout";
 import { parseLocalCommandMessage, isUserSlashCommandEcho } from './parseLocalCommandMessage';
 import { resolveUserMessageBubbleColor } from '@/utils/userMessageBubbleColor';
+import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 
 
 export const MessageView = React.memo((props: {
   message: Message;
   metadata: Metadata | null;
   sessionId: string;
+  readOnly?: boolean;
   getMessageById?: (id: string) => Message | null;
 }) => {
+  const readOnly = props.readOnly ?? isCodexSessionReadOnly(props.metadata);
   return (
     <View
       style={styles.messageContainer}
@@ -32,6 +35,7 @@ export const MessageView = React.memo((props: {
           message={props.message}
           metadata={props.metadata}
           sessionId={props.sessionId}
+          readOnly={readOnly}
           getMessageById={props.getMessageById}
         />
       </View>
@@ -44,6 +48,7 @@ function RenderBlock(props: {
   message: Message;
   metadata: Metadata | null;
   sessionId: string;
+  readOnly: boolean;
   getMessageById?: (id: string) => Message | null;
 }): React.ReactElement {
   switch (props.message.kind) {
@@ -53,17 +58,19 @@ function RenderBlock(props: {
           message={props.message}
           metadata={props.metadata}
           sessionId={props.sessionId}
+          readOnly={props.readOnly}
         />
       );
 
     case 'agent-text':
-      return <AgentTextBlock message={props.message} sessionId={props.sessionId} />;
+      return <AgentTextBlock message={props.message} sessionId={props.sessionId} readOnly={props.readOnly} />;
 
     case 'tool-call':
       return <ToolCallBlock
         message={props.message}
         metadata={props.metadata}
         sessionId={props.sessionId}
+        readOnly={props.readOnly}
         getMessageById={props.getMessageById}
       />;
 
@@ -82,10 +89,13 @@ function UserTextBlock(props: {
   message: UserTextMessage;
   metadata: Metadata | null;
   sessionId: string;
+  readOnly: boolean;
 }) {
   const handleOptionPress = React.useCallback((option: Option) => {
+    if (props.readOnly) return;
     sync.sendMessage(props.sessionId, option.title, { source: 'option' });
-  }, [props.sessionId]);
+  }, [props.readOnly, props.sessionId]);
+  const onOptionPress = props.readOnly ? undefined : handleOptionPress;
 
   const userMessageBubbleColor = useSetting('userMessageBubbleColor');
   const { theme } = useUnistyles();
@@ -122,7 +132,7 @@ function UserTextBlock(props: {
     return (
       <View style={styles.userMessageContainer}>
         <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, bubbleStyle, styles.goalMessageBubble]}>
-          <MarkdownView markdown={parsed.goal} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
+          <MarkdownView markdown={parsed.goal} onOptionPress={onOptionPress} sessionId={props.sessionId} />
         </View>
         <View style={styles.goalSentRow}>
           <Ionicons name="locate-outline" size={16} color={styles.goalSentText.color} />
@@ -136,7 +146,7 @@ function UserTextBlock(props: {
       <View style={styles.userMessageContainer}>
         {parsed.args ? (
           <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, bubbleStyle, styles.commandMessageBubble]}>
-            <MarkdownView markdown={parsed.args} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
+            <MarkdownView markdown={parsed.args} onOptionPress={onOptionPress} sessionId={props.sessionId} />
           </View>
         ) : null}
         <View style={[styles.commandChip, styles.userMessageBubbleSolid, bubbleStyle]}>
@@ -151,7 +161,7 @@ function UserTextBlock(props: {
       {/* Text owns long-press so native selection / Markdown Copy v2 can work
           without also opening the rewind picker. Rewind remains in session actions. */}
       <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, bubbleStyle]}>
-        <MarkdownView markdown={parsed.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
+        <MarkdownView markdown={parsed.text} onOptionPress={onOptionPress} sessionId={props.sessionId} />
       </View>
     </View>
   );
@@ -160,10 +170,12 @@ function UserTextBlock(props: {
 function AgentTextBlock(props: {
   message: AgentTextMessage;
   sessionId: string;
+  readOnly: boolean;
 }) {
   const handleOptionPress = React.useCallback((option: Option) => {
+    if (props.readOnly) return;
     sync.sendMessage(props.sessionId, option.title, { source: 'option' });
-  }, [props.sessionId]);
+  }, [props.readOnly, props.sessionId]);
 
   // Hide thinking messages
   if (props.message.isThinking) {
@@ -172,7 +184,11 @@ function AgentTextBlock(props: {
 
   return (
     <View style={styles.agentMessageContainer}>
-      <MarkdownView markdown={props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
+      <MarkdownView
+        markdown={props.message.text}
+        onOptionPress={props.readOnly ? undefined : handleOptionPress}
+        sessionId={props.sessionId}
+      />
     </View>
   );
 }
@@ -224,6 +240,7 @@ function ToolCallBlock(props: {
   message: ToolCallMessage;
   metadata: Metadata | null;
   sessionId: string;
+  readOnly: boolean;
   getMessageById?: (id: string) => Message | null;
 }) {
   if (!props.message.tool) {
@@ -237,6 +254,7 @@ function ToolCallBlock(props: {
         messages={props.message.children}
         sessionId={props.sessionId}
         messageId={props.message.id}
+        readOnly={props.readOnly}
       />
     </View>
   );

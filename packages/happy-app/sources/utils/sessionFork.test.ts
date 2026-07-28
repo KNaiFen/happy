@@ -49,4 +49,17 @@ describe('getSessionForkSource', () => {
             },
         } as any)).toBeNull();
     });
+
+    it('does not expose a fork source for a provider-created Codex child', () => {
+        expect(getSessionForkSource({
+            id: 'happy-child',
+            metadata: {
+                flavor: 'codex',
+                machineId: 'machine-1',
+                path: '/tmp/project',
+                codexThreadId: 'thread-child',
+                codexReadOnly: true,
+            },
+        } as any)).toBeNull();
+    });
 });

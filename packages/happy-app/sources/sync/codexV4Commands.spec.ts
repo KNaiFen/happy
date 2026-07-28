@@ -109,6 +109,15 @@ describe('Codex v4 App commands', () => {
             threadId: 'thread-1',
             expectedTurnId: 'turn-1',
         });
+        expect(commandForCodexV4Input({
+            parsed,
+            projection: projection(true),
+            threadId: 'thread-2',
+            mode: {},
+        })).toMatchObject({
+            command: 'turn.start',
+            threadId: 'thread-2',
+        });
     });
 
     it('maps approval, tool input, and MCP elicitation responses to official shapes', () => {

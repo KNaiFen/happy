@@ -16,6 +16,7 @@ import {
     applyCodexV4ProjectionUpdates,
     createCodexV4Projection,
     resetCodexV4Projection,
+    selectCodexV4ProjectionThread,
     type CodexV4Projection,
 } from './codexV4Projection';
 
@@ -649,5 +650,165 @@ describe('Codex v4 projection', () => {
             id: 'codex-v4:command-result:command-compact',
             tool: { state: 'error', result: 'compact failed' },
         });
+    });
+
+    it('keeps metadata-selected thread state isolated from newer late updates', () => {
+        const usage = (totalTokens: number) => ({
+            totalTokens,
+            inputTokens: totalTokens - 10,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+        });
+        const threadEntity = (
+            threadId: string,
+            updatedAt: number,
+            totalTokens: number,
+        ): CodexThreadEntityV4 => ({
+            schemaVersion: 1,
+            entityType: 'codex.thread',
+            providerId: `thread:${threadId}`,
+            createdAt: 1,
+            updatedAt,
+            threadId,
+            sessionTreeId: null,
+            forkedFromThreadId: null,
+            parentThreadId: null,
+            name: null,
+            preview: '',
+            cwd: '/workspace',
+            cliVersion: '0.145.0',
+            model: 'gpt-5',
+            modelProvider: 'openai',
+            source: 'cli',
+            status: { type: 'idle' },
+            canAcceptDirectInput: true,
+            settings: {
+                approvalPolicy: null,
+                approvalsReviewer: null,
+                sandboxPolicy: null,
+                permissionProfile: null,
+                serviceTier: null,
+                reasoningEffort: null,
+                reasoningSummary: null,
+                collaborationMode: null,
+                personality: null,
+            },
+            goal: null,
+            tokenUsage: {
+                total: usage(totalTokens),
+                last: usage(totalTokens),
+                modelContextWindow: 200_000,
+            },
+        });
+        const runtimeEntity = (
+            threadId: string,
+            updatedAt: number,
+            execution: CodexRuntimeEntityV4['execution'],
+        ): CodexRuntimeEntityV4 => ({
+            schemaVersion: 1,
+            entityType: 'codex.runtime',
+            providerId: `runtime:${threadId}`,
+            createdAt: 1,
+            updatedAt,
+            threadId,
+            connection: 'connected',
+            execution,
+            statusUnknown: false,
+            protocolVersion: 'v2',
+            codexCliVersion: '0.145.0',
+            syncState: 'ready',
+            pendingApprovalCount: 0,
+            pendingUserInputCount: 0,
+            activeSubagentCount: 0,
+            lastError: null,
+            lastKnownAt: updatedAt,
+        });
+        const turnEntity = (threadId: string, totalTokens: number): CodexTurnEntityV4 => ({
+            ...turn,
+            providerId: `turn:${threadId}`,
+            threadId,
+            turnId: `turn:${threadId}`,
+            usage: usage(totalTokens),
+        });
+        const itemEntity = (threadId: string): CodexItemEntityV4 => ({
+            ...item,
+            providerId: `item:${threadId}`,
+            threadId,
+            turnId: `turn:${threadId}`,
+            itemId: `item:${threadId}`,
+        });
+        const partEntity = (threadId: string, content: string): CodexPartEntityV4 => ({
+            ...part(content),
+            providerId: `part:${threadId}`,
+            threadId,
+            turnId: `turn:${threadId}`,
+            itemId: `item:${threadId}`,
+            partId: `part:${threadId}`,
+        });
+        const threadA = threadEntity('thread-a', 100, 111);
+        const runtimeA = runtimeEntity(
+            'thread-a',
+            100,
+            { type: 'active', activeFlags: [] },
+        );
+        const threadB = threadEntity('thread-b', 10, 222);
+        const runtimeB = runtimeEntity('thread-b', 10, { type: 'idle' });
+        let projection = applyCodexV4ProjectionUpdates(
+            createCodexV4Projection('thread-b'),
+            [
+                { entity: threadA, revision: 1, op: 'upsert' },
+                { entity: runtimeA, revision: 1, op: 'upsert' },
+                { entity: turnEntity('thread-a', 111), revision: 1, op: 'upsert' },
+                { entity: itemEntity('thread-a'), revision: 1, op: 'upsert' },
+                { entity: partEntity('thread-a', 'Old thread'), revision: 1, op: 'upsert' },
+                { entity: threadB, revision: 1, op: 'upsert' },
+                { entity: runtimeB, revision: 1, op: 'upsert' },
+                { entity: turnEntity('thread-b', 222), revision: 1, op: 'upsert' },
+                { entity: itemEntity('thread-b'), revision: 1, op: 'upsert' },
+                { entity: partEntity('thread-b', 'Selected thread'), revision: 1, op: 'upsert' },
+            ],
+        );
+
+        expect(projection.thread?.threadId).toBe('thread-b');
+        expect(projection.runtime?.threadId).toBe('thread-b');
+        expect(projection.runtime?.execution).toEqual({ type: 'idle' });
+        expect(projection.usage?.contextSize).toBe(222);
+        expect(projection.messages).toMatchObject([{
+            kind: 'agent-text',
+            text: 'Selected thread',
+        }]);
+        const selectedMessages = projection.messages;
+        const selectedThread = projection.thread;
+        const selectedRuntime = projection.runtime;
+        const selectedUsage = projection.usage;
+
+        projection = applyCodexV4ProjectionUpdates(projection, [
+            { entity: { ...threadA, updatedAt: 1_000 }, revision: 2, op: 'upsert' },
+            { entity: { ...runtimeA, updatedAt: 1_000 }, revision: 2, op: 'upsert' },
+            {
+                entity: {
+                    ...partEntity('thread-a', 'Late old-thread update'),
+                    updatedAt: 1_000,
+                },
+                revision: 2,
+                op: 'upsert',
+            },
+        ]);
+
+        expect(projection.thread).toBe(selectedThread);
+        expect(projection.runtime).toBe(selectedRuntime);
+        expect(projection.usage).toBe(selectedUsage);
+        expect(projection.messages).toBe(selectedMessages);
+
+        projection = selectCodexV4ProjectionThread(projection, 'thread-a');
+        expect(projection.thread?.threadId).toBe('thread-a');
+        expect(projection.runtime?.execution).toEqual({ type: 'active', activeFlags: [] });
+        expect(projection.usage?.contextSize).toBe(111);
+        expect(projection.messages).toMatchObject([{
+            kind: 'agent-text',
+            text: 'Late old-thread update',
+        }]);
     });
 });

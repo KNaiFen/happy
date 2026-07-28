@@ -25,6 +25,7 @@ export type ToolViewProps = {
     metadata: Metadata | null;
     messages: Message[];
     sessionId?: string;
+    readOnly?: boolean;
     permissionFooter?: React.ReactNode;
 }
 

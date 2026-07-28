@@ -42,7 +42,11 @@ type ResumeAvailability = {
 };
 
 function getResumeAvailability(session: Session, machine: Machine | null | undefined, isConnected: boolean): ResumeAvailability {
-    if (isRigMetadata(session.metadata) || session.metadata?.capabilities?.resume === false) {
+    if (
+        session.metadata?.codexReadOnly === true
+        || isRigMetadata(session.metadata)
+        || session.metadata?.capabilities?.resume === false
+    ) {
         return {
             canResume: false,
             canShowResume: false,
@@ -119,6 +123,7 @@ export function useSessionQuickActions(
     const router = useRouter();
     const navigateToSession = useNavigateToSession();
     const sessionStatus = useSessionStatus(session);
+    const isCodexReadOnly = session.metadata?.codexReadOnly === true;
     const machineId = session.metadata?.machineId ?? '';
     const machine = useMachine(machineId);
     const devModeEnabled = useLocalSetting('devModeEnabled');
@@ -139,6 +144,7 @@ export function useSessionQuickActions(
         session.metadata?.path,
         session.metadata?.claudeSessionId,
         session.metadata?.codexThreadId,
+        session.metadata?.codexReadOnly,
     ]);
     const canFork = Boolean(
         expResumeSession
@@ -280,7 +286,9 @@ export function useSessionQuickActions(
             items.push({ id: 'copy-metadata-and-logs', icon: 'document-text-outline', label: t('sessionInfo.copyMetadata') + ' & Client Logs', onPress: copySessionMetadataAndLogs });
         }
 
-        items.push({ id: 'archive', icon: 'archive-outline', label: 'Archive', onPress: archiveSession, destructive: true });
+        if (!isCodexReadOnly) {
+            items.push({ id: 'archive', icon: 'archive-outline', label: 'Archive', onPress: archiveSession, destructive: true });
+        }
 
         return items;
     }, [
@@ -291,6 +299,7 @@ export function useSessionQuickActions(
         copySessionMetadataAndLogs,
         forkSource,
         forkSession,
+        isCodexReadOnly,
         openDetails,
         openDuplicateSheet,
         resumeAvailability.canShowResume,
@@ -312,7 +321,7 @@ export function useSessionQuickActions(
         showActionAlert,
         archiveSession,
         archivingSession,
-        canArchive: true,
+        canArchive: !isCodexReadOnly,
         canCopySessionMetadata,
         canResume: resumeAvailability.canResume,
         canShowResume: resumeAvailability.canShowResume,

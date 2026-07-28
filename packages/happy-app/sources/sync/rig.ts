@@ -1,4 +1,5 @@
 import type { Metadata } from './storageTypes';
+import { isCodexSessionReadOnly } from './codexV4Capabilities';
 
 export type ProviderIconKind = 'codex' | 'claude' | 'grok' | 'kimi' | 'generic';
 
@@ -145,11 +146,13 @@ export function rigHasRpcMethod(metadata: Metadata | null | undefined, method: s
 }
 
 export function rigCanAbort(metadata: Metadata | null | undefined): boolean {
+    if (isCodexSessionReadOnly(metadata)) return false;
     return !isRigMetadataV1(metadata)
         || (metadata?.capabilities?.abort === true && rigHasRpcMethod(metadata, 'abort'));
 }
 
 export function rigCanUseAttachments(metadata: Metadata | null | undefined): boolean {
+    if (isCodexSessionReadOnly(metadata)) return false;
     return !isRigMetadataV1(metadata) || metadata?.capabilities?.attachments.enabled === true;
 }
 
@@ -164,6 +167,7 @@ export function rigCanBrowseFiles(metadata: Metadata | null | undefined): boolea
 }
 
 export function rigCanWriteFiles(metadata: Metadata | null | undefined): boolean {
+    if (isCodexSessionReadOnly(metadata)) return false;
     return !isRigMetadataV1(metadata)
         || (metadata?.capabilities?.files.write === true && rigHasRpcMethod(metadata, 'writeFile'));
 }
@@ -174,6 +178,7 @@ export function rigCanSearchFiles(metadata: Metadata | null | undefined): boolea
 }
 
 export function rigCanUseShell(metadata: Metadata | null | undefined): boolean {
+    if (isCodexSessionReadOnly(metadata)) return false;
     return !isRigMetadataV1(metadata)
         || (metadata?.capabilities?.shell === true && rigHasRpcMethod(metadata, 'bash'));
 }
