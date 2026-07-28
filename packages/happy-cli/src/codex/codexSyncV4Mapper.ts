@@ -340,7 +340,12 @@ export class CodexSyncV4Mapper {
     ): Promise<void> {
         switch (notification.method) {
             case 'thread/started':
-                await this.applyThreadSnapshot(notification.params.thread, true, deliveryId);
+                await this.applyThreadSnapshot(
+                    notification.params.thread,
+                    true,
+                    deliveryId,
+                    'metadata',
+                );
                 return;
             case 'thread/status/changed':
                 await this.applyThreadStatus(notification.params.threadId, notification.params.status);
@@ -565,15 +570,32 @@ export class CodexSyncV4Mapper {
         thread: Thread,
         includeTurns = true,
         diagnosticSeed: string | null = null,
+        source: 'snapshot' | 'metadata' = 'snapshot',
     ): Promise<void> {
         const now = this.now();
         const previous = this.threads.get(thread.id);
         const raw = thread as unknown as Record<string, unknown>;
         const reportedStatus = normalizeThreadStatus(thread.status);
-        const status: CodexThreadStatusV4 = thread.turns.some((turn) => turn.status === 'inProgress')
+        const activeTurnId = this.activeTurnByThread.get(thread.id);
+        const liveActiveTurn = source === 'metadata' && activeTurnId
+            ? this.turns.get(turnKey(thread.id, activeTurnId))
+            : null;
+        const hasActiveTurn = thread.turns.some((turn) => turn.status === 'inProgress')
+            || (liveActiveTurn?.status === 'inProgress');
+        let status: CodexThreadStatusV4 = reportedStatus;
+        if (source === 'metadata' && previous) {
+            status = previous.status;
+            if (hasActiveTurn && status.type !== 'active') {
+                status = { type: 'active', activeFlags: [] };
+            }
+        } else if (
+            hasActiveTurn
             && (reportedStatus.type === 'idle' || reportedStatus.type === 'active')
-            ? reportedStatus.type === 'active' ? reportedStatus : { type: 'active', activeFlags: [] }
-            : reportedStatus;
+        ) {
+            status = reportedStatus.type === 'active'
+                ? reportedStatus
+                : { type: 'active', activeFlags: [] };
+        }
         const createdAt = toEpochMs(thread.createdAt, previous?.createdAt ?? now);
         const updatedAt = toEpochMs(thread.updatedAt, now);
         const entity: CodexThreadEntityV4 = {

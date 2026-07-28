@@ -198,6 +198,7 @@ async function main(): Promise<void> {
         await runRealLongTurn();
         return;
     }
+    await runLateThreadStartedScenario();
     await runHttpRelayScenario();
 }
 
@@ -213,6 +214,76 @@ function configurePinnedCodexPath(): void {
     }).trim();
     assert.equal(output, 'codex-cli 0.145.0');
     process.env.PATH = `${dirname(explicitBinary)}${delimiter}${process.env.PATH ?? ''}`;
+}
+
+async function runLateThreadStartedScenario(): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), 'happy-codex-late-thread-started-'));
+    const originalHappyHome = process.env.HAPPY_HOME_DIR;
+    const originalAppServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH;
+    process.env.HAPPY_HOME_DIR = join(root, 'happy-home');
+    process.env.HAPPY_CODEX_APP_SERVER_PATH = fakeCodexPath;
+
+    let codex: InstanceType<
+        typeof import('../../packages/happy-cli/src/codex/codexAppServerClient').CodexAppServerClient
+    > | null = null;
+    try {
+        const scenarioPath = join(root, 'late-thread-started.json');
+        await writeFile(
+            scenarioPath,
+            JSON.stringify(lateThreadStartedScenario(root)),
+        );
+        process.env.HAPPY_FAKE_CODEX_SCENARIO = scenarioPath;
+        const { CodexAppServerClient } = await import(
+            '../../packages/happy-cli/src/codex/codexAppServerClient'
+        );
+        codex = new CodexAppServerClient();
+        await codex.connect();
+        const { threadId } = await codex.startThread({
+            cwd: root,
+            model: 'gpt-test',
+            approvalPolicy: 'on-request',
+            sandbox: 'read-only',
+        });
+        assert.equal(threadId, 'fake-thread-late');
+
+        let lateThreadMetadataObserved = false;
+        codex.setStableNotificationHandler((notification) => {
+            if (
+                notification.method === 'thread/started'
+                && notification.params.thread.id === threadId
+            ) {
+                lateThreadMetadataObserved = true;
+            }
+        });
+        let settled = false;
+        const turn = codex.sendTurnAndWait('survive late thread metadata', {
+            clientUserMessageId: 'late-thread-started-command',
+        });
+        void turn.then(
+            () => { settled = true; },
+            () => { settled = true; },
+        );
+        await waitUntil(
+            () => lateThreadMetadataObserved,
+            5_000,
+            'late thread/started metadata',
+        );
+        await Promise.resolve();
+        assert.equal(
+            settled,
+            false,
+            'late thread/started metadata settled the active turn',
+        );
+        await codex.interruptTurn({ timeoutMs: 5_000 });
+        await assert.doesNotReject(turn);
+        console.log('Late thread/started ordering gate passed');
+    } finally {
+        if (codex) await codex.disconnect().catch(() => undefined);
+        restoreEnvironment('HAPPY_HOME_DIR', originalHappyHome);
+        restoreEnvironment('HAPPY_CODEX_APP_SERVER_PATH', originalAppServerPath);
+        delete process.env.HAPPY_FAKE_CODEX_SCENARIO;
+        await rm(root, { recursive: true, force: true });
+    }
 }
 
 async function runHttpRelayScenario(): Promise<void> {
@@ -470,18 +541,35 @@ async function runRealLongTurn(): Promise<void> {
 
         console.log(`Starting real long-turn gate for ${requestedDuration} ms`);
         const startedAt = performance.now();
-        let settled = false;
         const turn = codex.sendTurnAndWait('remain active past ten minutes', {
             clientUserMessageId: 'real-long-turn-command',
         });
-        void turn.then(
-            () => { settled = true; },
-            () => { settled = true; },
+        const settlement = turn.then(
+            () => ({
+                outcome: 'resolved' as const,
+                elapsedMs: performance.now() - startedAt,
+                error: null,
+            }),
+            (error: unknown) => ({
+                outcome: 'rejected' as const,
+                elapsedMs: performance.now() - startedAt,
+                error,
+            }),
         );
-        await delay(realLongTurnMinimumMs + 250);
-        assert.equal(settled, false, 'turn settled before ten real minutes elapsed');
-        await assert.doesNotReject(turn);
-        const elapsed = performance.now() - startedAt;
+        const earlySettlement = await Promise.race([
+            settlement,
+            delay(realLongTurnMinimumMs).then(() => null),
+        ]);
+        assert.equal(
+            earlySettlement,
+            null,
+            earlySettlement
+                ? `turn ${earlySettlement.outcome} after only ${earlySettlement.elapsedMs.toFixed(0)} ms`
+                : 'turn settled before ten real minutes elapsed',
+        );
+        const completed = await settlement;
+        if (completed.outcome === 'rejected') throw completed.error;
+        const elapsed = completed.elapsedMs;
         assert(
             elapsed > realLongTurnMinimumMs,
             `turn completed after only ${elapsed.toFixed(0)} ms`,
@@ -494,6 +582,101 @@ async function runRealLongTurn(): Promise<void> {
         delete process.env.HAPPY_FAKE_CODEX_SCENARIO;
         await rm(root, { recursive: true, force: true });
     }
+}
+
+function lateThreadStartedScenario(cwd: string): Record<string, unknown> {
+    const thread = {
+        id: 'fake-thread-late',
+        sessionId: 'fake-session-late',
+        forkedFromId: null,
+        parentThreadId: null,
+        preview: '',
+        ephemeral: false,
+        modelProvider: 'openai',
+        createdAt: 1,
+        updatedAt: 1,
+        recencyAt: 1,
+        status: { type: 'idle' },
+        path: null,
+        cwd,
+        cliVersion: '0.145.0',
+        source: 'appServer',
+        threadSource: null,
+        agentNickname: null,
+        agentRole: null,
+        gitInfo: null,
+        name: null,
+        turns: [],
+    };
+    const startedTurn = {
+        id: 'fake-turn-late',
+        items: [],
+        itemsView: 'full',
+        status: 'inProgress',
+        error: null,
+        startedAt: 2,
+        completedAt: null,
+        durationMs: null,
+    };
+    return {
+        strictStableV2: true,
+        rules: [
+            {
+                on: 'thread/start',
+                actions: [{
+                    type: 'response',
+                    result: {
+                        thread,
+                        model: 'gpt-test',
+                        modelProvider: 'openai',
+                        serviceTier: null,
+                        cwd,
+                        instructionSources: [],
+                        approvalPolicy: 'on-request',
+                        approvalsReviewer: 'user',
+                        sandbox: { type: 'readOnly', networkAccess: false },
+                        reasoningEffort: null,
+                    },
+                }],
+            },
+            {
+                on: 'turn/start',
+                actions: [
+                    { type: 'response', result: { turn: startedTurn } },
+                    {
+                        type: 'notification',
+                        method: 'turn/started',
+                        params: { threadId: thread.id, turn: startedTurn },
+                    },
+                    {
+                        type: 'notification',
+                        method: 'thread/started',
+                        delayMs: 10,
+                        params: { thread },
+                    },
+                ],
+            },
+            {
+                on: 'turn/interrupt',
+                actions: [
+                    { type: 'response', result: {} },
+                    {
+                        type: 'notification',
+                        method: 'turn/completed',
+                        params: {
+                            threadId: thread.id,
+                            turn: {
+                                ...startedTurn,
+                                status: 'completed',
+                                completedAt: 3,
+                                durationMs: 10,
+                            },
+                        },
+                    },
+                ],
+            },
+        ],
+    };
 }
 
 function streamingScenario(): Record<string, unknown> {

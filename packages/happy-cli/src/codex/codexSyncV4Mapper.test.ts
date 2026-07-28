@@ -355,6 +355,77 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.close();
     });
 
+    it('keeps canonical runtime active when late thread-started metadata reports idle', async () => {
+        const publisher = new RecordingPublisher();
+        let now = 1_800_000_000_000;
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            now: () => now++,
+        });
+
+        mapper.handleNotification(notification({
+            method: 'turn/started',
+            params: {
+                threadId: 'thread-late',
+                turn: turn('turn-late', 'inProgress'),
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'thread/started',
+            params: { thread: thread('thread-late') },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.thread')[0].status).toEqual({
+            type: 'active',
+            activeFlags: [],
+        });
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({
+            type: 'active',
+            activeFlags: [],
+        });
+
+        mapper.handleNotification(notification({
+            method: 'turn/completed',
+            params: {
+                threadId: 'thread-late',
+                turn: turn('turn-late', 'completed'),
+            },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'idle' });
+        await mapper.close();
+    });
+
+    it('does not let thread-started metadata overwrite an authoritative system error', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+        });
+
+        mapper.handleNotification(notification({
+            method: 'thread/started',
+            params: { thread: thread('thread-error') },
+        }));
+        mapper.handleNotification(notification({
+            method: 'thread/status/changed',
+            params: {
+                threadId: 'thread-error',
+                status: { type: 'systemError' },
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'thread/started',
+            params: { thread: thread('thread-error') },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.thread')[0].status).toEqual({ type: 'systemError' });
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'systemError' });
+        await mapper.close();
+    });
+
     it('chunks UTF-8 without splitting code points and never rewrites a frozen chunk', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });

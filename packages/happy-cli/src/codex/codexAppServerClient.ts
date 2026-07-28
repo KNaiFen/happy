@@ -546,7 +546,7 @@ export class CodexAppServerClient {
 
     private registerThreadSnapshot(
         value: unknown,
-        source: 'response' | 'snapshot' = 'response',
+        source: 'response' | 'snapshot' | 'notification' = 'response',
         emitNotification = true,
     ): ProtocolThread | null {
         const thread = this.normalizeProtocolThread(value);
@@ -579,7 +579,9 @@ export class CodexAppServerClient {
         if (!threadId) return null;
 
         if (method === 'thread/started') {
-            if (!this.registerThreadSnapshot(params?.thread)) this.scheduleThreadHydration(threadId);
+            if (!this.registerThreadSnapshot(params?.thread, 'notification')) {
+                this.scheduleThreadHydration(threadId);
+            }
             return null;
         }
 

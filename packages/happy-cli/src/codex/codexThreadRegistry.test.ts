@@ -95,6 +95,80 @@ describe('CodexThreadRegistry', () => {
         });
     });
 
+    it('does not let late thread-started metadata settle a pending or active turn', async () => {
+        const registry = new CodexThreadRegistry();
+        const wait = registry.beginTurn('thread-1');
+        let settled = false;
+        void wait.promise.then(
+            () => { settled = true; },
+            () => { settled = true; },
+        );
+
+        registry.registerThread(
+            thread('thread-1', { type: 'idle' }),
+            'notification',
+        );
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(registry.getThread('thread-1')?.status).toEqual({ type: 'idle' });
+
+        registry.registerTurn('thread-1', turn('turn-1'));
+        registry.registerThread(
+            thread('thread-1', { type: 'idle' }),
+            'notification',
+        );
+        await Promise.resolve();
+
+        expect(settled).toBe(false);
+        expect(registry.getThread('thread-1')).toMatchObject({
+            activeTurnId: 'turn-1',
+            status: { type: 'active' },
+        });
+
+        registry.registerTurn('thread-1', turn('turn-1', 'completed'));
+        await expect(wait.promise).resolves.toMatchObject({
+            turnId: 'turn-1',
+            status: 'completed',
+            source: 'turn',
+        });
+        expect(registry.getThread('thread-1')).toMatchObject({
+            activeTurnId: null,
+            status: { type: 'idle' },
+        });
+    });
+
+    it('does not leave a synthetic active status after a definitive turn start failure', async () => {
+        const registry = new CodexThreadRegistry();
+        registry.registerThread(thread('thread-1', { type: 'idle' }));
+        const wait = registry.beginTurn('thread-1');
+
+        registry.registerThread(
+            thread('thread-1', { type: 'idle' }),
+            'notification',
+        );
+        registry.failTurnStart('thread-1', new Error('turn/start failed'));
+
+        await expect(wait.promise).rejects.toThrow('turn/start failed');
+        expect(registry.activeThreadIds()).not.toContain('thread-1');
+        expect(registry.getThread('thread-1')).toMatchObject({
+            activeTurnId: null,
+            status: { type: 'idle' },
+        });
+    });
+
+    it('does not let thread-started metadata overwrite an authoritative system error', () => {
+        const registry = new CodexThreadRegistry();
+        registry.registerThread(thread('thread-1', { type: 'idle' }));
+        registry.updateThreadStatus('thread-1', { type: 'systemError' });
+
+        registry.registerThread(
+            thread('thread-1', { type: 'idle' }),
+            'notification',
+        );
+
+        expect(registry.getThread('thread-1')?.status).toEqual({ type: 'systemError' });
+    });
+
     it('recovers an in-flight completion from a resumed thread snapshot', async () => {
         const registry = new CodexThreadRegistry();
         const wait = registry.beginTurn('thread-1');

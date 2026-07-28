@@ -138,8 +138,12 @@ export class CodexThreadRegistry {
         return this.threads.get(threadId) ?? null;
     }
 
-    registerThread(thread: Thread, source: 'response' | 'snapshot' = 'response'): CodexThreadRuntime {
+    registerThread(
+        thread: Thread,
+        source: 'response' | 'snapshot' | 'notification' = 'response',
+    ): CodexThreadRuntime {
         const { runtime } = this.ensureThread(thread.id);
+        const hadSnapshot = runtime.snapshot !== null;
         runtime.placeholder = false;
         runtime.hydrationRequested = true;
 
@@ -160,9 +164,12 @@ export class CodexThreadRegistry {
         for (const turn of thread.turns) {
             this.registerTurn(thread.id, turn, source === 'snapshot' ? 'snapshot' : 'turn');
         }
-        runtime.snapshot = thread;
-        runtime.status = thread.status;
-        if (thread.status.type !== 'active') {
+        const nextStatus: ThreadStatus = source === 'notification' && hadSnapshot
+            ? runtime.status
+            : thread.status;
+        runtime.snapshot = { ...thread, status: nextStatus };
+        runtime.status = nextStatus;
+        if (source !== 'notification' && thread.status.type !== 'active') {
             this.settleFromThreadStatus(runtime, source === 'snapshot' ? 'snapshot' : 'threadStatus');
         }
         return runtime;
@@ -271,6 +278,13 @@ export class CodexThreadRegistry {
             ) {
                 thread.activeTurnId = turn.id;
             }
+            thread.status = {
+                type: 'active',
+                activeFlags: thread.status.type === 'active' ? thread.status.activeFlags : [],
+            };
+            if (thread.snapshot) {
+                thread.snapshot = { ...thread.snapshot, status: thread.status };
+            }
         } else {
             this.settleTurn(thread, runtime, source);
         }
@@ -322,7 +336,15 @@ export class CodexThreadRegistry {
     ): void {
         if (turn.settled) return;
         turn.settled = true;
-        if (thread.activeTurnId === turn.turnId) thread.activeTurnId = null;
+        if (thread.activeTurnId === turn.turnId) {
+            thread.activeTurnId = null;
+            if (source === 'turn' && thread.status.type !== 'systemError') {
+                thread.status = { type: 'idle' };
+                if (thread.snapshot) {
+                    thread.snapshot = { ...thread.snapshot, status: thread.status };
+                }
+            }
+        }
         const controller = this.turnCompletions.get(turnKey(thread.threadId, turn.turnId));
         if (controller) {
             controller.resolve({

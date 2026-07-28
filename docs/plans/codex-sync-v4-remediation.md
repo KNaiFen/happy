@@ -565,6 +565,13 @@ R5 transport 与 URL 边界：
 - [x] 性能：10,000 entity + 5 Hz delta，健康本地链路 p95 < 750 ms。
 - [x] 长 turn：虚拟时钟 2 小时不假结束。
 - [ ] 长 turn：真实 wall-clock 超过 10 分钟，仅在权威完成通知后结束。
+- [x] 生命周期乱序：迟到的 `thread/started` 元数据不得用旧 `idle` 状态
+      结束已经由 `turn/started` 登记的 active turn；真实子进程场景必须
+      覆盖该顺序，CLI completion registry 与 Sync v4 canonical runtime
+      projection 都必须保持 active。
+- [x] `thread/started` 只补充元数据：已有权威 thread status 时不得被其中
+      的旧状态覆盖；`turn/start` 明确失败后不得残留由 pending start 合成
+      的 active 状态。registry 与 mapper 都必须覆盖 idle/systemError 回归。
 - [x] GitHub CI 覆盖 Wire、Server、CLI、App 的 typecheck、unit test 和 build。
 - [x] GitHub CI 覆盖 Agent 的 typecheck、unit test 和 build，并将 Codex
       provider、CLI transport、relay 路由和 App projection 的故障场景作为
@@ -600,6 +607,8 @@ R6 场景与性能口径：
   app-server 子进程，并只在官方 `turn/completed` 后结束。
 - 长 turn 门禁的 settled 观察不得通过未消费的 `Promise.finally()` 分支制造
   unhandled rejection；失败必须由被等待的原始 turn promise 统一报告。
+- 长 turn 在十分钟检查点前提前 resolve/reject 时必须立即失败并报告实际
+  elapsed，不能继续占用 runner 到检查点后才暴露状态机错误。
 - 100,000 mutation Chaos 沿用确定性 seed，覆盖重复 POST、响应提交后断连、
   重排、cursor 提交前崩溃、丢失全部 invalidation 和 snapshot fallback；
   不再增加功能重复但规模更小的第二套实现。
@@ -608,7 +617,7 @@ R6 场景与性能口径：
 
 1. 修复代码并保持 v4 Server flag 关闭。
 2. 推进受影响包 patch 版本；本轮最低目标：
-   CLI `1.4.3`、App `1.11.9`、Server `1.1.13`、Wire `0.1.2`。App
+   CLI `1.4.4`、App `1.11.9`、Server `1.1.13`、Wire `0.1.2`。App
    `1.11.5` 已进入首轮云端 CI；后续 Tauri 格式、lockfile 闭包与可诊断
    lock drift 门禁及权威 feature-resolution lock 修复按仓库规则各自使用
    新 patch。
@@ -835,3 +844,31 @@ R6 场景与性能口径：
   当前仅使用普通 HTTP 方法、显式 header/body 且禁用重定向的 transport
   能力边界一致。修复限定为原样应用云端 diff，App 推进到 `1.11.9`，再跑
   `cargo check/test --locked`。
+- 2026-07-28：提交 `7a74d71` 的 push CI `30381641311` 与 PR CI
+  `30381644859` 除真实十分钟 turn 外全部通过，CLI Smoke
+  `30381645230` 在 Linux/Windows 与 Node 20/24 全绿。两个长 turn 均在
+  约 `600257 ms` 检查点报告提前 settled；trace 证明 fake provider 的
+  `turn/completed` 配置在 `601500 ms`，根因锁定为 `thread/start` 响应后
+  迟到的 `thread/started(idle)` 可越过新 `turn/started` 并错误结算 active
+  turn。差异审查进一步确认同一通知还会把 Sync v4 canonical runtime
+  投影为 idle，即使 completion registry 已保持 pending。修复限定为区分
+  元数据通知与权威状态边界、让 mapper 以既有 live active turn 抵御迟到
+  idle metadata、补充 registry/mapper/真实子进程乱序回归，并让长 turn
+  提前结算时 fail-fast；CLI 推进到 `1.4.4` 后重新跑全部云端门禁。
+- 2026-07-28：迟到 `thread/started` 修复通过 CLI typecheck、bundle、
+  registry/client/mapper 定向 `80/80`、事件驱动真实 fake app-server 乱序
+  场景及 Codex -> CLI -> HTTP relay -> App projection 业务链路，健康流式
+  p95 `241.2 ms`。完整 CLI unit suite 共 `1021/1021`：工作区沙箱内
+  `1013` 项通过，唯一受限的 Claude scanner `8/8` 在授权写入其测试临时
+  目录后单独通过。bundle 版本确认为 `1.4.4`；下一门禁为重新提交并等待
+  云端真实十分钟 turn、全矩阵 CI 与 CLI Smoke。
+- 2026-07-28：提交前差异审查发现第一版乱序修复仍把 pending start 遇到的
+  `thread/started(idle)` 写成 synthetic active；若 `turn/start` 随后返回
+  明确错误，`failTurnStart` 只清 pending completion，runtime 会永久残留
+  active。同一 metadata 也可把已知 `systemError` 降为 idle。修复边界收紧
+  为：已有 registry/mapper 状态时 `thread/started` 只合并元数据，状态只由
+  turn lifecycle、`thread/status/changed` 或权威 snapshot 推进。
+- 2026-07-28：metadata 状态边界修复完成。registry、mapper 与 app-server
+  client 定向 `83/83`、CLI typecheck、真实 fake provider 乱序门禁及
+  Codex -> CLI -> HTTP relay -> App projection 通过；10k+ entity、断开
+  invalidation 后轮询收敛场景的健康流式 p95 为 `239.8 ms`。
