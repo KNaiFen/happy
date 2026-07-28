@@ -608,9 +608,10 @@ R6 场景与性能口径：
 
 1. 修复代码并保持 v4 Server flag 关闭。
 2. 推进受影响包 patch 版本；本轮最低目标：
-   CLI `1.4.3`、App `1.11.8`、Server `1.1.13`、Wire `0.1.2`。App
+   CLI `1.4.3`、App `1.11.9`、Server `1.1.13`、Wire `0.1.2`。App
    `1.11.5` 已进入首轮云端 CI；后续 Tauri 格式、lockfile 闭包与可诊断
-   lock drift 门禁按仓库规则各自使用新 patch。
+   lock drift 门禁及权威 feature-resolution lock 修复按仓库规则各自使用
+   新 patch。
 3. 本地通过四包 typecheck、unit test、build、协议模拟和 migration gate。
 4. 推送 `origin/codex/sync-v4`，等待所有 PR CI。
 5. CI 失败时修复、再次推进受影响 patch 版本、提交并推送。
@@ -827,3 +828,10 @@ R6 场景与性能口径：
   `git diff --exit-code` 输出权威 lock drift，再执行
   `cargo fmt/check/test --locked`；该诊断门禁永久保留，App 推进到
   `1.11.8`。
+- 2026-07-28：提交 `762e505` 的 push CI `30381234770` 由 Tauri job
+  `90349414969` 输出完整 Cargo metadata drift。直接 `reqwest` 的解析结果
+  删除 cookie store、QUIC/HTTP3 和不再可达的 rustls 辅助闭包，增加系统
+  TLS 所需的 native-tls/OpenSSL/Security Framework/Schannel 条目；这与
+  当前仅使用普通 HTTP 方法、显式 header/body 且禁用重定向的 transport
+  能力边界一致。修复限定为原样应用云端 diff，App 推进到 `1.11.9`，再跑
+  `cargo check/test --locked`。
