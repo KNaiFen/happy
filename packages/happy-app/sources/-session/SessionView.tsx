@@ -825,6 +825,13 @@ export function SessionViewLoaded({
     }), [sessionStatus.statusText, sessionStatus.statusColor, sessionStatus.statusDotColor, sessionStatus.isPulsing]);
 
     const usageData = React.useMemo(() => {
+        if (isCodexV4Active) {
+            const usage = codexV4Session?.usage;
+            return usage ? {
+                ...usage,
+                contextWindow: usage.contextWindow ?? undefined,
+            } : undefined;
+        }
         const source = sessionUsage ?? session.latestUsage;
         if (!source) return undefined;
         return {
@@ -835,7 +842,7 @@ export function SessionViewLoaded({
             contextSize: source.contextSize,
             contextWindow: source.contextWindow,
         };
-    }, [sessionUsage, session.latestUsage]);
+    }, [isCodexV4Active, codexV4Session?.usage, sessionUsage, session.latestUsage]);
     const metadataGitBranch = React.useMemo(() => {
         const gitBranch = (session.metadata as { gitBranch?: unknown } | null)?.gitBranch;
         return typeof gitBranch === 'string' && gitBranch.trim() ? gitBranch.trim() : null;

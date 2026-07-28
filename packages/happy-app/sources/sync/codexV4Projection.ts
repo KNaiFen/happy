@@ -21,13 +21,38 @@ export type CodexV4EntityBuckets = {
     [T in CodexEntityType]: Record<string, EntityOfType<T>>;
 };
 
+interface CodexV4ProjectionIndexes {
+    turnProviderIdByKey: Record<string, string>;
+    itemProviderIdByKey: Record<string, string>;
+    itemProviderIdsByTurn: Record<string, string[]>;
+    partProviderIdsByItem: Record<string, string[]>;
+    requestProviderIdsByItem: Record<string, string[]>;
+    relationProviderIdsByItem: Record<string, string[]>;
+    commandProviderIdByCommandId: Record<string, string>;
+    commandProviderIdsByClientId: Record<string, string[]>;
+    commandResultProviderIdsByCommandId: Record<string, string[]>;
+    providerUserItemProviderIdsByClientId: Record<string, string[]>;
+    replacementCommandProviderIdsByCommandId: Record<string, string[]>;
+}
+
+export interface CodexV4UsageProjection {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreation: number;
+    cacheRead: number;
+    contextSize: number;
+    contextWindow: number | null;
+}
+
 export interface CodexV4Projection {
     revisions: Record<string, number>;
     entities: CodexV4EntityBuckets;
+    indexes: CodexV4ProjectionIndexes;
     thread: CodexThreadEntityV4 | null;
     runtime: CodexRuntimeEntityV4 | null;
     activated: boolean;
     syncHealth: CodexV4RegistrySyncState | null;
+    usage: CodexV4UsageProjection | null;
     messages: Message[];
 }
 
@@ -51,11 +76,29 @@ export function createCodexV4Projection(): CodexV4Projection {
             'codex.commandResult': {},
             'codex.relation': {},
         },
+        indexes: createProjectionIndexes(),
         thread: null,
         runtime: null,
         activated: false,
         syncHealth: null,
+        usage: null,
         messages: [],
+    };
+}
+
+function createProjectionIndexes(): CodexV4ProjectionIndexes {
+    return {
+        turnProviderIdByKey: {},
+        itemProviderIdByKey: {},
+        itemProviderIdsByTurn: {},
+        partProviderIdsByItem: {},
+        requestProviderIdsByItem: {},
+        relationProviderIdsByItem: {},
+        commandProviderIdByCommandId: {},
+        commandProviderIdsByClientId: {},
+        commandResultProviderIdsByCommandId: {},
+        providerUserItemProviderIdsByClientId: {},
+        replacementCommandProviderIdsByCommandId: {},
     };
 }
 
@@ -100,6 +143,8 @@ export function applyCodexV4ProjectionUpdates(
 ): CodexV4Projection {
     let revisions = current.revisions;
     const changedBuckets = new Map<CodexEntityType, Record<string, CodexEntityV4>>();
+    const indexBuilder = new ProjectionIndexBuilder(current.indexes);
+    const affected = createAffectedOwners();
     let changed = false;
 
     for (const update of updates) {
@@ -115,11 +160,19 @@ export function applyCodexV4ProjectionUpdates(
             bucket = { ...current.entities[entityType] } as Record<string, CodexEntityV4>;
             changedBuckets.set(entityType, bucket);
         }
+        const previous = bucket[update.entity.providerId] ?? null;
+        if (previous) collectAffectedOwners(previous, indexBuilder, affected);
         if (update.op === 'delete') {
             delete bucket[update.entity.providerId];
         } else {
             bucket[update.entity.providerId] = update.entity;
         }
+        const next = update.op === 'delete' ? null : update.entity;
+        if (!hasSameIndexMembership(previous, next)) {
+            if (previous) removeEntityFromIndexes(previous, indexBuilder);
+            if (next) addEntityToIndexes(next, indexBuilder);
+        }
+        if (next) collectAffectedOwners(next, indexBuilder, affected);
     }
     if (!changed) return current;
 
@@ -127,18 +180,55 @@ export function applyCodexV4ProjectionUpdates(
     for (const [entityType, bucket] of changedBuckets) {
         entities = { ...entities, [entityType]: bucket } as CodexV4EntityBuckets;
     }
-    const runtime = newestEntity(Object.values(entities['codex.runtime']));
-    const thread = newestEntity(Object.values(entities['codex.thread']));
+    const indexes = indexBuilder.finish();
+    const runtime = changedBuckets.has('codex.runtime')
+        ? newestEntity(Object.values(entities['codex.runtime']))
+        : current.runtime;
+    const thread = changedBuckets.has('codex.thread')
+        ? newestEntity(Object.values(entities['codex.thread']))
+        : current.thread;
     const activated = current.activated || runtime?.syncState === 'ready';
+    const usage = changedBuckets.has('codex.thread') || changedBuckets.has('codex.turn')
+        ? projectUsage(thread, Object.values(entities['codex.turn']))
+        : current.usage;
 
     return {
         revisions,
         entities,
+        indexes,
         runtime,
         thread,
         activated,
         syncHealth: current.syncHealth,
-        messages: projectMessages(entities),
+        usage,
+        messages: projectAffectedMessages(current.messages, entities, indexes, affected),
+    };
+}
+
+function projectUsage(
+    thread: CodexThreadEntityV4 | null,
+    turns: CodexTurnEntityV4[],
+): CodexV4UsageProjection | null {
+    const threadUsage = thread?.tokenUsage;
+    if (threadUsage) {
+        return {
+            inputTokens: threadUsage.last.inputTokens,
+            outputTokens: threadUsage.last.outputTokens,
+            cacheCreation: threadUsage.last.cacheWriteInputTokens,
+            cacheRead: threadUsage.last.cachedInputTokens,
+            contextSize: threadUsage.last.totalTokens,
+            contextWindow: threadUsage.modelContextWindow,
+        };
+    }
+    const turn = newestEntity(turns.filter((entry) => entry.usage !== null));
+    if (!turn?.usage) return null;
+    return {
+        inputTokens: turn.usage.inputTokens,
+        outputTokens: turn.usage.outputTokens,
+        cacheCreation: turn.usage.cacheWriteInputTokens,
+        cacheRead: turn.usage.cachedInputTokens,
+        contextSize: turn.usage.totalTokens,
+        contextWindow: null,
     };
 }
 
@@ -156,91 +246,474 @@ function newestEntity<T extends { updatedAt: number; providerId: string }>(entit
     return newest;
 }
 
-function projectMessages(entities: CodexV4EntityBuckets): Message[] {
-    const turns = new Map(Object.values(entities['codex.turn']).map((turn) => [turn.turnId, turn]));
-    const items = Object.values(entities['codex.item']);
-    const parts = Object.values(entities['codex.part']);
-    const requests = Object.values(entities['codex.request']);
-    const relations = Object.values(entities['codex.relation']);
-    const commands = Object.values(entities['codex.command']);
-    const commandsById = new Map(commands.map((command) => [command.commandId, command]));
-    const partsByItem = new Map<string, CodexPartEntityV4[]>();
-    const requestsByItem = new Map<string, CodexRequestEntityV4[]>();
-    const relationsByItem = new Map<string, CodexRelationEntityV4>();
-    for (const part of parts) {
-        appendGrouped(partsByItem, itemKey(part.threadId, part.turnId, part.itemId), part);
-    }
-    for (const groupedParts of partsByItem.values()) groupedParts.sort(compareParts);
-    for (const request of requests) {
-        if (request.turnId === null || request.itemId === null) continue;
-        appendGrouped(requestsByItem, itemKey(request.threadId, request.turnId, request.itemId), request);
-    }
-    for (const relation of relations) {
-        if (relation.parentTurnId === null || relation.delegationItemId === null) continue;
-        const key = itemKey(relation.parentThreadId, relation.parentTurnId, relation.delegationItemId);
-        const current = relationsByItem.get(key);
-        if (!current || newestEntity([current, relation]) === relation) relationsByItem.set(key, relation);
-    }
-    const providerUserMessageIds = new Set(
-        items
-            .filter((item) => item.itemType.toLowerCase() === 'usermessage' && item.clientId)
-            .map((item) => item.clientId!),
-    );
-    const replacedCommandIds = new Set(
-        commands
-            .map((command) => command.replacesCommandId)
-            .filter((commandId): commandId is string => Boolean(commandId)),
-    );
-    const messages: Message[] = [];
-    const attachedRequestIds = new Set<string>();
+type GroupIndexName =
+    | 'itemProviderIdsByTurn'
+    | 'partProviderIdsByItem'
+    | 'requestProviderIdsByItem'
+    | 'relationProviderIdsByItem'
+    | 'commandProviderIdsByClientId'
+    | 'commandResultProviderIdsByCommandId'
+    | 'providerUserItemProviderIdsByClientId'
+    | 'replacementCommandProviderIdsByCommandId';
 
-    for (const item of items) {
+type DirectIndexName =
+    | 'turnProviderIdByKey'
+    | 'itemProviderIdByKey'
+    | 'commandProviderIdByCommandId';
+
+class ProjectionIndexBuilder {
+    private readonly groupChanges = new Map<GroupIndexName, Map<string, Set<string>>>();
+    private readonly directChanges = new Map<DirectIndexName, Map<string, string | null>>();
+
+    constructor(private readonly current: CodexV4ProjectionIndexes) {}
+
+    getGroup(name: GroupIndexName, key: string): readonly string[] {
+        return [...(this.groupChanges.get(name)?.get(key) ?? this.current[name][key] ?? [])];
+    }
+
+    addGroup(name: GroupIndexName, key: string, providerId: string): void {
+        this.mutableGroup(name, key).add(providerId);
+    }
+
+    removeGroup(name: GroupIndexName, key: string, providerId: string): void {
+        this.mutableGroup(name, key).delete(providerId);
+    }
+
+    getDirect(name: DirectIndexName, key: string): string | undefined {
+        const changed = this.directChanges.get(name)?.get(key);
+        return changed === null ? undefined : changed ?? this.current[name][key];
+    }
+
+    setDirect(name: DirectIndexName, key: string, providerId: string | null): void {
+        let changes = this.directChanges.get(name);
+        if (!changes) {
+            changes = new Map();
+            this.directChanges.set(name, changes);
+        }
+        changes.set(key, providerId);
+    }
+
+    finish(): CodexV4ProjectionIndexes {
+        if (this.groupChanges.size === 0 && this.directChanges.size === 0) return this.current;
+        const next = { ...this.current };
+        for (const [name, changes] of this.groupChanges) {
+            const index = { ...this.current[name] };
+            for (const [key, values] of changes) {
+                if (values.size === 0) delete index[key];
+                else index[key] = [...values].sort();
+            }
+            next[name] = index;
+        }
+        for (const [name, changes] of this.directChanges) {
+            const index = { ...this.current[name] };
+            for (const [key, value] of changes) {
+                if (value === null) delete index[key];
+                else index[key] = value;
+            }
+            next[name] = index;
+        }
+        return next;
+    }
+
+    private mutableGroup(name: GroupIndexName, key: string): Set<string> {
+        let changes = this.groupChanges.get(name);
+        if (!changes) {
+            changes = new Map();
+            this.groupChanges.set(name, changes);
+        }
+        let values = changes.get(key);
+        if (!values) {
+            values = new Set(this.current[name][key] ?? []);
+            changes.set(key, values);
+        }
+        return values;
+    }
+}
+
+interface AffectedMessageOwners {
+    items: Set<string>;
+    requests: Set<string>;
+    commands: Set<string>;
+    commandResults: Set<string>;
+}
+
+function createAffectedOwners(): AffectedMessageOwners {
+    return {
+        items: new Set(),
+        requests: new Set(),
+        commands: new Set(),
+        commandResults: new Set(),
+    };
+}
+
+function collectAffectedOwners(
+    entity: CodexEntityV4,
+    indexes: ProjectionIndexBuilder,
+    affected: AffectedMessageOwners,
+): void {
+    switch (entity.entityType) {
+        case 'codex.turn':
+            for (const providerId of indexes.getGroup(
+                'itemProviderIdsByTurn',
+                turnKey(entity.threadId, entity.turnId),
+            )) affected.items.add(providerId);
+            return;
+        case 'codex.item': {
+            affected.items.add(entity.providerId);
+            if (entity.itemType.toLowerCase() === 'usermessage' && entity.clientId) {
+                for (const providerId of indexes.getGroup(
+                    'commandProviderIdsByClientId',
+                    entity.clientId,
+                )) affected.commands.add(providerId);
+            }
+            return;
+        }
+        case 'codex.part': {
+            const providerId = indexes.getDirect(
+                'itemProviderIdByKey',
+                itemKey(entity.threadId, entity.turnId, entity.itemId),
+            );
+            if (providerId) affected.items.add(providerId);
+            return;
+        }
+        case 'codex.request':
+            affected.requests.add(entity.providerId);
+            return;
+        case 'codex.command':
+            affected.commands.add(entity.providerId);
+            for (const providerId of indexes.getGroup(
+                'commandResultProviderIdsByCommandId',
+                entity.commandId,
+            )) affected.commandResults.add(providerId);
+            if (entity.replacesCommandId) {
+                const replaced = indexes.getDirect('commandProviderIdByCommandId', entity.replacesCommandId);
+                if (replaced) affected.commands.add(replaced);
+            }
+            return;
+        case 'codex.commandResult':
+            affected.commandResults.add(entity.providerId);
+            return;
+        case 'codex.relation': {
+            if (entity.parentTurnId === null || entity.delegationItemId === null) return;
+            const providerId = indexes.getDirect(
+                'itemProviderIdByKey',
+                itemKey(entity.parentThreadId, entity.parentTurnId, entity.delegationItemId),
+            );
+            if (providerId) affected.items.add(providerId);
+            return;
+        }
+        case 'codex.thread':
+        case 'codex.runtime':
+            return;
+        default:
+            return assertNever(entity);
+    }
+}
+
+function addEntityToIndexes(entity: CodexEntityV4, indexes: ProjectionIndexBuilder): void {
+    switch (entity.entityType) {
+        case 'codex.turn':
+            indexes.setDirect('turnProviderIdByKey', turnKey(entity.threadId, entity.turnId), entity.providerId);
+            return;
+        case 'codex.item':
+            indexes.setDirect(
+                'itemProviderIdByKey',
+                itemKey(entity.threadId, entity.turnId, entity.itemId),
+                entity.providerId,
+            );
+            indexes.addGroup('itemProviderIdsByTurn', turnKey(entity.threadId, entity.turnId), entity.providerId);
+            if (entity.itemType.toLowerCase() === 'usermessage' && entity.clientId) {
+                indexes.addGroup('providerUserItemProviderIdsByClientId', entity.clientId, entity.providerId);
+            }
+            return;
+        case 'codex.part':
+            indexes.addGroup(
+                'partProviderIdsByItem',
+                itemKey(entity.threadId, entity.turnId, entity.itemId),
+                entity.providerId,
+            );
+            return;
+        case 'codex.request':
+            if (entity.turnId !== null && entity.itemId !== null) {
+                indexes.addGroup(
+                    'requestProviderIdsByItem',
+                    itemKey(entity.threadId, entity.turnId, entity.itemId),
+                    entity.providerId,
+                );
+            }
+            return;
+        case 'codex.command':
+            indexes.setDirect('commandProviderIdByCommandId', entity.commandId, entity.providerId);
+            indexes.addGroup('commandProviderIdsByClientId', entity.clientUserMessageId, entity.providerId);
+            if (entity.replacesCommandId) {
+                indexes.addGroup(
+                    'replacementCommandProviderIdsByCommandId',
+                    entity.replacesCommandId,
+                    entity.providerId,
+                );
+            }
+            return;
+        case 'codex.commandResult':
+            indexes.addGroup(
+                'commandResultProviderIdsByCommandId',
+                entity.commandId,
+                entity.providerId,
+            );
+            return;
+        case 'codex.relation':
+            if (entity.parentTurnId !== null && entity.delegationItemId !== null) {
+                indexes.addGroup(
+                    'relationProviderIdsByItem',
+                    itemKey(entity.parentThreadId, entity.parentTurnId, entity.delegationItemId),
+                    entity.providerId,
+                );
+            }
+            return;
+        case 'codex.thread':
+        case 'codex.runtime':
+            return;
+        default:
+            return assertNever(entity);
+    }
+}
+
+function removeEntityFromIndexes(entity: CodexEntityV4, indexes: ProjectionIndexBuilder): void {
+    switch (entity.entityType) {
+        case 'codex.turn': {
+            const key = turnKey(entity.threadId, entity.turnId);
+            if (indexes.getDirect('turnProviderIdByKey', key) === entity.providerId) {
+                indexes.setDirect('turnProviderIdByKey', key, null);
+            }
+            return;
+        }
+        case 'codex.item': {
+            const key = itemKey(entity.threadId, entity.turnId, entity.itemId);
+            if (indexes.getDirect('itemProviderIdByKey', key) === entity.providerId) {
+                indexes.setDirect('itemProviderIdByKey', key, null);
+            }
+            indexes.removeGroup('itemProviderIdsByTurn', turnKey(entity.threadId, entity.turnId), entity.providerId);
+            if (entity.itemType.toLowerCase() === 'usermessage' && entity.clientId) {
+                indexes.removeGroup('providerUserItemProviderIdsByClientId', entity.clientId, entity.providerId);
+            }
+            return;
+        }
+        case 'codex.part':
+            indexes.removeGroup(
+                'partProviderIdsByItem',
+                itemKey(entity.threadId, entity.turnId, entity.itemId),
+                entity.providerId,
+            );
+            return;
+        case 'codex.request':
+            if (entity.turnId !== null && entity.itemId !== null) {
+                indexes.removeGroup(
+                    'requestProviderIdsByItem',
+                    itemKey(entity.threadId, entity.turnId, entity.itemId),
+                    entity.providerId,
+                );
+            }
+            return;
+        case 'codex.command':
+            if (indexes.getDirect('commandProviderIdByCommandId', entity.commandId) === entity.providerId) {
+                indexes.setDirect('commandProviderIdByCommandId', entity.commandId, null);
+            }
+            indexes.removeGroup('commandProviderIdsByClientId', entity.clientUserMessageId, entity.providerId);
+            if (entity.replacesCommandId) {
+                indexes.removeGroup(
+                    'replacementCommandProviderIdsByCommandId',
+                    entity.replacesCommandId,
+                    entity.providerId,
+                );
+            }
+            return;
+        case 'codex.commandResult':
+            indexes.removeGroup(
+                'commandResultProviderIdsByCommandId',
+                entity.commandId,
+                entity.providerId,
+            );
+            return;
+        case 'codex.relation':
+            if (entity.parentTurnId !== null && entity.delegationItemId !== null) {
+                indexes.removeGroup(
+                    'relationProviderIdsByItem',
+                    itemKey(entity.parentThreadId, entity.parentTurnId, entity.delegationItemId),
+                    entity.providerId,
+                );
+            }
+            return;
+        case 'codex.thread':
+        case 'codex.runtime':
+            return;
+        default:
+            return assertNever(entity);
+    }
+}
+
+function hasSameIndexMembership(previous: CodexEntityV4 | null, next: CodexEntityV4 | null): boolean {
+    if (!previous || !next || previous.entityType !== next.entityType) return false;
+    const previousMembership = indexMembership(previous);
+    const nextMembership = indexMembership(next);
+    return previousMembership.length === nextMembership.length
+        && previousMembership.every((entry, index) => entry === nextMembership[index]);
+}
+
+function indexMembership(entity: CodexEntityV4): string[] {
+    switch (entity.entityType) {
+        case 'codex.turn':
+            return [turnKey(entity.threadId, entity.turnId)];
+        case 'codex.item':
+            return [
+                itemKey(entity.threadId, entity.turnId, entity.itemId),
+                turnKey(entity.threadId, entity.turnId),
+                entity.itemType.toLowerCase() === 'usermessage' ? entity.clientId ?? '' : '',
+            ];
+        case 'codex.part':
+            return [itemKey(entity.threadId, entity.turnId, entity.itemId)];
+        case 'codex.request':
+            return [entity.turnId !== null && entity.itemId !== null
+                ? itemKey(entity.threadId, entity.turnId, entity.itemId)
+                : ''];
+        case 'codex.command':
+            return [entity.commandId, entity.clientUserMessageId, entity.replacesCommandId ?? ''];
+        case 'codex.commandResult':
+            return [entity.commandId];
+        case 'codex.relation':
+            return [entity.parentTurnId !== null && entity.delegationItemId !== null
+                ? itemKey(entity.parentThreadId, entity.parentTurnId, entity.delegationItemId)
+                : ''];
+        case 'codex.thread':
+        case 'codex.runtime':
+            return [];
+        default:
+            return assertNever(entity);
+    }
+}
+
+function projectAffectedMessages(
+    current: Message[],
+    entities: CodexV4EntityBuckets,
+    indexes: CodexV4ProjectionIndexes,
+    affected: AffectedMessageOwners,
+): Message[] {
+    const affectedMessageIds = new Set<string>();
+    const projected: Message[] = [];
+
+    for (const providerId of affected.items) {
+        affectedMessageIds.add(itemMessageId(providerId));
+        const item = entities['codex.item'][providerId];
+        if (!item) continue;
         const key = itemKey(item.threadId, item.turnId, item.itemId);
-        const itemParts = partsByItem.get(key) ?? [];
-        const itemRequests = requestsByItem.get(key) ?? [];
-        for (const request of itemRequests) attachedRequestIds.add(request.requestId);
-        const relation = relationsByItem.get(key);
-        const projected = projectItem(item, itemParts, itemRequests, turns.get(item.turnId), relation);
-        if (projected) messages.push(projected);
+        const parts = (indexes.partProviderIdsByItem[key] ?? [])
+            .map((id) => entities['codex.part'][id])
+            .filter((part): part is CodexPartEntityV4 => Boolean(part))
+            .sort(compareParts);
+        const turnProviderId = indexes.turnProviderIdByKey[turnKey(item.threadId, item.turnId)];
+        const relation = newestEntity(
+            (indexes.relationProviderIdsByItem[key] ?? [])
+                .map((id) => entities['codex.relation'][id])
+                .filter((entry): entry is CodexRelationEntityV4 => Boolean(entry)),
+        );
+        const message = projectItem(
+            item,
+            parts,
+            turnProviderId ? entities['codex.turn'][turnProviderId] : undefined,
+            relation ?? undefined,
+        );
+        if (message) projected.push(message);
     }
 
-    for (const request of requests) {
-        if (request.requestType !== 'toolUserInput' || attachedRequestIds.has(request.requestId)) continue;
-        messages.push(projectUserInputRequest(request));
+    for (const providerId of affected.requests) {
+        affectedMessageIds.add(requestMessageId(providerId));
+        const request = entities['codex.request'][providerId];
+        if (request) projected.push(projectRequestMessage(request));
     }
 
-    for (const command of commands) {
-        if (providerUserMessageIds.has(command.clientUserMessageId) || replacedCommandIds.has(command.commandId)) continue;
-        const displayText = jsonObject(command.payload).displayText;
-        if (typeof displayText !== 'string' || displayText.length === 0) continue;
-        messages.push({
-            kind: 'user-text',
-            id: `codex-v4:command:${command.providerId}`,
-            localId: command.clientUserMessageId,
-            createdAt: command.createdAt,
-            text: displayText,
-        });
+    for (const providerId of affected.commands) {
+        affectedMessageIds.add(commandMessageId(providerId));
+        const command = entities['codex.command'][providerId];
+        if (!command) continue;
+        const hasProviderItem = (indexes.providerUserItemProviderIdsByClientId[
+            command.clientUserMessageId
+        ]?.length ?? 0) > 0;
+        const isReplaced = (indexes.replacementCommandProviderIdsByCommandId[
+            command.commandId
+        ]?.length ?? 0) > 0;
+        const message = projectCommand(command, hasProviderItem || isReplaced);
+        if (message) projected.push(message);
     }
 
-    for (const result of Object.values(entities['codex.commandResult'])) {
-        const command = commandsById.get(result.commandId);
+    for (const providerId of affected.commandResults) {
+        affectedMessageIds.add(commandResultMessageId(providerId));
+        const result = entities['codex.commandResult'][providerId];
+        if (!result) continue;
+        const commandProviderId = indexes.commandProviderIdByCommandId[result.commandId];
+        const command = commandProviderId ? entities['codex.command'][commandProviderId] : undefined;
         if (isTextTurnCommand(command) && !isCommandFailure(result.status)) continue;
-        messages.push(projectCommandResult(result, command));
+        projected.push(projectCommandResult(result, command));
     }
 
-    return messages.sort((left, right) => (
-        right.createdAt - left.createdAt || right.id.localeCompare(left.id)
-    ));
+    if (affectedMessageIds.size === 0) return current;
+    const unaffected = current.filter((message) => !affectedMessageIds.has(message.id));
+    projected.sort(compareMessages);
+    return mergeSortedMessages(unaffected, projected);
+}
+
+function projectCommand(command: CodexCommandEntityV4, hidden: boolean): Message | null {
+    if (hidden) return null;
+    const displayText = jsonObject(command.payload).displayText;
+    if (typeof displayText !== 'string' || displayText.length === 0) return null;
+    return {
+        kind: 'user-text',
+        id: commandMessageId(command.providerId),
+        localId: command.clientUserMessageId,
+        createdAt: command.createdAt,
+        text: displayText,
+    };
+}
+
+function compareMessages(left: Message, right: Message): number {
+    return right.createdAt - left.createdAt || right.id.localeCompare(left.id);
+}
+
+function mergeSortedMessages(left: Message[], right: Message[]): Message[] {
+    const merged: Message[] = [];
+    let leftIndex = 0;
+    let rightIndex = 0;
+    while (leftIndex < left.length || rightIndex < right.length) {
+        if (rightIndex >= right.length) {
+            merged.push(left[leftIndex++]);
+        } else if (leftIndex >= left.length || compareMessages(right[rightIndex], left[leftIndex]) < 0) {
+            merged.push(right[rightIndex++]);
+        } else {
+            merged.push(left[leftIndex++]);
+        }
+    }
+    return merged;
 }
 
 function itemKey(threadId: string, turnId: string, itemId: string): string {
     return JSON.stringify([threadId, turnId, itemId]);
 }
 
-function appendGrouped<T>(groups: Map<string, T[]>, key: string, value: T): void {
-    const group = groups.get(key);
-    if (group) group.push(value);
-    else groups.set(key, [value]);
+function turnKey(threadId: string, turnId: string): string {
+    return JSON.stringify([threadId, turnId]);
+}
+
+function itemMessageId(providerId: string): string {
+    return `codex-v4:item:${providerId}`;
+}
+
+function requestMessageId(providerId: string): string {
+    return `codex-v4:request:${providerId}`;
+}
+
+function commandMessageId(providerId: string): string {
+    return `codex-v4:command:${providerId}`;
+}
+
+function commandResultMessageId(providerId: string): string {
+    return `codex-v4:command-result:${providerId}`;
 }
 
 function projectCommandResult(
@@ -251,7 +724,7 @@ function projectCommandResult(
     const completed = result.status === 'succeeded' || failed;
     return {
         kind: 'tool-call',
-        id: `codex-v4:command-result:${result.providerId}`,
+        id: commandResultMessageId(result.providerId),
         localId: null,
         createdAt: result.createdAt,
         children: [],
@@ -279,7 +752,6 @@ function isCommandFailure(status: CodexCommandResultEntityV4['status']): boolean
 function projectItem(
     item: CodexItemEntityV4,
     parts: CodexPartEntityV4[],
-    requests: CodexRequestEntityV4[],
     turn: CodexTurnEntityV4 | undefined,
     relation: CodexRelationEntityV4 | undefined,
 ): Message | null {
@@ -291,7 +763,7 @@ function projectItem(
         if (!text) return null;
         return {
             kind: 'user-text',
-            id: `codex-v4:item:${item.providerId}`,
+            id: itemMessageId(item.providerId),
             localId: item.clientId,
             createdAt,
             text,
@@ -303,17 +775,17 @@ function projectItem(
         if (!text) return null;
         return {
             kind: 'agent-text',
-            id: `codex-v4:item:${item.providerId}`,
+            id: itemMessageId(item.providerId),
             localId: null,
             createdAt,
             text,
         };
     }
 
-    const tool = projectTool(item, parts, requests, turn, relation);
+    const tool = projectTool(item, parts, turn, relation);
     return tool ? {
         kind: 'tool-call',
-        id: `codex-v4:item:${item.providerId}`,
+        id: itemMessageId(item.providerId),
         localId: null,
         createdAt,
         tool,
@@ -324,7 +796,6 @@ function projectItem(
 function projectTool(
     item: CodexItemEntityV4,
     parts: CodexPartEntityV4[],
-    requests: CodexRequestEntityV4[],
     turn: CodexTurnEntityV4 | undefined,
     relation: CodexRelationEntityV4 | undefined,
 ): ToolCall | null {
@@ -342,14 +813,12 @@ function projectTool(
     const state = toolState(item, turn);
     const createdAt = item.startedAt ?? item.createdAt;
     const completedAt = item.completedAt ?? turn?.completedAt ?? null;
-    const permission = projectPermission(requests[0]);
     const base = {
         state,
         createdAt,
         startedAt: item.startedAt,
         completedAt,
         description: null,
-        permission,
     } satisfies Omit<ToolCall, 'name' | 'input'>;
 
     if (itemType === 'reasoning') {
@@ -407,7 +876,7 @@ function projectTool(
             result: content || undefined,
         };
     }
-    if (content || permission) {
+    if (content) {
         return {
             ...base,
             name: item.tool ?? `Codex:${item.itemType}`,
@@ -435,21 +904,38 @@ function projectPermission(request: CodexRequestEntityV4 | undefined): ToolCall[
     };
 }
 
-function projectUserInputRequest(request: CodexRequestEntityV4): ToolCallMessage {
+function projectRequestMessage(request: CodexRequestEntityV4): ToolCallMessage {
+    const isUserInput = request.requestType === 'toolUserInput';
+    const name = isUserInput
+        ? 'AskUserQuestion'
+        : request.requestType === 'commandApproval'
+            ? 'CodexCommandApproval'
+            : request.requestType === 'fileChangeApproval'
+                ? 'CodexFileChangeApproval'
+                : 'CodexPermissions';
     return {
         kind: 'tool-call',
-        id: `codex-v4:request:${request.providerId}`,
+        id: requestMessageId(request.providerId),
         localId: null,
         createdAt: request.createdAt,
         children: [],
         tool: {
-            name: 'AskUserQuestion',
+            name,
             state: request.status === 'pending' ? 'running' : request.status === 'error' ? 'error' : 'completed',
-            input: request.options ?? { questions: request.prompt ? [{ question: request.prompt }] : [] },
+            input: isUserInput
+                ? request.options ?? { questions: request.prompt ? [{ question: request.prompt }] : [] }
+                : {
+                    requestType: request.requestType,
+                    title: request.title,
+                    prompt: request.prompt,
+                    options: request.options,
+                },
             result: request.response ?? undefined,
             createdAt: request.createdAt,
             startedAt: request.createdAt,
-            completedAt: request.resolvedAt,
+            completedAt: request.status === 'pending'
+                ? null
+                : request.resolvedAt ?? request.updatedAt,
             description: request.title,
             permission: projectPermission(request),
         },
@@ -504,4 +990,8 @@ function mcpToolName(server: string | null, tool: string | null): string {
         (value ?? fallback).replace(/[^a-zA-Z0-9_-]/g, '_')
     );
     return `mcp__${clean(server, 'server')}__${clean(tool, 'tool')}`;
+}
+
+function assertNever(value: never): never {
+    throw new Error(`Unhandled Codex v4 entity: ${String(value)}`);
 }

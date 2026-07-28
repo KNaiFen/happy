@@ -4,8 +4,10 @@ import type {
     CodexCommandResultEntityV4,
     CodexItemEntityV4,
     CodexPartEntityV4,
+    CodexRequestEntityV4,
     CodexRelationEntityV4,
     CodexRuntimeEntityV4,
+    CodexThreadEntityV4,
     CodexTurnEntityV4,
 } from '@slopus/happy-wire';
 import { describe, expect, it } from 'vitest';
@@ -152,10 +154,240 @@ describe('Codex v4 projection', () => {
         });
     });
 
+    it('preserves unrelated message identity when one streaming part advances', () => {
+        const secondItem = {
+            ...item,
+            providerId: 'item-2',
+            itemId: 'item-2',
+            createdAt: 20,
+            startedAt: 20,
+        };
+        const secondPart = {
+            ...part('Unchanged'),
+            providerId: 'part-2',
+            partId: 'part-2',
+            itemId: 'item-2',
+            createdAt: 21,
+            updatedAt: 21,
+        };
+        let projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: turn, revision: 1, op: 'upsert' },
+            { entity: item, revision: 1, op: 'upsert' },
+            { entity: part('First'), revision: 1, op: 'upsert' },
+            { entity: secondItem, revision: 1, op: 'upsert' },
+            { entity: secondPart, revision: 1, op: 'upsert' },
+        ]);
+        const firstBefore = projection.messages.find((message) => message.id === 'codex-v4:item:item-1');
+        const secondBefore = projection.messages.find((message) => message.id === 'codex-v4:item:item-2');
+
+        projection = apply(projection, { ...part('First updated'), updatedAt: 22 }, 2);
+
+        expect(projection.messages.find((message) => message.id === 'codex-v4:item:item-1'))
+            .not.toBe(firstBefore);
+        expect(projection.messages.find((message) => message.id === 'codex-v4:item:item-2'))
+            .toBe(secondBefore);
+    });
+
+    it('keeps 10,000-entity streaming updates scoped to one projected message', () => {
+        const updates: Array<{
+            entity: CodexEntityV4;
+            revision: number;
+            op: 'upsert';
+        }> = [{ entity: turn, revision: 1, op: 'upsert' }];
+        for (let index = 0; index < 5_000; index += 1) {
+            updates.push({
+                entity: {
+                    ...item,
+                    providerId: `item-${index}`,
+                    itemId: `item-${index}`,
+                    createdAt: 20 + index,
+                    updatedAt: 20 + index,
+                    startedAt: 20 + index,
+                },
+                revision: 1,
+                op: 'upsert',
+            });
+            updates.push({
+                entity: {
+                    ...part(`Message ${index}`),
+                    providerId: `part-${index}`,
+                    partId: `part-${index}`,
+                    itemId: `item-${index}`,
+                    createdAt: 20 + index,
+                    updatedAt: 20 + index,
+                },
+                revision: 1,
+                op: 'upsert',
+            });
+        }
+        let projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), updates);
+        const previousMessages = new Map(projection.messages.map((message) => [message.id, message]));
+
+        projection = apply(projection, {
+            ...part('Updated once'),
+            providerId: 'part-2500',
+            partId: 'part-2500',
+            itemId: 'item-2500',
+            createdAt: 2_520,
+            updatedAt: 10_000,
+        }, 2);
+
+        expect(projection.messages).toHaveLength(5_000);
+        expect(projection.messages.reduce((count, message) => (
+            count + (previousMessages.get(message.id) === message ? 0 : 1)
+        ), 0)).toBe(1);
+        expect(projection.messages.find((message) => message.id === 'codex-v4:item:item-2500'))
+            .toMatchObject({ kind: 'agent-text', text: 'Updated once' });
+    });
+
+    it('reprojects both owners when a part moves between items and when it is deleted', () => {
+        const secondItem = {
+            ...item,
+            providerId: 'item-2',
+            itemId: 'item-2',
+            createdAt: 20,
+            startedAt: 20,
+        };
+        let projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: turn, revision: 1, op: 'upsert' },
+            { entity: item, revision: 1, op: 'upsert' },
+            { entity: secondItem, revision: 1, op: 'upsert' },
+            { entity: part('Moves'), revision: 1, op: 'upsert' },
+        ]);
+
+        projection = apply(projection, {
+            ...part('Moves'),
+            itemId: 'item-2',
+            updatedAt: 21,
+        }, 2);
+
+        expect(projection.messages.find((message) => message.id === 'codex-v4:item:item-1'))
+            .toBeUndefined();
+        expect(projection.messages.find((message) => message.id === 'codex-v4:item:item-2'))
+            .toMatchObject({ kind: 'agent-text', text: 'Moves' });
+
+        projection = applyCodexV4ProjectionUpdate(projection, {
+            entity: {
+                ...part('Moves'),
+                itemId: 'item-2',
+                updatedAt: 22,
+            },
+            revision: 3,
+            op: 'delete',
+        });
+
+        expect(projection.messages).toEqual([]);
+    });
+
     it('ignores duplicate and lower entity revisions', () => {
         let projection = apply(createCodexV4Projection(), part('new'), 3);
         const unchanged = apply(projection, { ...part('old'), updatedAt: 9 }, 2);
         expect(unchanged).toBe(projection);
+    });
+
+    it('prefers thread usage, falls back to the latest turn, and clears legacy fallback', () => {
+        const turnUsage = {
+            totalTokens: 1_200,
+            inputTokens: 900,
+            cachedInputTokens: 250,
+            cacheWriteInputTokens: 30,
+            outputTokens: 300,
+            reasoningOutputTokens: 100,
+        };
+        const thread: CodexThreadEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.thread',
+            providerId: 'thread-1',
+            createdAt: 1,
+            updatedAt: 20,
+            threadId: 'thread-1',
+            sessionTreeId: null,
+            forkedFromThreadId: null,
+            parentThreadId: null,
+            name: null,
+            preview: '',
+            cwd: '/workspace',
+            cliVersion: '0.145.0',
+            model: 'gpt-5',
+            modelProvider: 'openai',
+            source: 'cli',
+            status: { type: 'idle' },
+            canAcceptDirectInput: true,
+            settings: {
+                approvalPolicy: null,
+                approvalsReviewer: null,
+                sandboxPolicy: null,
+                permissionProfile: null,
+                serviceTier: null,
+                reasoningEffort: null,
+                reasoningSummary: null,
+                collaborationMode: null,
+                personality: null,
+            },
+            goal: null,
+            tokenUsage: {
+                total: {
+                    ...turnUsage,
+                    totalTokens: 4_000,
+                    inputTokens: 3_000,
+                    outputTokens: 1_000,
+                },
+                last: turnUsage,
+                modelContextWindow: 200_000,
+            },
+        };
+        let projection = apply(createCodexV4Projection(), {
+            ...turn,
+            updatedAt: 15,
+            usage: {
+                ...turnUsage,
+                totalTokens: 900,
+                inputTokens: 700,
+                outputTokens: 200,
+            },
+        });
+        expect(projection.usage).toEqual({
+            inputTokens: 700,
+            outputTokens: 200,
+            cacheCreation: 30,
+            cacheRead: 250,
+            contextSize: 900,
+            contextWindow: null,
+        });
+
+        projection = apply(projection, thread);
+        expect(projection.usage).toEqual({
+            inputTokens: 900,
+            outputTokens: 300,
+            cacheCreation: 30,
+            cacheRead: 250,
+            contextSize: 1_200,
+            contextWindow: 200_000,
+        });
+
+        projection = apply(projection, {
+            ...turn,
+            updatedAt: 30,
+            usage: {
+                ...turnUsage,
+                totalTokens: 2_000,
+                inputTokens: 1_500,
+                outputTokens: 500,
+            },
+        }, 2);
+        expect(projection.usage?.contextSize).toBe(1_200);
+
+        projection = applyCodexV4ProjectionUpdate(projection, {
+            entity: { ...thread, updatedAt: 31 },
+            revision: 2,
+            op: 'delete',
+        });
+        expect(projection.usage).toMatchObject({
+            inputTokens: 1_500,
+            outputTokens: 500,
+            contextSize: 2_000,
+            contextWindow: null,
+        });
     });
 
     it('activates only on ready runtime and keeps active execution while disconnected', () => {
@@ -201,6 +433,60 @@ describe('Codex v4 projection', () => {
                 result: { content: 'Checked the transport.' },
             },
         });
+    });
+
+    it('projects every request for one item as an independent stable control', () => {
+        const approvalItem = {
+            ...item,
+            itemType: 'commandExecution',
+            command: 'git status',
+        };
+        const request = (providerId: string, requestType: CodexRequestEntityV4['requestType']): CodexRequestEntityV4 => ({
+            schemaVersion: 1,
+            entityType: 'codex.request',
+            providerId,
+            createdAt: providerId === 'request-1' ? 13 : 14,
+            updatedAt: providerId === 'request-1' ? 13 : 14,
+            requestId: providerId,
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: 'item-1',
+            requestType,
+            status: 'pending',
+            title: null,
+            prompt: `Approve ${providerId}`,
+            options: {},
+            response: null,
+            resolvedAt: null,
+        });
+        const firstRequest = request('request-1', 'commandApproval');
+        const secondRequest = request('request-2', 'permissions');
+        let projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: turn, revision: 1, op: 'upsert' },
+            { entity: approvalItem, revision: 1, op: 'upsert' },
+            { entity: part('output', 'commandOutput'), revision: 1, op: 'upsert' },
+            { entity: firstRequest, revision: 1, op: 'upsert' },
+            { entity: secondRequest, revision: 1, op: 'upsert' },
+        ]);
+        const secondBefore = projection.messages.find((message) => message.id === 'codex-v4:request:request-2');
+
+        expect(projection.messages.filter((message) => (
+            message.kind === 'tool-call' && message.tool.permission?.status === 'pending'
+        )).map((message) => message.kind === 'tool-call' ? message.tool.permission?.id : null))
+            .toEqual(['request-2', 'request-1']);
+
+        projection = apply(projection, {
+            ...firstRequest,
+            status: 'accepted',
+            response: { decision: 'accept' },
+            resolvedAt: 15,
+            updatedAt: 15,
+        }, 2);
+
+        expect(projection.messages.find((message) => message.id === 'codex-v4:request:request-1'))
+            .toMatchObject({ tool: { permission: { status: 'approved' } } });
+        expect(projection.messages.find((message) => message.id === 'codex-v4:request:request-2'))
+            .toBe(secondBefore);
     });
 
     it('links a delegation item to its isolated child Happy session', () => {
@@ -275,6 +561,51 @@ describe('Codex v4 projection', () => {
             text: 'hello',
             codexItemId: 'item-1',
         });
+    });
+
+    it('restores a replaced optimistic command when the replacement is deleted', () => {
+        const original: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-original',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'command-original',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'turn.start',
+            payload: { text: 'first', displayText: 'first' },
+            clientUserMessageId: 'client-original',
+            replacesCommandId: null,
+        };
+        const replacement: CodexCommandEntityV4 = {
+            ...original,
+            providerId: 'command-replacement',
+            createdAt: 11,
+            updatedAt: 11,
+            commandId: 'command-replacement',
+            payload: { text: 'second', displayText: 'second' },
+            clientUserMessageId: 'client-replacement',
+            replacesCommandId: original.commandId,
+        };
+        let projection = apply(createCodexV4Projection(), original);
+        projection = apply(projection, replacement);
+
+        expect(projection.messages).toMatchObject([{
+            id: 'codex-v4:command:command-replacement',
+            text: 'second',
+        }]);
+
+        projection = applyCodexV4ProjectionUpdate(projection, {
+            entity: { ...replacement, updatedAt: 12 },
+            revision: 2,
+            op: 'delete',
+        });
+
+        expect(projection.messages).toMatchObject([{
+            id: 'codex-v4:command:command-original',
+            text: 'first',
+        }]);
     });
 
     it('projects control progress and failed prompt results as stable tool messages', () => {

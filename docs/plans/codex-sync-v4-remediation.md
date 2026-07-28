@@ -362,10 +362,10 @@ reasoning 脱敏、结构化诊断和 stream/batch 内存治理。
 - [x] changes 在解密前分类为 new/exactReplay/superseded。
 - [x] snapshot 使用 shadow generation，完整验证后原子切换。
 - [x] 损坏的派生 MMKV index 可以由独立记录重建。
-- [ ] entity、outbox 和 projection 使用分桶或增量索引。
-- [ ] delta 只重投影受影响 item/turn，不全量重建历史。
-- [ ] 同一 item 的每个 pending request 都可独立显示和操作。
-- [ ] v4 token usage、connection、execution、approval、user-input 和
+- [x] entity、outbox 和 projection 使用分桶或增量索引。
+- [x] delta 只重投影受影响 item/turn，不全量重建历史。
+- [x] 同一 item 的每个 pending request 都可独立显示和操作。
+- [x] v4 token usage、connection、execution、approval、user-input 和
       subagent activity 接入 UI。
 - [ ] child readOnly 贯穿 MessageView、ToolView、审批、用户输入和 MCP。
 - [ ] command publish 边界再次拒绝 child 写操作和跨 owned-thread 目标。
@@ -558,6 +558,12 @@ revision 冲突、10,000 entity 增量投影计数、同 item 多 request，以�
   替换 projection，再提交 active generation/cursor。entity/outbox 派生
   index 改为固定分桶且可从独立 record 重建，恶意 legacy marker 不能删除
   outbox。App typecheck 通过，`77/77` 测试文件、`869/869` 单元测试通过。
+- 2026-07-28：R4 第二切片完成增量 projection 反向索引。part、turn、item、
+  relation、command 和 result 只重建受影响的稳定 message；同一 item 的
+  request 各自使用独立 control。thread usage 优先、最新 turn usage 回退，
+  v4 激活后不再读取 legacy usage。删除、跨 owner 重定位、command replacement
+  恢复和 `10,001` entity 单 delta 均有回归测试，规模测试只替换目标 message
+  对象。
 - 2026-07-28：R2 完成。CLI session 初始化和关闭使用 generation 隔离；
   journal 增加单 writer lease、durability poison、可回收字节压缩和终态
   command receipt；显式 outbound flush 固定调用时集合，后台 outbound 使用
