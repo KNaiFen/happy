@@ -1,0 +1,384 @@
+name: Happy monorepo CI
+
+on:
+  push:
+    paths:
+      - "packages/happy-wire/**"
+      - "packages/happy-agent/**"
+      - "packages/happy-server/**"
+      - "packages/happy-cli/**"
+      - "packages/happy-app/**"
+      - "scripts/ci/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "packages/happy-wire/**"
+      - "packages/happy-agent/**"
+      - "packages/happy-server/**"
+      - "packages/happy-cli/**"
+      - "packages/happy-app/**"
+      - "scripts/ci/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: happy-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wire:
+    name: Wire typecheck, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck Wire
+        run: pnpm --filter @slopus/happy-wire typecheck
+
+      - name: Test and build Wire
+        run: pnpm --filter @slopus/happy-wire test
+
+  agent:
+    name: Agent typecheck, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Typecheck Agent
+        run: pnpm --filter happy-agent typecheck
+
+      - name: Test and build Agent
+        run: pnpm --filter happy-agent test
+
+  server:
+    name: Server typecheck, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Generate Prisma client
+        run: pnpm --filter happy-server-self-host generate
+
+      - name: Typecheck Server
+        run: pnpm --filter happy-server-self-host typecheck
+
+      - name: Test Server
+        run: pnpm --filter happy-server-self-host test
+
+      - name: Build Server runtime
+        run: pnpm --filter happy-server-self-host build
+
+  cli:
+    name: CLI typecheck, unit test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Typecheck CLI
+        run: pnpm --filter happy typecheck
+
+      - name: Test and build CLI
+        run: pnpm --filter happy test
+
+  app:
+    name: App typecheck, unit test, and Web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      APP_ENV: production
+      NODE_ENV: production
+      HAPPY_DISABLE_OTA: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Typecheck App
+        run: pnpm --filter happy-app typecheck
+
+      - name: Test App
+        run: pnpm --filter happy-app exec vitest run
+
+      - name: Export Web App
+        run: pnpm --filter happy-app exec expo export --platform web --output-dir "$RUNNER_TEMP/happy-app-web"
+
+      - name: Verify Web output
+        run: test -f "$RUNNER_TEMP/happy-app-web/index.html"
+
+  migration:
+    name: PostgreSQL migration deploy and upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: happy
+          POSTGRES_PASSWORD: happy
+          POSTGRES_DB: happy_sync_v4_migration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U happy -d happy_sync_v4_migration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://happy:happy@127.0.0.1:5432/happy_sync_v4_migration_test
+      HAPPY_MIGRATION_TEST_ALLOW_RESET: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify clean deploy, old-schema upgrade, and drift
+        run: pnpm --filter happy-server-self-host test:migration:sync-v4
+
+  protocol-drift:
+    name: Codex 0.145.0 stable-v2 protocol drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install pinned Codex CLI
+        run: npm install --global @openai/codex@0.145.0
+
+      - name: Regenerate stable-v2 protocol
+        run: pnpm --filter happy codex:protocol:generate
+
+      - name: Reject generated protocol drift
+        run: git diff --exit-code -- packages/happy-cli/src/codex/protocol/generated
+
+  codex_transport_scenarios:
+    name: Codex provider-to-App transport scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Exercise fake Codex, CLI mapper, and durable transport faults
+        run: >-
+          pnpm --filter happy exec vitest run --project unit
+          src/codex/fakeCodexAppServer.test.ts
+          src/codex/codexSyncV4Mapper.test.ts
+          src/api/syncV4Client.test.ts
+
+      - name: Exercise relay ordering, idempotency, and snapshot recovery
+        run: >-
+          pnpm --filter happy-server-self-host exec vitest run
+          sources/app/api/routes/v4SessionRoutes.spec.ts
+
+      - name: Exercise App persistence and projection recovery
+        run: >-
+          pnpm --filter happy-app exec vitest run
+          sources/sync/syncV4Client.spec.ts
+          sources/sync/codexV4Projection.spec.ts
+
+  dependency-audit:
+    name: Production dependency critical audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level=critical
+
+  ci-gate:
+    name: Required CI gate
+    if: always()
+    needs:
+      - wire
+      - agent
+      - server
+      - cli
+      - app
+      - migration
+      - protocol-drift
+      - codex_transport_scenarios
+      - dependency-audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job to pass
+        env:
+          WIRE_RESULT: ${{ needs.wire.result }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          SERVER_RESULT: ${{ needs.server.result }}
+          CLI_RESULT: ${{ needs.cli.result }}
+          APP_RESULT: ${{ needs.app.result }}
+          MIGRATION_RESULT: ${{ needs.migration.result }}
+          PROTOCOL_RESULT: ${{ needs.protocol-drift.result }}
+          SCENARIOS_RESULT: ${{ needs.codex_transport_scenarios.result }}
+          AUDIT_RESULT: ${{ needs.dependency-audit.result }}
+        run: |
+          test "$WIRE_RESULT" = success
+          test "$AGENT_RESULT" = success
+          test "$SERVER_RESULT" = success
+          test "$CLI_RESULT" = success
+          test "$APP_RESULT" = success
+          test "$MIGRATION_RESULT" = success
+          test "$PROTOCOL_RESULT" = success
+          test "$SCENARIOS_RESULT" = success
+          test "$AUDIT_RESULT" = success

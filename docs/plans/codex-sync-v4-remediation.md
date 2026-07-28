@@ -28,6 +28,8 @@
    边界拒绝。
 8. v4 发布开关只有在数据库、四包测试、协议模拟、规模测试和云端 CI
    全部通过后才能启用。
+9. 安全依赖更新不得顺带改变 Codium/Claude 的依赖解析版本；Claude
+   adapter 与 Sync v3 的运行路径保持在本轮范围之外。
 
 ## Prisma migration 授权与门禁
 
@@ -139,6 +141,9 @@ migration 文件缺失、drift 检查失败或任一升级路径未验证时，�
 - [ ] 性能：10,000 entity + 5 Hz delta，健康本地链路 p95 < 750 ms。
 - [ ] 长 turn：真实超过 10 分钟，虚拟时钟 2 小时不假结束。
 - [ ] GitHub CI 覆盖 Wire、Server、CLI、App 的 typecheck、unit test 和 build。
+- [ ] GitHub CI 覆盖 Agent 的 typecheck、unit test 和 build，并将 Codex
+      provider、CLI transport、relay 路由和 App projection 的故障场景作为
+      独立 required gate。
 - [ ] GitHub CI 覆盖 Prisma migration drift、协议生成 drift 和业务链路模拟。
 - [ ] Android release workflow 保留现有签名、ABI、OTA、SDK 和 16 KiB 检查。
 - [ ] CLI release workflow 产出单一可安装 tgz 并验证内置工具归档。
@@ -170,3 +175,5 @@ migration 文件缺失、drift 检查失败或任一升级路径未验证时，�
   stable-v2-only 决策。
 - 2026-07-28：用户明确授权代理创建正式 Prisma migration；将原人工门禁
   改为代理创建、PostgreSQL 双路径验证和 drift 门禁。
+- 2026-07-28：依赖漏洞修复保持 Codium 的 Claude Agent SDK 解析版本不变；
+  全面 CI 增加 Agent 与跨组件 Codex 传输场景门禁。
