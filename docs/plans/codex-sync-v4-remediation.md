@@ -608,7 +608,8 @@ R6 场景与性能口径：
 
 1. 修复代码并保持 v4 Server flag 关闭。
 2. 推进受影响包 patch 版本；本轮最低目标：
-   CLI `1.4.3`、App `1.11.5`、Server `1.1.13`、Wire `0.1.2`。
+   CLI `1.4.3`、App `1.11.6`、Server `1.1.13`、Wire `0.1.2`。App
+   `1.11.5` 已进入首轮云端 CI，后续 Tauri 格式修复按仓库规则使用新 patch。
 3. 本地通过四包 typecheck、unit test、build、协议模拟和 migration gate。
 4. 推送 `origin/codex/sync-v4`，等待所有 PR CI。
 5. CI 失败时修复、再次推进受影响 patch 版本、提交并推送。
@@ -807,3 +808,9 @@ R6 场景与性能口径：
   production `0 critical` audit 和 `git diff --check` 通过。真实 HTTP
   业务链路 p95 `322.1 ms`。本机未安装 Bun/Rust，Server runtime build、
   Tauri fmt/check/test 与真实十分钟 turn 继续由 GitHub required jobs 验证。
+- 2026-07-28：提交 `b9b36f2` 后，push CI `30379938973` 与 PR CI
+  `30379934547` 均已启动。PR CI 的 Tauri job `90344992161` 在编译前由
+  `cargo fmt --check` 拒绝 `build.rs`、`lib.rs` 和 `main.rs` 的既有两空格
+  Rust 风格；云端日志给出了确定性 rustfmt diff。修复限定为应用该 diff，
+  App 推进到 `1.11.6`，再提交并重跑全部 required jobs；本地仍不安装
+  Rust/Tauri 工具链。
