@@ -165,6 +165,26 @@ describe('CodexV4CommandProcessor', () => {
         processor.close();
     });
 
+    it('durably records the execution context before invoking the provider RPC', async () => {
+        const store = new FakeStore();
+        const pending = command({ payload: { text: 'persist me' } });
+        const execute = vi.fn(async () => {
+            expect(store.statuses.get(pending.commandId)).toBe('executing');
+            expect(store.commands.get(pending.commandId)).toEqual(pending);
+            return { threadId: pending.threadId, turnId: 'turn-1' };
+        });
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+        });
+
+        await processor.handle(event(pending));
+        expect(execute).toHaveBeenCalledTimes(1);
+        processor.close();
+    });
+
     it('leaves a received command for the replacement processor when closed mid-transition', async () => {
         const store = new FakeStore();
         let releaseReceived!: () => void;

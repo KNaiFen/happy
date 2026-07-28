@@ -1210,7 +1210,7 @@ export async function runCodex(opts: {
                     await mapper!.close();
                     await syncClient.flushOutboundOnce();
                 } finally {
-                    syncClient.stop();
+                    await syncClient.close();
                     if (bindingOptions.closeSession) await bindingOptions.target.close();
                 }
             },

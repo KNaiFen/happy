@@ -82,6 +82,21 @@ vi.mock('@/utils/lidState', () => ({
 type SocketHandler = (...args: any[]) => void;
 type SocketHandlers = Record<string, SocketHandler[]>;
 
+class Deferred<T> {
+    readonly promise: Promise<T>;
+    private resolvePromise!: (value: T | PromiseLike<T>) => void;
+
+    constructor() {
+        this.promise = new Promise<T>((resolve) => {
+            this.resolvePromise = resolve;
+        });
+    }
+
+    resolve(value: T): void {
+        this.resolvePromise(value);
+    }
+}
+
 function makeSession() {
     return {
         id: 'test-session-id',
@@ -199,6 +214,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
         const syncV4 = {
             start: vi.fn(async () => { order.push('start'); }),
             stop: vi.fn(),
+            close: vi.fn(async () => undefined),
         } as unknown as SyncV4Client;
         vi.spyOn(SyncV4Client, 'create').mockResolvedValue(syncV4);
         const client = new ApiSessionClient('fake-token', session);
@@ -211,7 +227,48 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(result).toBe(syncV4);
         expect(order).toEqual(['handler', 'start']);
         await client.close();
-        expect(syncV4.stop).toHaveBeenCalledTimes(1);
+        expect(syncV4.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('shares one in-flight Sync v4 initialization across concurrent callers', async () => {
+        const created = new Deferred<SyncV4Client>();
+        const syncV4 = {
+            start: vi.fn(async () => undefined),
+            stop: vi.fn(),
+            close: vi.fn(async () => undefined),
+        } as unknown as SyncV4Client;
+        const create = vi.spyOn(SyncV4Client, 'create').mockReturnValue(created.promise);
+        const client = new ApiSessionClient('fake-token', session);
+        const createHandler = vi.fn(() => async () => undefined);
+
+        const first = client.enableSyncV4(createHandler);
+        const second = client.enableSyncV4(createHandler);
+        expect(create).toHaveBeenCalledTimes(1);
+        created.resolve(syncV4);
+
+        await expect(Promise.all([first, second])).resolves.toEqual([syncV4, syncV4]);
+        expect(createHandler).toHaveBeenCalledTimes(1);
+        expect(syncV4.start).toHaveBeenCalledTimes(1);
+        await client.close();
+    });
+
+    it('invalidates an unfinished Sync v4 initialization when the session closes', async () => {
+        const created = new Deferred<SyncV4Client>();
+        const syncV4 = {
+            start: vi.fn(async () => undefined),
+            stop: vi.fn(),
+            close: vi.fn(async () => undefined),
+        } as unknown as SyncV4Client;
+        vi.spyOn(SyncV4Client, 'create').mockReturnValue(created.promise);
+        const client = new ApiSessionClient('fake-token', session);
+
+        const enabling = client.enableSyncV4(() => async () => undefined);
+        await client.close();
+        created.resolve(syncV4);
+
+        await expect(enabling).rejects.toThrow('API session has been closed');
+        expect(syncV4.start).not.toHaveBeenCalled();
+        expect(syncV4.close).toHaveBeenCalledTimes(1);
     });
 
     it('retries after initial socket connection error', async () => {

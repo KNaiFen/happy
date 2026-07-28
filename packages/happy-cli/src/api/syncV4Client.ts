@@ -44,6 +44,8 @@ import {
 const CHANGES_PAGE_SIZE = 100;
 const SNAPSHOT_PAGE_SIZE = 500;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
+const BACKGROUND_OUTBOUND_BATCH_BUDGET = 16;
+const COMPACTION_CHECK_BATCH_INTERVAL = 16;
 
 export interface SyncV4Transport {
     postMutations(sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4>;
@@ -152,20 +154,25 @@ export class SyncV4Client {
             rootDir: options.journalRoot ?? join(configuration.happyHomeDir, "sync-v4"),
             sessionId: options.sessionId,
         });
-        const crypto = await SyncV4Crypto.create({ sessionId: options.sessionId, sessionKey: options.sessionKey });
-        const transport = options.transport ?? new AxiosSyncV4Transport(
-            options.serverUrl ?? configuration.serverUrl,
-            requiredToken(options.token),
-            `cli-coding-session/${configuration.currentCliVersion}`,
-        );
-        return new SyncV4Client(
-            options.sessionId,
-            journal,
-            crypto,
-            transport,
-            options.onEntity,
-            options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
-        );
+        try {
+            const crypto = await SyncV4Crypto.create({ sessionId: options.sessionId, sessionKey: options.sessionKey });
+            const transport = options.transport ?? new AxiosSyncV4Transport(
+                options.serverUrl ?? configuration.serverUrl,
+                requiredToken(options.token),
+                `cli-coding-session/${configuration.currentCliVersion}`,
+            );
+            return new SyncV4Client(
+                options.sessionId,
+                journal,
+                crypto,
+                transport,
+                options.onEntity,
+                options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+            );
+        } catch (error) {
+            await journal.close();
+            throw error;
+        }
     }
 
     private readonly publishLock = new AsyncLock();
@@ -178,6 +185,7 @@ export class SyncV4Client {
     private disposed = false;
     private lifecycleGeneration = 0;
     private readonly diagnosticSessionId: string;
+    private journalClosePromise: Promise<void> | null = null;
 
     private constructor(
         readonly sessionId: string,
@@ -188,7 +196,10 @@ export class SyncV4Client {
         private readonly pollIntervalMs: number,
     ) {
         this.diagnosticSessionId = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
-        this.sendSync = new InvalidateSync(() => this.flushOutboundForGeneration(this.lifecycleGeneration));
+        this.sendSync = new InvalidateSync(() => this.flushOutboundForGeneration(
+            this.lifecycleGeneration,
+            BACKGROUND_OUTBOUND_BATCH_BUDGET,
+        ));
         this.receiveSync = new InvalidateSync(() => this.pullChangesForGeneration(this.lifecycleGeneration));
     }
 
@@ -209,7 +220,7 @@ export class SyncV4Client {
         try {
             await this.processPendingInbound(generation);
             await Promise.all([
-                this.flushOutboundForGeneration(generation),
+                this.flushOutboundForGeneration(generation, BACKGROUND_OUTBOUND_BATCH_BUDGET),
                 this.pullChangesForGeneration(generation),
             ]);
             this.assertCurrentGeneration(generation);
@@ -233,6 +244,12 @@ export class SyncV4Client {
         this.pollTimer = null;
         this.sendSync.stop();
         this.receiveSync.stop();
+        this.journalClosePromise = this.journal.close();
+    }
+
+    async close(): Promise<void> {
+        this.stop();
+        await this.journalClosePromise;
     }
 
     invalidate(highWatermark?: number): void {
@@ -359,28 +376,49 @@ export class SyncV4Client {
     }
 
     async flushOutboundOnce(): Promise<void> {
-        await this.flushOutboundForGeneration(this.lifecycleGeneration);
+        const targetMutationIds = new Set(
+            this.journal.snapshot().pendingOutbound.map((mutation) => mutation.mutationId),
+        );
+        await this.flushOutboundForGeneration(this.lifecycleGeneration, null, targetMutationIds);
     }
 
-    private async flushOutboundForGeneration(generation: number): Promise<void> {
+    private async flushOutboundForGeneration(
+        generation: number,
+        batchBudget: number | null,
+        targetMutationIds?: ReadonlySet<string>,
+    ): Promise<void> {
         await this.sendLock.inLock(async () => {
+            const targets = targetMutationIds ?? new Set(
+                this.journal.snapshot().pendingOutbound.map((mutation) => mutation.mutationId),
+            );
+            let processedBatches = 0;
             while (true) {
                 if (!this.isCurrentGeneration(generation)) return;
-                const pending = this.journal.snapshot().pendingOutbound;
+                const pending = this.journal.snapshot().pendingOutbound
+                    .filter((mutation) => targets.has(mutation.mutationId));
                 if (pending.length === 0) break;
+                if (batchBudget !== null && processedBatches >= batchBudget) break;
                 const batch = takeMutationBatch(pending);
                 const response = await this.transport.postMutations(this.sessionId, batch);
                 if (!this.isCurrentGeneration(generation)) return;
                 validateAcknowledgements(batch, response.acknowledgements);
                 await this.journal.appendAcknowledgements(response.acknowledgements);
+                processedBatches += 1;
                 this.logJournalDiagnostics("ack", {
                     accepted: response.acknowledgements.filter((ack) => ack.status === "accepted").length,
                     duplicate: response.acknowledgements.filter((ack) => ack.status === "duplicate").length,
                     superseded: response.acknowledgements.filter((ack) => ack.status === "superseded").length,
                 });
+                if (processedBatches % COMPACTION_CHECK_BATCH_INTERVAL === 0) {
+                    await this.journal.compactIfNeeded();
+                    await yieldToEventLoop();
+                }
             }
             if (!this.isCurrentGeneration(generation)) return;
             await this.journal.compactIfNeeded();
+            if (this.started && this.journal.snapshot().pendingOutbound.length > 0) {
+                this.sendSync.invalidate();
+            }
         });
     }
 
@@ -392,9 +430,13 @@ export class SyncV4Client {
         await this.receiveLock.inLock(async () => {
             if (!this.isCurrentGeneration(generation)) return;
             await this.processPendingInbound(generation);
+            let targetWatermark: number | null = null;
+            let latestObservedWatermark = this.receiveCursor;
+            let processedPages = 0;
             while (true) {
                 if (!this.isCurrentGeneration(generation)) return;
                 const cursor = this.receiveCursor;
+                if (targetWatermark !== null && cursor >= targetWatermark) break;
                 let response: ReturnType<typeof SyncChangesResponseV4Schema.parse>;
                 try {
                     response = await this.transport.getChanges(this.sessionId, cursor, CHANGES_PAGE_SIZE);
@@ -415,7 +457,12 @@ export class SyncV4Client {
                 if (response.highWatermark < cursor) {
                     throw new Error("Sync v4 server watermark moved backwards");
                 }
-                const projectionLag = response.highWatermark - cursor;
+                if (targetWatermark !== null && response.highWatermark < targetWatermark) {
+                    throw new Error("Sync v4 server watermark moved backwards during a drain");
+                }
+                targetWatermark ??= response.highWatermark;
+                latestObservedWatermark = Math.max(latestObservedWatermark, response.highWatermark);
+                const projectionLag = targetWatermark - cursor;
                 if (projectionLag > 0 || response.changes.length > 0) {
                     logger.debug("[Sync v4] Projection lag", {
                         session: this.diagnosticSessionId,
@@ -424,20 +471,30 @@ export class SyncV4Client {
                     });
                 }
                 if (response.changes.length === 0) {
-                    if (response.hasMore || cursor < response.highWatermark) {
+                    if (cursor < targetWatermark) {
                         throw new Error("Sync v4 changes response has a sequence gap");
                     }
                     break;
                 }
                 assertContiguousChanges(response.changes, cursor);
-                await this.journal.appendInbound(response.changes);
+                const changesInDrain = response.changes.filter((change) => change.seq <= targetWatermark!);
+                if (changesInDrain.length === 0) break;
+                await this.journal.appendInbound(changesInDrain);
                 if (!this.isCurrentGeneration(generation)) return;
                 await this.processPendingInbound(generation);
+                processedPages += 1;
                 this.logJournalDiagnostics("projection");
-                if (!response.hasMore && this.receiveCursor >= response.highWatermark) break;
+                if (processedPages % COMPACTION_CHECK_BATCH_INTERVAL === 0) {
+                    await this.journal.compactIfNeeded();
+                    await yieldToEventLoop();
+                }
+                if (this.receiveCursor >= targetWatermark) break;
             }
             if (!this.isCurrentGeneration(generation)) return;
             await this.journal.compactIfNeeded();
+            if (this.started && latestObservedWatermark > this.receiveCursor) {
+                this.receiveSync.invalidate();
+            }
         });
     }
 
@@ -584,6 +641,10 @@ export class SyncV4Client {
 function requiredToken(token: string | undefined): string {
     if (!token) throw new Error("Sync v4 token is required when no custom transport is provided");
     return token;
+}
+
+function yieldToEventLoop(): Promise<void> {
+    return new Promise((resolve) => setImmediate(resolve));
 }
 
 function takeMutationBatch(pending: SyncMutationV4[]): SyncMutationV4[] {

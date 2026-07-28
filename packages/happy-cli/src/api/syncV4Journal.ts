@@ -21,6 +21,16 @@ import {
 import { AsyncLock } from "@/utils/lock";
 import { createHash, randomUUID } from "node:crypto";
 import {
+    closeSync,
+    constants,
+    fsyncSync,
+    openSync,
+    readFileSync,
+    statSync,
+    unlinkSync,
+    writeFileSync,
+} from "node:fs";
+import {
     chmod,
     mkdir,
     open,
@@ -28,12 +38,15 @@ import {
     rename,
     stat,
     truncate,
+    unlink,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
 const JOURNAL_VERSION = 1;
 const DEFAULT_COMPACTION_BYTES = 8 * 1024 * 1024;
+const INVALID_LEASE_GRACE_MS = 30_000;
+const activeJournalLeases = new Map<string, string>();
 
 export const SyncV4CommandJournalStatusSchema = z.enum([
     "received",
@@ -156,6 +169,24 @@ export class SyncV4JournalCorruptionError extends Error {
     }
 }
 
+export class SyncV4JournalLeaseError extends Error {
+    constructor() {
+        super("Sync v4 journal already has an active writer");
+    }
+}
+
+export class SyncV4JournalDurabilityError extends Error {
+    constructor(options?: ErrorOptions) {
+        super("Sync v4 journal durability is uncertain; reopen before writing again", options);
+    }
+}
+
+interface SyncV4JournalLease {
+    fd: number;
+    lockPath: string;
+    payload: string;
+}
+
 /**
  * Opens one session journal and repairs only an incomplete final JSONL record.
  */
@@ -166,15 +197,22 @@ export class SyncV4Journal {
         const producerId = await loadOrCreateProducerId(options.rootDir);
         const journalName = `${createHash("sha256").update(options.sessionId).digest("hex")}.jsonl`;
         const journalPath = join(options.rootDir, journalName);
-        const loaded = await loadJournal(journalPath);
-        return new SyncV4Journal(
-            journalPath,
-            options.rootDir,
-            producerId,
-            options.compactionBytes ?? DEFAULT_COMPACTION_BYTES,
-            options.now ?? Date.now,
-            loaded,
-        );
+        const lease = acquireJournalLease(`${journalPath}.lock`, options.now ?? Date.now);
+        try {
+            const loaded = await loadJournal(journalPath);
+            return new SyncV4Journal(
+                journalPath,
+                options.rootDir,
+                producerId,
+                options.compactionBytes ?? DEFAULT_COMPACTION_BYTES,
+                options.now ?? Date.now,
+                loaded,
+                lease,
+            );
+        } catch (error) {
+            releaseJournalLease(lease);
+            throw error;
+        }
     }
 
     private readonly lock = new AsyncLock();
@@ -184,9 +222,13 @@ export class SyncV4Journal {
     private readonly pendingInbound = new Map<number, SyncChangeV4>();
     private readonly entityRevisions = new Map<string, number>();
     private readonly commandStatuses = new Map<string, SyncV4CommandJournalStatus>();
+    private readonly commandUpdatedAt = new Map<string, number>();
     private readonly commands = new Map<string, CodexCommandEntityV4>();
     private readonly pendingProviderRequests = new Map<string, CodexRequestEntityV4>();
     private readonly migrationStates = new Map<string, SyncV4MigrationJournalState>();
+    private poisonedCause: unknown = null;
+    private closed = false;
+    private closePromise: Promise<void> | null = null;
 
     private constructor(
         private readonly journalPath: string,
@@ -195,6 +237,7 @@ export class SyncV4Journal {
         private readonly compactionBytes: number,
         private readonly now: () => number,
         records: JournalRecord[],
+        private readonly lease: SyncV4JournalLease,
     ) {
         for (const record of records) this.applyRecord(record);
     }
@@ -213,7 +256,17 @@ export class SyncV4Journal {
         };
     }
 
+    async close(): Promise<void> {
+        if (this.closePromise) return await this.closePromise;
+        this.closed = true;
+        this.closePromise = this.lock.inLock(() => {
+            releaseJournalLease(this.lease);
+        });
+        return await this.closePromise;
+    }
+
     nextRevision(entityId: string): number {
+        this.assertWritable();
         return (this.entityRevisions.get(entityId) ?? 0) + 1;
     }
 
@@ -362,89 +415,127 @@ export class SyncV4Journal {
     }
 
     async compactIfNeeded(): Promise<void> {
-        let currentSize = 0;
-        try {
-            currentSize = (await stat(this.journalPath)).size;
-        } catch (error) {
-            if (!isNodeError(error, "ENOENT")) throw error;
-        }
-        if (currentSize >= this.compactionBytes) await this.compact();
+        this.assertWritable();
+        await this.lock.inLock(async () => {
+            this.assertWritable();
+            let currentSize = 0;
+            try {
+                currentSize = (await stat(this.journalPath)).size;
+            } catch (error) {
+                if (!isNodeError(error, "ENOENT")) throw error;
+            }
+            const records = this.compactedRecords();
+            const compactedSize = Buffer.byteLength(serializeRecords(records), "utf8");
+            if (Math.max(0, currentSize - compactedSize) < this.compactionBytes) return;
+            await this.replaceJournal(records);
+        });
     }
 
     async compact(): Promise<void> {
+        this.assertWritable();
         await this.lock.inLock(async () => {
-            const records: JournalRecord[] = [];
-            for (const mutation of this.pendingOutbound.values()) {
-                const enqueuedAt = this.pendingOutboundEnqueuedAt.get(mutation.mutationId);
-                records.push({
-                    version: JOURNAL_VERSION,
-                    kind: "outbound",
-                    mutation,
-                    ...(enqueuedAt === undefined ? {} : { enqueuedAt }),
-                });
-            }
-            for (const change of [...this.pendingInbound.values()].sort((left, right) => left.seq - right.seq)) {
-                records.push({ version: JOURNAL_VERSION, kind: "inbound", change });
-            }
-            for (const [entityId, revision] of this.entityRevisions) {
-                records.push({ version: JOURNAL_VERSION, kind: "revision", entityId, revision });
-            }
-            for (const [commandId, status] of this.commandStatuses) {
-                records.push({
-                    version: JOURNAL_VERSION,
-                    kind: "command",
-                    commandId,
-                    status,
-                    updatedAt: this.now(),
-                    ...(this.commands.get(commandId) ? { command: this.commands.get(commandId) } : {}),
-                });
-            }
-            for (const request of this.pendingProviderRequests.values()) {
-                records.push({
-                    version: JOURNAL_VERSION,
-                    kind: "providerRequest",
-                    request,
-                    state: "pending",
-                    updatedAt: this.now(),
-                });
-            }
-            for (const [threadId, state] of this.migrationStates) {
-                records.push({
-                    version: JOURNAL_VERSION,
-                    kind: "migration",
-                    threadId,
-                    state,
-                    updatedAt: this.now(),
-                });
-            }
-            if (this.receiveCursor > 0) {
-                records.push({ version: JOURNAL_VERSION, kind: "cursor", seq: this.receiveCursor });
-            }
-            const temporaryPath = `${this.journalPath}.${randomUUID()}.tmp`;
-            const handle = await open(temporaryPath, "wx", 0o600);
-            try {
-                await handle.writeFile(serializeRecords(records), "utf8");
-                await handle.sync();
-            } finally {
-                await handle.close();
-            }
-            await rename(temporaryPath, this.journalPath);
-            await syncDirectory(this.rootDir);
+            this.assertWritable();
+            await this.replaceJournal(this.compactedRecords());
         });
     }
 
     private async appendRecords(records: JournalRecord[]): Promise<void> {
         if (records.length === 0) return;
+        this.assertWritable();
         await this.lock.inLock(async () => {
-            const handle = await open(this.journalPath, "a", 0o600);
+            this.assertWritable();
+            let handle: Awaited<ReturnType<typeof open>> | null = null;
             try {
+                handle = await open(this.journalPath, "a", 0o600);
                 await handle.writeFile(serializeRecords(records), "utf8");
                 await handle.sync();
-            } finally {
                 await handle.close();
+                handle = null;
+            } catch (cause) {
+                if (handle) await handle.close().catch(() => undefined);
+                this.poisonedCause = cause;
+                throw new SyncV4JournalDurabilityError({ cause });
             }
             for (const record of records) this.applyRecord(record);
         });
+    }
+
+    private compactedRecords(): JournalRecord[] {
+        const records: JournalRecord[] = [];
+        for (const mutation of this.pendingOutbound.values()) {
+            const enqueuedAt = this.pendingOutboundEnqueuedAt.get(mutation.mutationId);
+            records.push({
+                version: JOURNAL_VERSION,
+                kind: "outbound",
+                mutation,
+                ...(enqueuedAt === undefined ? {} : { enqueuedAt }),
+            });
+        }
+        for (const change of [...this.pendingInbound.values()].sort((left, right) => left.seq - right.seq)) {
+            records.push({ version: JOURNAL_VERSION, kind: "inbound", change });
+        }
+        for (const [entityId, revision] of this.entityRevisions) {
+            records.push({ version: JOURNAL_VERSION, kind: "revision", entityId, revision });
+        }
+        for (const [commandId, status] of this.commandStatuses) {
+            const command = this.commands.get(commandId);
+            records.push({
+                version: JOURNAL_VERSION,
+                kind: "command",
+                commandId,
+                status,
+                updatedAt: this.commandUpdatedAt.get(commandId) ?? this.now(),
+                ...(command && isPendingCommandStatus(status) ? { command } : {}),
+            });
+        }
+        for (const request of this.pendingProviderRequests.values()) {
+            records.push({
+                version: JOURNAL_VERSION,
+                kind: "providerRequest",
+                request,
+                state: "pending",
+                updatedAt: this.now(),
+            });
+        }
+        for (const [threadId, state] of this.migrationStates) {
+            records.push({
+                version: JOURNAL_VERSION,
+                kind: "migration",
+                threadId,
+                state,
+                updatedAt: this.now(),
+            });
+        }
+        if (this.receiveCursor > 0) {
+            records.push({ version: JOURNAL_VERSION, kind: "cursor", seq: this.receiveCursor });
+        }
+        return records;
+    }
+
+    private async replaceJournal(records: JournalRecord[]): Promise<void> {
+        const temporaryPath = `${this.journalPath}.${randomUUID()}.tmp`;
+        let handle: Awaited<ReturnType<typeof open>> | null = null;
+        try {
+            handle = await open(temporaryPath, "wx", 0o600);
+            await handle.writeFile(serializeRecords(records), "utf8");
+            await handle.sync();
+            await handle.close();
+            handle = null;
+            await rename(temporaryPath, this.journalPath);
+            await syncDirectory(this.rootDir);
+        } catch (cause) {
+            if (handle) await handle.close().catch(() => undefined);
+            await unlink(temporaryPath).catch(() => undefined);
+            this.poisonedCause = cause;
+            throw new SyncV4JournalDurabilityError({ cause });
+        }
+    }
+
+    private assertWritable(): void {
+        if (this.poisonedCause) {
+            throw new SyncV4JournalDurabilityError({ cause: this.poisonedCause });
+        }
+        if (this.closed) throw new Error("Sync v4 journal has been closed");
     }
 
     private applyRecord(record: JournalRecord): void {
@@ -480,7 +571,12 @@ export class SyncV4Journal {
                 return;
             case "command":
                 this.commandStatuses.set(record.commandId, record.status);
-                if (record.command) this.commands.set(record.commandId, record.command);
+                this.commandUpdatedAt.set(record.commandId, record.updatedAt);
+                if (isPendingCommandStatus(record.status) && record.command) {
+                    this.commands.set(record.commandId, record.command);
+                } else if (!isPendingCommandStatus(record.status)) {
+                    this.commands.delete(record.commandId);
+                }
                 return;
             case "inboundComplete":
                 this.applyRevision(record.entityId, record.revision);
@@ -501,7 +597,12 @@ export class SyncV4Journal {
                 );
                 this.applyRevision(record.mutation.entityId, record.mutation.revision);
                 this.commandStatuses.set(record.commandId, record.status);
-                if (record.command) this.commands.set(record.commandId, record.command);
+                this.commandUpdatedAt.set(record.commandId, record.updatedAt);
+                if (isPendingCommandStatus(record.status) && record.command) {
+                    this.commands.set(record.commandId, record.command);
+                } else if (!isPendingCommandStatus(record.status)) {
+                    this.commands.delete(record.commandId);
+                }
                 return;
             case "providerRequest":
                 if (record.mutation) {
@@ -537,6 +638,86 @@ export class SyncV4Journal {
         this.receiveCursor = Math.max(this.receiveCursor, seq);
         for (const pendingSeq of this.pendingInbound.keys()) {
             if (pendingSeq <= this.receiveCursor) this.pendingInbound.delete(pendingSeq);
+        }
+    }
+}
+
+function isPendingCommandStatus(status: SyncV4CommandJournalStatus): boolean {
+    return status === "received" || status === "executing" || status === "resultUnknown";
+}
+
+function acquireJournalLease(lockPath: string, now: () => number): SyncV4JournalLease {
+    if (activeJournalLeases.has(lockPath)) throw new SyncV4JournalLeaseError();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const payload = `${JSON.stringify({
+            pid: process.pid,
+            leaseId: randomUUID(),
+            createdAt: now(),
+        })}\n`;
+        let fd: number | null = null;
+        try {
+            fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR, 0o600);
+            writeFileSync(fd, payload, "utf8");
+            fsyncSync(fd);
+            activeJournalLeases.set(lockPath, payload);
+            return { fd, lockPath, payload };
+        } catch (error) {
+            if (fd !== null) {
+                try {
+                    closeSync(fd);
+                } catch {}
+                try {
+                    unlinkSync(lockPath);
+                } catch {}
+            }
+            if (!isNodeError(error, "EEXIST")) throw error;
+            if (!journalLeaseIsStale(lockPath, now())) throw new SyncV4JournalLeaseError();
+            try {
+                unlinkSync(lockPath);
+            } catch (unlinkError) {
+                if (!isNodeError(unlinkError, "ENOENT")) throw new SyncV4JournalLeaseError();
+            }
+        }
+    }
+    throw new SyncV4JournalLeaseError();
+}
+
+function releaseJournalLease(lease: SyncV4JournalLease): void {
+    try {
+        closeSync(lease.fd);
+    } catch {}
+    try {
+        if (readFileSync(lease.lockPath, "utf8") === lease.payload) unlinkSync(lease.lockPath);
+    } catch {}
+    if (activeJournalLeases.get(lease.lockPath) === lease.payload) {
+        activeJournalLeases.delete(lease.lockPath);
+    }
+}
+
+function journalLeaseIsStale(lockPath: string, now: number): boolean {
+    let raw: string;
+    try {
+        raw = readFileSync(lockPath, "utf8");
+    } catch (error) {
+        return isNodeError(error, "ENOENT");
+    }
+    try {
+        const parsed = z.object({
+            pid: z.number().int().positive(),
+            leaseId: z.string().uuid(),
+            createdAt: z.number().int().nonnegative(),
+        }).strict().parse(JSON.parse(raw));
+        try {
+            process.kill(parsed.pid, 0);
+            return false;
+        } catch (error) {
+            return isNodeError(error, "ESRCH");
+        }
+    } catch {
+        try {
+            return now - statSync(lockPath).mtimeMs >= INVALID_LEASE_GRACE_MS;
+        } catch (error) {
+            return isNodeError(error, "ENOENT");
         }
     }
 }

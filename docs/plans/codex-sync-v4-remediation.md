@@ -69,14 +69,30 @@ migration 文件缺失、drift 检查失败或任一升级路径未验证时，�
 
 ### R2 CLI 持久队列
 
-- [ ] `enableSyncV4()` 使用单一 in-flight promise、closed/generation 检查。
-- [ ] 每个 session journal 只有一个进程级 writer lease。
-- [ ] journal 持久化结果不确定时 fail-stop，不继续分配 revision。
-- [ ] outbound/inbound drain 有批次预算，持续流量下也会 compact。
-- [ ] compact 依据可回收字节而非文件总大小，避免无收益周期重写。
-- [ ] terminal command 仅保留紧凑 receipt，不永久保留完整 payload。
-- [ ] command execution context 在 provider RPC 前持久化。
-- [ ] 非幂等 RPC outcome unknown 时只协调，不自动重放。
+- [x] `enableSyncV4()` 使用单一 in-flight promise、closed/generation 检查。
+- [x] 每个 session journal 只有一个进程级 writer lease。
+- [x] journal 持久化结果不确定时 fail-stop，不继续分配 revision。
+- [x] outbound/inbound drain 有批次预算，持续流量下也会 compact。
+- [x] compact 依据可回收字节而非文件总大小，避免无收益周期重写。
+- [x] terminal command 仅保留紧凑 receipt，不永久保留完整 payload。
+- [x] command execution context 在 provider RPC 前持久化。
+- [x] 非幂等 RPC outcome unknown 时只协调，不自动重放。
+
+R2 实施约束：
+
+- `enableSyncV4()` 的创建、handler 安装和 start 共用同一个 promise；session
+  close 必须使尚未完成的创建失效，并立即停止已经创建但尚未发布的 client。
+- journal 使用每个 session 独立的原子 lock file，记录 PID 与随机 lease ID；
+  活进程持有时拒绝第二个 writer，崩溃遗留且 PID 已不存在时才回收。release
+  前必须等待已进入 journal lock 的写入完成，并校验 lease ID 后删除 lock。
+- 任一 append/fsync/close 结果不确定都会 poison 当前 journal；当前实例之后
+  的 revision 分配与写入全部失败，只有重新 open 并重放磁盘记录才能恢复。
+- 后台 outbound drain 每轮最多处理固定批数并重新 invalidate；显式 flush
+  只保证调用时已存在的 mutation 全部 ACK，不追赶之后产生的 mutation。
+  inbound pull 固定本轮首次观察到的 high watermark，不无限追赶新增 change。
+- 长 drain 定期让出事件循环并检查可回收字节；只有累计可回收 JSONL 字节
+  达到阈值才 compact。终态 command 只保留 commandId、status 与时间 receipt，
+  不在 compact 后保留完整 command payload。
 
 ### R3 Codex Gateway
 
@@ -183,3 +199,10 @@ migration 文件缺失、drift 检查失败或任一升级路径未验证时，�
   npm prefix 下的 `codex 0.145.0` binary，不改变 stable-v2 约束。
   dependency audit job 不启用无依赖安装场景下的 pnpm cache；CI、Smoke
   Test 和版本构建工作流统一使用 Node 24 runtime 对应的 action 版本。
+- 2026-07-28：R2 完成。CLI session 初始化和关闭使用 generation 隔离；
+  journal 增加单 writer lease、durability poison、可回收字节压缩和终态
+  command receipt；显式 outbound flush 固定调用时集合，后台 outbound 使用
+  固定预算，inbound 固定首次 watermark。lock 文件由本进程通过 `O_EXCL`
+  创建后，写入或 fsync 失败会无条件清理，避免部分 lease 永久阻塞恢复。
+  CLI TypeScript 检查通过，R2 四个定向测试文件共 `62/62` 通过；本机
+  Vitest global setup 的 pnpm store 检查失败仅产生日志，测试进程本身成功。

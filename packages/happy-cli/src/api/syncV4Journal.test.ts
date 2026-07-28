@@ -1,15 +1,29 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SyncV4Journal, SyncV4JournalCorruptionError } from "./syncV4Journal";
+import {
+    SyncV4Journal,
+    SyncV4JournalCorruptionError,
+    SyncV4JournalDurabilityError,
+    SyncV4JournalLeaseError,
+} from "./syncV4Journal";
 
 const temporaryDirectories: string[] = [];
+const openJournals = new Set<SyncV4Journal>();
 
 async function createRoot(): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), "happy-sync-v4-journal-"));
     temporaryDirectories.push(root);
     return root;
+}
+
+async function openJournal(
+    options: Parameters<typeof SyncV4Journal.open>[0],
+): Promise<SyncV4Journal> {
+    const journal = await SyncV4Journal.open(options);
+    openJournals.add(journal);
+    return journal;
 }
 
 const mutation = {
@@ -57,13 +71,15 @@ const providerRequest = {
 };
 
 afterEach(async () => {
+    await Promise.all([...openJournals].map((journal) => journal.close()));
+    openJournals.clear();
     await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe("SyncV4Journal", () => {
     it("preserves outbound FIFO until acknowledgements are durable", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 1_000 });
+        const journal = await openJournal({ rootDir, sessionId: "session-1", now: () => 1_000 });
         await journal.appendOutbound([
             mutation,
             { ...mutation, mutationId: "mutation-2", entityId: "entity-2" },
@@ -76,7 +92,8 @@ describe("SyncV4Journal", () => {
             status: "accepted",
         }]);
 
-        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 1_600 });
+        await journal.close();
+        const reopened = await openJournal({ rootDir, sessionId: "session-1", now: () => 1_600 });
         expect(reopened.snapshot().pendingOutbound.map((entry) => entry.mutationId)).toEqual([
             "mutation-2",
             "mutation-3",
@@ -92,7 +109,7 @@ describe("SyncV4Journal", () => {
 
     it("replays inbound changes until the independent receive cursor advances", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
         const changes = [1, 2].map((seq) => ({
             ...mutation,
             mutationId: `inbound-${seq}`,
@@ -107,20 +124,22 @@ describe("SyncV4Journal", () => {
         });
         await journal.advanceReceiveCursor(1);
 
-        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        await journal.close();
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
         expect(reopened.snapshot().receiveCursor).toBe(1);
         expect(reopened.snapshot().pendingInbound.map((entry) => entry.seq)).toEqual([2]);
     });
 
     it("repairs a truncated tail without skipping interior corruption", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
         await journal.appendOutbound([mutation]);
         const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
         const journalPath = join(rootDir, journalFile);
+        await journal.close();
         await appendFile(journalPath, '{"version":1,"kind":"outbound"', "utf8");
 
-        const repaired = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const repaired = await openJournal({ rootDir, sessionId: "session-1" });
         expect(repaired.snapshot().pendingOutbound).toHaveLength(1);
         await repaired.appendAcknowledgements([{
             mutationId: "mutation-1",
@@ -130,6 +149,7 @@ describe("SyncV4Journal", () => {
         }]);
         expect((await readFile(journalPath, "utf8")).endsWith("\n")).toBe(true);
 
+        await repaired.close();
         await writeFile(journalPath, '{"version":1,"kind":"broken"}\n{}\n', "utf8");
         await expect(SyncV4Journal.open({ rootDir, sessionId: "session-1" }))
             .rejects.toBeInstanceOf(SyncV4JournalCorruptionError);
@@ -137,7 +157,7 @@ describe("SyncV4Journal", () => {
 
     it("atomically compacts revisions, pending work, cursor, and command state", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1", compactionBytes: 1 });
+        const journal = await openJournal({ rootDir, sessionId: "session-1", compactionBytes: 1 });
         await journal.appendOutbound([mutation]);
         await journal.appendInbound([{
             ...mutation,
@@ -150,7 +170,8 @@ describe("SyncV4Journal", () => {
         await journal.setMigrationState("thread-1", "ready");
         await journal.compactIfNeeded();
 
-        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        await journal.close();
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
         const snapshot = reopened.snapshot();
         expect(snapshot.pendingOutbound).toEqual([mutation]);
         expect(snapshot.pendingInbound.map((entry) => entry.seq)).toEqual([2]);
@@ -163,7 +184,7 @@ describe("SyncV4Journal", () => {
 
     it("persists a command transition and its result mutation in one journal append", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
         const resultMutation = {
             ...mutation,
             entityType: "codex.commandResult" as const,
@@ -171,7 +192,8 @@ describe("SyncV4Journal", () => {
         };
         await journal.appendCommandTransition("command-1", "executing", resultMutation, command);
 
-        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        await journal.close();
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
         const snapshot = reopened.snapshot();
         expect(snapshot.commandStatuses.get("command-1")).toBe("executing");
         expect(snapshot.commands.get("command-1")).toEqual(command);
@@ -181,7 +203,7 @@ describe("SyncV4Journal", () => {
 
     it("atomically tracks provider requests until a terminal entity is durable", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 200 });
+        const journal = await openJournal({ rootDir, sessionId: "session-1", now: () => 200 });
         const pendingMutation = {
             ...mutation,
             entityType: "codex.request" as const,
@@ -195,10 +217,12 @@ describe("SyncV4Journal", () => {
             status: "accepted",
         }]);
 
-        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 300 });
+        await journal.close();
+        const reopened = await openJournal({ rootDir, sessionId: "session-1", now: () => 300 });
         expect(reopened.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual(providerRequest);
         await reopened.compact();
-        const compacted = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 300 });
+        await reopened.close();
+        const compacted = await openJournal({ rootDir, sessionId: "session-1", now: () => 300 });
         expect(compacted.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual(providerRequest);
 
         const completedRequest = {
@@ -215,7 +239,8 @@ describe("SyncV4Journal", () => {
         };
         await compacted.appendProviderRequestTransition(completedRequest, "completed", completedMutation);
 
-        const completed = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        await compacted.close();
+        const completed = await openJournal({ rootDir, sessionId: "session-1" });
         expect(completed.snapshot().pendingProviderRequests.size).toBe(0);
         expect(completed.snapshot().pendingOutbound).toEqual([completedMutation]);
         expect(completed.snapshot().entityRevisions.get("provider-request-1")).toBe(2);
@@ -223,7 +248,7 @@ describe("SyncV4Journal", () => {
 
     it("drops an interrupted command transition as one logical record", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
         await journal.setCommandStatus("command-1", "received", command);
         const resultMutation = {
             ...mutation,
@@ -242,9 +267,10 @@ describe("SyncV4Journal", () => {
             mutation: resultMutation,
             command,
         }).slice(0, -12);
+        await journal.close();
         await appendFile(journalPath, incomplete, "utf8");
 
-        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
         expect(reopened.snapshot().commandStatuses.get("command-1")).toBe("received");
         expect(reopened.snapshot().pendingOutbound).toEqual([]);
         expect(reopened.nextRevision("command-result-1")).toBe(1);
@@ -252,24 +278,26 @@ describe("SyncV4Journal", () => {
 
     it("commits inbound revision with its cursor and snapshot revisions with their watermark", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
         await journal.appendInbound([{ ...mutation, mutationId: "remote-1", seq: 1, createdAt: 100 }]);
         const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
         const journalPath = join(rootDir, journalFile);
+        await journal.close();
         await appendFile(
             journalPath,
             '{"version":1,"kind":"inboundComplete","entityId":"entity-1","revision":1',
             "utf8",
         );
 
-        const interrupted = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const interrupted = await openJournal({ rootDir, sessionId: "session-1" });
         expect(interrupted.snapshot().receiveCursor).toBe(0);
         expect(interrupted.snapshot().entityRevisions.get("entity-1")).toBeUndefined();
         expect(interrupted.snapshot().pendingInbound).toHaveLength(1);
         await interrupted.completeInbound("entity-1", 1, 1);
         await interrupted.completeSnapshot([{ entityId: "snapshot-entity", revision: 4 }], 7);
 
-        const completed = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        await interrupted.close();
+        const completed = await openJournal({ rootDir, sessionId: "session-1" });
         expect(completed.snapshot().receiveCursor).toBe(7);
         expect(completed.snapshot().pendingInbound).toEqual([]);
         expect(completed.snapshot().entityRevisions.get("entity-1")).toBe(1);
@@ -278,9 +306,90 @@ describe("SyncV4Journal", () => {
 
     it("uses one stable producer ID across session journals", async () => {
         const rootDir = await createRoot();
-        const first = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
-        const second = await SyncV4Journal.open({ rootDir, sessionId: "session-2" });
+        const first = await openJournal({ rootDir, sessionId: "session-1" });
+        const second = await openJournal({ rootDir, sessionId: "session-2" });
         expect(second.producerId).toBe(first.producerId);
         expect(first.producerId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it("allows only one writer lease for a session and releases it on close", async () => {
+        const rootDir = await createRoot();
+        const first = await openJournal({ rootDir, sessionId: "session-1" });
+
+        await expect(SyncV4Journal.open({ rootDir, sessionId: "session-1" }))
+            .rejects.toBeInstanceOf(SyncV4JournalLeaseError);
+
+        await first.close();
+        const replacement = await openJournal({ rootDir, sessionId: "session-1" });
+        await replacement.appendOutbound([mutation]);
+        expect(replacement.snapshot().pendingOutbound).toEqual([mutation]);
+    });
+
+    it("poisons the writer after a journal durability failure", async () => {
+        const rootDir = await createRoot();
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
+        await journal.appendOutbound([mutation]);
+        const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
+        const journalPath = join(rootDir, journalFile);
+        await rm(journalPath);
+        await mkdir(journalPath);
+
+        await expect(journal.appendOutbound([{
+            ...mutation,
+            mutationId: "mutation-2",
+            revision: 2,
+        }])).rejects.toBeInstanceOf(SyncV4JournalDurabilityError);
+        expect(() => journal.nextRevision("entity-1")).toThrow(SyncV4JournalDurabilityError);
+    });
+
+    it("compacts only when enough bytes are reclaimable", async () => {
+        const rootDir = await createRoot();
+        const journal = await openJournal({ rootDir, sessionId: "session-1", compactionBytes: 1 });
+        await journal.appendOutbound([mutation]);
+        const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
+        const journalPath = join(rootDir, journalFile);
+        const originalInode = (await stat(journalPath)).ino;
+
+        await journal.compactIfNeeded();
+        expect((await stat(journalPath)).ino).toBe(originalInode);
+
+        await journal.appendAcknowledgements([{
+            mutationId: mutation.mutationId,
+            seq: 1,
+            revision: mutation.revision,
+            status: "accepted",
+        }]);
+        await journal.compactIfNeeded();
+        expect((await stat(journalPath)).ino).not.toBe(originalInode);
+    });
+
+    it("retains only a compact receipt for terminal commands", async () => {
+        const rootDir = await createRoot();
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
+        const executingMutation = {
+            ...mutation,
+            mutationId: "command-executing",
+            entityId: "command-result-1",
+            entityType: "codex.commandResult" as const,
+        };
+        const succeededMutation = {
+            ...executingMutation,
+            mutationId: "command-succeeded",
+            revision: 2,
+        };
+        await journal.appendCommandTransition("command-1", "executing", executingMutation, command);
+        await journal.appendCommandTransition("command-1", "succeeded", succeededMutation, command);
+        await journal.appendAcknowledgements([
+            { mutationId: executingMutation.mutationId, seq: 1, revision: 1, status: "accepted" },
+            { mutationId: succeededMutation.mutationId, seq: 2, revision: 2, status: "accepted" },
+        ]);
+        await journal.compact();
+        await journal.close();
+
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
+        expect(reopened.snapshot().commandStatuses.get("command-1")).toBe("succeeded");
+        expect(reopened.snapshot().commands.has("command-1")).toBe(false);
+        const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
+        expect(await readFile(join(rootDir, journalFile), "utf8")).not.toContain("hello");
     });
 });

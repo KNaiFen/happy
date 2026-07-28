@@ -20,6 +20,7 @@ import {
 
 const sessionKey = Uint8Array.from({ length: 32 }, (_, index) => index);
 const temporaryDirectories: string[] = [];
+const openClients = new Set<SyncV4Client>();
 
 class Deferred<T> {
     readonly promise: Promise<T>;
@@ -118,16 +119,20 @@ async function createClient(
     transport: SyncV4Transport,
     applied: SyncV4AppliedEntity[] = [],
 ): Promise<SyncV4Client> {
-    return SyncV4Client.create({
+    const client = await SyncV4Client.create({
         sessionId: "session-1",
         sessionKey,
         journalRoot,
         transport,
         onEntity: async (event) => { applied.push(event); },
     });
+    openClients.add(client);
+    return client;
 }
 
 afterEach(async () => {
+    await Promise.all([...openClients].map((client) => client.close()));
+    openClients.clear();
     await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -168,6 +173,7 @@ describe("SyncV4Client", () => {
         const mutation = await first.publishEntity(part("part-1"));
         transport.failAfterCommit = true;
         await expect(first.flushOutboundOnce()).rejects.toThrow("connection lost");
+        await first.close();
 
         const reopened = await createClient(root, transport);
         await reopened.flushOutboundOnce();
@@ -210,9 +216,11 @@ describe("SyncV4Client", () => {
                 throw new Error("handler stopped");
             },
         });
+        openClients.add(failing);
         await expect(failing.pullChangesOnce()).rejects.toThrow("handler stopped");
         expect(failing.receiveCursor).toBe(0);
         expect(appliedBeforeCrash).toHaveLength(1);
+        await failing.close();
 
         const applied: SyncV4AppliedEntity[] = [];
         const reopened = await createClient(root, transport, applied);
@@ -284,9 +292,10 @@ describe("SyncV4Client", () => {
         transport.snapshots = structuredClone(pages);
         transport.failSnapshotCall = 2;
         const beforeCrash: SyncV4AppliedEntity[] = [];
-        await expect((await createClient(root, transport, beforeCrash)).pullChangesOnce())
-            .rejects.toThrow("snapshot transport lost");
+        const interrupted = await createClient(root, transport, beforeCrash);
+        await expect(interrupted.pullChangesOnce()).rejects.toThrow("snapshot transport lost");
         expect(beforeCrash.map((event) => event.entity.providerId)).toEqual(["snapshot-crash-1"]);
+        await interrupted.close();
 
         transport.requireSnapshot = true;
         transport.snapshots = structuredClone(pages);
@@ -326,6 +335,7 @@ describe("SyncV4Client", () => {
             }],
         });
         await flush;
+        await client.close();
 
         const retryTransport = new FakeTransport();
         await (await createClient(root, retryTransport)).flushOutboundOnce();
@@ -389,5 +399,57 @@ describe("SyncV4Client", () => {
 
         expect(applied).toEqual([]);
         expect(client.receiveCursor).toBe(0);
+    });
+
+    it("flushes only mutations that existed when an explicit flush began", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const client = await createClient(root, transport);
+        const first = await client.publishEntity(part("initial"));
+        const post = transport.postMutations.bind(transport);
+        let publishedDuringFlush = false;
+        transport.postMutations = async (sessionId, mutations) => {
+            if (!publishedDuringFlush) {
+                publishedDuringFlush = true;
+                await client.publishEntity(part("later"));
+            }
+            return await post(sessionId, mutations);
+        };
+
+        await client.flushOutboundOnce();
+        expect(transport.postedBatches.flat().map((entry) => entry.mutationId)).toEqual([first.mutationId]);
+
+        await client.flushOutboundOnce();
+        expect(transport.postedBatches.flat()).toHaveLength(2);
+    });
+
+    it("stops an inbound drain at the first observed high watermark", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const publisher = await createClient(await createRoot(), transport);
+        for (let index = 0; index < 200; index += 1) {
+            const mutation = await publisher.publishEntity(part(`moving-${index}`));
+            transport.changes.push({ ...mutation, seq: index + 1, createdAt: 100 + index });
+        }
+        const allChanges = [...transport.changes];
+        transport.changes = allChanges.slice(0, 100);
+        const getChanges = transport.getChanges.bind(transport);
+        let calls = 0;
+        transport.getChanges = async (...args) => {
+            const response = await getChanges(...args);
+            calls += 1;
+            if (calls === 1) transport.changes = allChanges;
+            return response;
+        };
+        const applied: SyncV4AppliedEntity[] = [];
+        const client = await createClient(root, transport, applied);
+
+        await client.pullChangesOnce();
+        expect(client.receiveCursor).toBe(100);
+        expect(applied).toHaveLength(100);
+
+        await client.pullChangesOnce();
+        expect(client.receiveCursor).toBe(200);
+        expect(applied).toHaveLength(200);
     });
 });

@@ -230,6 +230,10 @@ export class ApiSessionClient extends EventEmitter {
     private readonly sendSync: InvalidateSync;
     private readonly receiveSync: InvalidateSync;
     private syncV4Client: SyncV4Client | null = null;
+    private syncV4InitializingClient: SyncV4Client | null = null;
+    private syncV4EnablePromise: Promise<SyncV4Client> | null = null;
+    private syncV4LifecycleGeneration = 0;
+    private closed = false;
 
     constructor(token: string, session: Session) {
         super()
@@ -401,26 +405,50 @@ export class ApiSessionClient extends EventEmitter {
     async enableSyncV4(
         createEntityHandler: (client: SyncV4Client) => (event: SyncV4AppliedEntity) => Promise<void>,
     ): Promise<SyncV4Client> {
+        if (this.closed) throw new Error('API session has been closed');
         if (this.syncV4Client) return this.syncV4Client;
-        let onEntity: ((event: SyncV4AppliedEntity) => Promise<void>) | null = null;
-        const client = await SyncV4Client.create({
-            sessionId: this.sessionId,
-            sessionKey: this.encryptionKey,
-            token: this.token,
-            onEntity: async (event) => {
-                if (!onEntity) throw new Error('Sync v4 entity handler was not initialized');
-                await onEntity(event);
-            },
-        });
-        onEntity = createEntityHandler(client);
-        this.syncV4Client = client;
+        if (this.syncV4EnablePromise) return await this.syncV4EnablePromise;
+        const generation = this.syncV4LifecycleGeneration;
+        const initialization = (async (): Promise<SyncV4Client> => {
+            let client: SyncV4Client | null = null;
+            let onEntity: ((event: SyncV4AppliedEntity) => Promise<void>) | null = null;
+            const assertCurrent = (): void => {
+                if (this.closed || generation !== this.syncV4LifecycleGeneration) {
+                    throw new Error('API session has been closed');
+                }
+            };
+            try {
+                client = await SyncV4Client.create({
+                    sessionId: this.sessionId,
+                    sessionKey: this.encryptionKey,
+                    token: this.token,
+                    onEntity: async (event) => {
+                        assertCurrent();
+                        if (!onEntity) throw new Error('Sync v4 entity handler was not initialized');
+                        await onEntity(event);
+                    },
+                });
+                assertCurrent();
+                this.syncV4InitializingClient = client;
+                onEntity = createEntityHandler(client);
+                assertCurrent();
+                await client.start();
+                assertCurrent();
+                this.syncV4InitializingClient = null;
+                this.syncV4Client = client;
+                return client;
+            } catch (error) {
+                if (client) await client.close();
+                if (this.syncV4InitializingClient === client) this.syncV4InitializingClient = null;
+                if (this.syncV4Client === client) this.syncV4Client = null;
+                throw error;
+            }
+        })();
+        this.syncV4EnablePromise = initialization;
         try {
-            await client.start();
-            return client;
-        } catch (error) {
-            client.stop();
-            this.syncV4Client = null;
-            throw error;
+            return await initialization;
+        } finally {
+            if (this.syncV4EnablePromise === initialization) this.syncV4EnablePromise = null;
         }
     }
 
@@ -1031,10 +1059,19 @@ export class ApiSessionClient extends EventEmitter {
 
     async close() {
         logger.debug('[API] socket.close() called');
+        if (!this.closed) {
+            this.closed = true;
+            this.syncV4LifecycleGeneration += 1;
+        }
         this.sendSync.stop();
         this.receiveSync.stop();
-        this.syncV4Client?.stop();
+        const syncClients = new Set(
+            [this.syncV4Client, this.syncV4InitializingClient]
+                .filter((client): client is SyncV4Client => client !== null),
+        );
         this.syncV4Client = null;
+        this.syncV4InitializingClient = null;
+        await Promise.all([...syncClients].map((client) => client.close()));
         if (this.reconnectInterval) {
             clearInterval(this.reconnectInterval);
             this.reconnectInterval = null;
