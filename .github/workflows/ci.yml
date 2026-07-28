@@ -226,6 +226,11 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Reject Tauri Cargo lockfile drift
+        run: |
+          cargo metadata --format-version 1 --manifest-path packages/happy-app/src-tauri/Cargo.toml > /dev/null
+          git diff --exit-code -- packages/happy-app/src-tauri/Cargo.lock
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path packages/happy-app/src-tauri/Cargo.toml -- --check
 
