@@ -609,6 +609,9 @@ R6 场景与性能口径：
   unhandled rejection；失败必须由被等待的原始 turn promise 统一报告。
 - 长 turn 在十分钟检查点前提前 resolve/reject 时必须立即失败并报告实际
   elapsed，不能继续占用 runner 到检查点后才暴露状态机错误。
+- [x] PR duplicate long-turn job 因 registry 下载停滞而未进入有效测试时，
+      允许在同一提交上重跑一次；若连续复现，必须为依赖安装增加独立的
+      有界超时与重试预算，并相应扩大 job 总预算，不能缩短真实十分钟门禁。
 - 100,000 mutation Chaos 沿用确定性 seed，覆盖重复 POST、响应提交后断连、
   重排、cursor 提交前崩溃、丢失全部 invalidation 和 snapshot fallback；
   不再增加功能重复但规模更小的第二套实现。
@@ -872,3 +875,15 @@ R6 场景与性能口径：
   client 定向 `83/83`、CLI typecheck、真实 fake provider 乱序门禁及
   Codex -> CLI -> HTTP relay -> App projection 通过；10k+ entity、断开
   invalidation 后轮询收敛场景的健康流式 p95 为 `239.8 ms`。
+- 2026-07-28：提交 `58fd524` 的 push CI `30385923082` 全绿，包含真实
+  十分钟 turn 与 required gate；CLI Smoke `30385927463` 的 Linux/Windows、
+  Node 20/24 全绿。PR CI `30385927478` 的 duplicate long-turn job 并非
+  业务失败：`pnpm install` 从 `18:08:20` 到 `18:27:45` 停滞 `19m44s`，
+  后续 Codex 安装约 3 分钟，真实测试在 `18:31:02` 才启动并于 47 秒后被
+  25 分钟 job timeout 取消。先在相同提交上重跑 failed jobs；若安装停滞
+  连续复现，再增加安装级有界重试与总 job 预算，不降低十分钟验收口径。
+- 2026-07-28：PR CI `30385927478` attempt 2 的 failed-jobs rerun 正常完成
+  依赖安装并通过真实十分钟 turn（job `90372107716`，总耗时 `11m0s`）与
+  required gate。最终云端结果：push CI `30385923082` 全绿、PR CI
+  `30385927478` 全绿、CLI Smoke `30385927463` 的 Linux/Windows 和
+  Node 20/24 全绿；单次 registry 停滞未连续复现，不修改十分钟门禁。
