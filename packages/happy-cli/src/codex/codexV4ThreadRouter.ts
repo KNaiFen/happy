@@ -16,7 +16,7 @@ import type { CodexSyncV4Mapper } from './codexSyncV4Mapper';
 import type { CodexV4CommandProcessor } from './codexV4CommandProcessor';
 import type { CodexV4RequestBroker } from './codexV4RequestBroker';
 import type { CodexV4ChildThreadRoute, CodexV4MigrationSink } from './codexV4Migration';
-import { childThreadReferences } from './codexV4Migration';
+import { childThreadReferences, finalizeCodexV4Activation } from './codexV4Migration';
 import type { ServerNotification, Thread, ThreadGoal, ThreadStatus } from './protocol';
 
 export interface CodexV4SessionBinding {
@@ -236,14 +236,20 @@ export class CodexV4ThreadRouter {
         const parentBinding = this.bindingsByThread.get(resolvedLineage.parentThreadId);
         if (!parentBinding) throw new Error('Codex child relation has no parent session binding');
         const binding = await this.options.createChildBinding(route, parentBinding);
-        this.bindingsByThread.set(thread.id, binding);
-        const finalLineage = this.lineagesByChild.get(thread.id) ?? resolvedLineage;
-        await this.publishRelation(thread, binding, finalLineage);
-        if (activate) {
-            const goal = this.options.readGoal ? await this.options.readGoal(thread.id) : null;
-            await activateChildBinding(binding, thread, goal);
+        try {
+            if (!activate) await binding.mapper.prepareMigration(thread.id);
+            const finalLineage = this.lineagesByChild.get(thread.id) ?? resolvedLineage;
+            await this.publishRelation(thread, binding, finalLineage);
+            if (activate) {
+                const goal = this.options.readGoal ? await this.options.readGoal(thread.id) : null;
+                await activateChildBinding(binding, thread, goal);
+            }
+            this.bindingsByThread.set(thread.id, binding);
+            return binding;
+        } catch (error) {
+            await binding.close().catch(() => undefined);
+            throw error;
         }
-        return binding;
     }
 
     private async bindingForThread(threadId: string): Promise<CodexV4SessionBinding> {
@@ -321,9 +327,10 @@ export class CodexV4ThreadRouter {
             depth: next.depth,
             updatedAt: this.now(),
         };
-        this.relationsByChild.set(childThreadId, updated);
         const parentBinding = this.bindingsByThread.get(updated.parentThreadId);
-        if (parentBinding) await parentBinding.mapper.upsertRelation(updated);
+        if (!parentBinding) return;
+        await parentBinding.mapper.upsertRelation(updated);
+        this.relationsByChild.set(childThreadId, updated);
     }
 
     private async publishRelation(
@@ -349,8 +356,8 @@ export class CodexV4ThreadRouter {
             depth: lineage.depth,
             status: relationStatus(thread.status),
         };
-        this.relationsByChild.set(thread.id, relation);
         await parentBinding.mapper.upsertRelation(relation);
+        this.relationsByChild.set(thread.id, relation);
     }
 
     private async updateChildRelation(threadId: string, notification: ServerNotification): Promise<void> {
@@ -365,9 +372,10 @@ export class CodexV4ThreadRouter {
                     : relation.status;
         if (status === relation.status) return;
         const next = { ...relation, status, updatedAt: this.now() };
-        this.relationsByChild.set(threadId, next);
         const parentBinding = this.bindingsByThread.get(next.parentThreadId);
-        if (parentBinding) await parentBinding.mapper.upsertRelation(next);
+        if (!parentBinding) return;
+        await parentBinding.mapper.upsertRelation(next);
+        this.relationsByChild.set(threadId, next);
     }
 
     private async depthForParent(parentThreadId: string): Promise<number> {
@@ -387,6 +395,7 @@ export class CodexV4ThreadRouter {
 function migrationSink(binding: CodexV4SessionBinding): CodexV4MigrationSink {
     return {
         prepareMigration: (threadId) => binding.mapper.prepareMigration(threadId),
+        releaseMigrationBarrier: (threadId) => binding.mapper.releaseMigrationBarrier(threadId),
         importThread: (thread) => binding.mapper.importThread(thread),
         importGoal: (threadId, goal) => binding.mapper.importGoal(threadId, goal),
         setSyncState: (state) => binding.mapper.setSyncState(state),
@@ -411,10 +420,18 @@ async function activateChildBinding(
         await sink.flushOutboundOnce();
         return;
     }
+    if (sink.getMigrationState(thread.id) === 'activating') {
+        await finalizeCodexV4Activation(sink, thread.id);
+        binding.mapper.importThreadState(thread);
+        sink.importGoal(thread.id, goal);
+        await sink.flush();
+        await sink.flushOutboundOnce();
+        return;
+    }
 
     try {
-        await sink.setMigrationState(thread.id, 'pending');
         await sink.prepareMigration(thread.id);
+        await sink.setMigrationState(thread.id, 'pending');
         await sink.flush();
         await sink.flushOutboundOnce();
         await sink.setSyncState('importing');
@@ -423,13 +440,12 @@ async function activateChildBinding(
         await sink.setMigrationState(thread.id, 'importing');
         sink.importThread(thread);
         sink.importGoal(thread.id, goal);
+        await sink.releaseMigrationBarrier(thread.id);
         await sink.flush();
         await sink.flushOutboundOnce();
-        await sink.setSyncState('ready');
-        await sink.flush();
-        await sink.flushOutboundOnce();
-        await sink.setMigrationState(thread.id, 'ready');
+        await finalizeCodexV4Activation(sink, thread.id);
     } catch (error) {
+        await sink.releaseMigrationBarrier(thread.id).catch(() => undefined);
         await Promise.allSettled([
             sink.setSyncState('error')
                 .then(() => sink.flush())

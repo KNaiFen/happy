@@ -23,6 +23,7 @@ type ResumeThreadMessageBuffer = {
 export interface CodexResumeSyncStrategy {
     emitLegacySnapshot: boolean;
     migrateToSyncV4: boolean;
+    finalizeSyncV4Activation: boolean;
 }
 
 /** Keeps the resume snapshot and canonical migration on one coordinated branch. */
@@ -32,7 +33,10 @@ export function resolveCodexResumeSyncStrategy(
 ): CodexResumeSyncStrategy {
     return {
         emitLegacySnapshot: !syncV4Enabled,
-        migrateToSyncV4: syncV4Enabled && migrationState !== 'ready',
+        migrateToSyncV4: syncV4Enabled
+            && migrationState !== 'ready'
+            && migrationState !== 'activating',
+        finalizeSyncV4Activation: syncV4Enabled && migrationState === 'activating',
     };
 }
 

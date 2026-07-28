@@ -45,6 +45,33 @@ class RecordingPublisher implements Pick<
     }
 }
 
+class FailOncePublisher extends RecordingPublisher {
+    private failed = false;
+
+    constructor(private readonly failingType: CodexEntityV4['entityType']) {
+        super();
+    }
+
+    override async publishEntity(
+        entity: CodexEntityV4,
+        op: SyncMutationOperationV4 = 'upsert',
+    ): Promise<SyncMutationV4> {
+        if (!this.failed && entity.entityType === this.failingType) {
+            this.failed = true;
+            throw new Error(`failed ${this.failingType}`);
+        }
+        return await super.publishEntity(entity, op);
+    }
+
+    override async publishEntities(entries: SyncV4PublishEntity[]): Promise<SyncMutationV4[]> {
+        if (!this.failed && entries.some(({ entity }) => entity.entityType === this.failingType)) {
+            this.failed = true;
+            throw new Error(`failed ${this.failingType}`);
+        }
+        return await super.publishEntities(entries);
+    }
+}
+
 function mutationFor(
     entity: CodexEntityV4,
     revision: number,
@@ -174,6 +201,48 @@ describe('CodexSyncV4Mapper', () => {
         });
         await mapper.flush();
         expect(publisher.latest('codex.thread')[0].goal).toBeNull();
+    });
+
+    it('replays live notifications after an older migration snapshot', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            now: () => 1_800_000_000_000,
+        });
+        await mapper.prepareMigration('thread-barrier');
+        mapper.handleNotification(notification({
+            method: 'thread/goal/updated',
+            params: {
+                threadId: 'thread-barrier',
+                turnId: null,
+                goal: {
+                    threadId: 'thread-barrier',
+                    objective: 'live goal',
+                    status: 'active',
+                    tokenBudget: null,
+                    tokensUsed: 1,
+                    timeUsedSeconds: 1,
+                    createdAt: 1_700_000_010,
+                    updatedAt: 1_700_000_011,
+                },
+            },
+        }));
+        mapper.importThread(thread('thread-barrier'));
+        mapper.importGoal('thread-barrier', {
+            threadId: 'thread-barrier',
+            objective: 'stale snapshot goal',
+            status: 'active',
+            tokenBudget: null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1_700_000_000,
+            updatedAt: 1_700_000_001,
+        });
+        await mapper.releaseMigrationBarrier('thread-barrier');
+        await mapper.flush();
+
+        expect(publisher.latest('codex.thread')[0].goal?.objective).toBe('live goal');
+        await mapper.close();
     });
 
     it('projects lifecycle and streaming deltas into stable in-place entities', async () => {
@@ -312,6 +381,54 @@ describe('CodexSyncV4Mapper', () => {
         await sleep(35);
         expect(publisher.latest('codex.part')).toMatchObject([{ content: 'AB' }]);
         expect(publisher.published.filter((entity) => entity.entityType === 'codex.part')).toHaveLength(1);
+        await mapper.close();
+    });
+
+    it('commits part publication markers only after the durable publisher succeeds', async () => {
+        const publisher = new FailOncePublisher('codex.part');
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        const params = { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' };
+        mapper.handleNotification(notification({
+            method: 'item/agentMessage/delta',
+            params: { ...params, delta: 'durable text' },
+        }));
+
+        await expect(mapper.flush()).rejects.toThrow('failed codex.part');
+        await expect(mapper.flush()).rejects.toThrow('failed codex.part');
+
+        expect(publisher.latest('codex.part')).toMatchObject([{
+            content: 'durable text',
+            final: false,
+        }]);
+        await mapper.close();
+    });
+
+    it('releases finalized stream content after the final part is durable', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        const item: ThreadItem = {
+            type: 'agentMessage',
+            id: 'item-final',
+            text: 'finished',
+            phase: null,
+            memoryCitation: null,
+        };
+        mapper.handleNotification(notification({
+            method: 'item/completed',
+            params: {
+                threadId: 'thread-1',
+                turnId: 'turn-1',
+                item,
+                completedAtMs: Date.now(),
+            },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.part')).toMatchObject([{ content: 'finished', final: true }]);
+        expect(mapper.diagnostics()).toMatchObject({
+            activeStreamCount: 0,
+            finalizedStreamCount: 1,
+        });
         await mapper.close();
     });
 

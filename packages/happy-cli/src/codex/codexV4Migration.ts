@@ -7,6 +7,7 @@ import type { ThreadGoal } from './protocol';
 
 export interface CodexV4MigrationSink {
     prepareMigration(threadId: string): Promise<void>;
+    releaseMigrationBarrier(threadId: string): Promise<void>;
     importThread(thread: Thread): void;
     importGoal(threadId: string, goal: ThreadGoal | null): void;
     setSyncState(syncState: CodexRuntimeEntityV4['syncState']): Promise<void>;
@@ -35,6 +36,7 @@ interface PendingThread {
     thread: Thread;
     sink: CodexV4MigrationSink;
     depth: number;
+    importRequired: boolean;
 }
 
 interface ChildReference {
@@ -45,6 +47,7 @@ interface ChildReference {
 
 export class CodexV4Migrator {
     private readonly preparedThreads = new Map<string, CodexV4MigrationSink>();
+    private readonly importRequiredByThread = new Map<string, boolean>();
     private readonly sinks = new Set<CodexV4MigrationSink>();
 
     constructor(private readonly options: MigrationOptions) {}
@@ -58,7 +61,12 @@ export class CodexV4Migrator {
             await this.prepareRoot(rootThread.id);
         }
 
-        const pending: PendingThread[] = [{ thread: rootThread, sink: this.options.rootSink, depth: 0 }];
+        const pending: PendingThread[] = [{
+            thread: rootThread,
+            sink: this.options.rootSink,
+            depth: 0,
+            importRequired: this.importRequiredByThread.get(rootThread.id) ?? true,
+        }];
         const seen = new Set<string>();
         try {
             while (pending.length > 0) {
@@ -66,13 +74,16 @@ export class CodexV4Migrator {
                 if (seen.has(current.thread.id)) continue;
                 seen.add(current.thread.id);
 
-                current.sink.importThread(current.thread);
-                current.sink.importGoal(
-                    current.thread.id,
-                    this.options.readGoal ? await this.options.readGoal(current.thread.id) : null,
-                );
-                await current.sink.flush();
-                await current.sink.flushOutboundOnce();
+                if (current.importRequired) {
+                    current.sink.importThread(current.thread);
+                    current.sink.importGoal(
+                        current.thread.id,
+                        this.options.readGoal ? await this.options.readGoal(current.thread.id) : null,
+                    );
+                    await current.sink.releaseMigrationBarrier(current.thread.id);
+                    await current.sink.flush();
+                    await current.sink.flushOutboundOnce();
+                }
 
                 for (const child of childThreadReferences(current.thread)) {
                     if (seen.has(child.childThreadId)) continue;
@@ -85,7 +96,12 @@ export class CodexV4Migrator {
                         depth: current.depth + 1,
                     });
                     await this.prepareThread(childThread.id, childSink);
-                    pending.push({ thread: childThread, sink: childSink, depth: current.depth + 1 });
+                    pending.push({
+                        thread: childThread,
+                        sink: childSink,
+                        depth: current.depth + 1,
+                        importRequired: this.importRequiredByThread.get(childThread.id) ?? true,
+                    });
                 }
             }
 
@@ -99,13 +115,13 @@ export class CodexV4Migrator {
             ];
             for (const sink of activationOrder) {
                 const threadId = this.threadIdForSink(sink);
-                await sink.setSyncState('ready');
-                await sink.flush();
-                await sink.flushOutboundOnce();
-                await sink.setMigrationState(threadId, 'ready');
+                if (sink.getMigrationState(threadId) !== 'ready') {
+                    await finalizeCodexV4Activation(sink, threadId);
+                }
             }
         } catch (error) {
             await Promise.allSettled([...this.preparedThreads].map(async ([threadId, sink]) => {
+                await sink.releaseMigrationBarrier(threadId).catch(() => undefined);
                 await sink.setSyncState('error');
                 await sink.flush();
                 await sink.flushOutboundOnce();
@@ -124,8 +140,23 @@ export class CodexV4Migrator {
         this.preparedThreads.set(threadId, sink);
         this.sinks.add(sink);
 
-        await sink.setMigrationState(threadId, 'pending');
+        const state = sink.getMigrationState(threadId);
+        if (state === 'ready') {
+            this.importRequiredByThread.set(threadId, false);
+            await sink.setSyncState('ready');
+            await sink.flush();
+            await sink.flushOutboundOnce();
+            return;
+        }
+        if (state === 'activating') {
+            this.importRequiredByThread.set(threadId, false);
+            await finalizeCodexV4Activation(sink, threadId);
+            return;
+        }
+
+        this.importRequiredByThread.set(threadId, true);
         await sink.prepareMigration(threadId);
+        await sink.setMigrationState(threadId, 'pending');
         await sink.flush();
         await sink.flushOutboundOnce();
         await sink.setSyncState('importing');
@@ -140,6 +171,20 @@ export class CodexV4Migrator {
         }
         throw new Error('Codex migration sink has no prepared thread');
     }
+}
+
+export async function finalizeCodexV4Activation(
+    sink: CodexV4MigrationSink,
+    threadId: string,
+): Promise<void> {
+    if (sink.getMigrationState(threadId) === 'ready') return;
+    await sink.prepareMigration(threadId);
+    await sink.setMigrationState(threadId, 'activating');
+    await sink.releaseMigrationBarrier(threadId);
+    await sink.setSyncState('ready');
+    await sink.flush();
+    await sink.flushOutboundOnce();
+    await sink.setMigrationState(threadId, 'ready');
 }
 
 export function childThreadReferences(thread: Thread): ChildReference[] {

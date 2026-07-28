@@ -81,6 +81,10 @@ class FakeSink implements CodexV4MigrationSink {
         this.events.push(`${this.name}:prepare:${threadId}`);
     }
 
+    async releaseMigrationBarrier(threadId: string): Promise<void> {
+        this.events.push(`${this.name}:release:${threadId}`);
+    }
+
     importThread(value: Thread): void {
         this.events.push(`${this.name}:import:${value.id}`);
     }
@@ -167,11 +171,36 @@ describe('CodexV4Migrator', () => {
         expect(events.indexOf('root:state:ready')).toBeGreaterThan(events.indexOf('child:state:ready'));
         for (const name of ['root', 'child', 'nested']) {
             expect(events).toContain(`${name}:state:importing`);
+            expect(events).toContain(`${name}:migration:${name}:activating`);
             const readyIndex = events.indexOf(`${name}:state:ready`);
             expect(events[readyIndex + 1]).toBe(`${name}:flush`);
             expect(events[readyIndex + 2]).toBe(`${name}:ack`);
             expect(events[readyIndex + 3]).toBe(`${name}:migration:${name}:ready`);
         }
+    });
+
+    it('recovers an activating migration without replaying the snapshot', async () => {
+        const events: string[] = [];
+        const rootSink = new FakeSink('root', events);
+        await rootSink.setMigrationState('root', 'activating');
+        events.length = 0;
+        const root = thread('root');
+        const migrator = new CodexV4Migrator({
+            rootSink,
+            readThread: vi.fn(),
+            resolveChildSink: vi.fn(),
+        });
+
+        await migrator.prepareRoot(root.id);
+        await migrator.migrate(root);
+
+        expect(events).not.toContain('root:import:root');
+        expect(events).toContain('root:state:ready');
+        const readyState = events.indexOf('root:state:ready');
+        const readyMigration = events.indexOf('root:migration:root:ready');
+        expect(events[readyState + 1]).toBe('root:flush');
+        expect(events[readyState + 2]).toBe('root:ack');
+        expect(readyMigration).toBeGreaterThan(readyState + 2);
     });
 
     it('keeps the projection inactive and records an error when a child snapshot cannot be read', async () => {

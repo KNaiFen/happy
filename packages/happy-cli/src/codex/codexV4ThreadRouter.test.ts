@@ -14,6 +14,7 @@ class FakeMapper {
     readonly stateSnapshots: Thread[] = [];
     readonly relations: CodexRelationEntityV4[] = [];
     readonly goals: Array<{ threadId: string; goal: ThreadGoal | null }> = [];
+    syncStateFailure: Error | null = null;
 
     handleNotification(notification: ServerNotification): void {
         this.notifications.push(notification);
@@ -36,7 +37,13 @@ class FakeMapper {
     }
 
     async prepareMigration(): Promise<void> {}
-    async setSyncState(): Promise<void> {}
+    async releaseMigrationBarrier(): Promise<void> {}
+    async setSyncState(): Promise<void> {
+        if (!this.syncStateFailure) return;
+        const error = this.syncStateFailure;
+        this.syncStateFailure = null;
+        throw error;
+    }
     async setConnection(): Promise<void> {}
     async flush(): Promise<void> {}
 }
@@ -448,6 +455,43 @@ describe('CodexV4ThreadRouter', () => {
 
         expect(createChildBinding).toHaveBeenCalledOnce();
         expect(root.mapper.relations).toHaveLength(1);
+    });
+
+    it('closes a failed child activation and retries with a fresh binding', async () => {
+        const root = binding('happy-root');
+        const failedChild = binding('happy-child-failed');
+        const recoveredChild = binding('happy-child-recovered');
+        failedChild.mapper.syncStateFailure = new Error('activation failed');
+        const createChildBinding = vi.fn()
+            .mockResolvedValueOnce(failedChild.value)
+            .mockResolvedValueOnce(recoveredChild.value);
+        const errors: unknown[] = [];
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-child', 'thread-root'),
+            createChildBinding,
+            onError: (error) => errors.push(error),
+        });
+        router.registerRootThread('thread-root');
+
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: thread('thread-child', 'thread-root') },
+        });
+        await router.flush();
+
+        expect(failedChild.close).toHaveBeenCalledOnce();
+        expect(errors).toHaveLength(1);
+
+        const recoveredNotification = {
+            method: 'thread/status/changed',
+            params: { threadId: 'thread-child', status: { type: 'idle' } },
+        } as ServerNotification;
+        router.handleNotification(recoveredNotification);
+        await router.flush();
+
+        expect(createChildBinding).toHaveBeenCalledTimes(2);
+        expect(recoveredChild.mapper.notifications).toEqual([recoveredNotification]);
     });
 
     it('does not block root notifications while a child binding is being created', async () => {

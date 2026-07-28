@@ -66,7 +66,7 @@ import { CodexSyncV4Mapper } from './codexSyncV4Mapper';
 import { CodexV4CommandProcessor } from './codexV4CommandProcessor';
 import { CodexV4CommandExecutor } from './codexV4CommandExecutor';
 import { CodexV4RequestBroker } from './codexV4RequestBroker';
-import { CodexV4Migrator } from './codexV4Migration';
+import { CodexV4Migrator, finalizeCodexV4Activation } from './codexV4Migration';
 import {
     CodexV4ThreadRouter,
     type CodexV4SessionBinding,
@@ -1215,14 +1215,19 @@ export async function runCodex(opts: {
                 }
             },
         };
-        const recoveredProviderRequests = await binding.requestBroker.recoverPending(
-            binding.syncClient.getPendingProviderRequests(),
-        );
-        if (recoveredProviderRequests > 0) {
-            await binding.syncClient.flushOutboundOnce();
+        try {
+            const recoveredProviderRequests = await binding.requestBroker.recoverPending(
+                binding.syncClient.getPendingProviderRequests(),
+            );
+            if (recoveredProviderRequests > 0) {
+                await binding.syncClient.flushOutboundOnce();
+            }
+            await binding.commandProcessor.recoverPending();
+            return binding;
+        } catch (error) {
+            await binding.close().catch(() => undefined);
+            throw error;
         }
-        await binding.commandProcessor.recoverPending();
-        return binding;
     };
 
     bindCodexV4Session = async (target) => {
@@ -1297,6 +1302,18 @@ export async function runCodex(opts: {
                 });
             },
         });
+        if (opts.resumeThreadId) {
+            router.registerRootThread(opts.resumeThreadId);
+            const migrationState = rootBinding.syncClient.getMigrationState(opts.resumeThreadId);
+            if (migrationState !== 'ready') {
+                try {
+                    await rootBinding.mapper.prepareMigration(opts.resumeThreadId);
+                } catch (error) {
+                    await rootBinding.close().catch(() => undefined);
+                    throw error;
+                }
+            }
+        }
 
         codexV4Runtime.rootBinding = rootBinding;
         codexV4Runtime.router = router;
@@ -1343,6 +1360,7 @@ export async function runCodex(opts: {
             const resumeSyncStrategy = resolveCodexResumeSyncStrategy(codexSyncV4Enabled, migrationState);
             const router = codexV4Runtime.router;
             let migrator: CodexV4Migrator | null = null;
+            let activationSink: ReturnType<CodexV4ThreadRouter['migrationSinkForRoot']> | null = null;
             if (codexSyncV4Enabled) {
                 if (!router || !rootBinding) throw new Error('Codex Sync v4 router is unavailable during migration');
                 router.registerRootThread(opts.resumeThreadId);
@@ -1356,6 +1374,9 @@ export async function runCodex(opts: {
                         resolveChildSink: (route) => router.migrationSinkForChild(route),
                     });
                     await migrator.prepareRoot(opts.resumeThreadId);
+                } else if (resumeSyncStrategy.finalizeSyncV4Activation) {
+                    activationSink = router.migrationSinkForRoot();
+                    await activationSink.prepareMigration(opts.resumeThreadId);
                 }
             }
             const resumed = await resumeExistingThread({
@@ -1373,6 +1394,17 @@ export async function runCodex(opts: {
             appendSystemPromptInjected = true;
             if (migrator) {
                 await migrator.migrate(resumed.thread);
+                codexV4CanonicalActive = true;
+            } else if (activationSink && rootBinding) {
+                rootBinding.mapper.importThreadState(resumed.thread);
+                rootBinding.mapper.importGoal(
+                    resumed.threadId,
+                    (await client.getGoal({ threadId: resumed.threadId })).goal,
+                );
+                await activationSink.releaseMigrationBarrier(resumed.threadId);
+                await rootBinding.mapper.flush();
+                await rootBinding.syncClient.flushOutboundOnce();
+                await finalizeCodexV4Activation(activationSink, resumed.threadId);
                 codexV4CanonicalActive = true;
             } else if (codexSyncV4Enabled && rootBinding) {
                 rootBinding.mapper.importThreadState(resumed.thread);

@@ -9,10 +9,31 @@ const resumedThread = {
 
 describe('resumeExistingThread', () => {
     it.each([
-        [false, undefined, { emitLegacySnapshot: true, migrateToSyncV4: false }],
-        [true, undefined, { emitLegacySnapshot: false, migrateToSyncV4: true }],
-        [true, 'importing' as const, { emitLegacySnapshot: false, migrateToSyncV4: true }],
-        [true, 'ready' as const, { emitLegacySnapshot: false, migrateToSyncV4: false }],
+        [false, undefined, {
+            emitLegacySnapshot: true,
+            migrateToSyncV4: false,
+            finalizeSyncV4Activation: false,
+        }],
+        [true, undefined, {
+            emitLegacySnapshot: false,
+            migrateToSyncV4: true,
+            finalizeSyncV4Activation: false,
+        }],
+        [true, 'importing' as const, {
+            emitLegacySnapshot: false,
+            migrateToSyncV4: true,
+            finalizeSyncV4Activation: false,
+        }],
+        [true, 'activating' as const, {
+            emitLegacySnapshot: false,
+            migrateToSyncV4: false,
+            finalizeSyncV4Activation: true,
+        }],
+        [true, 'ready' as const, {
+            emitLegacySnapshot: false,
+            migrateToSyncV4: false,
+            finalizeSyncV4Activation: false,
+        }],
     ])('keeps v3 snapshots and v4 migration mutually exclusive when enabled=%s, state=%s', (enabled, state, expected) => {
         expect(resolveCodexResumeSyncStrategy(enabled, state)).toEqual(expected);
     });

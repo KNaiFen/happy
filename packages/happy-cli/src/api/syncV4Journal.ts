@@ -61,6 +61,7 @@ export type SyncV4CommandJournalStatus = z.infer<typeof SyncV4CommandJournalStat
 export const SyncV4MigrationJournalStateSchema = z.enum([
     "pending",
     "importing",
+    "activating",
     "ready",
     "error",
 ]);

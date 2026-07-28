@@ -392,4 +392,14 @@ describe("SyncV4Journal", () => {
         const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
         expect(await readFile(join(rootDir, journalFile), "utf8")).not.toContain("hello");
     });
+
+    it("recovers the migration activation handoff after a restart", async () => {
+        const rootDir = await createRoot();
+        const journal = await openJournal({ rootDir, sessionId: "session-1" });
+        await journal.setMigrationState("thread-1", "activating");
+        await journal.close();
+
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
+        expect(reopened.getMigrationState("thread-1")).toBe("activating");
+    });
 });

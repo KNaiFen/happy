@@ -96,9 +96,9 @@ R2 实施约束：
 
 ### R3 Codex Gateway
 
-- [ ] mapper 只在实体进入持久 outbox 后提交 published 状态。
-- [ ] migration 建立 snapshot/live barrier，旧 snapshot 不得覆盖 live delta。
-- [ ] `ready` mutation ACK 与本地 migration 状态通过可恢复的 activating
+- [x] mapper 只在实体进入持久 outbox 后提交 published 状态。
+- [x] migration 建立 snapshot/live barrier，旧 snapshot 不得覆盖 live delta。
+- [x] `ready` mutation ACK 与本地 migration 状态通过可恢复的 activating
       状态协调。
 - [ ] orphan notification 进入持久 FIFO，绑定失败可重试并最终 snapshot
       对账。
@@ -114,6 +114,47 @@ R2 实施约束：
       variant 产生受控诊断而不是空 item。
 - [ ] warning/error ID 跨重启不碰撞，错误码保持结构化。
 - [ ] finalized stream 释放大内容，snapshot 批量投影避免重复发布。
+
+R3 实施顺序与状态机：
+
+```txt
+官方 snapshot/live notification
+│
+├─ ThreadRouter
+│  ├─ 已绑定 thread -> per-thread FIFO
+│  └─ 未绑定 thread -> durable orphan FIFO -> hydrate/classify -> replay
+│
+├─ CodexSyncV4Mapper
+│  ├─ build next entity/part state
+│  ├─ persist mutation into SyncV4 outbox
+│  └─ only then commit in-memory published/state markers
+│
+└─ App projection
+   └─ entity revision decides in-place replacement
+```
+
+```txt
+migration local state
+pending -> importing -> activating -> ready
+                        │
+                        ├─ persist activating locally
+                        ├─ publish runtime(syncState=ready)
+                        ├─ wait until ready mutation ACK
+                        └─ persist ready locally
+
+restart at activating
+└─ flush existing outbox -> republish ready if needed -> ACK -> persist ready
+```
+
+R3 分为四个可独立验证的提交：
+
+1. mapper durable publication boundary、迁移 `activating` 恢复和
+   snapshot/live barrier；
+2. thread/turn 单调状态、全部 active thread 恢复、interrupt 权威协调和
+   conservative resume policy；
+3. provider request 五态持久恢复，以及 server request 必答/协议错误；
+4. orphan durable FIFO、provider child/user fork/detached review/sibling 分类、
+   stable-v2 exhaustive item/input mapper、诊断 ID 与 stream/batch 内存治理。
 
 ### R4 App
 
@@ -206,3 +247,17 @@ R2 实施约束：
   创建后，写入或 fsync 失败会无条件清理，避免部分 lease 永久阻塞恢复。
   CLI TypeScript 检查通过，R2 四个定向测试文件共 `62/62` 通过；本机
   Vitest global setup 的 pnpm store 检查失败仅产生日志，测试进程本身成功。
+- 2026-07-28：R2 提交 `4a5b2ac9` 的 push CI `30332614672`、PR CI
+  `30332612493` 和 CLI Smoke `30332614666` 全部通过。R3 源码复核确认
+  migration activation、mapper published marker、late turn completion、
+  forced interrupt、request delivery state 和 detached thread 分类均存在
+  计划所述缺口；按新增四提交顺序整改。
+- 2026-07-28：R3 第一切片完成。mapper 仅在 mutation 持久写入 outbox 后
+  提交内存实体与 part marker；snapshot/live 使用 per-thread barrier 原序
+  重放；migration 使用 `pending -> importing -> activating -> ready`
+  协调 ready ACK 与本地状态。finalized stream 成功发布后释放正文，child
+  binding 激活或恢复失败会关闭 lease/socket 并允许重新创建。CLI typecheck、
+  `git diff --check` 和五个定向测试文件 `50/50` 通过；完整 CLI unit suite
+  在工作区内通过 `925/933`，仅因沙箱禁止写 `~/.claude/projects` 导致
+  Claude scanner 的 `8` 项 `EPERM`，授权该测试目录后单独重跑 `8/8`
+  通过。
