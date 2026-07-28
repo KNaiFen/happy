@@ -46,6 +46,7 @@ type MockRpcMessage = {
     method?: string;
     params?: any;
     result?: any;
+    error?: { code: number | string; message?: string; data?: unknown };
 };
 
 function pushJsonLine(stdout: NodeJS.ReadableStream & { push: (chunk: string) => void }, payload: unknown) {
@@ -2859,6 +2860,86 @@ describe('CodexAppServerClient sandbox integration', () => {
         await new Promise<void>((resolve) => setImmediate(resolve));
 
         expect(handler).toHaveBeenCalledOnce();
+        await client.disconnect();
+    });
+
+    it('returns a payload-free internal error when a managed request handler fails', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({ onRequest: (message) => requests.push(message) });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        client.setServerRequestHandler(async () => {
+            throw new Error('sensitive local failure details');
+        });
+        await client.connect();
+
+        pushJsonLine(proc.stdout, {
+            id: 93,
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+        });
+
+        await waitFor(() => requests.some((message) => message.id === 93));
+        expect(requests.filter((message) => message.id === 93)).toEqual([{
+            id: 93,
+            error: { code: -32000, message: 'Server request handler failed' },
+        }]);
+        expect(JSON.stringify(requests.find((message) => message.id === 93))).not.toContain('sensitive');
+        await client.disconnect();
+    });
+
+    it('returns method-not-found for an unknown provider request', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({ onRequest: (message) => requests.push(message) });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+
+        pushJsonLine(proc.stdout, {
+            id: 94,
+            method: 'future/request',
+            params: { privatePayload: 'not echoed' },
+        });
+
+        await waitFor(() => requests.some((message) => message.id === 94));
+        expect(requests.filter((message) => message.id === 94)).toEqual([{
+            id: 94,
+            error: { code: -32601, message: 'Method not found' },
+        }]);
+        await client.disconnect();
+    });
+
+    it('does not send a second response when supplied-state persistence fails', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({ onRequest: (message) => requests.push(message) });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const markAbandoned = vi.fn(async () => {});
+        client.setServerRequestHandler(async () => ({
+            response: { decision: 'accept' },
+            markResponseSupplied: vi.fn(async () => {
+                throw new Error('simulated fsync failure');
+            }),
+            markDelivered: vi.fn(async () => {}),
+            markAbandoned,
+        }));
+        await client.connect();
+
+        pushJsonLine(proc.stdout, {
+            id: 95,
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+        });
+
+        await waitFor(() => markAbandoned.mock.calls.length === 1);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(requests.filter((message) => message.id === 95)).toEqual([{
+            id: 95,
+            result: { decision: 'accept' },
+        }]);
         await client.disconnect();
     });
 

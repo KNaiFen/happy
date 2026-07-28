@@ -67,6 +67,24 @@ export const SyncV4MigrationJournalStateSchema = z.enum([
 ]);
 export type SyncV4MigrationJournalState = z.infer<typeof SyncV4MigrationJournalStateSchema>;
 
+export const SyncV4ProviderRequestJournalStateSchema = z.enum([
+    "pending",
+    "responseReady",
+    "responseSupplied",
+    "resolved",
+    "outcomeUnknown",
+]);
+export type SyncV4ProviderRequestJournalState = z.infer<
+    typeof SyncV4ProviderRequestJournalStateSchema
+>;
+
+// Read journals written by the first Sync v4 implementation. Compaction
+// rewrites this legacy terminal state as no provider-request record.
+const syncV4ProviderRequestRecordStateSchema = z.union([
+    SyncV4ProviderRequestJournalStateSchema,
+    z.literal("completed"),
+]);
+
 const journalRecordSchema = z.discriminatedUnion("kind", [
     z.object({
         version: z.literal(JOURNAL_VERSION),
@@ -124,7 +142,8 @@ const journalRecordSchema = z.discriminatedUnion("kind", [
         version: z.literal(JOURNAL_VERSION),
         kind: z.literal("providerRequest"),
         request: CodexRequestEntityV4Schema,
-        state: z.enum(["pending", "completed"]),
+        state: syncV4ProviderRequestRecordStateSchema,
+        response: z.json().nullable().optional(),
         updatedAt: z.number().int().nonnegative(),
         mutation: SyncMutationV4Schema.optional(),
     }).strict(),
@@ -153,8 +172,17 @@ export interface SyncV4JournalSnapshot {
     entityRevisions: ReadonlyMap<string, number>;
     commandStatuses: ReadonlyMap<string, SyncV4CommandJournalStatus>;
     commands: ReadonlyMap<string, CodexCommandEntityV4>;
-    pendingProviderRequests: ReadonlyMap<string, CodexRequestEntityV4>;
+    pendingProviderRequests: ReadonlyMap<string, SyncV4PendingProviderRequest>;
     migrationStates: ReadonlyMap<string, SyncV4MigrationJournalState>;
+}
+
+export interface SyncV4PendingProviderRequest {
+    request: CodexRequestEntityV4;
+    state: Extract<
+        SyncV4ProviderRequestJournalState,
+        "pending" | "responseReady" | "responseSupplied"
+    >;
+    response: CodexRequestEntityV4["response"];
 }
 
 export interface SyncV4JournalDiagnostics {
@@ -225,7 +253,7 @@ export class SyncV4Journal {
     private readonly commandStatuses = new Map<string, SyncV4CommandJournalStatus>();
     private readonly commandUpdatedAt = new Map<string, number>();
     private readonly commands = new Map<string, CodexCommandEntityV4>();
-    private readonly pendingProviderRequests = new Map<string, CodexRequestEntityV4>();
+    private readonly pendingProviderRequests = new Map<string, SyncV4PendingProviderRequest>();
     private readonly migrationStates = new Map<string, SyncV4MigrationJournalState>();
     private poisonedCause: unknown = null;
     private closed = false;
@@ -388,8 +416,9 @@ export class SyncV4Journal {
 
     async appendProviderRequestTransition(
         request: CodexRequestEntityV4,
-        state: "pending" | "completed",
-        mutation: SyncMutationV4,
+        state: SyncV4ProviderRequestJournalState,
+        mutation?: SyncMutationV4,
+        response?: CodexRequestEntityV4["response"],
     ): Promise<void> {
         await this.appendRecords([{
             version: JOURNAL_VERSION,
@@ -397,7 +426,8 @@ export class SyncV4Journal {
             request,
             state,
             updatedAt: this.now(),
-            mutation,
+            ...(response === undefined ? {} : { response }),
+            ...(mutation ? { mutation } : {}),
         }]);
     }
 
@@ -489,12 +519,13 @@ export class SyncV4Journal {
                 ...(command && isPendingCommandStatus(status) ? { command } : {}),
             });
         }
-        for (const request of this.pendingProviderRequests.values()) {
+        for (const pending of this.pendingProviderRequests.values()) {
             records.push({
                 version: JOURNAL_VERSION,
                 kind: "providerRequest",
-                request,
-                state: "pending",
+                request: pending.request,
+                state: pending.state,
+                response: pending.response,
                 updatedAt: this.now(),
             });
         }
@@ -617,8 +648,16 @@ export class SyncV4Journal {
                     );
                     this.applyRevision(record.mutation.entityId, record.mutation.revision);
                 }
-                if (record.state === "pending") {
-                    this.pendingProviderRequests.set(record.request.providerId, record.request);
+                if (
+                    record.state === "pending"
+                    || record.state === "responseReady"
+                    || record.state === "responseSupplied"
+                ) {
+                    this.pendingProviderRequests.set(record.request.providerId, {
+                        request: record.request,
+                        state: record.state,
+                        response: record.response ?? null,
+                    });
                 } else {
                     this.pendingProviderRequests.delete(record.request.providerId);
                 }

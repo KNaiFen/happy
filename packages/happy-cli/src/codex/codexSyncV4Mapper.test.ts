@@ -13,9 +13,16 @@ import { CodexSyncV4Mapper } from './codexSyncV4Mapper';
 
 class RecordingPublisher implements Pick<
     SyncV4Client,
-    'publishEntity' | 'publishEntities' | 'publishProviderRequestTransition'
+    | 'publishEntity'
+    | 'publishEntities'
+    | 'publishProviderRequestTransition'
+    | 'persistProviderRequestTransition'
 > {
     readonly published: CodexEntityV4[] = [];
+    readonly persistedProviderResponses: Array<{
+        state: 'responseReady' | 'responseSupplied';
+        response: CodexRequestEntityV4['response'];
+    }> = [];
 
     async publishEntity(
         entity: CodexEntityV4,
@@ -34,6 +41,14 @@ class RecordingPublisher implements Pick<
 
     async publishProviderRequestTransition(request: CodexRequestEntityV4): Promise<SyncMutationV4> {
         return await this.publishEntity(request);
+    }
+
+    async persistProviderRequestTransition(
+        _request: CodexRequestEntityV4,
+        state: 'responseReady' | 'responseSupplied',
+        response: CodexRequestEntityV4['response'],
+    ): Promise<void> {
+        this.persistedProviderResponses.push({ state, response });
     }
 
     latest<T extends CodexEntityV4['entityType']>(entityType: T): Array<Extract<CodexEntityV4, { entityType: T }>> {

@@ -219,11 +219,31 @@ describe("SyncV4Journal", () => {
 
         await journal.close();
         const reopened = await openJournal({ rootDir, sessionId: "session-1", now: () => 300 });
-        expect(reopened.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual(providerRequest);
+        expect(reopened.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual({
+            request: providerRequest,
+            state: "pending",
+            response: null,
+        });
+        await reopened.appendProviderRequestTransition(
+            providerRequest,
+            "responseReady",
+            undefined,
+            { decision: "accept" },
+        );
+        await reopened.appendProviderRequestTransition(
+            providerRequest,
+            "responseSupplied",
+            undefined,
+            { decision: "accept" },
+        );
         await reopened.compact();
         await reopened.close();
         const compacted = await openJournal({ rootDir, sessionId: "session-1", now: () => 300 });
-        expect(compacted.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual(providerRequest);
+        expect(compacted.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual({
+            request: providerRequest,
+            state: "responseSupplied",
+            response: { decision: "accept" },
+        });
 
         const completedRequest = {
             ...providerRequest,
@@ -237,13 +257,42 @@ describe("SyncV4Journal", () => {
             mutationId: "mutation-2",
             revision: 2,
         };
-        await compacted.appendProviderRequestTransition(completedRequest, "completed", completedMutation);
+        await compacted.appendProviderRequestTransition(completedRequest, "resolved", completedMutation);
 
         await compacted.close();
         const completed = await openJournal({ rootDir, sessionId: "session-1" });
         expect(completed.snapshot().pendingProviderRequests.size).toBe(0);
         expect(completed.snapshot().pendingOutbound).toEqual([completedMutation]);
         expect(completed.snapshot().entityRevisions.get("provider-request-1")).toBe(2);
+    });
+
+    it("reads the legacy completed provider-request state as terminal", async () => {
+        const rootDir = await createRoot();
+        const journal = await openJournal({ rootDir, sessionId: "session-1", now: () => 200 });
+        await journal.appendProviderRequestTransition(
+            providerRequest,
+            "pending",
+            { ...mutation, entityType: "codex.request", entityId: "provider-request-legacy" },
+        );
+        await journal.close();
+
+        const journalFile = (await readdir(rootDir)).find((entry) => entry.endsWith(".jsonl"))!;
+        await appendFile(join(rootDir, journalFile), `${JSON.stringify({
+            version: 1,
+            kind: "providerRequest",
+            request: {
+                ...providerRequest,
+                status: "accepted",
+                response: { decision: "accept" },
+                resolvedAt: 250,
+                updatedAt: 250,
+            },
+            state: "completed",
+            updatedAt: 250,
+        })}\n`);
+
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
+        expect(reopened.snapshot().pendingProviderRequests.size).toBe(0);
     });
 
     it("drops an interrupted command transition as one logical record", async () => {

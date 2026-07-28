@@ -19,6 +19,7 @@ import {
     type CodexTurnEntityV4,
 } from '@slopus/happy-wire';
 import type { SyncV4Client } from '@/api/syncV4Client';
+import type { SyncV4ProviderRequestJournalState } from '@/api/syncV4Journal';
 import { logger } from '@/ui/logger';
 import { createHash } from 'node:crypto';
 import type {
@@ -31,7 +32,10 @@ import type {
 
 type SyncPublisher = Pick<
     SyncV4Client,
-    'publishEntity' | 'publishEntities' | 'publishProviderRequestTransition'
+    | 'publishEntity'
+    | 'publishEntities'
+    | 'publishProviderRequestTransition'
+    | 'persistProviderRequestTransition'
 >;
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type ThreadTokenUsage = NonNullable<CodexThreadEntityV4['tokenUsage']>;
@@ -202,11 +206,38 @@ export class CodexSyncV4Mapper {
         });
     }
 
-    async upsertRequest(request: CodexRequestEntityV4): Promise<void> {
+    async upsertRequest(
+        request: CodexRequestEntityV4,
+        state: Extract<
+            SyncV4ProviderRequestJournalState,
+            'pending' | 'resolved' | 'outcomeUnknown'
+        > = request.status === 'pending' ? 'pending' : 'resolved',
+    ): Promise<void> {
         await this.enqueue(async () => {
-            await this.publisher.publishProviderRequestTransition(request);
+            await this.publisher.publishProviderRequestTransition(
+                request,
+                state,
+                request.response,
+            );
             this.requests.set(request.providerId, request);
             await this.publishRuntimeRequestCounts(request.threadId);
+        });
+    }
+
+    async persistRequestState(
+        request: CodexRequestEntityV4,
+        state: Extract<
+            SyncV4ProviderRequestJournalState,
+            'responseReady' | 'responseSupplied'
+        >,
+        response: CodexRequestEntityV4['response'],
+    ): Promise<void> {
+        await this.enqueue(async () => {
+            await this.publisher.persistProviderRequestTransition(
+                request,
+                state,
+                response,
+            );
         });
     }
 

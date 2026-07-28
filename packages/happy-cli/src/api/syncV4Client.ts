@@ -39,6 +39,8 @@ import {
     SyncV4Journal,
     type SyncV4CommandJournalStatus,
     type SyncV4MigrationJournalState,
+    type SyncV4PendingProviderRequest,
+    type SyncV4ProviderRequestJournalState,
 } from "./syncV4Journal";
 
 const CHANGES_PAGE_SIZE = 100;
@@ -339,7 +341,13 @@ export class SyncV4Client {
         return mutation;
     }
 
-    async publishProviderRequestTransition(request: CodexRequestEntityV4): Promise<SyncMutationV4> {
+    async publishProviderRequestTransition(
+        request: CodexRequestEntityV4,
+        state: SyncV4ProviderRequestJournalState = request.status === "pending"
+            ? "pending"
+            : "resolved",
+        response: CodexRequestEntityV4["response"] = request.response,
+    ): Promise<SyncMutationV4> {
         const generation = this.lifecycleGeneration;
         this.assertCurrentGeneration(generation);
         const mutation = await this.publishLock.inLock(async () => {
@@ -366,13 +374,35 @@ export class SyncV4Client {
             this.assertCurrentGeneration(generation);
             await this.journal.appendProviderRequestTransition(
                 request,
-                request.status === "pending" ? "pending" : "completed",
+                state,
                 next,
+                response,
             );
             return next;
         });
         if (this.started) this.sendSync.invalidate();
         return mutation;
+    }
+
+    async persistProviderRequestTransition(
+        request: CodexRequestEntityV4,
+        state: Extract<
+            SyncV4ProviderRequestJournalState,
+            "responseReady" | "responseSupplied"
+        >,
+        response: CodexRequestEntityV4["response"],
+    ): Promise<void> {
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        await this.publishLock.inLock(async () => {
+            this.assertCurrentGeneration(generation);
+            await this.journal.appendProviderRequestTransition(
+                request,
+                state,
+                undefined,
+                response,
+            );
+        });
     }
 
     async flushOutboundOnce(): Promise<void> {
@@ -520,11 +550,11 @@ export class SyncV4Client {
         ));
     }
 
-    getPendingProviderRequests(): CodexRequestEntityV4[] {
+    getPendingProviderRequests(): SyncV4PendingProviderRequest[] {
         return [...this.journal.snapshot().pendingProviderRequests.values()]
             .sort((left, right) => (
-                left.createdAt - right.createdAt
-                || left.providerId.localeCompare(right.providerId)
+                left.request.createdAt - right.request.createdAt
+                || left.request.providerId.localeCompare(right.request.providerId)
             ));
     }
 

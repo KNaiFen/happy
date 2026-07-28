@@ -2018,9 +2018,24 @@ export class CodexAppServerClient {
         result: unknown,
         sourceEpoch: number = this.processEpoch,
     ): Promise<boolean> {
+        return await this.writeResponse({ id, result }, sourceEpoch);
+    }
+
+    private async respondError(
+        id: number,
+        code: number,
+        message: string,
+        sourceEpoch: number = this.processEpoch,
+    ): Promise<boolean> {
+        return await this.writeResponse({ id, error: { code, message } }, sourceEpoch);
+    }
+
+    private async writeResponse(
+        msg: CodexWireResponse,
+        sourceEpoch: number,
+    ): Promise<boolean> {
         if (sourceEpoch !== this.processEpoch || !this.process?.stdin?.writable) return false;
         const stdin = this.process.stdin;
-        const msg: CodexWireResponse = { id, result };
         this.recordProtocolTrace('outbound', msg);
         return await new Promise<boolean>((resolve) => {
             let settled = false;
@@ -2029,7 +2044,7 @@ export class CodexAppServerClient {
                 settled = true;
                 stdin.off('error', onError);
                 stdin.off('close', onClose);
-                if (written) logger.debug(`[CodexAppServer] → response (id=${id})`);
+                if (written) logger.debug(`[CodexAppServer] → response (id=${msg.id})`);
                 resolve(written);
             };
             const onError = () => finish(false);
@@ -2225,16 +2240,34 @@ export class CodexAppServerClient {
         sourceEpoch: number,
     ): Promise<void> {
         if (this.serverRequestHandler && isStableServerRequestMethod(method)) {
-            const managed = await this.serverRequestHandler({
-                requestId: String(id),
-                method,
-                params,
-            });
+            let managed: CodexManagedServerResponse;
+            try {
+                managed = await this.serverRequestHandler({
+                    requestId: String(id),
+                    method,
+                    params,
+                });
+            } catch (error) {
+                logger.debug(`[CodexAppServer] Managed server request failed before response (${errorKind(error)})`);
+                await this.respondError(id, -32000, 'Server request handler failed', sourceEpoch);
+                return;
+            }
             if (!await this.respond(id, managed.response, sourceEpoch)) {
                 await managed.markAbandoned();
                 return;
             }
-            await managed.markResponseSupplied();
+            try {
+                await managed.markResponseSupplied();
+            } catch (error) {
+                // The success response may already be visible to Codex. Never
+                // answer the same JSON-RPC id twice; coordinate it as unknown.
+                try {
+                    await managed.markAbandoned();
+                } catch (abandonError) {
+                    logger.debug(`[CodexAppServer] Failed to persist unknown provider response (${errorKind(abandonError)})`);
+                }
+                throw error;
+            }
             // stdin.write only confirms local handoff. The matching
             // serverRequest/resolved notification is the provider ACK and is
             // routed back to the owning request broker.
@@ -2330,7 +2363,7 @@ export class CodexAppServerClient {
 
         // Unknown server request — respond so server doesn't hang
         logger.debug(`[CodexAppServer] Unknown server request: ${method}`);
-        await this.respond(id, {}, sourceEpoch);
+        await this.respondError(id, -32601, 'Method not found', sourceEpoch);
     }
 
     // The bare scoped key keeps the app's permission ↔ tool-call join for the

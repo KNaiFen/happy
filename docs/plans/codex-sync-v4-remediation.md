@@ -107,8 +107,8 @@ R2 实施约束：
 - [x] turn/thread 状态单调，旧 turn 完成不能结束另一个 active turn。
 - [x] interrupt 超时只触发重连协调，不直接产生权威 completed/idle。
 - [x] resume 不使用陈旧配置放宽 approval/sandbox 权限。
-- [ ] server request handler 总是返回 response 或协议 error。
-- [ ] provider request 的 pending、response-ready、supplied、resolved 和
+- [x] server request handler 总是返回 response 或协议 error。
+- [x] provider request 的 pending、response-ready、supplied、resolved 和
       outcome-unknown 状态可跨进程恢复。
 - [ ] stable-v2 UserInput 和 ThreadItem 使用 exhaustive mapper；未知 stable
       variant 产生受控诊断而不是空 item。
@@ -187,6 +187,40 @@ interrupt grace timeout
   registry completion，不得从恢复前的空 turn ID 推断；
 - 直接 stable-v2 `thread/status/changed` 和 `turn/completed` 仍是权威边界；
 - 自动恢复只收紧权限；用户发起的显式 resume 继续使用显式参数。
+
+R3 第三切片使用以下 provider request 持久状态机：
+
+```txt
+server request received
+│
+└─ pending
+   ├─ App response validated + fsync      -> responseReady
+   │  ├─ stdin write callback + fsync     -> responseSupplied
+   │  │  ├─ serverRequest/resolved        -> resolved
+   │  │  └─ disconnect/crash              -> outcomeUnknown
+   │  └─ disconnect/crash                 -> outcomeUnknown
+   ├─ provider resolves before App reply  -> resolved
+   └─ process restart before App reply    -> resolved(error)
+```
+
+实现约束：
+
+- `responseReady` 必须在唤醒 app-server response writer 前 fsync；
+- `responseSupplied` 只在 stdin write callback 成功后提交；但
+  `responseReady` 恢复时仍按 outcome unknown 处理，因为崩溃可能发生在
+  write 与 callback 之间；
+- `serverRequest/resolved` 是 provider ACK；ACK 早于 write callback 时先缓冲，
+  不得提前向 App command 返回成功；
+- `resolved` 和 `outcomeUnknown` 必须与最终 request entity mutation 原子写入
+  journal，崩溃后不得重放响应；
+- managed handler 在写 response 前失败时返回 payload-free JSON-RPC
+  `-32000`；未知 server request 返回 `-32601`，不得回空成功对象；
+- response 已写入后发生本地持久化失败时不得再发送第二个 JSON-RPC response，
+  只能进入 outcome unknown/fail-stop。
+
+R3 第三切片本地门禁：CLI typecheck/build 通过，`99` 个测试文件、
+`946/946` 单元测试通过；其中定向 `85/85` 覆盖五态顺序、每个响应写入
+边界、旧 journal 兼容、handler 失败、未知方法和禁止二次 response。
 
 R3 分为四个可独立验证的提交：
 
@@ -283,6 +317,9 @@ R3 分为四个可独立验证的提交：
 - 2026-07-28：R3 第二切片完成全部 active thread 的保守恢复、selection
   隔离、turn/thread 单调合并和 interrupt 权威协调；`turn/interrupt` 的
   `{}` ACK 不再被视为终态，pending start 也通过 registry completion 对账。
+- 2026-07-28：R3 第三切片细化 provider request 为 pending、
+  responseReady、responseSupplied、resolved 和 outcomeUnknown 五态；
+  unknown/失败的 server request 必须返回 JSON-RPC error。
   dependency audit job 不启用无依赖安装场景下的 pnpm cache；CI、Smoke
   Test 和版本构建工作流统一使用 Node 24 runtime 对应的 action 版本。
 - 2026-07-28：R2 完成。CLI session 初始化和关闭使用 generation 隔离；

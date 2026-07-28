@@ -1,13 +1,47 @@
 import type { CodexRequestEntityV4 } from '@slopus/happy-wire';
 import { describe, expect, it } from 'vitest';
+import type { SyncV4ProviderRequestJournalState } from '@/api/syncV4Journal';
 import type { CodexServerRequest } from './codexAppServerClient';
 import { CodexV4RequestBroker } from './codexV4RequestBroker';
 
 class RecordingMapper {
     readonly requests: CodexRequestEntityV4[] = [];
+    readonly transitions: Array<{
+        state: SyncV4ProviderRequestJournalState;
+        response: CodexRequestEntityV4['response'];
+    }> = [];
 
-    async upsertRequest(request: CodexRequestEntityV4): Promise<void> {
+    async upsertRequest(
+        request: CodexRequestEntityV4,
+        state: Extract<
+            SyncV4ProviderRequestJournalState,
+            'pending' | 'resolved' | 'outcomeUnknown'
+        > = request.status === 'pending' ? 'pending' : 'resolved',
+    ): Promise<void> {
         this.requests.push(request);
+        this.transitions.push({ state, response: request.response });
+    }
+
+    async persistRequestState(
+        _request: CodexRequestEntityV4,
+        state: Extract<
+            SyncV4ProviderRequestJournalState,
+            'responseReady' | 'responseSupplied'
+        >,
+        response: CodexRequestEntityV4['response'],
+    ): Promise<void> {
+        this.transitions.push({ state, response });
+    }
+}
+
+class FailingResponseReadyMapper extends RecordingMapper {
+    override async persistRequestState(
+        request: CodexRequestEntityV4,
+        state: 'responseReady' | 'responseSupplied',
+        response: CodexRequestEntityV4['response'],
+    ): Promise<void> {
+        if (state === 'responseReady') throw new Error('simulated responseReady fsync failure');
+        await super.persistRequestState(request, state, response);
     }
 }
 
@@ -63,6 +97,12 @@ describe('CodexV4RequestBroker', () => {
             response: { decision: 'acceptForSession' },
             resolvedAt: expect.any(Number),
         });
+        expect(mapper.transitions.map((transition) => transition.state)).toEqual([
+            'pending',
+            'responseReady',
+            'responseSupplied',
+            'resolved',
+        ]);
         expect(broker.pendingCount()).toBe(0);
     });
 
@@ -109,6 +149,36 @@ describe('CodexV4RequestBroker', () => {
         })).rejects.toThrow('Invalid Codex approval decision');
         expect(broker.pendingCount()).toBe(1);
         expect(mapper.requests).toHaveLength(1);
+    });
+
+    it('does not wake the provider response writer before responseReady is durable', async () => {
+        const mapper = new FailingResponseReadyMapper();
+        const broker = new CodexV4RequestBroker({ mapper });
+        const providerResponse = broker.handle({
+            requestId: 'rpc-fsync',
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-fsync' },
+        });
+        let writerWoke = false;
+        const providerSettled = providerResponse.then(
+            () => {
+                writerWoke = true;
+                return null;
+            },
+            (error: unknown) => error,
+        );
+        await waitForRequest(mapper);
+
+        await expect(broker.resolve({
+            requestId: 'rpc-fsync',
+            threadId: 'thread-1',
+            response: { decision: 'accept' },
+        })).rejects.toThrow('responseReady fsync failure');
+
+        expect(writerWoke).toBe(false);
+        expect(mapper.transitions.map((transition) => transition.state)).toEqual(['pending']);
+        await broker.failPending('brokerClosed');
+        expect(await providerSettled).toBeInstanceOf(Error);
     });
 
     it('marks unresolved provider requests as errors when their transport is lost', async () => {
@@ -158,7 +228,11 @@ describe('CodexV4RequestBroker', () => {
             resolvedAt: null,
         };
 
-        await expect(broker.recoverPending([staleRequest])).resolves.toBe(1);
+        await expect(broker.recoverPending([{
+            request: staleRequest,
+            state: 'pending',
+            response: null,
+        }])).resolves.toBe(1);
 
         expect(mapper.requests).toEqual([{
             ...staleRequest,
@@ -167,7 +241,49 @@ describe('CodexV4RequestBroker', () => {
             resolvedAt: 250,
             updatedAt: 250,
         }]);
+        expect(mapper.transitions.at(-1)?.state).toBe('resolved');
     });
+
+    it.each(['responseReady', 'responseSupplied'] as const)(
+        'recovers a %s provider response as outcome unknown without replaying it',
+        async (state) => {
+            const mapper = new RecordingMapper();
+            const broker = new CodexV4RequestBroker({ mapper, now: () => 275 });
+            const staleRequest: CodexRequestEntityV4 = {
+                schemaVersion: 1,
+                entityType: 'codex.request',
+                providerId: `thread-1\0request\0rpc-${state}`,
+                createdAt: 100,
+                updatedAt: 100,
+                requestId: `rpc-${state}`,
+                threadId: 'thread-1',
+                turnId: 'turn-1',
+                itemId: 'item-stale',
+                requestType: 'fileChangeApproval',
+                status: 'pending',
+                title: null,
+                prompt: null,
+                options: {},
+                response: null,
+                resolvedAt: null,
+            };
+
+            await broker.recoverPending([{
+                request: staleRequest,
+                state,
+                response: { decision: 'accept' },
+            }]);
+
+            expect(mapper.requests.at(-1)).toMatchObject({
+                status: 'error',
+                response: {
+                    error: 'providerResponseOutcomeUnknown',
+                    previousState: state,
+                },
+            });
+            expect(mapper.transitions.at(-1)?.state).toBe('outcomeUnknown');
+        },
+    );
 
     it('marks command resolution unknown after the response reached provider stdin', async () => {
         const mapper = new RecordingMapper();

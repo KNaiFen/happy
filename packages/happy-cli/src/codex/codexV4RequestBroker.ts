@@ -9,6 +9,7 @@ import type {
     CodexServerRequest,
 } from './codexAppServerClient';
 import type { CodexSyncV4Mapper } from './codexSyncV4Mapper';
+import type { SyncV4PendingProviderRequest } from '@/api/syncV4Journal';
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -19,11 +20,12 @@ interface PendingRequest {
     provideResponse: (response: unknown) => void;
     rejectResponse: (error: Error) => void;
     state: 'pending' | 'responseReady' | 'responseSupplied' | 'settling';
-    response: unknown;
+    response: CodexRequestEntityV4['response'];
     deliveryPromise: Promise<void> | null;
     markDelivery: (() => void) | null;
     rejectDelivery: ((error: Error) => void) | null;
     providerResolved: boolean;
+    transition: Promise<void>;
 }
 
 export interface CodexV4RequestResolution {
@@ -33,7 +35,7 @@ export interface CodexV4RequestResolution {
 }
 
 interface RequestBrokerOptions {
-    mapper: Pick<CodexSyncV4Mapper, 'upsertRequest'>;
+    mapper: Pick<CodexSyncV4Mapper, 'upsertRequest' | 'persistRequestState'>;
     now?: () => number;
 }
 
@@ -73,10 +75,11 @@ export class CodexV4RequestBroker {
             markDelivery: null,
             rejectDelivery: null,
             providerResolved: false,
+            transition: Promise.resolve(),
         };
         this.pending.set(key, pending);
         try {
-            await this.options.mapper.upsertRequest(entity);
+            await this.options.mapper.upsertRequest(entity, 'pending');
         } catch (error) {
             this.pending.delete(key);
             throw error;
@@ -88,29 +91,46 @@ export class CodexV4RequestBroker {
         const key = requestKey(resolution.threadId, resolution.requestId);
         const pending = this.pending.get(key);
         if (!pending) throw new Error('Codex request is no longer pending');
-        if (pending.state !== 'pending') throw new Error('Codex request response is already awaiting delivery');
         const response = validateResponse(pending.method, resolution.response);
-        pending.state = 'responseReady';
-        pending.response = response;
-        pending.deliveryPromise = new Promise<void>((resolve, reject) => {
-            pending.markDelivery = resolve;
-            pending.rejectDelivery = reject;
+        await this.transition(pending, async () => {
+            if (this.pending.get(key) !== pending) {
+                throw new Error('Codex request is no longer pending');
+            }
+            if (pending.state !== 'pending') {
+                throw new Error('Codex request response is already awaiting delivery');
+            }
+            await this.options.mapper.persistRequestState(
+                pending.entity,
+                'responseReady',
+                response,
+            );
+            pending.state = 'responseReady';
+            pending.response = response;
+            pending.deliveryPromise = new Promise<void>((resolve, reject) => {
+                pending.markDelivery = resolve;
+                pending.rejectDelivery = reject;
+            });
+            pending.provideResponse(response);
         });
-        pending.provideResponse(response);
+        if (!pending.deliveryPromise) throw new Error('Codex request delivery was not initialized');
         await pending.deliveryPromise;
         return { providerRequestId: resolution.requestId };
     }
 
-    async recoverPending(requests: readonly CodexRequestEntityV4[]): Promise<number> {
-        for (const request of requests) {
+    async recoverPending(requests: readonly SyncV4PendingProviderRequest[]): Promise<number> {
+        for (const pending of requests) {
             const now = this.now();
+            const outcomeUnknown = pending.state !== 'pending';
+            const request = pending.request;
             await this.options.mapper.upsertRequest({
                 ...request,
                 status: 'error',
-                response: { error: 'providerProcessRestarted' },
+                response: outcomeUnknown
+                    ? { error: 'providerResponseOutcomeUnknown', previousState: pending.state }
+                    : { error: 'providerProcessRestarted' },
                 resolvedAt: now,
                 updatedAt: now,
-            });
+            }, outcomeUnknown ? 'outcomeUnknown' : 'resolved');
         }
         return requests.length;
     }
@@ -127,33 +147,11 @@ export class CodexV4RequestBroker {
     async markProviderResolved(threadId: string, requestId: string): Promise<void> {
         const key = requestKey(threadId, requestId);
         const pending = this.pending.get(key);
-        if (!pending || pending.state === 'settling') return;
-        if (pending.state === 'responseSupplied') {
-            await this.markDelivered(key, pending);
-            return;
-        }
-        if (pending.state === 'responseReady') {
-            pending.providerResolved = true;
-            return;
-        }
-
-        pending.state = 'settling';
-        const error = new Error('Codex provider resolved the request before Happy supplied a response');
-        const now = this.now();
-        const entity: CodexRequestEntityV4 = {
-            ...pending.entity,
-            status: 'resolved',
-            response: null,
-            resolvedAt: now,
-            updatedAt: now,
-        };
-        try {
-            await this.options.mapper.upsertRequest(entity);
-        } finally {
-            this.pending.delete(key);
-            pending.rejectResponse(error);
-            pending.rejectDelivery?.(error);
-        }
+        if (!pending) return;
+        await this.transition(pending, async () => {
+            if (this.pending.get(key) !== pending || pending.state === 'settling') return;
+            await this.markProviderResolvedLocked(key, pending);
+        });
     }
 
     pendingCount(): number {
@@ -177,14 +175,58 @@ export class CodexV4RequestBroker {
         };
     }
 
-    private async markResponseSupplied(key: string, pending: PendingRequest): Promise<void> {
-        if (this.pending.get(key) === pending && pending.state === 'responseReady') {
-            pending.state = 'responseSupplied';
-            if (pending.providerResolved) await this.markDelivered(key, pending);
+    private async markProviderResolvedLocked(
+        key: string,
+        pending: PendingRequest,
+    ): Promise<void> {
+        if (pending.state === 'responseSupplied') {
+            await this.markDeliveredLocked(key, pending);
+            return;
+        }
+        if (pending.state === 'responseReady') {
+            pending.providerResolved = true;
+            return;
+        }
+
+        pending.state = 'settling';
+        const error = new Error('Codex provider resolved the request before Happy supplied a response');
+        const now = this.now();
+        const entity: CodexRequestEntityV4 = {
+            ...pending.entity,
+            status: 'resolved',
+            response: null,
+            resolvedAt: now,
+            updatedAt: now,
+        };
+        try {
+            await this.options.mapper.upsertRequest(entity, 'resolved');
+        } finally {
+            this.pending.delete(key);
+            pending.rejectResponse(error);
+            pending.rejectDelivery?.(error);
         }
     }
 
+    private async markResponseSupplied(key: string, pending: PendingRequest): Promise<void> {
+        await this.transition(pending, async () => {
+            if (this.pending.get(key) !== pending || pending.state !== 'responseReady') return;
+            await this.options.mapper.persistRequestState(
+                pending.entity,
+                'responseSupplied',
+                pending.response,
+            );
+            pending.state = 'responseSupplied';
+            if (pending.providerResolved) await this.markDeliveredLocked(key, pending);
+        });
+    }
+
     private async markDelivered(key: string, pending: PendingRequest): Promise<void> {
+        await this.transition(pending, async () => {
+            await this.markDeliveredLocked(key, pending);
+        });
+    }
+
+    private async markDeliveredLocked(key: string, pending: PendingRequest): Promise<void> {
         if (this.pending.get(key) !== pending || pending.state !== 'responseSupplied') return;
         pending.state = 'settling';
         const now = this.now();
@@ -196,7 +238,7 @@ export class CodexV4RequestBroker {
             updatedAt: now,
         };
         try {
-            await this.options.mapper.upsertRequest(entity);
+            await this.options.mapper.upsertRequest(entity, 'resolved');
             this.pending.delete(key);
             pending.markDelivery?.();
         } catch (error) {
@@ -211,27 +253,56 @@ export class CodexV4RequestBroker {
         pending: PendingRequest,
         reason: 'transportDisconnected' | 'brokerClosed',
     ): Promise<void> {
+        await this.transition(pending, async () => {
+            await this.markAbandonedLocked(key, pending, reason);
+        });
+    }
+
+    private async markAbandonedLocked(
+        key: string,
+        pending: PendingRequest,
+        reason: 'transportDisconnected' | 'brokerClosed',
+    ): Promise<void> {
         if (this.pending.get(key) !== pending || pending.state === 'settling') return;
-        const responseWasSupplied = pending.state === 'responseSupplied' || pending.providerResolved;
+        const responseOutcomeUnknown = pending.state === 'responseReady'
+            || pending.state === 'responseSupplied'
+            || pending.providerResolved;
         pending.state = 'settling';
-        const error = responseWasSupplied
+        const error = responseOutcomeUnknown
             ? new CodexRequestDeliveryUnknownError(reason)
             : new Error(`Codex provider request is unavailable: ${reason}`);
         const now = this.now();
         const entity: CodexRequestEntityV4 = {
             ...pending.entity,
             status: 'error',
-            response: { error: reason },
+            response: responseOutcomeUnknown
+                ? { error: 'providerResponseOutcomeUnknown', reason }
+                : { error: reason },
             resolvedAt: now,
             updatedAt: now,
         };
         try {
-            await this.options.mapper.upsertRequest(entity);
+            await this.options.mapper.upsertRequest(
+                entity,
+                responseOutcomeUnknown ? 'outcomeUnknown' : 'resolved',
+            );
         } finally {
             this.pending.delete(key);
             pending.rejectResponse(error);
             pending.rejectDelivery?.(error);
         }
+    }
+
+    private async transition<T>(
+        pending: PendingRequest,
+        operation: () => Promise<T>,
+    ): Promise<T> {
+        const result = pending.transition.then(operation);
+        pending.transition = result.then(
+            () => undefined,
+            () => undefined,
+        );
+        return await result;
     }
 }
 
@@ -321,7 +392,7 @@ function requestTitle(
     return method === 'mcpServer/elicitation/request' ? optionalString(params.serverName) : null;
 }
 
-function validateResponse(method: CodexServerRequest['method'], response: unknown): unknown {
+function validateResponse(method: CodexServerRequest['method'], response: unknown): JsonValue {
     const value = asRecord(response);
     switch (method) {
         case 'item/commandExecution/requestApproval':
