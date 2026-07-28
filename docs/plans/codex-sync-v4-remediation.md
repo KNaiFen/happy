@@ -65,7 +65,7 @@ migration 文件缺失、drift 检查失败或任一升级路径未验证时，�
 - [x] CORS 显式允许 `Authorization, Content-Type, X-Happy-Client`。
 - [x] 使用稳定的 `/health` relay identity/health 与
   `/v4/capabilities` 协议能力端点。
-- [ ] 创建正式 Prisma migration，并执行 PostgreSQL 空库和旧库升级测试。
+- [x] 创建正式 Prisma migration，并执行 PostgreSQL 空库和旧库升级测试。
 
 ### R2 CLI 持久队列
 
@@ -177,3 +177,9 @@ migration 文件缺失、drift 检查失败或任一升级路径未验证时，�
   改为代理创建、PostgreSQL 双路径验证和 drift 门禁。
 - 2026-07-28：依赖漏洞修复保持 Codium 的 Claude Agent SDK 解析版本不变；
   全面 CI 增加 Agent 与跨组件 Codex 传输场景门禁。
+- 2026-07-28：GitHub run `30330542959` 已通过 PostgreSQL 空库部署、旧库升级、
+  drift、索引和级联门禁，R1 完成。首轮 CI 同时确认 pnpm script 会优先命中
+  Codium 的 `codex 0.130.0`；协议生成门禁改为显式传入全局
+  npm prefix 下的 `codex 0.145.0` binary，不改变 stable-v2 约束。
+  dependency audit job 不启用无依赖安装场景下的 pnpm cache；CI、Smoke
+  Test 和版本构建工作流统一使用 Node 24 runtime 对应的 action 版本。
