@@ -2,10 +2,11 @@ import {
     classifySyncV4Mutations,
     MutationConflictError,
     RevisionConflictError,
+    syncV4MutationContentHash,
 } from "@/app/api/routes/syncV4MutationClassifier";
 import { eventRouter } from "@/app/events/eventRouter";
 import {
-    getMetricsLabelsFromRequest,
+    getSyncV4MetricsLabelsFromRequest,
     syncV4MutationResultsCounter,
     syncV4ProjectionLagHistogram,
     syncV4SnapshotFallbackCounter,
@@ -14,9 +15,14 @@ import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import {
     isSyncV4VersionAtLeast,
-    MAX_SYNC_V4_MUTATIONS_PER_BATCH,
+    MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH,
+    MAX_SYNC_V4_CHANGES_PER_PAGE,
+    MAX_SYNC_V4_CURSOR_LENGTH,
+    MAX_SYNC_V4_DATABASE_INTEGER,
+    MAX_SYNC_V4_RESPONSE_CIPHERTEXT_LENGTH,
+    MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
     SyncMutationBatchV4Schema,
-    SyncMutationV4Schema,
+    syncV4Utf8ByteLength,
 } from "@slopus/happy-wire";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -25,6 +31,8 @@ import { type Fastify } from "../types";
 const JOURNAL_MINIMUM_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
 const JOURNAL_CLEANUP_INTERVAL = 1_024;
+const RESPONSE_FETCH_CHUNK_SIZE = 16;
+const SYNC_V4_MUTATION_BODY_LIMIT = MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH + 1024 * 1024;
 const MINIMUM_HAPPY_CLI_VERSION = "1.4.2";
 const MINIMUM_HAPPY_APP_VERSION = "1.11.4";
 const MINIMUM_CODEX_CLI_VERSION = "0.145.0";
@@ -82,18 +90,18 @@ export function v4CapabilitiesRoutes(app: Fastify): void {
 }
 
 const changesQuerySchema = z.object({
-    after_seq: z.coerce.number().int().min(0).default(0),
-    limit: z.coerce.number().int().min(1).max(500).default(100),
+    after_seq: z.coerce.number().int().min(0).max(MAX_SYNC_V4_DATABASE_INTEGER).default(0),
+    limit: z.coerce.number().int().min(1).max(MAX_SYNC_V4_CHANGES_PER_PAGE).default(100),
 });
 
 const snapshotQuerySchema = z.object({
-    cursor: z.string().min(1).max(512).optional(),
-    limit: z.coerce.number().int().min(1).max(500).default(100),
+    cursor: z.string().min(1).max(MAX_SYNC_V4_CURSOR_LENGTH).optional(),
+    limit: z.coerce.number().int().min(1).max(MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE).default(100),
 });
 
-const mutationsBodySchema = z.object({
-    mutations: z.array(SyncMutationV4Schema).min(1).max(MAX_SYNC_V4_MUTATIONS_PER_BATCH),
-}).strict();
+const sessionParamsSchema = z.object({
+    sessionId: z.string().min(1).max(200),
+});
 
 function encodeSnapshotCursor(highWatermark: number, entityId: string): string {
     return `${highWatermark}:${entityId}`;
@@ -104,7 +112,11 @@ function decodeSnapshotCursor(cursor: string | undefined): { highWatermark: numb
     const separator = cursor.indexOf(":");
     if (separator <= 0 || separator === cursor.length - 1) return null;
     const highWatermark = Number(cursor.slice(0, separator));
-    if (!Number.isSafeInteger(highWatermark) || highWatermark < 0) return null;
+    if (
+        !Number.isSafeInteger(highWatermark)
+        || highWatermark < 0
+        || highWatermark > MAX_SYNC_V4_DATABASE_INTEGER
+    ) return null;
     return { highWatermark, entityId: cursor.slice(separator + 1) };
 }
 
@@ -115,9 +127,49 @@ async function findOwnedSession(sessionId: string, accountId: string) {
     });
 }
 
+interface CiphertextRow {
+    ciphertext: string;
+}
+
+async function collectByteBoundedPage<Row extends CiphertextRow, Cursor>(
+    limit: number,
+    initialCursor: Cursor,
+    fetchRows: (cursor: Cursor, take: number) => Promise<Row[]>,
+    cursorOf: (row: Row) => Cursor,
+): Promise<{ page: Row[]; hasMore: boolean }> {
+    const page: Row[] = [];
+    let cursor = initialCursor;
+    let ciphertextBytes = 0;
+
+    while (page.length < limit) {
+        const remaining = limit - page.length;
+        const take = Math.min(RESPONSE_FETCH_CHUNK_SIZE, remaining + 1);
+        const rows = await fetchRows(cursor, take);
+        if (rows.length === 0) return { page, hasMore: false };
+
+        for (const row of rows) {
+            if (page.length >= limit) return { page, hasMore: true };
+            const rowBytes = syncV4Utf8ByteLength(row.ciphertext);
+            if (rowBytes > MAX_SYNC_V4_RESPONSE_CIPHERTEXT_LENGTH) {
+                throw new Error("Sync v4 stored ciphertext exceeds response limit");
+            }
+            if (page.length > 0 && ciphertextBytes + rowBytes > MAX_SYNC_V4_RESPONSE_CIPHERTEXT_LENGTH) {
+                return { page, hasMore: true };
+            }
+            page.push(row);
+            ciphertextBytes += rowBytes;
+            cursor = cursorOf(row);
+        }
+        if (rows.length < take) return { page, hasMore: false };
+    }
+
+    return { page, hasMore: true };
+}
+
 /**
  * Removes journal rows only after both safety windows have elapsed. Current
- * entity snapshots remain available, so expired cursors can always recover.
+ * entity snapshots remain available, while compact receipts preserve mutation
+ * idempotency after the ciphertext journal payload expires.
  */
 async function pruneMutationJournal(
     sessionId: string,
@@ -129,34 +181,39 @@ async function pruneMutationJournal(
     if (currentCleanupBucket <= previousCleanupBucket) return;
     const maximumPrunableSeq = highWatermark - JOURNAL_MINIMUM_RECENT_RECORDS;
     if (maximumPrunableSeq <= 0) return;
-    await db.sessionMutationV4.deleteMany({
+    await db.sessionMutationV4.updateMany({
         where: {
             sessionId,
             seq: { lte: maximumPrunableSeq },
             createdAt: { lt: new Date(Date.now() - JOURNAL_MINIMUM_AGE_MS) },
+            prunedAt: null,
+        },
+        data: {
+            ciphertext: "",
+            prunedAt: new Date(),
         },
     });
 }
 
 export function v4SessionRoutes(app: Fastify): void {
     app.post("/v4/sessions/:sessionId/mutations", {
-        preHandler: [app.authenticate, requireCompatibleSyncV4Client],
+        bodyLimit: SYNC_V4_MUTATION_BODY_LIMIT,
+        onRequest: [app.authenticate, requireCompatibleSyncV4Client],
         schema: {
-            params: z.object({ sessionId: z.string() }),
-            body: mutationsBodySchema,
+            params: sessionParamsSchema,
+            body: SyncMutationBatchV4Schema,
         },
     }, async (request, reply) => {
         const { sessionId } = request.params;
-        const session = await findOwnedSession(sessionId, request.userId);
-        if (!session) return reply.code(404).send({ error: "Session not found" });
-        const validatedBody = SyncMutationBatchV4Schema.safeParse(request.body);
-        if (!validatedBody.success) {
-            return reply.code(400).send({ error: "Invalid mutation batch" });
-        }
 
         try {
             const result = await inTx(async (tx) => {
-                const mutations = validatedBody.data.mutations;
+                const session = await tx.session.findFirst({
+                    where: { id: sessionId, accountId: request.userId },
+                    select: { id: true, syncV4Seq: true },
+                });
+                if (!session) return null;
+                const mutations = request.body.mutations;
                 const mutationIds = mutations.map((mutation) => mutation.mutationId);
                 const entityIds = [...new Set(mutations.map((mutation) => mutation.entityId))];
                 const existingMutations = await tx.sessionMutationV4.findMany({
@@ -165,7 +222,10 @@ export function v4SessionRoutes(app: Fastify): void {
                 const existingEntities = await tx.sessionEntityV4.findMany({
                     where: { sessionId, entityId: { in: entityIds } },
                 });
-                const mutationsById = new Map(existingMutations.map((mutation) => [mutation.mutationId, mutation]));
+                const mutationsById = new Map(existingMutations.map((mutation) => [mutation.mutationId, {
+                    ...mutation,
+                    contentHash: mutation.contentHash,
+                }]));
                 const entitiesById = new Map(existingEntities.map((entity) => [entity.entityId, {
                     producerId: entity.producerId,
                     entityId: entity.entityId,
@@ -184,6 +244,9 @@ export function v4SessionRoutes(app: Fastify): void {
                 let nextSeq = session.syncV4Seq + 1;
                 let highWatermark = session.syncV4Seq;
                 if (newClassifications.length > 0) {
+                    if (session.syncV4Seq > MAX_SYNC_V4_DATABASE_INTEGER - newClassifications.length) {
+                        throw new Error("Sync v4 sequence space exhausted");
+                    }
                     const updatedSession = await tx.session.update({
                         where: { id: sessionId },
                         data: { syncV4Seq: { increment: newClassifications.length } },
@@ -240,6 +303,7 @@ export function v4SessionRoutes(app: Fastify): void {
                             revision: mutation.revision,
                             op: mutation.op,
                             ciphertext: mutation.ciphertext,
+                            contentHash: syncV4MutationContentHash(mutation),
                             status: classification.status,
                             seq,
                         },
@@ -259,6 +323,7 @@ export function v4SessionRoutes(app: Fastify): void {
                     hasNewMutations: newClassifications.length > 0,
                 };
             });
+            if (!result) return reply.code(404).send({ error: "Session not found" });
 
             if (result.hasNewMutations) {
                 eventRouter.emitEphemeral({
@@ -272,7 +337,7 @@ export function v4SessionRoutes(app: Fastify): void {
                     result.highWatermark,
                 );
             }
-            const metricLabels = getMetricsLabelsFromRequest(request);
+            const metricLabels = getSyncV4MetricsLabelsFromRequest(request);
             for (const acknowledgement of result.acknowledgements) {
                 syncV4MutationResultsCounter.inc({ result: acknowledgement.status, ...metricLabels });
             }
@@ -281,14 +346,14 @@ export function v4SessionRoutes(app: Fastify): void {
             if (error instanceof RevisionConflictError) {
                 syncV4MutationResultsCounter.inc({
                     result: "revision_conflict",
-                    ...getMetricsLabelsFromRequest(request),
+                    ...getSyncV4MetricsLabelsFromRequest(request),
                 });
                 return reply.code(409).send({ error: "revisionConflict", ...error.details });
             }
             if (error instanceof MutationConflictError) {
                 syncV4MutationResultsCounter.inc({
                     result: "mutation_conflict",
-                    ...getMetricsLabelsFromRequest(request),
+                    ...getSyncV4MetricsLabelsFromRequest(request),
                 });
                 return reply.code(409).send({ error: "mutationConflict", mutationId: error.mutationId });
             }
@@ -297,45 +362,83 @@ export function v4SessionRoutes(app: Fastify): void {
     });
 
     app.get("/v4/sessions/:sessionId/changes", {
-        preHandler: [app.authenticate, requireCompatibleSyncV4Client],
+        onRequest: [app.authenticate, requireCompatibleSyncV4Client],
         schema: {
-            params: z.object({ sessionId: z.string() }),
+            params: sessionParamsSchema,
             querystring: changesQuerySchema,
         },
     }, async (request, reply) => {
         const { sessionId } = request.params;
         const { after_seq: afterSeq, limit } = request.query;
-        const session = await findOwnedSession(sessionId, request.userId);
-        if (!session) return reply.code(404).send({ error: "Session not found" });
-
-        const minimum = await db.sessionMutationV4.aggregate({
-            where: { sessionId },
-            _min: { seq: true },
+        const result = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: { id: sessionId, accountId: request.userId },
+                select: { id: true, syncV4Seq: true },
+            });
+            if (!session) return { kind: "notFound" as const };
+            const minimum = await tx.sessionMutationV4.aggregate({
+                where: { sessionId, prunedAt: null },
+                _min: { seq: true },
+            });
+            const minimumSeq = minimum._min.seq;
+            if (afterSeq > session.syncV4Seq) {
+                return { kind: "invalid" as const };
+            }
+            if (afterSeq < session.syncV4Seq && (minimumSeq === null || afterSeq < minimumSeq - 1)) {
+                return {
+                    kind: "snapshotRequired" as const,
+                    reason: "journal_expired" as const,
+                    minimumSeq: minimumSeq ?? session.syncV4Seq + 1,
+                    highWatermark: session.syncV4Seq,
+                };
+            }
+            const { page, hasMore } = await collectByteBoundedPage(
+                limit,
+                afterSeq,
+                (cursor, take) => tx.sessionMutationV4.findMany({
+                    where: {
+                        sessionId,
+                        prunedAt: null,
+                        seq: { gt: cursor, lte: session.syncV4Seq },
+                    },
+                    orderBy: { seq: "asc" },
+                    take,
+                }),
+                (row) => row.seq,
+            );
+            const firstGapIndex = page.findIndex((row, index) => row.seq !== afterSeq + index + 1);
+            if (firstGapIndex >= 0) {
+                return {
+                    kind: "snapshotRequired" as const,
+                    reason: "journal_gap" as const,
+                    minimumSeq: page[firstGapIndex].seq,
+                    highWatermark: session.syncV4Seq,
+                };
+            }
+            return {
+                kind: "ok" as const,
+                page,
+                hasMore,
+                highWatermark: session.syncV4Seq,
+            };
         });
-        const minimumSeq = minimum._min.seq;
-        if (afterSeq > session.syncV4Seq) {
+        if (result.kind === "notFound") return reply.code(404).send({ error: "Session not found" });
+        if (result.kind === "invalid") {
             return reply.code(400).send({ error: "Invalid changes cursor" });
         }
-        const metricLabels = getMetricsLabelsFromRequest(request);
-        syncV4ProjectionLagHistogram.observe(metricLabels, session.syncV4Seq - afterSeq);
-        if (afterSeq < session.syncV4Seq && (minimumSeq === null || afterSeq < minimumSeq - 1)) {
-            syncV4SnapshotFallbackCounter.inc({ reason: "journal_expired", ...metricLabels });
+        const metricLabels = getSyncV4MetricsLabelsFromRequest(request);
+        syncV4ProjectionLagHistogram.observe(metricLabels, result.highWatermark - afterSeq);
+        if (result.kind === "snapshotRequired") {
+            syncV4SnapshotFallbackCounter.inc({ reason: result.reason, ...metricLabels });
             return reply.code(410).send({
                 error: "snapshotRequired",
-                minimumSeq: minimumSeq ?? session.syncV4Seq + 1,
-                highWatermark: session.syncV4Seq,
+                minimumSeq: result.minimumSeq,
+                highWatermark: result.highWatermark,
             });
         }
 
-        const rows = await db.sessionMutationV4.findMany({
-            where: { sessionId, seq: { gt: afterSeq, lte: session.syncV4Seq } },
-            orderBy: { seq: "asc" },
-            take: limit + 1,
-        });
-        const hasMore = rows.length > limit;
-        const page = hasMore ? rows.slice(0, limit) : rows;
         return reply.send({
-            changes: page.map((row) => ({
+            changes: result.page.map((row) => ({
                 mutationId: row.mutationId,
                 producerId: row.producerId,
                 entityId: row.entityId,
@@ -346,15 +449,15 @@ export function v4SessionRoutes(app: Fastify): void {
                 seq: row.seq,
                 createdAt: row.createdAt.getTime(),
             })),
-            hasMore,
-            highWatermark: session.syncV4Seq,
+            hasMore: result.hasMore,
+            highWatermark: result.highWatermark,
         });
     });
 
     app.get("/v4/sessions/:sessionId/snapshot", {
-        preHandler: [app.authenticate, requireCompatibleSyncV4Client],
+        onRequest: [app.authenticate, requireCompatibleSyncV4Client],
         schema: {
-            params: z.object({ sessionId: z.string() }),
+            params: sessionParamsSchema,
             querystring: snapshotQuerySchema,
         },
     }, async (request, reply) => {
@@ -369,17 +472,20 @@ export function v4SessionRoutes(app: Fastify): void {
             return reply.code(400).send({ error: "Invalid snapshot cursor" });
         }
         const highWatermark = decodedCursor?.highWatermark ?? session.syncV4Seq;
-        const rows = await db.sessionEntityV4.findMany({
-            where: {
-                sessionId,
-                updatedSeq: { lte: highWatermark },
-                ...(decodedCursor ? { entityId: { gt: decodedCursor.entityId } } : {}),
-            },
-            orderBy: { entityId: "asc" },
-            take: request.query.limit + 1,
-        });
-        const hasMore = rows.length > request.query.limit;
-        const page = hasMore ? rows.slice(0, request.query.limit) : rows;
+        const { page, hasMore } = await collectByteBoundedPage(
+            request.query.limit,
+            decodedCursor?.entityId ?? "",
+            (cursor, take) => db.sessionEntityV4.findMany({
+                where: {
+                    sessionId,
+                    updatedSeq: { lte: highWatermark },
+                    ...(cursor ? { entityId: { gt: cursor } } : {}),
+                },
+                orderBy: { entityId: "asc" },
+                take,
+            }),
+            (row) => row.entityId,
+        );
         return reply.send({
             entities: page.map((row) => ({
                 producerId: row.producerId,

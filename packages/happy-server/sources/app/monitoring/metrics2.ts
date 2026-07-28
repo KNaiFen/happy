@@ -16,6 +16,20 @@ interface ClientLabels {
     client_type: string;
 }
 
+interface SyncV4ClientLabels {
+    client_type: string;
+}
+
+const syncV4ClientTypes = new Set([
+    'cli-coding-session',
+    'ios',
+    'android',
+    'web',
+    'desktop',
+    'macos',
+    'windows',
+]);
+
 function parseClientLabels(raw: string | undefined | null): ClientLabels {
     if (!raw) return { client: 'unknown', client_type: 'unknown' };
     const type = raw.split('/')[0].toLowerCase();
@@ -36,6 +50,14 @@ export function getMetricsLabelsFromSocket(socket: Socket): ClientLabels {
  */
 export function getMetricsLabelsFromRequest(request: { headers: Record<string, string | string[] | undefined> }): ClientLabels {
     return parseClientLabels(request.headers['x-happy-client'] as string);
+}
+
+export function getSyncV4MetricsLabelsFromRequest(
+    request: { headers: Record<string, string | string[] | undefined> },
+): SyncV4ClientLabels {
+    const raw = request.headers['x-happy-client'];
+    const clientType = typeof raw === 'string' ? raw.split('/')[0].toLowerCase() : 'unknown';
+    return { client_type: syncV4ClientTypes.has(clientType) ? clientType : 'unknown' };
 }
 
 // Application metrics
@@ -97,22 +119,22 @@ export const httpRequestDurationHistogram = new Histogram({
 export const syncV4MutationResultsCounter = new Counter({
     name: 'sync_v4_mutation_results_total',
     help: 'Total Codex Sync v4 mutation outcomes',
-    labelNames: ['result', 'client', 'client_type'] as const,
+    labelNames: ['result', 'client_type'] as const,
     registers: [register]
 });
 
 export const syncV4ProjectionLagHistogram = new Histogram({
     name: 'sync_v4_projection_lag_mutations',
     help: 'Codex Sync v4 mutations between a receive cursor and the server watermark',
-    labelNames: ['client', 'client_type'] as const,
+    labelNames: ['client_type'] as const,
     buckets: [0, 1, 5, 10, 50, 100, 500, 1_000, 10_000, 100_000],
     registers: [register]
 });
 
 export const syncV4SnapshotFallbackCounter = new Counter({
     name: 'sync_v4_snapshot_fallback_total',
-    help: 'Total Codex Sync v4 snapshot fallbacks caused by expired journals',
-    labelNames: ['reason', 'client', 'client_type'] as const,
+    help: 'Total Codex Sync v4 snapshot fallbacks caused by journal recovery conditions',
+    labelNames: ['reason', 'client_type'] as const,
     registers: [register]
 });
 

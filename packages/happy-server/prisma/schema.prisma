@@ -132,7 +132,6 @@ model SessionEntityV4 {
     updatedAt   DateTime @updatedAt
 
     @@unique([sessionId, entityId])
-    @@index([sessionId, entityId])
     @@index([sessionId, updatedSeq])
 }
 
@@ -147,13 +146,16 @@ model SessionMutationV4 {
     revision    Int
     op          String
     ciphertext  String
+    contentHash String
     status      String
     seq         Int
     createdAt   DateTime @default(now())
+    prunedAt    DateTime?
 
     @@unique([sessionId, mutationId])
     @@unique([sessionId, seq])
     @@index([sessionId, createdAt])
+    @@index([sessionId, prunedAt, seq])
 }
 
 model SessionMessage {

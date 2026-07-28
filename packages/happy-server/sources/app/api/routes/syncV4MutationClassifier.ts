@@ -2,6 +2,7 @@ import {
     type SyncAckStatusV4,
     type SyncMutationV4,
 } from "@slopus/happy-wire";
+import { createHash } from "node:crypto";
 
 interface ComparableSyncV4Mutation {
     producerId: string;
@@ -10,6 +11,7 @@ interface ComparableSyncV4Mutation {
     revision: number;
     op: string;
     ciphertext: string;
+    contentHash?: string;
 }
 
 export interface StoredSyncV4Mutation extends ComparableSyncV4Mutation {
@@ -58,12 +60,26 @@ function hasSameMutationContent(
     left: ComparableSyncV4Mutation,
     right: ComparableSyncV4Mutation,
 ): boolean {
+    if (left.contentHash) {
+        return left.contentHash === syncV4MutationContentHash(right);
+    }
     return left.producerId === right.producerId
         && left.entityId === right.entityId
         && left.entityType === right.entityType
         && left.revision === right.revision
         && left.op === right.op
         && left.ciphertext === right.ciphertext;
+}
+
+export function syncV4MutationContentHash(mutation: ComparableSyncV4Mutation): string {
+    return createHash("sha256").update(JSON.stringify([
+        mutation.producerId,
+        mutation.entityId,
+        mutation.entityType,
+        mutation.revision,
+        mutation.op,
+        mutation.ciphertext,
+    ])).digest("hex");
 }
 
 /**

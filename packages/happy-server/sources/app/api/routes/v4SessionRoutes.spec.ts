@@ -1,6 +1,10 @@
 import fastify from "fastify";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+    MAX_SYNC_V4_CIPHERTEXT_LENGTH,
+    MAX_SYNC_V4_RESPONSE_CIPHERTEXT_LENGTH,
+} from "@slopus/happy-wire";
 import { type Fastify } from "../types";
 
 type SessionRecord = {
@@ -19,9 +23,11 @@ type MutationRecord = {
     revision: number;
     op: string;
     ciphertext: string;
+    contentHash: string;
     status: string;
     seq: number;
     createdAt: Date;
+    prunedAt: Date | null;
 };
 
 type EntityRecord = {
@@ -97,6 +103,9 @@ const {
 
     const mutationFindMany = vi.fn(async (args: any) => {
         let rows = state.mutations.filter((mutation) => mutation.sessionId === args?.where?.sessionId);
+        if (args?.where?.prunedAt === null) {
+            rows = rows.filter((mutation) => mutation.prunedAt === null);
+        }
         if (Array.isArray(args?.where?.mutationId?.in)) {
             const ids = new Set(args.where.mutationId.in);
             rows = rows.filter((mutation) => ids.has(mutation.mutationId));
@@ -117,17 +126,32 @@ const {
             id: `mutation-row-${state.nextMutationId++}`,
             ...args.data,
             createdAt: new Date(state.nowMs++),
+            prunedAt: args.data.prunedAt ?? null,
         };
         state.mutations.push(row);
         return selectFields(row as unknown as Record<string, unknown>, args?.select);
     });
 
     const mutationAggregate = vi.fn(async (args: any) => {
-        const rows = state.mutations.filter((mutation) => mutation.sessionId === args?.where?.sessionId);
+        let rows = state.mutations.filter((mutation) => mutation.sessionId === args?.where?.sessionId);
+        if (args?.where?.prunedAt === null) {
+            rows = rows.filter((mutation) => mutation.prunedAt === null);
+        }
         return { _min: { seq: rows.length > 0 ? Math.min(...rows.map((mutation) => mutation.seq)) : null } };
     });
 
-    const mutationDeleteMany = vi.fn(async () => ({ count: 0 }));
+    const mutationUpdateMany = vi.fn(async (args: any) => {
+        let count = 0;
+        for (const mutation of state.mutations) {
+            if (mutation.sessionId !== args?.where?.sessionId) continue;
+            if (typeof args?.where?.seq?.lte === "number" && mutation.seq > args.where.seq.lte) continue;
+            if (args?.where?.createdAt?.lt instanceof Date && mutation.createdAt >= args.where.createdAt.lt) continue;
+            if (args?.where?.prunedAt === null && mutation.prunedAt !== null) continue;
+            Object.assign(mutation, args.data);
+            count += 1;
+        }
+        return { count };
+    });
 
     const entityFindMany = vi.fn(async (args: any) => {
         let rows = state.entities.filter((entity) => entity.sessionId === args?.where?.sessionId);
@@ -169,11 +193,11 @@ const {
     });
 
     const txClient = {
-        session: { update: sessionUpdate },
+        session: { findFirst: sessionFindFirst, update: sessionUpdate },
         sessionMutationV4: {
             findMany: mutationFindMany,
             create: mutationCreate,
-            deleteMany: mutationDeleteMany,
+            aggregate: mutationAggregate,
         },
         sessionEntityV4: { findMany: entityFindMany, upsert: entityUpsert },
     };
@@ -184,7 +208,7 @@ const {
             findMany: mutationFindMany,
             create: mutationCreate,
             aggregate: mutationAggregate,
-            deleteMany: mutationDeleteMany,
+            updateMany: mutationUpdateMany,
         },
         sessionEntityV4: { findMany: entityFindMany, upsert: entityUpsert },
         $transaction: vi.fn(async (operation: any) => operation(txClient)),
@@ -208,6 +232,7 @@ vi.mock("@/app/events/eventRouter", () => ({
 }));
 vi.mock("@/app/monitoring/metrics2", () => ({
     getMetricsLabelsFromRequest: () => ({ client: "test/1.0.0", client_type: "test" }),
+    getSyncV4MetricsLabelsFromRequest: () => ({ client_type: "test" }),
     syncV4MutationResultsCounter: { inc: mutationMetricMock },
     syncV4ProjectionLagHistogram: { observe: projectionLagMetricMock },
     syncV4SnapshotFallbackCounter: { inc: snapshotFallbackMetricMock },
@@ -292,6 +317,19 @@ describe("v4SessionRoutes", () => {
         });
     });
 
+    it("rejects an unauthenticated oversized mutation body before parsing it", async () => {
+        app = await createApp();
+        const response = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "content-type": "application/json" },
+            payload: JSON.stringify("x".repeat(6 * 1024 * 1024)),
+        });
+
+        expect(response.statusCode).toBe(401);
+        expect(response.json()).toEqual({ error: "Unauthorized" });
+    });
+
     let app: Fastify;
 
     beforeEach(() => {
@@ -300,7 +338,7 @@ describe("v4SessionRoutes", () => {
         mutationMetricMock.mockClear();
         projectionLagMetricMock.mockClear();
         snapshotFallbackMetricMock.mockClear();
-        dbMock.sessionMutationV4.deleteMany.mockClear();
+        dbMock.sessionMutationV4.updateMany.mockClear();
     });
 
     afterEach(async () => {
@@ -349,7 +387,6 @@ describe("v4SessionRoutes", () => {
         }));
         expect(mutationMetricMock).toHaveBeenCalledWith({
             result: "accepted",
-            client: "test/1.0.0",
             client_type: "test",
         });
     });
@@ -375,10 +412,18 @@ describe("v4SessionRoutes", () => {
         expect(mutationMetricMock).toHaveBeenLastCalledWith(expect.objectContaining({ result: "duplicate" }));
     });
 
-    it("prunes after a batch crosses a cleanup boundary without landing on it", async () => {
+    it("prunes payloads but retains mutation receipts after crossing a cleanup boundary", async () => {
         seedSession("session-1", "user-1");
-        state.sessions[0].syncV4Seq = 100_351;
         app = await createApp();
+        await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [mutation] },
+        });
+        state.mutations[0].createdAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+        const retainedContentHash = state.mutations[0].contentHash;
+        state.sessions[0].syncV4Seq = 100_351;
 
         const response = await app.inject({
             method: "POST",
@@ -386,21 +431,57 @@ describe("v4SessionRoutes", () => {
             headers: { "x-user-id": "user-1" },
             payload: {
                 mutations: [
-                    mutation,
                     { ...mutation, mutationId: "mutation-2", entityId: "opaque-entity-2" },
+                    { ...mutation, mutationId: "mutation-3", entityId: "opaque-entity-3" },
                 ],
             },
         });
 
         expect(response.statusCode).toBe(200);
         expect(state.sessions[0].syncV4Seq).toBe(100_353);
-        expect(dbMock.sessionMutationV4.deleteMany).toHaveBeenCalledWith({
+        expect(dbMock.sessionMutationV4.updateMany).toHaveBeenCalledWith({
             where: {
                 sessionId: "session-1",
                 seq: { lte: 353 },
                 createdAt: { lt: expect.any(Date) },
+                prunedAt: null,
             },
+            data: { ciphertext: "", prunedAt: expect.any(Date) },
         });
+        expect(state.mutations[0]).toMatchObject({
+            mutationId: "mutation-1",
+            ciphertext: "",
+            contentHash: retainedContentHash,
+            prunedAt: expect.any(Date),
+        });
+    });
+
+    it("deduplicates a pruned mutation receipt and rejects changed content", async () => {
+        seedSession("session-1", "user-1");
+        app = await createApp();
+        const request = {
+            method: "POST" as const,
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [mutation] },
+        };
+        await app.inject(request);
+        state.mutations[0].ciphertext = "";
+        state.mutations[0].prunedAt = new Date();
+
+        const duplicate = await app.inject(request);
+        expect(duplicate.statusCode).toBe(200);
+        expect(duplicate.json().acknowledgements).toEqual([
+            { mutationId: "mutation-1", seq: 1, revision: 1, status: "duplicate" },
+        ]);
+
+        const conflict = await app.inject({
+            ...request,
+            payload: { mutations: [{ ...mutation, ciphertext: "changed" }] },
+        });
+        expect(conflict.statusCode).toBe(409);
+        expect(conflict.json()).toEqual({ error: "mutationConflict", mutationId: "mutation-1" });
+        expect(state.mutations).toHaveLength(1);
     });
 
     it("rejects duplicate ids in a batch and conflicting mutation retries", async () => {
@@ -575,7 +656,7 @@ describe("v4SessionRoutes", () => {
             changes: [{ mutationId: "mutation-1", seq: 1 }],
         });
         expect(projectionLagMetricMock).toHaveBeenCalledWith(
-            { client: "test/1.0.0", client_type: "test" },
+            { client_type: "test" },
             2,
         );
 
@@ -585,6 +666,75 @@ describe("v4SessionRoutes", () => {
             headers: { "x-user-id": "user-2" },
         });
         expect(wrongOwner.statusCode).toBe(404);
+    });
+
+    it("bounds changes and snapshot pages by aggregate ciphertext bytes", async () => {
+        seedSession("session-1", "user-1");
+        const ciphertext = "x".repeat(MAX_SYNC_V4_CIPHERTEXT_LENGTH);
+        const createdAt = new Date(state.nowMs);
+        for (let index = 1; index <= 17; index += 1) {
+            const suffix = String(index).padStart(2, "0");
+            const entityId = `opaque-entity-${suffix}`;
+            state.mutations.push({
+                id: `mutation-row-${suffix}`,
+                sessionId: "session-1",
+                mutationId: `mutation-${suffix}`,
+                producerId: "producer-1",
+                entityId,
+                entityType: "codex.part",
+                revision: 1,
+                op: "upsert",
+                ciphertext,
+                contentHash: `content-hash-${suffix}`,
+                status: "accepted",
+                seq: index,
+                createdAt,
+                prunedAt: null,
+            });
+            state.entities.push({
+                id: `entity-row-${suffix}`,
+                sessionId: "session-1",
+                producerId: "producer-1",
+                entityId,
+                entityType: "codex.part",
+                revision: 1,
+                op: "upsert",
+                ciphertext,
+                updatedSeq: index,
+                createdAt,
+                updatedAt: createdAt,
+            });
+        }
+        state.sessions[0].syncV4Seq = 17;
+        app = await createApp();
+
+        const changes = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0&limit=100",
+            headers: { "x-user-id": "user-1" },
+        });
+        const changesBody = changes.json();
+        expect(changes.statusCode).toBe(200);
+        expect(changesBody.changes).toHaveLength(16);
+        expect(changesBody.changes.reduce(
+            (total: number, change: { ciphertext: string }) => total + change.ciphertext.length,
+            0,
+        )).toBe(MAX_SYNC_V4_RESPONSE_CIPHERTEXT_LENGTH);
+        expect(changesBody.hasMore).toBe(true);
+
+        const snapshot = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/snapshot?limit=100",
+            headers: { "x-user-id": "user-1" },
+        });
+        const snapshotBody = snapshot.json();
+        expect(snapshot.statusCode).toBe(200);
+        expect(snapshotBody.entities).toHaveLength(16);
+        expect(snapshotBody.entities.reduce(
+            (total: number, entity: { ciphertext: string }) => total + entity.ciphertext.length,
+            0,
+        )).toBe(MAX_SYNC_V4_RESPONSE_CIPHERTEXT_LENGTH);
+        expect(snapshotBody.nextCursor).not.toBeNull();
     });
 
     it("does not return a concurrent mutation beyond the response watermark", async () => {
@@ -642,7 +792,6 @@ describe("v4SessionRoutes", () => {
         expect(expired.json()).toEqual({ error: "snapshotRequired", minimumSeq: 2, highWatermark: 2 });
         expect(snapshotFallbackMetricMock).toHaveBeenCalledWith({
             reason: "journal_expired",
-            client: "test/1.0.0",
             client_type: "test",
         });
 
@@ -654,6 +803,41 @@ describe("v4SessionRoutes", () => {
         });
         expect(fullyPruned.statusCode).toBe(410);
         expect(fullyPruned.json()).toEqual({ error: "snapshotRequired", minimumSeq: 3, highWatermark: 2 });
+    });
+
+    it("requires a snapshot when a retained journal page contains an internal sequence gap", async () => {
+        seedSession("session-1", "user-1");
+        app = await createApp();
+        await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: {
+                mutations: [
+                    mutation,
+                    { ...mutation, mutationId: "mutation-2", entityId: "opaque-entity-2" },
+                    { ...mutation, mutationId: "mutation-3", entityId: "opaque-entity-3" },
+                ],
+            },
+        });
+        state.mutations.splice(1, 1);
+
+        const response = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(response.statusCode).toBe(410);
+        expect(response.json()).toEqual({
+            error: "snapshotRequired",
+            minimumSeq: 3,
+            highWatermark: 3,
+        });
+        expect(snapshotFallbackMetricMock).toHaveBeenCalledWith({
+            reason: "journal_gap",
+            client_type: "test",
+        });
     });
 
     it("paginates a stable snapshot and rejects future watermarks", async () => {

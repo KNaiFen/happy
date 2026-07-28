@@ -29,37 +29,41 @@
 8. v4 发布开关只有在数据库、四包测试、协议模拟、规模测试和云端 CI
    全部通过后才能启用。
 
-## 不可自动完成的人工门禁
+## Prisma migration 授权与门禁
 
-`packages/happy-server/CLAUDE.md` 明确禁止代理创建 Prisma migration。
-因此代理负责：
+用户已于 2026-07-28 明确授权本轮代理创建正式 Prisma migration，
+覆盖 `packages/happy-server/CLAUDE.md` 中“只能由人工创建 migration”的
+项目默认限制。本轮必须：
 
+- 创建 `Session.syncV4Seq`、`SessionEntityV4` 和
+  `SessionMutationV4` 的正式 additive migration；
 - 校验 schema 与 migration 的差异；
-- 提供 migration 所需模型、索引和约束清单；
-- 增加真实升级和空库部署测试；
-- 在人工 migration 到位后验证 `prisma migrate deploy`。
+- 审查全部索引、唯一约束、外键和删除行为；
+- 增加真实旧库升级与空库部署测试；
+- 在 PostgreSQL 上验证 `prisma migrate deploy`，不得仅依赖生成的
+  Prisma Client 或 PGlite。
 
-人工负责创建并审查
-`Session.syncV4Seq`、`SessionEntityV4` 和 `SessionMutationV4` 的正式
-Prisma migration。该文件缺失时，发布门禁必须失败。
+migration 文件缺失、drift 检查失败或任一升级路径未验证时，发布门禁
+仍必须失败。
 
 ## 整改工作流
 
 ### R1 Wire 与 Server
 
-- [ ] Sync v4 POST 路由使用约 5 MiB 独立 `bodyLimit`。
-- [ ] 认证和版本门禁在 `onRequest` 执行，先于 body 解析。
-- [ ] Wire 在字符串长度超限后不再执行完整 UTF-8 编码。
-- [ ] ACK、changes、snapshot 响应限制条数和聚合密文字节。
-- [ ] snapshot/changes 按“条数或字节先到”分页，transport 设置响应上限。
-- [ ] seq/revision/watermark 与数据库整数域一致。
-- [ ] 分页 schema 校验 watermark、连续性、游标长度和空页不变量。
-- [ ] journal payload 可清理，但紧凑 mutation receipt 长期保留幂等信息。
-- [ ] prune 与 410 检查使用一致数据库快照，或返回页后验证连续性。
-- [ ] Prometheus 标签只使用有界 client type/version bucket。
-- [ ] CORS 显式允许 `Authorization, Content-Type, X-Happy-Client`。
-- [ ] 增加稳定的 relay identity/health/capabilities endpoint。
-- [ ] 人工 Prisma migration 到位后执行空库和旧库升级测试。
+- [x] Sync v4 POST 路由使用约 5 MiB 独立 `bodyLimit`。
+- [x] 认证和版本门禁在 `onRequest` 执行，先于 body 解析。
+- [x] Wire 在字符串长度超限后不再执行完整 UTF-8 编码。
+- [x] ACK、changes、snapshot 响应限制条数和聚合密文字节。
+- [x] snapshot/changes 按“条数或字节先到”分页，transport 设置响应上限。
+- [x] seq/revision/watermark 与数据库整数域一致。
+- [x] 分页 schema 校验 watermark、连续性、游标长度和空页不变量。
+- [x] journal payload 可清理，但紧凑 mutation receipt 长期保留幂等信息。
+- [x] prune 与 410 检查使用一致数据库快照，或返回页后验证连续性。
+- [x] Prometheus 标签只使用有界 client type/version bucket。
+- [x] CORS 显式允许 `Authorization, Content-Type, X-Happy-Client`。
+- [x] 使用稳定的 `/health` relay identity/health 与
+  `/v4/capabilities` 协议能力端点。
+- [ ] 创建正式 Prisma migration，并执行 PostgreSQL 空库和旧库升级测试。
 
 ### R2 CLI 持久队列
 
@@ -164,3 +168,5 @@ Prisma migration。该文件缺失时，发布门禁必须失败。
 
 - 2026-07-28：建立整改基线；锁定可信网络 HTTP、Web HTTPS/localhost 和
   stable-v2-only 决策。
+- 2026-07-28：用户明确授权代理创建正式 Prisma migration；将原人工门禁
+  改为代理创建、PostgreSQL 双路径验证和 drift 门禁。
