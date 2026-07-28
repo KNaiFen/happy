@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 export interface CodexCliVersion {
     major: number;
@@ -11,6 +11,8 @@ export const MINIMUM_CODEX_CLI_VERSION: CodexCliVersion = {
     minor: 145,
     patch: 0,
 };
+
+export const CODEX_CLI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
 export function parseCodexCliVersion(output: string): CodexCliVersion | null {
     const match = output.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/);
@@ -25,9 +27,13 @@ export function parseCodexCliVersion(output: string): CodexCliVersion | null {
 
 export function readCodexCliVersion(): CodexCliVersion | null {
     try {
-        const output = execSync('codex --version', {
+        const output = execFileSync('codex', ['--version'], {
             encoding: 'utf8',
             stdio: 'pipe',
+            timeout: CODEX_CLI_VERSION_PROBE_TIMEOUT_MS,
+            killSignal: 'SIGKILL',
+            maxBuffer: 64 * 1024,
+            shell: process.platform === 'win32',
             windowsHide: true,
         });
         return parseCodexCliVersion(output.trim());

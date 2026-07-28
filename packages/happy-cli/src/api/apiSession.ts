@@ -507,7 +507,7 @@ export class ApiSessionClient extends EventEmitter {
         const headers: Record<string, string> = {
             'Content-Type': 'application/octet-stream',
         };
-        if (upload.uploadUrl.startsWith(configuration.serverUrl)) {
+        if (hasSameOrigin(upload.uploadUrl, configuration.serverUrl)) {
             headers.Authorization = `Bearer ${this.token}`;
         }
 
@@ -557,7 +557,7 @@ export class ApiSessionClient extends EventEmitter {
             throw new Error('request-download returned no downloadUrl');
         }
 
-        const isServerUrl = downloadUrl.startsWith(configuration.serverUrl);
+        const isServerUrl = hasSameOrigin(downloadUrl, configuration.serverUrl);
         const headers: Record<string, string> = {};
         if (isServerUrl) {
             headers['Authorization'] = `Bearer ${this.token}`;
@@ -1100,5 +1100,13 @@ export class ApiSessionClient extends EventEmitter {
             logger.debug('[API] Network up + lid open — reconnecting in 1s');
             setTimeout(() => { if (!this.socket.connected) this.socket.connect() }, 1000);
         }
+    }
+}
+
+function hasSameOrigin(candidateUrl: string, serverUrl: string): boolean {
+    try {
+        return new URL(candidateUrl).origin === new URL(serverUrl).origin;
+    } catch {
+        return false;
     }
 }

@@ -88,7 +88,7 @@ function handleMessage(message) {
 function scheduleAction(action, incoming) {
     if (!action || typeof action !== 'object') return;
     const repeat = boundedInteger(action.repeat, 1, 1_000, 1);
-    const delayMs = boundedInteger(action.delayMs, 0, 60_000, 0);
+    const delayMs = boundedInteger(action.delayMs, 0, 15 * 60_000, 0);
     const intervalMs = boundedInteger(action.intervalMs, 0, 60_000, 0);
     for (let index = 0; index < repeat; index += 1) {
         schedule(delayMs + index * intervalMs, () => executeAction(action, incoming));
@@ -357,8 +357,8 @@ function validateStableV2Message(message) {
             if (!params.capabilities || typeof params.capabilities !== 'object') {
                 return 'initialize.capabilities must be an object or null';
             }
-            if (typeof params.capabilities.experimentalApi !== 'boolean') {
-                return 'initialize.capabilities.experimentalApi is required';
+            if (params.capabilities.experimentalApi !== false) {
+                return 'strict stable-v2 requires initialize.capabilities.experimentalApi=false';
             }
             if (typeof params.capabilities.requestAttestation !== 'boolean') {
                 return 'initialize.capabilities.requestAttestation is required';

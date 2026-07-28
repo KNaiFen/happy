@@ -372,7 +372,18 @@ export const en = {
         failedToConnectToServer: 'Failed to connect to server',
         currentlyUsingCustomServer: 'Currently using custom server',
         customServerUrlLabel: 'Custom Server URL',
-        advancedFeatureFooter: "This is an advanced feature. Only change the server if you know what you're doing. You will need to log out and log in again after changing servers."
+        advancedFeatureFooter: "This is an advanced feature. Only change the server if you know what you're doing. You will need to log out and log in again after changing servers.",
+        allowInsecureHttp: 'Allow insecure HTTP',
+        allowInsecureHttpSubtitle: 'Trusted networks only. HTTPS remains recommended.',
+        webHttpLocalhostOnly: 'Web browsers only allow HTTP relays on localhost. Use HTTPS for remote servers.',
+        insecureHttpConfirmTitle: 'Enable insecure HTTP?',
+        insecureHttpConfirmBody: 'Only continue on a network you trust. An active attacker can steal your token, forge acknowledgements, impersonate the server, and observe transport metadata. End-to-end encryption does not prevent these attacks.',
+        enableInsecureHttp: 'Enable HTTP',
+        httpOrHttpsOnly: 'Server URL must use HTTP or HTTPS.',
+        urlCredentialsNotAllowed: 'Server URL cannot contain a username or password.',
+        urlQueryNotAllowed: 'Server URL cannot contain a query string.',
+        urlFragmentNotAllowed: 'Server URL cannot contain a fragment.',
+        enableInsecureHttpFirst: 'Enable insecure HTTP before using this server.',
     },
 
     sessionInfo: {

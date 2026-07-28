@@ -620,6 +620,55 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(decryptBlob(new Uint8Array(uploadBody), blobKey)).toEqual(pngBytes);
     });
 
+    it('does not send the bearer token to a lookalike attachment upload origin', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        mockAxiosPost.mockResolvedValueOnce({
+            data: {
+                ref: 'sessions/test-session-id/attachments/lookalike.enc',
+                uploadUrl: 'https://server.test.evil.example/upload',
+                method: 'PUT',
+            },
+        });
+        mockAxiosPut.mockResolvedValueOnce({ data: { ok: true } });
+
+        await client.uploadLocalImageAttachmentEnvelope({
+            data: new Uint8Array([1, 2, 3]),
+            mimeType: 'image/png',
+            name: 'lookalike.png',
+        });
+
+        expect(mockAxiosPut).toHaveBeenCalledWith(
+            'https://server.test.evil.example/upload',
+            expect.any(Buffer),
+            expect.objectContaining({
+                headers: {
+                    'Content-Type': 'application/octet-stream',
+                },
+            }),
+        );
+    });
+
+    it('does not send the bearer token to a lookalike attachment download origin', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        mockAxiosPost.mockResolvedValueOnce({
+            data: {
+                downloadUrl: 'https://server.test.evil.example/download',
+            },
+        });
+        mockAxiosGet.mockResolvedValueOnce({
+            data: new Uint8Array([1, 2, 3]).buffer,
+        });
+
+        await client.downloadAttachment('attachment-ref');
+
+        expect(mockAxiosGet).toHaveBeenCalledWith(
+            'https://server.test.evil.example/download',
+            expect.objectContaining({
+                headers: {},
+            }),
+        );
+    });
+
     it('sends session protocol messages through enqueueMessage with session envelope', async () => {
         const client = new ApiSessionClient('fake-token', session);
         mockAxiosPost.mockResolvedValueOnce({

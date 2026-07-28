@@ -99,12 +99,14 @@ export default {
                 //   addresses (e.g. self-hosted server at 192.168.x.y) without
                 //   forcing TLS. Production cloud server is HTTPS, so the
                 //   default policy still applies there.
-                // - In dev/preview only, allow arbitrary HTTP loads so a
-                //   developer pointing the app at their machine doesn't have
-                //   to ship a TLS cert just to test attachment uploads.
-                NSAppTransportSecurity: variant === 'production'
-                    ? { NSAllowsLocalNetworking: true }
-                    : { NSAllowsLocalNetworking: true, NSAllowsArbitraryLoads: true }
+                // The OS transport permission is intentionally broad because
+                // a trusted relay can use any LAN hostname or IP. The App
+                // still requires the per-install allowInsecureHttp opt-in and
+                // validates the exact configured relay origin at runtime.
+                NSAppTransportSecurity: {
+                    NSAllowsLocalNetworking: true,
+                    NSAllowsArbitraryLoads: true,
+                }
             },
             ...(variant === 'production'
                 ? { associatedDomains: ["applinks:app.happy.engineering"] }
@@ -112,6 +114,9 @@ export default {
         },
         android: {
             ...(isLocalRelease ? { versionCode: androidVersionCode } : {}),
+            // Runtime policy remains default-deny and requires the explicit
+            // per-install allowInsecureHttp confirmation.
+            usesCleartextTraffic: true,
             adaptiveIcon: {
                 foregroundImage: "./sources/assets/images/icon-adaptive.png",
                 monochromeImage: "./sources/assets/images/icon-monochrome.png",

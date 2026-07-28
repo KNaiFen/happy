@@ -359,7 +359,18 @@ export const ja: TranslationStructure = {
         failedToConnectToServer: 'サーバーへの接続に失敗しました',
         currentlyUsingCustomServer: '現在カスタムサーバーを使用中',
         customServerUrlLabel: 'カスタムサーバーURL',
-        advancedFeatureFooter: "これは高度な機能です。何をしているか理解している場合のみサーバーを変更してください。サーバー変更後は再度ログインが必要です。"
+        advancedFeatureFooter: "これは高度な機能です。何をしているか理解している場合のみサーバーを変更してください。サーバー変更後は再度ログインが必要です。",
+        allowInsecureHttp: '安全でない HTTP を許可',
+        allowInsecureHttpSubtitle: '信頼できるネットワーク専用です。HTTPS を推奨します。',
+        webHttpLocalhostOnly: 'Web ブラウザーで HTTP リレーを使用できるのは localhost のみです。リモートサーバーには HTTPS を使用してください。',
+        insecureHttpConfirmTitle: '安全でない HTTP を有効にしますか？',
+        insecureHttpConfirmBody: '信頼できるネットワークでのみ続行してください。能動的な攻撃者はトークンの窃取、確認応答の偽造、サーバーのなりすまし、転送メタデータの観察が可能です。エンドツーエンド暗号化ではこれらを防げません。',
+        enableInsecureHttp: 'HTTP を有効化',
+        httpOrHttpsOnly: 'サーバー URL は HTTP または HTTPS を使用する必要があります。',
+        urlCredentialsNotAllowed: 'サーバー URL にユーザー名やパスワードを含めることはできません。',
+        urlQueryNotAllowed: 'サーバー URL にクエリ文字列を含めることはできません。',
+        urlFragmentNotAllowed: 'サーバー URL にフラグメントを含めることはできません。',
+        enableInsecureHttpFirst: 'このサーバーを使用する前に、安全でない HTTP を有効にしてください。',
     },
 
     sessionInfo: {

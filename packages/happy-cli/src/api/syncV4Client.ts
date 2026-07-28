@@ -11,6 +11,7 @@ import {
     CodexRequestEntityV4Schema,
     MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH,
     MAX_SYNC_V4_MUTATIONS_PER_BATCH,
+    MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
     SyncChangesResponseV4Schema,
     SyncMutationBatchResponseV4Schema,
     SyncMutationBatchV4Schema,
@@ -50,7 +51,7 @@ import {
 } from "./syncV4Journal";
 
 const CHANGES_PAGE_SIZE = 100;
-const SNAPSHOT_PAGE_SIZE = 500;
+const SNAPSHOT_PAGE_SIZE = MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const BACKGROUND_OUTBOUND_BATCH_BUDGET = 16;
 const COMPACTION_CHECK_BATCH_INTERVAL = 16;

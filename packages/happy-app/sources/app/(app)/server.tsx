@@ -1,16 +1,33 @@
 import React, { useState } from 'react';
 import { View, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
-import { Stack, useRouter } from 'expo-router';
+import { Stack } from 'expo-router';
 import { Text } from '@/components/StyledText';
 import { Typography } from '@/constants/Typography';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { RoundButton } from '@/components/RoundButton';
+import { Item } from '@/components/Item';
+import { Switch } from '@/components/Switch';
 import { Modal } from '@/modal';
 import { layout } from '@/components/layout';
 import { t } from '@/text';
-import { getServerUrl, setServerUrl, validateServerUrl, getServerInfo } from '@/sync/serverConfig';
+import {
+    getAllowInsecureHttp,
+    getServerUrl,
+    getServerInfo,
+    setAllowInsecureHttp,
+    setServerUrl,
+    validateServerUrl,
+    type ServerUrlValidation,
+} from '@/sync/serverConfig';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { isTauri } from '@/utils/isTauri';
+import {
+    commitServerTransportPolicy,
+    probeServerHealth,
+} from '@/sync/serverTransport';
+import { apiSocket } from '@/sync/apiSocket';
+import { ServerUrlPolicyError } from '@/sync/serverUrlPolicy';
 
 const stylesheet = StyleSheet.create((theme) => ({
     keyboardAvoidingView: {
@@ -78,31 +95,30 @@ const stylesheet = StyleSheet.create((theme) => ({
 export default function ServerConfigScreen() {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const router = useRouter();
     const serverInfo = getServerInfo();
     const [inputUrl, setInputUrl] = useState(serverInfo.isCustom ? getServerUrl() : '');
+    const [allowInsecureHttp, setAllowInsecureHttpState] = useState(getAllowInsecureHttp());
     const [error, setError] = useState<string | null>(null);
     const [isValidating, setIsValidating] = useState(false);
+    const isBrowserWeb = Platform.OS === 'web' && !isTauri();
 
     const validateServer = async (url: string): Promise<boolean> => {
         try {
             setIsValidating(true);
             setError(null);
             
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'Accept': 'text/plain'
-                }
-            });
+            const response = await probeServerHealth(url, allowInsecureHttp);
             
             if (!response.ok) {
                 setError(t('server.serverReturnedError'));
                 return false;
             }
             
-            const text = await response.text();
-            if (!text.includes('Welcome to Happy Server!')) {
+            const health = await response.json() as {
+                status?: string;
+                service?: string;
+            };
+            if (health.status !== 'ok' || health.service !== 'happy-server') {
                 setError(t('server.notValidHappyServer'));
                 return false;
             }
@@ -122,14 +138,14 @@ export default function ServerConfigScreen() {
             return;
         }
 
-        const validation = validateServerUrl(inputUrl);
+        const validation = validateServerUrl(inputUrl, { allowInsecureHttp });
         if (!validation.valid) {
-            setError(validation.error || t('errors.invalidFormat'));
+            setError(serverUrlValidationMessage(validation));
             return;
         }
 
         // Validate the server
-        const isValid = await validateServer(inputUrl);
+        const isValid = await validateServer(validation.normalizedUrl);
         if (!isValid) {
             return;
         }
@@ -141,7 +157,61 @@ export default function ServerConfigScreen() {
         );
 
         if (confirmed) {
-            setServerUrl(inputUrl);
+            setServerUrl(validation.normalizedUrl);
+            try {
+                await commitServerTransportPolicy();
+            } catch {
+                setError(t('server.failedToConnectToServer'));
+                return;
+            }
+            apiSocket.disconnect();
+        }
+    };
+
+    const handleAllowInsecureHttpChange = async (value: boolean) => {
+        if (!value) {
+            setAllowInsecureHttp(false);
+            setAllowInsecureHttpState(false);
+            setError(null);
+            try {
+                await commitServerTransportPolicy();
+            } catch (error) {
+                if (!(error instanceof ServerUrlPolicyError)) {
+                    setError(t('server.failedToConnectToServer'));
+                    return;
+                }
+            }
+            if (getServerUrl().startsWith('http://')) {
+                apiSocket.disconnect();
+            }
+            return;
+        }
+
+        const confirmed = await Modal.confirm(
+            t('server.insecureHttpConfirmTitle'),
+            t('server.insecureHttpConfirmBody'),
+            {
+                confirmText: t('server.enableInsecureHttp'),
+                destructive: true,
+            },
+        );
+        if (!confirmed) return;
+
+        setAllowInsecureHttp(true);
+        setAllowInsecureHttpState(true);
+        setError(null);
+        try {
+            await commitServerTransportPolicy();
+        } catch {
+            setAllowInsecureHttp(false);
+            setAllowInsecureHttpState(false);
+            try {
+                await commitServerTransportPolicy();
+            } catch {
+                // Preserve the original native policy commit failure.
+            }
+            setError(t('server.failedToConnectToServer'));
+            return;
         }
     };
 
@@ -154,7 +224,16 @@ export default function ServerConfigScreen() {
 
         if (confirmed) {
             setServerUrl(null);
+            setAllowInsecureHttp(false);
+            setAllowInsecureHttpState(false);
             setInputUrl('');
+            try {
+                await commitServerTransportPolicy();
+            } catch {
+                setError(t('server.failedToConnectToServer'));
+                return;
+            }
+            apiSocket.disconnect();
         }
     };
 
@@ -174,6 +253,22 @@ export default function ServerConfigScreen() {
             >
                 <ItemList style={styles.itemListContainer}>
                     <ItemGroup footer={t('server.advancedFeatureFooter')}>
+                        <Item
+                            title={t('server.allowInsecureHttp')}
+                            subtitle={isBrowserWeb
+                                ? t('server.webHttpLocalhostOnly')
+                                : t('server.allowInsecureHttpSubtitle')}
+                            rightElement={
+                                <Switch
+                                    value={!isBrowserWeb && allowInsecureHttp}
+                                    disabled={isBrowserWeb}
+                                    onValueChange={(value) => {
+                                        void handleAllowInsecureHttpChange(value);
+                                    }}
+                                />
+                            }
+                            showChevron={false}
+                        />
                         <View style={styles.contentContainer}>
                             <Text style={styles.labelText}>{t('server.customServerUrlLabel').toUpperCase()}</Text>
                             <TextInput
@@ -233,4 +328,25 @@ export default function ServerConfigScreen() {
             </KeyboardAvoidingView>
         </>
     );
+}
+
+function serverUrlValidationMessage(validation: Exclude<ServerUrlValidation, { valid: true }>): string {
+    switch (validation.errorCode) {
+        case 'empty':
+            return t('server.enterServerUrl');
+        case 'invalidUrl':
+            return t('errors.invalidFormat');
+        case 'unsupportedProtocol':
+            return t('server.httpOrHttpsOnly');
+        case 'credentialsNotAllowed':
+            return t('server.urlCredentialsNotAllowed');
+        case 'queryNotAllowed':
+            return t('server.urlQueryNotAllowed');
+        case 'fragmentNotAllowed':
+            return t('server.urlFragmentNotAllowed');
+        case 'insecureHttpNotAllowed':
+            return t('server.enableInsecureHttpFirst');
+        case 'webHttpRequiresLoopback':
+            return t('server.webHttpLocalhostOnly');
+    }
 }

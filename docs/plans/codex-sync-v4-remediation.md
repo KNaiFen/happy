@@ -396,7 +396,7 @@ R4 分为三个可独立验证的提交：
    - superseded 只消费 seq，不解密或投影；exact replay 不重复写 cache，但在
      cursor 尚未推进时允许幂等重投影，覆盖“cache 已写、projection 未完成”
      的崩溃边界，最终由 entity revision 去重；
-   - snapshot 写入独立 generation。全部分页、解密、schema 和 watermark
+- snapshot 写入独立 generation。全部分页、解密、schema 和 watermark
      校验通过后，先通过单次 store transaction 替换 UI projection，再以
      generation pointer 提交 cache/cursor；构建失败时旧 cache 和旧 UI 保留；
    - entity/outbox index 使用固定分桶。派生 index 损坏时从独立 record
@@ -456,40 +456,153 @@ R4 本地门禁至少包括：App typecheck/build、App 全量 unit、client/per
 revision 冲突、10,000 entity 增量投影计数、同 item 多 request，以及 child
 从 UI 事件到 outbox 的双层只读测试。
 
+R5 真实 HTTP 场景复核发现 CLI/App snapshot client 硬编码请求 500 条，
+但 Wire 与 Server 的权威上限为 100，真实路由会在 handler 前返回 400。
+CLI/App 必须直接引用 `MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE`，transport
+测试必须断言真实请求不超过 Wire 上限；fake transport 不得再掩盖该错误。
+
 ### R5 HTTP 平台支持
 
-- [ ] 设置模型增加显式 `allowInsecureHttp`，首次启用显示风险确认。
-- [ ] CLI 对 HTTP 自定义 relay 输出一次清晰的安全降级提示。
-- [ ] Android production 配置 cleartext，并在 CI introspection 中断言。
-- [ ] iOS production 允许已确认的 HTTP relay，并在 CI 检查 ATS 结果。
-- [ ] Tauri REST 使用受控 native transport；目标 origin 在 Rust/配置边界校验。
-- [ ] Tauri capability 不再无条件放行 `http://**`，CSP 不保持全关闭状态。
-- [ ] `happy server` 分离 bind URL、local URL 和 advertised `--public-url`。
-- [ ] bundled Web App 默认使用 `window.location.origin`。
-- [ ] Web 设置拒绝非 localhost HTTP，并解释浏览器限制。
-- [ ] Socket.IO 与轮询分别验证；invalidation 丢失时仍能拉取恢复。
+- [x] 每安装实例的 server-config 模型增加显式
+      `allowInsecureHttp`，默认关闭，首次启用显示风险确认；该值不得进入账户
+      Settings 同步，避免一台设备的确认静默放宽其他设备。
+- [x] CLI 对 HTTP 自定义 relay 输出一次清晰的安全降级提示。
+- [x] Android production 配置 cleartext，并在 CI introspection 中断言。
+- [x] iOS production 允许已确认的 HTTP relay，并在 CI 检查 ATS 结果。
+- [x] Tauri REST 使用受控 native transport；Rust 必须同时校验请求 URL 与
+      已提交 relay base 同源、HTTP 已显式授权，并拒绝跨源重定向。不得把
+      任意 URL native fetch 暴露给 WebView。
+- [x] Tauri capability 不再无条件放行 `http://**`，CSP 不保持全关闭状态。
+- [x] `happy server` 分离 bind URL、local URL 和 advertised `--public-url`。
+- [x] bundled Web App 默认使用 `window.location.origin`。
+- [x] Web 设置拒绝非 localhost HTTP，并解释浏览器限制。
+- [x] Socket.IO 与轮询分别验证；invalidation 丢失时仍能拉取恢复。
+
+R5 transport 与 URL 边界：
+
+- App 保存自定义 server URL 时先规范化并拒绝 credentials、fragment 和非
+  HTTP(S) scheme。HTTP 在 Android、iOS、Tauri 上要求本机
+  `allowInsecureHttp=true`；普通 Web 只允许 loopback HTTP。
+- 旧版本已经保存 HTTP relay、但尚无授权标记时，App 启动必须进入可操作的
+  离线 UI，而不是卡在 splash；用户可进入 server 设置完成首次风险确认，
+  随后按既有服务器切换流程重新登录。
+- URL 设置页的确认不是安全边界。REST transport、Tauri Rust command 和
+  Socket 初始化必须再次执行相同策略，防止损坏或手工修改的本地存储绕过。
+- Tauri 自定义 native transport 仅接管当前 Happy relay 同 origin 的 REST
+  请求；HTTPS 第三方请求继续使用 Web transport。native response 必须有
+  明确大小上限，避免不可信 HTTP peer 造成无界 IPC 内存占用。
+- Tauri authenticated REST command 不得从 WebView 的单次请求读取
+  `baseUrl` 或 `allowInsecureHttp`。Rust state 持有最近一次提交的 relay
+  policy，普通请求只携带目标 URL、method、headers 和 body，并再次按该
+  policy 校验 scheme 与 origin。设置页保存前的候选 relay 只允许通过独立、
+  无认证、固定 `GET /health` 的有界 native probe 验证，不得复用可转发
+  bearer token/body 的通用请求命令。
+- [x] Tauri relay policy 只允许在 App 启动或设置提交时更新；普通认证请求
+  不得隐式重写 policy。无效配置、撤销 HTTP 授权和 reset 必须 fail-closed
+  清空 Rust 中的旧 policy。所有显式 policy 提交必须经过同一个进程内串行
+  边界，并在取得锁后重新读取当前配置，保证旧设置提交晚到时不能覆盖新
+  policy；普通业务请求不参与该锁，也不得修改 policy。
+- [x] Tauri native transport 的二进制 body 通过有界 Base64 字符串跨 IPC，
+  不使用逐字节 `number[]`/JSON 数组；Rust 在解码前后都执行大小门禁，响应
+  在编码前执行流式大小门禁，避免 4--32 MiB payload 在 IPC 中数倍膨胀。
+- relay 返回的附件上传/下载 URL 在 App 与 CLI 中都只有与 Happy Server
+  精确同 origin 时才能携带 bearer token；禁止用字符串前缀判断，避免
+  lookalike hostname 获得认证头。外部 presigned URL 不带 Happy token。
+- Tauri production CSP 至少限制 default/script/style/connect 源；HTTP REST
+  通过 native invoke，不通过通配 `connect-src http:`。开发配置可单独放宽
+  localhost dev server，不改变 production policy。
+- Tauri 的 Socket.IO 仍运行在 WKWebView。macOS bundle 必须通过专用
+  `Info.plist` 允许已由 App policy 确认的 WebContent `ws://` 与本地网络，
+  同时保持 CSP 不允许通配 browser `http:` fetch；不得假设 reqwest REST
+  放行会自动解除 WebSocket 的 ATS 限制。
+- `happy server --host` 只决定监听地址；local URL 是本机可访问地址；
+  `--public-url` 是其他 CLI/App 使用且写入 `PUBLIC_URL` 的 advertised URL。
+  bundled Web App 不信任 injected advertised URL，而以自身
+  `window.location.origin` 连接同源 relay。
+- [x] `happy server --host` 严格校验成对 IPv6 方括号、IP 和 DNS label；
+  不得静默修复不成对括号、首尾连字符或超长 label 后继续监听。校验后的
+  normalized bind host 必须同时用于展示 URL 和实际传给 Server 的 `HOST`，
+  避免括号 IPv6、大小写或首尾空白出现“展示正确但监听失败”。
+- Android 门禁同时检查生成配置和最终 manifest 的 cleartext 标志；iOS
+  门禁检查 production Expo config 的 ATS 字段；Tauri 门禁静态检查 CSP、
+  capability 和 native origin 校验代码。以上平台放行只解除操作系统限制，
+  不能替代 App 的显式授权。
+- RootLayout 只允许把 relay policy 或 `syncRestore` 连接失败降级为离线 UI；
+  font、crypto 和 credential hydrate 等更早的初始化失败不得被误判为 relay
+  离线并继续进入未初始化界面。
+- `syncRestore` 的离线降级必须由显式 `ServerUrlPolicyError` 触发；无效密钥、
+  解密失败、本地持久化损坏和其他未知异常不得被宽泛 `catch` 吞掉。
+- Tauri 自定义 command 的边界以 bundled WebView 代码可信为前提；WebView
+  本身持有 bearer token 和端到端密钥，因此本轮防护目标是阻止实现缺陷、
+  损坏配置和不可信 relay 造成跨 origin 转发或无界资源消耗，不宣称在
+  WebView 已被攻陷后继续保护凭据。改变该边界需要把认证和加密整体迁入
+  native 层，超出本轮 Codex transport 整改范围。
+- R5 实际链路门禁启动临时 PGlite Happy Server，通过 `/v1/auth` 取得真实
+  bearer token，并创建真实 session。Socket.IO 必须强制 websocket transport
+  且收到一次 `sync-v4-invalidate`；随后主动断开该 socket，继续由 fake
+  stable-v2 Codex 经 CLI durable client 写入 relay，App 侧只依靠定时
+  `changes` 拉取恢复并形成最终 projection。
+- macOS Tauri job 使用锁定依赖执行 `cargo fmt --check`、
+  `cargo check --locked` 和 Rust library tests。该编译只在 GitHub macOS
+  runner 执行，不在本机生成 `src-tauri/target`。
 
 ### R6 测试与 CI
 
-- [ ] Wire：schema 正反例、响应字节预算、INT32、分页不变量、SemVer。
-- [ ] Server：真实 PostgreSQL migration、并发 POST、prune/410、receipt。
-- [ ] CLI：journal 每个崩溃边界、单 writer、持续流量和 unknown RPC。
-- [ ] Gateway：snapshot/live、orphan FIFO、多 thread、fork/review/child、
+- [x] Wire：schema 正反例、响应字节预算、INT32、分页不变量、SemVer。
+- [x] Server：真实 PostgreSQL migration、并发 POST、prune/410、receipt。
+- [x] CLI：journal 每个崩溃边界、单 writer、持续流量和 unknown RPC。
+- [x] Gateway：snapshot/live、orphan FIFO、多 thread、fork/review/child、
       request 恢复和 stable variant 覆盖。
-- [ ] App：启动重试、stale ciphertext、shadow snapshot、坏索引、child
+- [x] App：启动重试、stale ciphertext、shadow snapshot、坏索引、child
       双层只读、多审批和 usage 恢复。
-- [ ] 业务链路模拟：fake Codex app-server -> CLI -> relay -> App projection。
-- [ ] Chaos：100,000 mutation 的重复、延迟、断网、丢 invalidation，最终
+- [x] 业务链路模拟：fake Codex app-server -> CLI -> relay -> App projection。
+- [x] Codex 版本探测使用有界直接进程调用；真实 provider 在 5 秒内无法返回
+      版本时启动失败，显式 fake app-server 测试路径不依赖本机 Codex。
+- [x] 同一个 Codex client 复用已验证的 provider 版本；启动、能力声明和
+      steer 不得重复启动同步 `codex --version` 子进程。
+- [x] Chaos：100,000 mutation 的重复、延迟、断网、丢 invalidation，最终
       snapshot 完全一致。
-- [ ] 性能：10,000 entity + 5 Hz delta，健康本地链路 p95 < 750 ms。
-- [ ] 长 turn：真实超过 10 分钟，虚拟时钟 2 小时不假结束。
-- [ ] GitHub CI 覆盖 Wire、Server、CLI、App 的 typecheck、unit test 和 build。
-- [ ] GitHub CI 覆盖 Agent 的 typecheck、unit test 和 build，并将 Codex
+- [x] 性能：10,000 entity + 5 Hz delta，健康本地链路 p95 < 750 ms。
+- [x] 长 turn：虚拟时钟 2 小时不假结束。
+- [ ] 长 turn：真实 wall-clock 超过 10 分钟，仅在权威完成通知后结束。
+- [x] GitHub CI 覆盖 Wire、Server、CLI、App 的 typecheck、unit test 和 build。
+- [x] GitHub CI 覆盖 Agent 的 typecheck、unit test 和 build，并将 Codex
       provider、CLI transport、relay 路由和 App projection 的故障场景作为
       独立 required gate。
-- [ ] GitHub CI 覆盖 Prisma migration drift、协议生成 drift 和业务链路模拟。
-- [ ] Android release workflow 保留现有签名、ABI、OTA、SDK 和 16 KiB 检查。
-- [ ] CLI release workflow 产出单一可安装 tgz 并验证内置工具归档。
+- [x] GitHub CI 覆盖 Prisma migration drift、协议生成 drift 和业务链路模拟。
+- [x] Android release workflow 保留现有签名、ABI、OTA、SDK 和 16 KiB 检查。
+- [x] CLI release workflow 产出单一可安装 tgz 并验证内置工具归档。
+
+R6 场景与性能口径：
+
+- `codex_transport_scenarios` 安装并校验 `codex-cli 0.145.0`，实际业务链路
+  使用 `experimentalApi=false`；测试不得以 legacy notification 形成
+  canonical entity。strict stable-v2 fake 必须主动拒绝
+  `experimentalApi=true`，不能只验证字段类型。
+- 真实 Codex 启动的 `codex --version` 在 Unix 必须使用无 shell 的直接
+  进程，在 Windows 只为 npm `.cmd` shim 使用固定命令 shell；两者均设置
+  5 秒超时、强制终止和小输出上限，探测挂起不得永久冻结 CLI。测试专用
+  `HAPPY_CODEX_APP_SERVER_PATH` 不执行与实际 fake transport 无关的本机
+  Codex 探测，但真实 app-server 路径继续强制最低 `0.145.0`。
+- CI 安装固定 Codex 后的版本校验和业务脚本二次校验同样必须有界，provider
+  二进制挂起只能快速失败当前门禁，不能耗尽整个 job timeout。
+- stable-v2 协议生成脚本自身的版本探测和 `app-server generate-ts` 也必须
+  设置硬超时；不能只依赖 workflow 外层预检或 job 级超时。
+- 10,000 entity 性能场景先在 App projection 中建立至少 5,000 item 与
+  5,000 part，再以 fake provider 每 200 ms 发送一个 agent delta。延迟从
+  CLI 收到 stable notification 计时，到 App projection 可见对应文本为止；
+  至少采集 20 个样本并要求 p95 小于 750 ms。
+- invalidation 丢失通过真实 Socket.IO 断开制造；测试不得直接调用 App/CLI
+  invalidate 来伪造恢复，最终 cursor、文本和 idle runtime 必须来自 REST
+  polling。
+- 两小时长 turn 使用虚拟时钟单测，期间 completion promise 必须保持
+  pending；超过十分钟的真实 wall-clock turn 由独立云端 job 驱动真实 fake
+  app-server 子进程，并只在官方 `turn/completed` 后结束。
+- 长 turn 门禁的 settled 观察不得通过未消费的 `Promise.finally()` 分支制造
+  unhandled rejection；失败必须由被等待的原始 turn promise 统一报告。
+- 100,000 mutation Chaos 沿用确定性 seed，覆盖重复 POST、响应提交后断连、
+  重排、cursor 提交前崩溃、丢失全部 invalidation 和 snapshot fallback；
+  不再增加功能重复但规模更小的第二套实现。
 
 ## 发布顺序
 
@@ -621,3 +734,76 @@ revision 冲突、10,000 entity 增量投影计数、同 item 多 request，以�
   在工作区内通过 `925/933`，仅因沙箱禁止写 `~/.claude/projects` 导致
   Claude scanner 的 `8` 项 `EPERM`，授权该测试目录后单独重跑 `8/8`
   通过。
+- 2026-07-28：R5 实施前平台复核确认账户 Settings 不适合承载
+  `allowInsecureHttp`，否则会跨设备传播安全降级；改为每安装实例独立
+  server-config 状态，并要求 transport 再校验。Tauri 动态 HTTP relay
+  改用同 origin 受控 native command，禁止恢复 `http://**` capability；
+  `happy server` 明确拆分 bind、local 与 advertised URL。
+- 2026-07-28：R5 首次真实 HTTP 链路执行已通过认证、WebSocket、CLI 写入、
+  丢 invalidation 后轮询和 10k/5 Hz projection，随后在 snapshot 暴露
+  CLI/App 请求 500、Wire/Server 只允许 100 的分页契约错误；该问题升级为
+  R5 阻断项，修复并通过真实 snapshot 前不得提交。
+- 2026-07-28：R5 提交前安全复核发现 Tauri `relay_http_request` 同时接受
+  WebView 提供的 base URL 与 HTTP 授权位，未满足“已提交 relay policy”
+  边界；改为 Rust state policy + authenticated request 与无认证 health
+  probe 分离。R6 同时要求 strict fake 拒绝 experimental API、业务脚本从
+  package 读取 App 版本，并让任意 workflow 改动触发完整 CI。
+- 2026-07-28：R5 Tauri 可用性复核确认 reqwest 只覆盖 REST，HTTP relay 的
+  Socket.IO 仍需 WKWebView 建立 `ws://`；新增 macOS WebContent ATS 配置
+  与 CI 静态门禁，避免 REST 正常但实时 invalidation 永久离线。
+- 2026-07-28：R5 提交前恢复路径复核发现 RootLayout 宽泛捕获全部
+  `syncRestore` 异常，会把无效密钥、解密或本地持久化错误误报为 relay
+  离线；计划收紧为只对显式 `ServerUrlPolicyError` 提供可进入设置页的
+  降级路径。
+- 2026-07-28：R5/R6 本地发布门禁完成：CLI `102/102` 文件、
+  `1007/1007` 单测和 version-stamped build 通过；App `80/80` 文件、
+  `909/909` 单测、typecheck 与 production Web export 通过；Codex
+  `0.145.0` stable-v2 生成零漂移，HTTP 平台静态门禁通过，真实 HTTP
+  业务链路 p95 `239.4 ms`，production audit 为 `0 critical`。真实十分钟
+  turn 与 Tauri `cargo fmt/check/test --locked` 保留给云端 required jobs。
+- 2026-07-28：R5 最终依赖复核确认受控 Rust transport 已完全替代
+  `@tauri-apps/plugin-http`，App 与 Tauri 均无剩余引用；从 App manifest
+  和 pnpm lockfile 删除该死依赖，避免继续安装未授权的通用 HTTP 插件。
+- 2026-07-28：R6 真实链路复跑暴露 `CodexAppServerClient.connect()` 的
+  `codex --version` 无超时，provider 二进制挂起会永久冻结场景与 CLI；
+  版本探测改为 5 秒有界 `execFileSync`，并让显式 fake app-server 测试路径
+  不依赖本机 Codex，同时保留真实启动的 `0.145.0` 门禁。
+- 2026-07-28：版本探测差异复核补回 Windows npm `.cmd` shim 兼容，并为
+  GitHub 固定版本预检与业务脚本二次校验增加硬超时；Unix 真实启动仍使用
+  无 shell 直接进程。
+- 2026-07-28：HTTP 安全差异复核发现 App 与 CLI 的附件本地存储路径均用
+  字符串前缀判断 Happy Server，lookalike hostname 可诱导跨 origin 请求
+  附加 bearer token；两端改为 URL origin 精确比较，并增加上传、下载
+  回归测试。
+- 2026-07-28：R5 最终 native transport 审查发现普通请求仍会先调用
+  `relay_http_set_policy`，配置切换并发时可互相覆盖，撤销授权后还可能保留
+  旧 Rust policy；同时逐字节数组 IPC 会让 MiB 级 payload 数倍膨胀。新增
+  “启动/设置提交才更新、无效配置清空、普通请求只读”和有界 Base64 IPC
+  阻断项，并明确 bundled WebView 是既有可信边界。
+- 2026-07-28：R6 最终性能与诊断复核发现同一 client 会重复同步执行
+  `codex --version`，长 turn settled 观察还会创建未消费的 rejected
+  `finally` promise；新增版本缓存和无旁路拒绝门禁。
+- 2026-07-28：R5 CLI URL 复核发现 bind host 会独立剥离首尾 IPv6 方括号，
+  从而把不成对输入静默改写为合法地址，且 DNS label 首尾连字符未拒绝；
+  新增严格 host 语法与回归测试门禁。
+- 2026-07-28：R6 provider 进程搜索确认 capability discovery 已改用统一
+  version reader，但 stable-v2 生成脚本的版本读取和 schema 生成仍可无界
+  挂起；新增 10 秒版本探测、64 KiB 输出和 2 分钟生成硬超时。
+- 2026-07-28：R5 最终调用链复核发现 Tauri 显式 policy commit 尚未经过
+  同一串行边界，设置操作重叠时仍存在旧提交晚到窗口；同时 CLI 只把
+  normalized bind host 用于展示 URL，Server `HOST` 仍收到原始输入。两项
+  加入提交前阻断门禁并要求并发/IPv6 回归测试。
+- 2026-07-28：R5/R6 最终本地复核通过。App `80/80` 文件、
+  `911/911` 单测；CLI 合计 `1011/1011` 单测，其中既有 Claude scanner
+  `8/8` 在授权其测试目录后通过；两端 typecheck、CLI build、workflow YAML、
+  HTTP 平台门禁、frozen lockfile、production `0 critical` audit 和
+  `git diff --check` 通过。真实 HTTP 业务链路再次通过，p95 `243.3 ms`。
+- 2026-07-28：R5 最终调用链阻断项完成。App policy commit 使用统一
+  `AsyncLock`，在取得锁后读取当前配置；并发回归测试证明第二次提交不会
+  越过仍在进行的第一次提交。CLI 将 normalized bind host 同时用于 URL
+  展示与 Server `HOST`，方括号 IPv6 回归通过。最新本地门禁为 Wire
+  `38/38`、Agent `227/227`、Server `95/95`、App `81/81` 文件及
+  `915/915`、CLI `1019/1019`；workflow YAML、frozen lockfile、
+  production `0 critical` audit 和 `git diff --check` 通过。真实 HTTP
+  业务链路 p95 `322.1 ms`。本机未安装 Bun/Rust，Server runtime build、
+  Tauri fmt/check/test 与真实十分钟 turn 继续由 GitHub required jobs 验证。

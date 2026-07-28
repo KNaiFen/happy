@@ -358,7 +358,18 @@ export const ca: TranslationStructure = {
         failedToConnectToServer: 'Ha fallat la connexió amb el servidor',
         currentlyUsingCustomServer: 'Actualment utilitzant un servidor personalitzat',
         customServerUrlLabel: 'URL del servidor personalitzat',
-        advancedFeatureFooter: 'Aquesta és una funció avançada. Només canvia el servidor si saps el que fas. Hauràs de tancar la sessió i tornar-la a iniciar després de canviar els servidors.'
+        advancedFeatureFooter: 'Aquesta és una funció avançada. Només canvia el servidor si saps el que fas. Hauràs de tancar la sessió i tornar-la a iniciar després de canviar els servidors.',
+        allowInsecureHttp: 'Permet HTTP no segur',
+        allowInsecureHttpSubtitle: 'Només per a xarxes de confiança. Es recomana HTTPS.',
+        webHttpLocalhostOnly: 'Els navegadors web només permeten relés HTTP a localhost. Utilitza HTTPS per a servidors remots.',
+        insecureHttpConfirmTitle: 'Vols activar HTTP no segur?',
+        insecureHttpConfirmBody: 'Continua només en una xarxa de confiança. Un atacant actiu pot robar el testimoni, falsificar confirmacions, suplantar el servidor i observar metadades de transport. El xifratge d’extrem a extrem no evita aquests atacs.',
+        enableInsecureHttp: 'Activa HTTP',
+        httpOrHttpsOnly: 'L’URL del servidor ha d’utilitzar HTTP o HTTPS.',
+        urlCredentialsNotAllowed: 'L’URL del servidor no pot contenir usuari ni contrasenya.',
+        urlQueryNotAllowed: 'L’URL del servidor no pot contenir una cadena de consulta.',
+        urlFragmentNotAllowed: 'L’URL del servidor no pot contenir cap fragment.',
+        enableInsecureHttpFirst: 'Activa HTTP no segur abans d’utilitzar aquest servidor.',
     },
 
     sessionInfo: {

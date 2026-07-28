@@ -1,5 +1,6 @@
 import {
     MAX_CODEX_SYNC_V4_PART_BYTES,
+    MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
     SyncChangesResponseV4Schema,
     SyncSnapshotResponseV4Schema,
     type CodexEntityV4,
@@ -47,6 +48,7 @@ class FakeTransport implements SyncV4Transport {
     requireSnapshot = false;
     failAfterCommit = false;
     snapshotCallCount = 0;
+    readonly snapshotLimits: number[] = [];
     failSnapshotCall: number | null = null;
 
     async postMutations(_sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4> {
@@ -81,7 +83,12 @@ class FakeTransport implements SyncV4Transport {
         });
     }
 
-    async getSnapshot(): Promise<SyncSnapshotResponseV4> {
+    async getSnapshot(
+        _sessionId: string,
+        _cursor: string | null,
+        limit: number,
+    ): Promise<SyncSnapshotResponseV4> {
+        this.snapshotLimits.push(limit);
         this.snapshotCallCount += 1;
         if (this.snapshotCallCount === this.failSnapshotCall) throw new Error("snapshot transport lost");
         const page = this.snapshots.shift();
@@ -283,6 +290,10 @@ describe("SyncV4Client", () => {
 
         expect(applied.map((event) => event.source)).toEqual(["snapshot", "snapshot"]);
         expect(client.receiveCursor).toBe(2);
+        expect(transport.snapshotLimits).toEqual([
+            MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
+            MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
+        ]);
     });
 
     it("restarts a snapshot from page one when the process stops before its watermark commit", async () => {

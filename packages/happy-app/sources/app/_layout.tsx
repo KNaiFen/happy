@@ -35,6 +35,11 @@ import { applyVoiceUpsellOverride } from '@/realtime/voiceExperiment';
 import { useTauriZoom } from '@/hooks/useTauriZoom';
 import { useTauriDrag } from '@/hooks/useTauriDrag';
 import { BrowserNavigationShortcuts } from '@/hooks/useBrowserNavigationShortcuts';
+import {
+    commitServerTransportPolicy,
+    installServerFetchTransport,
+} from '@/sync/serverTransport';
+import { ServerUrlPolicyError } from '@/sync/serverUrlPolicy';
 
 // Configure notification handler — suppress push display when app is in foreground
 Notifications.setNotificationHandler({
@@ -233,11 +238,13 @@ export default function RootLayout() {
     const [initState, setInitState] = React.useState<{ credentials: AuthCredentials | null } | null>(null);
     React.useEffect(() => {
         (async () => {
+            let credentials: AuthCredentials | null = null;
             try {
+                installServerFetchTransport();
                 await loadFonts();
                 await sodium.ready;
 
-                let credentials = await TokenStorage.getCredentials();
+                credentials = await TokenStorage.getCredentials();
                 const devCredentials = getDevWebQueryCredentials() ?? getDevEnvironmentCredentials();
 
                 if (devCredentials) {
@@ -256,8 +263,20 @@ export default function RootLayout() {
                     }
                 }
 
-                if (credentials) {
-                    await syncRestore(credentials);
+                try {
+                    await commitServerTransportPolicy();
+                    if (credentials) {
+                        await syncRestore(credentials);
+                    }
+                } catch (error) {
+                    if (!(error instanceof ServerUrlPolicyError)) {
+                        throw error;
+                    }
+                    console.error('Error restoring sync:', error);
+                    // Keep server settings reachable when a persisted relay
+                    // is offline or now requires first-time HTTP approval.
+                    setInitState({ credentials });
+                    return;
                 }
 
                 setInitState({ credentials });

@@ -35,6 +35,8 @@ import { handleResumeCommand } from '@/resume/handleResumeCommand'
 import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
 import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
+import { configuration } from './configuration'
+import { getInsecureRelayWarning, isInsecureHttpUrl } from './utils/serverUrl'
 
 
 (async () => {
@@ -43,6 +45,9 @@ import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
   // If --version is passed - do not log, its likely daemon inquiring about our version
   if (!args.includes('--version')) {
     logger.debug('Starting happy CLI with args: ', process.argv)
+    if (args[0] !== 'server' && isInsecureHttpUrl(configuration.serverUrl)) {
+      console.error(chalk.yellow(getInsecureRelayWarning(configuration.serverUrl)))
+    }
   }
 
   // Check if first argument is a subcommand

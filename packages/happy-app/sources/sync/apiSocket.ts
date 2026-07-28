@@ -4,10 +4,13 @@ import Constants from 'expo-constants';
 import { TokenStorage } from '@/auth/tokenStorage';
 import { Encryption } from './encryption/encryption';
 import { storage } from './storage';
+import { isTauri } from '@/utils/isTauri';
+import { assertServerUrlAllowed } from './serverConfig';
+import { serverFetch } from './serverTransport';
 
 export function getHappyClientId(): string {
     let platform: string = Platform.OS; // 'ios' | 'android' | 'web'
-    if (platform === 'web' && typeof window !== 'undefined' && '__TAURI__' in window) {
+    if (isTauri()) {
         platform = 'desktop';
     }
     const version = Constants.expoConfig?.version || '0.0.0';
@@ -69,7 +72,10 @@ class ApiSocket {
     //
 
     initialize(config: SyncSocketConfig, encryption: Encryption) {
-        this.config = config;
+        this.config = {
+            ...config,
+            endpoint: assertServerUrlAllowed(config.endpoint),
+        };
         this.encryption = encryption;
         this.connect();
     }
@@ -83,6 +89,7 @@ class ApiSocket {
             return;
         }
 
+        assertServerUrlAllowed(this.config.endpoint);
         this.updateStatus('connecting');
 
         this.socket = io(this.config.endpoint, {
@@ -221,7 +228,7 @@ class ApiSocket {
             ...options?.headers
         };
 
-        return fetch(url, {
+        return serverFetch(url, {
             ...options,
             headers
         });

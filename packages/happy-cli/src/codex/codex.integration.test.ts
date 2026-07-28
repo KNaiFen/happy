@@ -6,7 +6,7 @@
  * were impossible with the legacy MCP tools.
  *
  * Requirements:
- *   - `codex` CLI installed and on PATH (>= 0.100)
+ *   - `codex` CLI installed and on PATH (>= 0.145.0)
  *   - OPENAI_API_KEY (or equivalent) configured
  *
  * Run:
@@ -14,9 +14,13 @@
  */
 
 import { afterEach, describe, it, expect } from "vitest";
-import { execSync } from "child_process";
 import { CodexAppServerClient } from "./codexAppServerClient";
 import type { ReviewDecision, EventMsg } from "./codexAppServerTypes";
+import {
+    isCodexCliVersionAtLeast,
+    MINIMUM_CODEX_CLI_VERSION,
+    readCodexCliVersion,
+} from "./codexCliVersion";
 import { getIntegrationEnv } from "@/testing/currentIntegrationEnv";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -38,15 +42,10 @@ function policyToDecision(policy: Exclude<PermissionPolicy, "hold">): ReviewDeci
 }
 
 async function isCodexAppServerAvailable(): Promise<boolean> {
-    try {
-        const version = execSync("codex --version", { encoding: "utf8" }).trim();
-        const match = version.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
-        if (!match) return false;
-        const [major, minor] = match[1].split(".").map(Number);
-        return major > 0 || minor >= 100;
-    } catch {
-        return false;
-    }
+    return isCodexCliVersionAtLeast(
+        readCodexCliVersion(),
+        MINIMUM_CODEX_CLI_VERSION,
+    );
 }
 
 // ── CodexDriver ──────────────────────────────────────────────────────────────

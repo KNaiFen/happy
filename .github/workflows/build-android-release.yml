@@ -156,6 +156,7 @@ jobs:
           grep -Fq "native-code: 'arm64-v8a'" "$BADGING"
 
           "$TOOLS/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > "$MANIFEST"
+          grep -Eq 'usesCleartextTraffic.*(0xffffffff|true)' "$MANIFEST"
           grep -A1 'expo.modules.updates.ENABLED' "$MANIFEST" | grep -Fq '=false'
           if grep -Eq 'EXPO_UPDATE_URL|u\.expo\.dev' "$MANIFEST"; then
             echo 'OTA update URL must not be present in the APK manifest.' >&2
@@ -171,6 +172,7 @@ jobs:
           if (config.version !== process.env.VERSION) throw new Error('APP version mismatch');
           if (config.android?.versionCode !== expectedCode) throw new Error('Android versionCode mismatch');
           if (config.android?.package !== 'com.ex3ndr.happy') throw new Error('Android package mismatch');
+          if (config.android?.usesCleartextTraffic !== true) throw new Error('Android cleartext transport support missing');
           if (config.updates?.enabled !== false || config.updates?.url) throw new Error('OTA must be disabled');
           if (config.extra?.app?.buildCommitSha !== process.env.BUILD_COMMIT_SHA) throw new Error('Build commit mismatch');
           NODE

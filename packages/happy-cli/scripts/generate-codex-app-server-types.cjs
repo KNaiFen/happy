@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const CODEX_PROTOCOL_VERSION = '0.145.0';
+const CODEX_VERSION_TIMEOUT_MS = 10_000;
+const CODEX_GENERATE_TIMEOUT_MS = 120_000;
 const packageRoot = path.resolve(__dirname, '..');
 const protocolRoot = path.join(packageRoot, 'src', 'codex', 'protocol');
 const outputDirectory = path.join(protocolRoot, 'generated');
@@ -15,6 +17,9 @@ function readCodexVersion() {
     return execFileSync(codexBinary, ['--version'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'inherit'],
+        timeout: CODEX_VERSION_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
+        maxBuffer: 64 * 1024,
         windowsHide: true,
     }).trim();
 }
@@ -38,6 +43,8 @@ try {
         stagingDirectory,
     ], {
         stdio: 'inherit',
+        timeout: CODEX_GENERATE_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
         windowsHide: true,
     });
     fs.writeFileSync(

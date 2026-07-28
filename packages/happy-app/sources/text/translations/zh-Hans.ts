@@ -359,7 +359,18 @@ export const zhHans: TranslationStructure = {
         failedToConnectToServer: '连接服务器失败',
         currentlyUsingCustomServer: '当前使用自定义服务器',
         customServerUrlLabel: '自定义服务器 URL',
-        advancedFeatureFooter: "这是一个高级功能。只有在您知道自己在做什么时才更改服务器。更改服务器后您需要重新登录。"
+        advancedFeatureFooter: "这是一个高级功能。只有在您知道自己在做什么时才更改服务器。更改服务器后您需要重新登录。",
+        allowInsecureHttp: '允许不安全的 HTTP',
+        allowInsecureHttpSubtitle: '仅限可信网络，仍建议使用 HTTPS。',
+        webHttpLocalhostOnly: 'Web 浏览器仅允许连接 localhost 上的 HTTP 中继；远程服务器必须使用 HTTPS。',
+        insecureHttpConfirmTitle: '启用不安全的 HTTP？',
+        insecureHttpConfirmBody: '仅应在你信任的网络中继续。主动攻击者可以窃取令牌、伪造确认、冒充服务器并观察传输元数据。端到端加密无法阻止这些攻击。',
+        enableInsecureHttp: '启用 HTTP',
+        httpOrHttpsOnly: '服务器 URL 必须使用 HTTP 或 HTTPS。',
+        urlCredentialsNotAllowed: '服务器 URL 不能包含用户名或密码。',
+        urlQueryNotAllowed: '服务器 URL 不能包含查询字符串。',
+        urlFragmentNotAllowed: '服务器 URL 不能包含片段。',
+        enableInsecureHttpFirst: '使用此服务器前请先启用不安全的 HTTP。',
     },
 
     sessionInfo: {

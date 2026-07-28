@@ -1,4 +1,3 @@
-import { execSync } from 'node:child_process';
 import type {
     CodexAgentCapabilities,
     CodexModelCapability,
@@ -7,6 +6,10 @@ import type {
 } from '@/api/types';
 import { logger } from '@/ui/logger';
 import { CodexAppServerClient } from './codexAppServerClient';
+import {
+    formatCodexCliVersion,
+    readCodexCliVersion,
+} from './codexCliVersion';
 import type { Model } from './protocol';
 
 export function normalizeCodexModels(models: Model[]): CodexModelCapability[] {
@@ -41,27 +44,14 @@ export async function loadCodexModelCapabilities(
     }
 }
 
-function readCodexCliVersion(): string | null {
-    try {
-        const version = execSync('codex --version', {
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            timeout: 2_000,
-            windowsHide: true,
-        }).trim();
-        return version.length > 0 ? version : null;
-    } catch {
-        return null;
-    }
-}
-
 export async function discoverCodexAgentCapabilities(
     timeoutMs: number = 5_000,
 ): Promise<CodexAgentCapabilities | null> {
-    const codexCliVersion = readCodexCliVersion();
-    if (!codexCliVersion) return null;
+    const version = readCodexCliVersion();
+    if (!version) return null;
+    const codexCliVersion = `codex-cli ${formatCodexCliVersion(version)}`;
 
-    const client = new CodexAppServerClient();
+    const client = new CodexAppServerClient(undefined, version);
     let timer: ReturnType<typeof setTimeout> | null = null;
     const operation = (async () => {
         await client.connect();

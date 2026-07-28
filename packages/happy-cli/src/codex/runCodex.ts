@@ -173,7 +173,7 @@ export async function runCodex(opts: {
     const settings = await readSettings();
     let machineId = settings?.machineId;
     const sandboxConfig = opts.noSandbox ? undefined : settings?.sandboxConfig;
-    const client = new CodexAppServerClient(sandboxConfig);
+    const client = new CodexAppServerClient(sandboxConfig, codexCliVersion);
     let protocolTraceRecorder: CodexProtocolTraceRecorder | null = null;
     const supportsQueueSteering = client.supportsTurnSteering();
     if (!machineId) {

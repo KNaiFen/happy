@@ -375,7 +375,18 @@ export const pl: TranslationStructure = {
         failedToConnectToServer: 'Nie udało się połączyć z serwerem',
         currentlyUsingCustomServer: 'Aktualnie używany jest niestandardowy serwer',
         customServerUrlLabel: 'URL niestandardowego serwera',
-        advancedFeatureFooter: 'To jest zaawansowana funkcja. Zmieniaj serwer tylko jeśli wiesz, co robisz. Po zmianie serwera będziesz musiał się wylogować i zalogować ponownie.'
+        advancedFeatureFooter: 'To jest zaawansowana funkcja. Zmieniaj serwer tylko jeśli wiesz, co robisz. Po zmianie serwera będziesz musiał się wylogować i zalogować ponownie.',
+        allowInsecureHttp: 'Zezwalaj na niezabezpieczony HTTP',
+        allowInsecureHttpSubtitle: 'Tylko w zaufanych sieciach. Zalecany jest HTTPS.',
+        webHttpLocalhostOnly: 'Przeglądarki zezwalają na HTTP tylko dla localhost. Dla serwerów zdalnych użyj HTTPS.',
+        insecureHttpConfirmTitle: 'Włączyć niezabezpieczony HTTP?',
+        insecureHttpConfirmBody: 'Kontynuuj tylko w zaufanej sieci. Aktywny napastnik może ukraść token, sfałszować potwierdzenia, podszyć się pod serwer i obserwować metadane transportu. Szyfrowanie end-to-end nie zapobiega tym atakom.',
+        enableInsecureHttp: 'Włącz HTTP',
+        httpOrHttpsOnly: 'Adres URL serwera musi używać HTTP lub HTTPS.',
+        urlCredentialsNotAllowed: 'Adres URL serwera nie może zawierać nazwy użytkownika ani hasła.',
+        urlQueryNotAllowed: 'Adres URL serwera nie może zawierać zapytania.',
+        urlFragmentNotAllowed: 'Adres URL serwera nie może zawierać fragmentu.',
+        enableInsecureHttpFirst: 'Najpierw włącz niezabezpieczony HTTP.',
     },
 
     sessionInfo: {

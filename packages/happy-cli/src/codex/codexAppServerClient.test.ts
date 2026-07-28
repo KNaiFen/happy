@@ -2,13 +2,13 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxConfig } from '@/persistence';
 
 const {
-    mockExecSync,
+    mockExecFileSync,
     mockInitializeSandbox,
     mockWrapForMcpTransport,
     mockSandboxCleanup,
     mockSpawn,
 } = vi.hoisted(() => ({
-    mockExecSync: vi.fn(),
+    mockExecFileSync: vi.fn(),
     mockInitializeSandbox: vi.fn(),
     mockWrapForMcpTransport: vi.fn(),
     mockSandboxCleanup: vi.fn(),
@@ -16,7 +16,7 @@ const {
 }));
 
 vi.mock('node:child_process', () => ({
-    execSync: mockExecSync,
+    execFileSync: mockExecFileSync,
     spawn: mockSpawn,
 }));
 
@@ -121,7 +121,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         vi.clearAllMocks();
         process.env.RUST_LOG = originalRustLog;
         delete process.env.HAPPY_CODEX_APP_SERVER_PATH;
-        mockExecSync.mockReturnValue('codex-cli 0.145.0');
+        mockExecFileSync.mockReturnValue('codex-cli 0.145.0');
         mockInitializeSandbox.mockResolvedValue(mockSandboxCleanup);
         mockWrapForMcpTransport.mockResolvedValue({ command: 'sh', args: ['-c', 'wrapped codex app-server'] });
         mockSpawn.mockImplementation(() => createMockProcess());
@@ -139,26 +139,38 @@ describe('CodexAppServerClient sandbox integration', () => {
     it('reports goal action support for Codex versions with goal action requests', async () => {
         const { CodexAppServerClient } = await import('./codexAppServerClient');
 
-        mockExecSync.mockReturnValue('codex-cli 0.140.0');
+        mockExecFileSync.mockReturnValue('codex-cli 0.140.0');
         expect(new CodexAppServerClient().supportsGoalActions()).toBe(true);
 
-        mockExecSync.mockReturnValue('codex-cli 0.130.0');
+        mockExecFileSync.mockReturnValue('codex-cli 0.130.0');
         expect(new CodexAppServerClient().supportsGoalActions()).toBe(false);
     });
 
     it('reports turn steering support from Codex 0.145 onward', async () => {
         const { CodexAppServerClient } = await import('./codexAppServerClient');
 
-        mockExecSync.mockReturnValue('codex-cli 0.145.0');
+        mockExecFileSync.mockReturnValue('codex-cli 0.145.0');
         expect(new CodexAppServerClient().supportsTurnSteering()).toBe(true);
 
-        mockExecSync.mockReturnValue('codex-cli 0.144.9');
+        mockExecFileSync.mockReturnValue('codex-cli 0.144.9');
         expect(new CodexAppServerClient().supportsTurnSteering()).toBe(false);
+    });
+
+    it('reuses one provider version probe for capabilities and connect', async () => {
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+
+        expect(client.supportsGoalActions()).toBe(true);
+        expect(client.supportsTurnSteering()).toBe(true);
+        await client.connect();
+
+        expect(mockExecFileSync).toHaveBeenCalledOnce();
+        await client.disconnect();
     });
 
     it('refuses to connect to Codex versions older than 0.145.0', async () => {
         const { CodexAppServerClient } = await import('./codexAppServerClient');
-        mockExecSync.mockReturnValue('codex-cli 0.144.9');
+        mockExecFileSync.mockReturnValue('codex-cli 0.144.9');
 
         await expect(new CodexAppServerClient().connect()).rejects.toThrow('found 0.144.9');
         expect(mockSpawn).not.toHaveBeenCalled();
@@ -178,6 +190,7 @@ describe('CodexAppServerClient sandbox integration', () => {
             ['/tmp/fake-codex-app-server.cjs'],
             expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] }),
         );
+        expect(mockExecFileSync).not.toHaveBeenCalled();
         await client.disconnect();
     });
 
@@ -360,7 +373,7 @@ describe('CodexAppServerClient sandbox integration', () => {
     });
 
     it('steers the active turn without interrupting it', async () => {
-        mockExecSync.mockReturnValue('codex-cli 0.145.0');
+        mockExecFileSync.mockReturnValue('codex-cli 0.145.0');
         const requests: MockRpcMessage[] = [];
         const proc = createMockProcess({
             onRequest: (msg, stdout) => {
@@ -582,6 +595,77 @@ describe('CodexAppServerClient sandbox integration', () => {
         });
         await expect(pending).resolves.toEqual({ aborted: false });
         await client.disconnect();
+    });
+
+    it('keeps a turn pending for two virtual hours without an authoritative boundary', async () => {
+        vi.useFakeTimers();
+        const proc = createMockProcess({
+            initializeDelayMs: 0,
+            onRequest: (msg, stdout) => {
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: { thread: { id: 'thread-two-hours' }, model: 'gpt-test' },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            turn: {
+                                id: 'turn-two-hours',
+                                items: [],
+                                status: 'inProgress',
+                                error: null,
+                            },
+                        },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        try {
+            const connecting = client.connect();
+            await vi.advanceTimersByTimeAsync(0);
+            await connecting;
+
+            const starting = client.startThread({ model: 'gpt-test' });
+            await vi.advanceTimersByTimeAsync(0);
+            await starting;
+
+            let settled = false;
+            const pending = client.sendTurnAndWait('two hour task', { turnTimeoutMs: 1 });
+            void pending.then(
+                () => { settled = true; },
+                () => { settled = true; },
+            );
+            await vi.advanceTimersByTimeAsync(0);
+            expect(client.turnId).toBe('turn-two-hours');
+
+            await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1_000);
+            expect(settled).toBe(false);
+
+            pushJsonLine(proc.stdout, {
+                method: 'turn/completed',
+                params: {
+                    threadId: 'thread-two-hours',
+                    turn: {
+                        id: 'turn-two-hours',
+                        items: [],
+                        status: 'completed',
+                        error: null,
+                    },
+                },
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await expect(pending).resolves.toEqual({ aborted: false });
+        } finally {
+            await client.disconnect();
+            vi.useRealTimers();
+        }
     });
 
     it('reconciles an unknown turn/start outcome after an app-server exit', async () => {

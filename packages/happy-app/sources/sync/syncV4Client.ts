@@ -6,6 +6,7 @@
 import {
     MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH,
     MAX_SYNC_V4_MUTATIONS_PER_BATCH,
+    MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
     isSyncV4VersionAtLeast,
     SyncMutationBatchV4Schema,
     SyncMutationV4Schema,
@@ -27,7 +28,7 @@ import { SyncV4Crypto } from './syncV4Crypto';
 import { SyncV4Persistence } from './syncV4Persistence';
 
 const CHANGES_PAGE_SIZE = 100;
-const SNAPSHOT_PAGE_SIZE = 500;
+const SNAPSHOT_PAGE_SIZE = MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
 export interface AppSyncV4Transport {

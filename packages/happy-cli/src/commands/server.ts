@@ -8,6 +8,11 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { configuration } from '@/configuration';
 import { updateSettings } from '@/persistence';
+import {
+    getInsecureRelayWarning,
+    isInsecureHttpUrl,
+    resolveServerUrls,
+} from '@/utils/serverUrl';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +35,7 @@ interface ServerOptions {
     persistServerUrl: boolean;
     allowSettingsWrite: boolean;
     masterSecret?: string;
+    publicUrl?: string;
 }
 
 interface ServerArtifacts {
@@ -63,8 +69,12 @@ export async function handleServerCommand(args: string[]): Promise<void> {
     const opts = parseArgs(args);
     if (opts === null) return;
 
-    const serverUrl = `http://${opts.host === '0.0.0.0' ? '127.0.0.1' : opts.host}:${opts.port}`;
-    await ensureSettingsWriteAllowed(opts, serverUrl);
+    const urls = resolveServerUrls({
+        host: opts.host,
+        port: opts.port,
+        publicUrl: opts.publicUrl,
+    });
+    await ensureSettingsWriteAllowed(opts, urls.advertisedUrl);
 
     const dataDir = path.join(configuration.happyHomeDir, 'server-data');
     const pgliteDir = path.join(dataDir, 'pglite');
@@ -94,12 +104,17 @@ export async function handleServerCommand(args: string[]): Promise<void> {
 
     console.log(chalk.cyan(`\n  happy server`));
     console.log(chalk.gray(`  data dir:   ${dataDir}`));
-    console.log(chalk.gray(`  server url: ${serverUrl}`));
+    console.log(chalk.gray(`  bind url:   ${urls.bindUrl}`));
+    console.log(chalk.gray(`  local url:  ${urls.localUrl}`));
+    console.log(chalk.gray(`  public url: ${urls.advertisedUrl}`));
     console.log(chalk.gray(`  mode:       ${serverArtifactMode(artifacts)}`));
     if (staticDir) {
         console.log(chalk.gray(`  webapp:     ${staticDir}`));
     } else {
         console.log(chalk.yellow('  webapp:     (no build) — API only. Run `pnpm bundle:webapp` to build.'));
+    }
+    if (isInsecureHttpUrl(urls.advertisedUrl)) {
+        console.error(chalk.yellow(`  ${getInsecureRelayWarning(urls.advertisedUrl)}`));
     }
     console.log();
 
@@ -110,11 +125,12 @@ export async function handleServerCommand(args: string[]): Promise<void> {
         PGLITE_DIR: pgliteDir,
         HANDY_MASTER_SECRET: masterSecret,
         PORT: String(opts.port),
-        HOST: opts.host,
+        HOST: urls.bindHost,
+        PUBLIC_URL: urls.advertisedUrl,
     };
     if (staticDir) env.HAPPY_STATIC_DIR = staticDir;
     env.HAPPY_INJECT_HTML_CONFIG = JSON.stringify({
-        serverUrl,
+        useWindowLocationOrigin: true,
         disableAnalytics: true,
     });
 
@@ -141,19 +157,22 @@ export async function handleServerCommand(args: string[]): Promise<void> {
     await spawnAndWait(artifacts, env, ['migrate']);
 
     if (opts.persistServerUrl) {
-        // The bundled server serves the webapp at its own origin, so webappUrl === serverUrl.
-        // Without this the CLI's auth flow would open the prod webapp (app.happy.engineering).
-        await updateSettings(current => ({ ...current, serverUrl, webappUrl: serverUrl }));
-        console.log(chalk.gray(`Wrote serverUrl + webappUrl=${serverUrl} to ${configuration.settingsFile}`));
+        await updateSettings(current => ({
+            ...current,
+            serverUrl: urls.advertisedUrl,
+            ...(staticDir ? { webappUrl: urls.advertisedUrl } : {}),
+        }));
+        const settingNames = staticDir ? 'serverUrl + webappUrl' : 'serverUrl';
+        console.log(chalk.gray(`Wrote ${settingNames}=${urls.advertisedUrl} to ${configuration.settingsFile}`));
     }
 
     console.log(chalk.gray('Starting server...'));
     const child = spawnBackground(artifacts, env, ['serve']);
 
     console.log();
-    console.log(chalk.green.bold(`✓ happy-server starting at ${serverUrl}`));
+    console.log(chalk.green.bold(`✓ happy-server starting at ${urls.localUrl}`));
     if (staticDir) {
-        console.log(chalk.green(`  Open ${serverUrl} in your browser.`));
+        console.log(chalk.green(`  Open ${urls.localUrl} in your browser.`));
     }
     if (opts.persistServerUrl) {
         console.log(chalk.gray('  happy CLI + daemon will use this server automatically (settings.serverUrl).'));
@@ -183,6 +202,7 @@ function parseArgs(args: string[]): ServerOptions | null {
     let persistServerUrl = true;
     let allowSettingsWrite = false;
     let masterSecret: string | undefined;
+    let publicUrl: string | undefined;
 
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
@@ -190,13 +210,16 @@ function parseArgs(args: string[]): ServerOptions | null {
             showHelp();
             return null;
         } else if (arg === '--port' || arg === '-p') {
-            port = parseInt(args[++i], 10);
-            if (Number.isNaN(port)) {
+            const value = requireOptionValue(args, i, arg);
+            i++;
+            port = Number(value);
+            if (!/^\d+$/.test(value) || !Number.isInteger(port) || port < 1 || port > 65_535) {
                 console.error(chalk.red('Invalid --port'));
                 process.exit(1);
             }
         } else if (arg === '--host') {
-            host = args[++i];
+            host = requireOptionValue(args, i, arg);
+            i++;
         } else if (arg === '--reset') {
             reset = true;
         } else if (arg === '--no-persist') {
@@ -204,7 +227,11 @@ function parseArgs(args: string[]): ServerOptions | null {
         } else if (arg === SETTINGS_WRITE_CONFIRM_FLAG) {
             allowSettingsWrite = true;
         } else if (arg === '--master-secret') {
-            masterSecret = args[++i];
+            masterSecret = requireOptionValue(args, i, arg);
+            i++;
+        } else if (arg === '--public-url') {
+            publicUrl = requireOptionValue(args, i, arg);
+            i++;
         } else {
             console.error(chalk.red(`Unknown arg: ${arg}`));
             showHelp();
@@ -212,7 +239,24 @@ function parseArgs(args: string[]): ServerOptions | null {
         }
     }
 
-    return { port, host, reset, persistServerUrl, allowSettingsWrite, masterSecret };
+    return {
+        port,
+        host,
+        reset,
+        persistServerUrl,
+        allowSettingsWrite,
+        masterSecret,
+        publicUrl,
+    };
+}
+
+function requireOptionValue(args: string[], index: number, option: string): string {
+    const value = args[index + 1];
+    if (!value || value.startsWith('--')) {
+        console.error(chalk.red(`Missing value for ${option}`));
+        process.exit(1);
+    }
+    return value;
 }
 
 function showHelp() {
@@ -220,11 +264,12 @@ function showHelp() {
 ${chalk.bold('happy server')} - Run Happy sync server + web app locally (self-host)
 
 ${chalk.bold('Usage:')}
-  happy server [--port 3005] [--host 127.0.0.1] [--reset] [--no-persist]
+  happy server [--port 3005] [--host 127.0.0.1] [--public-url URL] [--reset] [--no-persist]
 
 ${chalk.bold('Options:')}
   --port, -p <n>        Port to listen on (default: 3005)
   --host <ip>           Host to bind (default: 127.0.0.1)
+  --public-url <url>     URL advertised to other CLI/App clients (default: local URL)
   --reset               Wipe local server data before starting
   --no-persist          Don't write serverUrl into settings.json
   ${SETTINGS_WRITE_CONFIRM_FLAG}
@@ -240,13 +285,13 @@ ${chalk.bold('Notes:')}
 `);
 }
 
-async function ensureSettingsWriteAllowed(opts: ServerOptions, serverUrl: string): Promise<void> {
+async function ensureSettingsWriteAllowed(opts: ServerOptions, advertisedUrl: string): Promise<void> {
     if (!opts.persistServerUrl || opts.allowSettingsWrite) {
         return;
     }
 
     const message =
-        `happy server will write settings.serverUrl and settings.webappUrl to ${serverUrl} ` +
+        `happy server will write its advertised URL ${advertisedUrl} to local Happy settings ` +
         `in ${configuration.settingsFile}.`;
 
     if (!process.stdin.isTTY || !process.stderr.isTTY) {

@@ -1,5 +1,6 @@
 import {
     SyncChangesResponseV4Schema,
+    MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
     SyncSnapshotResponseV4Schema,
     type CodexCommandEntityV4,
     type CodexEntityV4,
@@ -61,6 +62,7 @@ class FakeTransport implements AppSyncV4Transport {
     readonly committed = new Map<string, number>();
     changes: SyncChangeV4[] = [];
     snapshots: SyncSnapshotResponseV4[] = [];
+    readonly snapshotLimits: number[] = [];
     requireSnapshot = false;
     failAfterCommit = false;
     capabilities: SyncV4Capabilities = {
@@ -109,7 +111,12 @@ class FakeTransport implements AppSyncV4Transport {
         });
     }
 
-    async getSnapshot(): Promise<SyncSnapshotResponseV4> {
+    async getSnapshot(
+        _sessionId: string,
+        _cursor: string | null,
+        limit: number,
+    ): Promise<SyncSnapshotResponseV4> {
+        this.snapshotLimits.push(limit);
         const page = this.snapshots.shift();
         if (!page) throw new Error('missing snapshot');
         return SyncSnapshotResponseV4Schema.parse(page);
@@ -417,6 +424,10 @@ describe('AppSyncV4Client', () => {
         await receiver.pullChangesOnce();
         expect(applied.map((event) => event.source)).toEqual(['snapshot', 'snapshot']);
         expect(receiver.receiveCursor).toBe(2);
+        expect(transport.snapshotLimits).toEqual([
+            MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
+            MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE,
+        ]);
 
         const hydrated: AppSyncV4AppliedEntity[] = [];
         await (await client(storage, transport, hydrated)).hydrate();

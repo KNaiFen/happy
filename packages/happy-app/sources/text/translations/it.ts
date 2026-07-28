@@ -356,7 +356,18 @@ export const it: TranslationStructure = {
         failedToConnectToServer: 'Impossibile connettersi al server',
         currentlyUsingCustomServer: 'Attualmente si usa un server personalizzato',
         customServerUrlLabel: 'URL server personalizzato',
-        advancedFeatureFooter: 'Questa è una funzionalità avanzata. Cambia il server solo se sai cosa stai facendo. Dovrai disconnetterti e accedere di nuovo dopo aver cambiato server.'
+        advancedFeatureFooter: 'Questa è una funzionalità avanzata. Cambia il server solo se sai cosa stai facendo. Dovrai disconnetterti e accedere di nuovo dopo aver cambiato server.',
+        allowInsecureHttp: 'Consenti HTTP non sicuro',
+        allowInsecureHttpSubtitle: 'Solo per reti attendibili. HTTPS resta consigliato.',
+        webHttpLocalhostOnly: 'I browser Web consentono relay HTTP solo su localhost. Usa HTTPS per i server remoti.',
+        insecureHttpConfirmTitle: 'Abilitare HTTP non sicuro?',
+        insecureHttpConfirmBody: 'Continua solo su una rete attendibile. Un attaccante attivo può rubare il token, falsificare conferme, impersonare il server e osservare i metadati di trasporto. La crittografia end-to-end non impedisce questi attacchi.',
+        enableInsecureHttp: 'Abilita HTTP',
+        httpOrHttpsOnly: 'L’URL del server deve usare HTTP o HTTPS.',
+        urlCredentialsNotAllowed: 'L’URL del server non può contenere nome utente o password.',
+        urlQueryNotAllowed: 'L’URL del server non può contenere una stringa di query.',
+        urlFragmentNotAllowed: 'L’URL del server non può contenere un frammento.',
+        enableInsecureHttpFirst: 'Abilita HTTP non sicuro prima di usare questo server.',
     },
 
     sessionInfo: {

@@ -28,6 +28,7 @@ import {
     assertMinimumCodexCliVersion,
     isCodexCliVersionAtLeast,
     readCodexCliVersion,
+    type CodexCliVersion,
 } from './codexCliVersion';
 import { CodexThreadRegistry, type CodexTurnCompletion } from './codexThreadRegistry';
 import type { CodexProtocolTraceDirection, CodexProtocolTraceSink } from './codexProtocolTrace';
@@ -217,12 +218,12 @@ function formatScopedItemKey(threadId: string | null, itemId: string): string {
     return threadId ? `${threadId}:${itemId}` : itemId;
 }
 
-function isGoalActionsAvailable(): boolean {
-    return isCodexCliVersionAtLeast(readCodexCliVersion(), { major: 0, minor: 140, patch: 0 });
+function isGoalActionsAvailable(version: CodexCliVersion | null): boolean {
+    return isCodexCliVersionAtLeast(version, { major: 0, minor: 140, patch: 0 });
 }
 
-function isTurnSteeringAvailable(): boolean {
-    return isCodexCliVersionAtLeast(readCodexCliVersion(), { major: 0, minor: 145, patch: 0 });
+function isTurnSteeringAvailable(version: CodexCliVersion | null): boolean {
+    return isCodexCliVersionAtLeast(version, { major: 0, minor: 145, patch: 0 });
 }
 
 function sandboxPolicyForMode(mode: SandboxMode): SandboxPolicy {
@@ -351,6 +352,7 @@ export class CodexAppServerClient {
     private connected = false;
     private intentionalTransportClose = false;
     private sandboxConfig?: SandboxConfig;
+    private codexCliVersion: CodexCliVersion | null | undefined;
     private sandboxCleanup: (() => Promise<void>) | null = null;
     public sandboxEnabled = false;
 
@@ -387,8 +389,9 @@ export class CodexAppServerClient {
         error: null,
     };
 
-    constructor(sandboxConfig?: SandboxConfig) {
+    constructor(sandboxConfig?: SandboxConfig, codexCliVersion?: CodexCliVersion) {
         this.sandboxConfig = sandboxConfig;
+        this.codexCliVersion = codexCliVersion;
     }
 
     get threadId(): string | null {
@@ -400,11 +403,18 @@ export class CodexAppServerClient {
     }
 
     supportsGoalActions(): boolean {
-        return isGoalActionsAvailable();
+        return isGoalActionsAvailable(this.readCodexCliVersionOnce());
     }
 
     supportsTurnSteering(): boolean {
-        return isTurnSteeringAvailable();
+        return isTurnSteeringAvailable(this.readCodexCliVersionOnce());
+    }
+
+    private readCodexCliVersionOnce(): CodexCliVersion | null {
+        if (this.codexCliVersion === undefined) {
+            this.codexCliVersion = readCodexCliVersion();
+        }
+        return this.codexCliVersion;
     }
 
     setEventHandler(handler: (msg: EventMsg) => void): void {
@@ -915,10 +925,14 @@ export class CodexAppServerClient {
 
     async connect(): Promise<void> {
         if (this.connected) return;
-        assertMinimumCodexCliVersion();
+        const appServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH?.trim();
+        if (!appServerPath) {
+            this.codexCliVersion = assertMinimumCodexCliVersion(
+                this.codexCliVersion ?? readCodexCliVersion(),
+            );
+        }
         this.updateConnection({ connection: 'connecting', statusUnknown: true, error: null });
 
-        const appServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH?.trim();
         let command = appServerPath ? process.execPath : 'codex';
         let args = appServerPath ? [appServerPath] : ['app-server', '--listen', 'stdio://'];
         this.sandboxEnabled = false;

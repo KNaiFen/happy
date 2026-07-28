@@ -12,7 +12,7 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
-      - ".github/workflows/ci.yml"
+      - ".github/workflows/**"
   pull_request:
     paths:
       - "packages/happy-wire/**"
@@ -24,7 +24,7 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
-      - ".github/workflows/ci.yml"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
@@ -202,11 +202,38 @@ jobs:
       - name: Test App
         run: pnpm --filter happy-app exec vitest run
 
+      - name: Verify HTTP platform policy
+        run: |
+          pnpm --filter happy-app exec expo config --type public --json > "$RUNNER_TEMP/happy-app-config.json"
+          node scripts/ci/verify-http-platform-config.cjs "$RUNNER_TEMP/happy-app-config.json"
+
       - name: Export Web App
         run: pnpm --filter happy-app exec expo export --platform web --output-dir "$RUNNER_TEMP/happy-app-web"
 
       - name: Verify Web output
         run: test -f "$RUNNER_TEMP/happy-app-web/index.html"
+
+  tauri:
+    name: macOS Tauri Rust format, check, and test
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path packages/happy-app/src-tauri/Cargo.toml -- --check
+
+      - name: Check Tauri native transport
+        run: cargo check --locked --manifest-path packages/happy-app/src-tauri/Cargo.toml
+
+      - name: Test Tauri native transport
+        run: cargo test --locked --lib --manifest-path packages/happy-app/src-tauri/Cargo.toml
 
   migration:
     name: PostgreSQL migration deploy and upgrade
@@ -277,7 +304,7 @@ jobs:
           npm install --global @openai/codex@0.145.0
           CODEX_BIN="$(npm prefix --global)/bin/codex"
           test -x "$CODEX_BIN"
-          test "$("$CODEX_BIN" --version)" = "codex-cli 0.145.0"
+          test "$(timeout 10s "$CODEX_BIN" --version)" = "codex-cli 0.145.0"
           printf 'HAPPY_CODEX_PROTOCOL_BIN=%s\n' "$CODEX_BIN" >> "$GITHUB_ENV"
 
       - name: Regenerate stable-v2 protocol
@@ -311,6 +338,17 @@ jobs:
       - name: Build Wire dependency
         run: pnpm --filter @slopus/happy-wire build
 
+      - name: Install pinned Codex CLI
+        run: |
+          npm install --global @openai/codex@0.145.0
+          CODEX_BIN="$(npm prefix --global)/bin/codex"
+          test -x "$CODEX_BIN"
+          test "$(timeout 10s "$CODEX_BIN" --version)" = "codex-cli 0.145.0"
+          printf 'HAPPY_SCENARIO_CODEX_BIN=%s\n' "$CODEX_BIN" >> "$GITHUB_ENV"
+
+      - name: Exercise real HTTP relay, WebSocket, polling, and App projection
+        run: pnpm --filter happy test:codex-http-relay
+
       - name: Exercise fake Codex, CLI mapper, and durable transport faults
         run: >-
           pnpm --filter happy exec vitest run --project unit
@@ -328,6 +366,42 @@ jobs:
           pnpm --filter happy-app exec vitest run
           sources/sync/syncV4Client.spec.ts
           sources/sync/codexV4Projection.spec.ts
+
+  codex_long_turn:
+    name: Codex real ten-minute turn
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Install pinned Codex CLI
+        run: |
+          npm install --global @openai/codex@0.145.0
+          CODEX_BIN="$(npm prefix --global)/bin/codex"
+          test -x "$CODEX_BIN"
+          test "$(timeout 10s "$CODEX_BIN" --version)" = "codex-cli 0.145.0"
+          printf 'HAPPY_SCENARIO_CODEX_BIN=%s\n' "$CODEX_BIN" >> "$GITHUB_ENV"
+
+      - name: Keep a real stable-v2 turn active past ten minutes
+        run: pnpm --filter happy test:codex-real-long-turn
 
   dependency-audit:
     name: Production dependency critical audit
@@ -359,9 +433,11 @@ jobs:
       - server
       - cli
       - app
+      - tauri
       - migration
       - protocol-drift
       - codex_transport_scenarios
+      - codex_long_turn
       - dependency-audit
     runs-on: ubuntu-latest
     steps:
@@ -372,9 +448,11 @@ jobs:
           SERVER_RESULT: ${{ needs.server.result }}
           CLI_RESULT: ${{ needs.cli.result }}
           APP_RESULT: ${{ needs.app.result }}
+          TAURI_RESULT: ${{ needs.tauri.result }}
           MIGRATION_RESULT: ${{ needs.migration.result }}
           PROTOCOL_RESULT: ${{ needs.protocol-drift.result }}
           SCENARIOS_RESULT: ${{ needs.codex_transport_scenarios.result }}
+          LONG_TURN_RESULT: ${{ needs.codex_long_turn.result }}
           AUDIT_RESULT: ${{ needs.dependency-audit.result }}
         run: |
           test "$WIRE_RESULT" = success
@@ -382,7 +460,9 @@ jobs:
           test "$SERVER_RESULT" = success
           test "$CLI_RESULT" = success
           test "$APP_RESULT" = success
+          test "$TAURI_RESULT" = success
           test "$MIGRATION_RESULT" = success
           test "$PROTOCOL_RESULT" = success
           test "$SCENARIOS_RESULT" = success
+          test "$LONG_TURN_RESULT" = success
           test "$AUDIT_RESULT" = success

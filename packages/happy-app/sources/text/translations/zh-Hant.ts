@@ -358,7 +358,18 @@ export const zhHant: TranslationStructure = {
         failedToConnectToServer: '連線伺服器失敗',
         currentlyUsingCustomServer: '目前使用自訂伺服器',
         customServerUrlLabel: '自訂伺服器 URL',
-        advancedFeatureFooter: "這是一個進階功能。只有在您知道自己在做什麼時才更改伺服器。更改伺服器後您需要重新登入。"
+        advancedFeatureFooter: "這是一個進階功能。只有在您知道自己在做什麼時才更改伺服器。更改伺服器後您需要重新登入。",
+        allowInsecureHttp: '允許不安全的 HTTP',
+        allowInsecureHttpSubtitle: '僅限受信任網路，仍建議使用 HTTPS。',
+        webHttpLocalhostOnly: 'Web 瀏覽器僅允許連線 localhost 上的 HTTP 中繼；遠端伺服器必須使用 HTTPS。',
+        insecureHttpConfirmTitle: '啟用不安全的 HTTP？',
+        insecureHttpConfirmBody: '僅應在你信任的網路中繼續。主動攻擊者可以竊取權杖、偽造確認、冒充伺服器並觀察傳輸中繼資料。端對端加密無法阻止這些攻擊。',
+        enableInsecureHttp: '啟用 HTTP',
+        httpOrHttpsOnly: '伺服器 URL 必須使用 HTTP 或 HTTPS。',
+        urlCredentialsNotAllowed: '伺服器 URL 不能包含使用者名稱或密碼。',
+        urlQueryNotAllowed: '伺服器 URL 不能包含查詢字串。',
+        urlFragmentNotAllowed: '伺服器 URL 不能包含片段。',
+        enableInsecureHttpFirst: '使用此伺服器前請先啟用不安全的 HTTP。',
     },
 
     sessionInfo: {

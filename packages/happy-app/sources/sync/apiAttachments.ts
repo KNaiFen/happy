@@ -189,7 +189,7 @@ export async function uploadEncryptedBlob(
     }
 
     // PUT (local-storage mode): direct upload to our server.
-    const isServerUrl = upload.uploadUrl.startsWith(serverUrl);
+    const isServerUrl = hasSameOrigin(upload.uploadUrl, serverUrl);
     const headers: Record<string, string> = {
         'Content-Type': 'application/octet-stream',
     };
@@ -301,7 +301,7 @@ export async function downloadEncryptedAttachment(
     }
     const downloadUrl = rewriteLoopbackHost(rawDownloadUrl);
 
-    const isServerUrl = downloadUrl.startsWith(API_ENDPOINT);
+    const isServerUrl = hasSameOrigin(downloadUrl, API_ENDPOINT);
     const headers: Record<string, string> = {};
     if (isServerUrl) {
         headers['Authorization'] = `Bearer ${credentials.token}`;
@@ -342,6 +342,14 @@ export async function downloadEncryptedAttachment(
         });
     }
     return new Uint8Array(buffer);
+}
+
+function hasSameOrigin(candidateUrl: string, serverUrl: string): boolean {
+    try {
+        return new URL(candidateUrl).origin === new URL(serverUrl).origin;
+    } catch {
+        return false;
+    }
 }
 
 function formatNetworkErrorMessage(prefix: string, message: string): string {

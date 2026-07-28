@@ -1,7 +1,7 @@
 {
   "name": "happy-app",
   "main": "index.ts",
-  "version": "1.11.4",
+  "version": "1.11.5",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
@@ -87,7 +87,6 @@
     "@slopus/happy-wire": "workspace:*",
     "@tauri-apps/api": "2.9.1",
     "@tauri-apps/cli": "^2.8.1",
-    "@tauri-apps/plugin-http": "^2.5.2",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@types/libsodium-wrappers": "^0.7.14",
     "@types/prismjs": "^1.26.6",
@@ -96,7 +95,6 @@
     "@types/resolve-path": "^1.4.3",
     "@types/uuid": "^10.0.0",
     "@uiw/react-codemirror": "^4.25.9",
-    "axios": "^1.10.0",
     "color": "^5.0.0",
     "diff": "^8.0.2",
     "expo": "~55.0.8",

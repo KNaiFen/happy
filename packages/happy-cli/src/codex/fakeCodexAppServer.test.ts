@@ -108,6 +108,20 @@ describe('fake Codex app-server', () => {
             await waitFor(() => response(fake, 1) !== null);
 
             send(fake, {
+                id: 20,
+                method: 'initialize',
+                params: {
+                    clientInfo: { name: 'happy-test', title: 'Happy Test', version: '0.0.0' },
+                    capabilities: { experimentalApi: true, requestAttestation: false },
+                },
+            });
+            await waitFor(() => errorResponse(fake, 20) !== null);
+            expect(errorResponse(fake, 20)?.error).toMatchObject({
+                code: -32602,
+                message: 'strict stable-v2 requires initialize.capabilities.experimentalApi=false',
+            });
+
+            send(fake, {
                 id: 2,
                 method: 'thread/start',
                 params: { cwd: '/tmp/project', profile: null },

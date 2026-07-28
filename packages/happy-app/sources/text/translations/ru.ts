@@ -310,7 +310,18 @@ export const ru: TranslationStructure = {
         failedToConnectToServer: 'Не удалось подключиться к серверу',
         currentlyUsingCustomServer: 'Сейчас используется пользовательский сервер',
         customServerUrlLabel: 'URL пользовательского сервера',
-        advancedFeatureFooter: 'Это расширенная функция. Изменяйте сервер только если знаете, что делаете. Вам нужно будет выйти и войти снова после изменения серверов.'
+        advancedFeatureFooter: 'Это расширенная функция. Изменяйте сервер только если знаете, что делаете. Вам нужно будет выйти и войти снова после изменения серверов.',
+        allowInsecureHttp: 'Разрешить небезопасный HTTP',
+        allowInsecureHttpSubtitle: 'Только для доверенных сетей. Рекомендуется HTTPS.',
+        webHttpLocalhostOnly: 'В браузере HTTP доступен только для localhost. Для удалённых серверов используйте HTTPS.',
+        insecureHttpConfirmTitle: 'Включить небезопасный HTTP?',
+        insecureHttpConfirmBody: 'Продолжайте только в доверенной сети. Активный злоумышленник может украсть токен, подделать подтверждения, выдать себя за сервер и наблюдать метаданные транспорта. Сквозное шифрование не предотвращает эти атаки.',
+        enableInsecureHttp: 'Включить HTTP',
+        httpOrHttpsOnly: 'URL сервера должен использовать HTTP или HTTPS.',
+        urlCredentialsNotAllowed: 'URL сервера не может содержать имя пользователя или пароль.',
+        urlQueryNotAllowed: 'URL сервера не может содержать строку запроса.',
+        urlFragmentNotAllowed: 'URL сервера не может содержать фрагмент.',
+        enableInsecureHttpFirst: 'Сначала включите небезопасный HTTP.',
     },
 
     sessionInfo: {

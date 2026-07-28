@@ -143,6 +143,24 @@ describe('requestAttachmentUpload', () => {
 });
 
 describe('uploadEncryptedBlob', () => {
+    it('does not send the bearer token to a lookalike upload origin', async () => {
+        fetchMock.mockResolvedValueOnce(response({ ok: true }));
+
+        await uploadEncryptedBlob({
+            uploadUrl: 'https://api.cluster-fluster.com.evil.example/upload',
+            method: 'PUT',
+        }, new Uint8Array([1, 2, 3]), credentials);
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            'https://api.cluster-fluster.com.evil.example/upload',
+            expect.objectContaining({
+                headers: {
+                    'Content-Type': 'application/octet-stream',
+                },
+            }),
+        );
+    });
+
     it('classifies POST blob upload network failures without leaking presigned data', async () => {
         fetchMock.mockRejectedValueOnce(new Error('Failed to fetch'));
 
@@ -219,6 +237,26 @@ describe('uploadEncryptedBlob', () => {
 });
 
 describe('downloadEncryptedAttachment', () => {
+    it('does not send the bearer token to a lookalike download origin', async () => {
+        const lookalikeUrl = 'https://api.cluster-fluster.com.evil.example/download';
+        fetchMock
+            .mockResolvedValueOnce(response({
+                ok: true,
+                json: { downloadUrl: lookalikeUrl },
+            }))
+            .mockResolvedValueOnce(response({ ok: true }));
+
+        await downloadEncryptedAttachment(
+            credentials,
+            'session-1',
+            'happy/session-1/ref',
+        );
+
+        expect(fetchMock).toHaveBeenNthCalledWith(2, lookalikeUrl, {
+            headers: {},
+        });
+    });
+
     it('classifies request-download network failures without leaking attachment refs', async () => {
         fetchMock.mockRejectedValueOnce(new Error('Failed to fetch'));
 
