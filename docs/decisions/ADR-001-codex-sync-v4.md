@@ -240,6 +240,27 @@ provider IDs, prompts, tool arguments, and outputs to the relay.
 - Additive tables and retained v3 history allow code rollback without a
   destructive database rollback.
 
+### 2026-07-28 remediation addendum
+
+The initial implementation review found recovery, ordering, scale, and
+platform gaps that must be closed before the feature flag is enabled. The
+tracked execution baseline is
+`docs/plans/codex-sync-v4-remediation.md`.
+
+Three product boundaries are now explicit:
+
+- custom HTTP relays are an opt-in trusted-network mode; active MITM attacks
+  can forge acknowledgements, steal bearer tokens, and manipulate transport
+  metadata, so the HTTPS zero-loss security claim does not apply;
+- Web remains HTTPS or localhost only because mixed-content rules and secure
+  context requirements prevent a general HTTPS-Web-to-HTTP-relay design; and
+- Codex remains stable-v2 only. Happy will not use experimental history
+  pagination or settings mutation APIs to satisfy the original plan.
+
+Provider-created child sessions remain strictly read-only. Permission and
+user-input controls must be rejected both by the App interaction surface and
+by the CLI command ownership boundary.
+
 ## Superseded Documents
 
 This ADR supersedes the architectural and release-scope assumptions in:
