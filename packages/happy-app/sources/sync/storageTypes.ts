@@ -122,6 +122,8 @@ export const MetadataSchema = z.object({
     machineId: z.string().optional(),
     claudeSessionId: z.string().optional(), // Claude Code session ID
     codexThreadId: z.string().optional(), // Codex app-server thread ID
+    /** Encrypted marker proving the session owner selected canonical Sync v4. */
+    codexSyncVersion: z.literal(4).optional(),
     codexCapabilities: z.object({
         queueSteering: z.boolean().optional(),
     }).passthrough().optional(),

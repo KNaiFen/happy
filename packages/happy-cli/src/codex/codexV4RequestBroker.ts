@@ -18,11 +18,12 @@ interface PendingRequest {
     responsePromise: Promise<unknown>;
     provideResponse: (response: unknown) => void;
     rejectResponse: (error: Error) => void;
-    state: 'pending' | 'resolved' | 'settling';
+    state: 'pending' | 'responseReady' | 'responseSupplied' | 'settling';
     response: unknown;
     deliveryPromise: Promise<void> | null;
     markDelivery: (() => void) | null;
     rejectDelivery: ((error: Error) => void) | null;
+    providerResolved: boolean;
 }
 
 export interface CodexV4RequestResolution {
@@ -34,6 +35,13 @@ export interface CodexV4RequestResolution {
 interface RequestBrokerOptions {
     mapper: Pick<CodexSyncV4Mapper, 'upsertRequest'>;
     now?: () => number;
+}
+
+class CodexRequestDeliveryUnknownError extends Error {
+    constructor(reason: 'transportDisconnected' | 'brokerClosed') {
+        super(`Codex provider request delivery is unknown: ${reason}`);
+        this.name = 'CodexRpcOutcomeUnknownError';
+    }
 }
 
 export class CodexV4RequestBroker {
@@ -64,6 +72,7 @@ export class CodexV4RequestBroker {
             deliveryPromise: null,
             markDelivery: null,
             rejectDelivery: null,
+            providerResolved: false,
         };
         this.pending.set(key, pending);
         try {
@@ -81,7 +90,7 @@ export class CodexV4RequestBroker {
         if (!pending) throw new Error('Codex request is no longer pending');
         if (pending.state !== 'pending') throw new Error('Codex request response is already awaiting delivery');
         const response = validateResponse(pending.method, resolution.response);
-        pending.state = 'resolved';
+        pending.state = 'responseReady';
         pending.response = response;
         pending.deliveryPromise = new Promise<void>((resolve, reject) => {
             pending.markDelivery = resolve;
@@ -90,6 +99,20 @@ export class CodexV4RequestBroker {
         pending.provideResponse(response);
         await pending.deliveryPromise;
         return { providerRequestId: resolution.requestId };
+    }
+
+    async recoverPending(requests: readonly CodexRequestEntityV4[]): Promise<number> {
+        for (const request of requests) {
+            const now = this.now();
+            await this.options.mapper.upsertRequest({
+                ...request,
+                status: 'error',
+                response: { error: 'providerProcessRestarted' },
+                resolvedAt: now,
+                updatedAt: now,
+            });
+        }
+        return requests.length;
     }
 
     async failPending(reason: 'transportDisconnected' | 'brokerClosed'): Promise<void> {
@@ -105,8 +128,12 @@ export class CodexV4RequestBroker {
         const key = requestKey(threadId, requestId);
         const pending = this.pending.get(key);
         if (!pending || pending.state === 'settling') return;
-        if (pending.state === 'resolved') {
+        if (pending.state === 'responseSupplied') {
             await this.markDelivered(key, pending);
+            return;
+        }
+        if (pending.state === 'responseReady') {
+            pending.providerResolved = true;
             return;
         }
 
@@ -125,6 +152,7 @@ export class CodexV4RequestBroker {
         } finally {
             this.pending.delete(key);
             pending.rejectResponse(error);
+            pending.rejectDelivery?.(error);
         }
     }
 
@@ -143,13 +171,21 @@ export class CodexV4RequestBroker {
         const response = await pending.responsePromise;
         return {
             response,
+            markResponseSupplied: () => this.markResponseSupplied(key, pending),
             markDelivered: () => this.markDelivered(key, pending),
             markAbandoned: () => this.markAbandoned(key, pending, 'transportDisconnected'),
         };
     }
 
+    private async markResponseSupplied(key: string, pending: PendingRequest): Promise<void> {
+        if (this.pending.get(key) === pending && pending.state === 'responseReady') {
+            pending.state = 'responseSupplied';
+            if (pending.providerResolved) await this.markDelivered(key, pending);
+        }
+    }
+
     private async markDelivered(key: string, pending: PendingRequest): Promise<void> {
-        if (this.pending.get(key) !== pending || pending.state !== 'resolved') return;
+        if (this.pending.get(key) !== pending || pending.state !== 'responseSupplied') return;
         pending.state = 'settling';
         const now = this.now();
         const entity: CodexRequestEntityV4 = {
@@ -176,8 +212,11 @@ export class CodexV4RequestBroker {
         reason: 'transportDisconnected' | 'brokerClosed',
     ): Promise<void> {
         if (this.pending.get(key) !== pending || pending.state === 'settling') return;
+        const responseWasSupplied = pending.state === 'responseSupplied' || pending.providerResolved;
         pending.state = 'settling';
-        const error = new Error(`Codex provider request is unavailable: ${reason}`);
+        const error = responseWasSupplied
+            ? new CodexRequestDeliveryUnknownError(reason)
+            : new Error(`Codex provider request is unavailable: ${reason}`);
         const now = this.now();
         const entity: CodexRequestEntityV4 = {
             ...pending.entity,

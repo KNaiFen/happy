@@ -3,6 +3,34 @@ import * as z from 'zod';
 export const MAX_SYNC_V4_MUTATIONS_PER_BATCH = 100;
 export const MAX_SYNC_V4_CIPHERTEXT_LENGTH = 256 * 1024;
 export const MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH = 4 * 1024 * 1024;
+export const CODEX_SYNC_V4_PROTOCOL_VERSION = 4 as const;
+
+const SyncV4StableVersionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
+
+export const SyncV4CapabilitiesSchema = z.object({
+  codex: z.object({
+    enabled: z.boolean(),
+    protocolVersion: z.literal(CODEX_SYNC_V4_PROTOCOL_VERSION),
+    minimumHappyCliVersion: SyncV4StableVersionSchema,
+    minimumHappyAppVersion: SyncV4StableVersionSchema,
+    minimumCodexCliVersion: SyncV4StableVersionSchema,
+  }).strict(),
+}).strict();
+export type SyncV4Capabilities = z.infer<typeof SyncV4CapabilitiesSchema>;
+
+export function isSyncV4VersionAtLeast(current: string, minimum: string): boolean {
+  const currentMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(current);
+  const minimumMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(minimum);
+  if (!currentMatch || !minimumMatch) return false;
+
+  for (let index = 1; index <= 3; index += 1) {
+    const currentPart = Number(currentMatch[index]);
+    const minimumPart = Number(minimumMatch[index]);
+    if (!Number.isSafeInteger(currentPart) || !Number.isSafeInteger(minimumPart)) return false;
+    if (currentPart !== minimumPart) return currentPart > minimumPart;
+  }
+  return true;
+}
 
 const utf8Encoder = new TextEncoder();
 

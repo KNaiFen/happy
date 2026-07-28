@@ -338,6 +338,8 @@ export type Metadata = {
   gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID
+  /** Canonical encrypted transport selected for this Codex session. */
+  codexSyncVersion?: 4,
   tools?: string[],
   slashCommands?: string[],
   mcpServers?: Array<{ name: string; status: string }>,

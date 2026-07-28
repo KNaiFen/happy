@@ -114,10 +114,12 @@ const sandboxConfig: SandboxConfig = {
 
 describe('CodexAppServerClient sandbox integration', () => {
     const originalRustLog = process.env.RUST_LOG;
+    const originalAppServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH;
 
     beforeEach(() => {
         vi.clearAllMocks();
         process.env.RUST_LOG = originalRustLog;
+        delete process.env.HAPPY_CODEX_APP_SERVER_PATH;
         mockExecSync.mockReturnValue('codex-cli 0.145.0');
         mockInitializeSandbox.mockResolvedValue(mockSandboxCleanup);
         mockWrapForMcpTransport.mockResolvedValue({ command: 'sh', args: ['-c', 'wrapped codex app-server'] });
@@ -126,6 +128,11 @@ describe('CodexAppServerClient sandbox integration', () => {
 
     afterAll(() => {
         process.env.RUST_LOG = originalRustLog;
+        if (originalAppServerPath === undefined) {
+            delete process.env.HAPPY_CODEX_APP_SERVER_PATH;
+        } else {
+            process.env.HAPPY_CODEX_APP_SERVER_PATH = originalAppServerPath;
+        }
     });
 
     it('reports goal action support for Codex versions with goal action requests', async () => {
@@ -154,6 +161,23 @@ describe('CodexAppServerClient sandbox integration', () => {
 
         await expect(new CodexAppServerClient().connect()).rejects.toThrow('found 0.144.9');
         expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('can launch the payload-free fake app-server through an explicit local test path', async () => {
+        process.env.HAPPY_CODEX_APP_SERVER_PATH = '/tmp/fake-codex-app-server.cjs';
+        const proc = createMockProcess();
+        mockSpawn.mockReturnValue(proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+
+        expect(mockSpawn).toHaveBeenCalledWith(
+            process.execPath,
+            ['/tmp/fake-codex-app-server.cjs'],
+            expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] }),
+        );
+        await client.disconnect();
     });
 
     it('publishes connection uncertainty across startup and unexpected process exit', async () => {
@@ -2518,7 +2542,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
-    it('routes stable server requests through the v4 request handler by JSON-RPC id', async () => {
+    it('waits for the provider request-resolution notification before delivery ACK', async () => {
         const requests: MockRpcMessage[] = [];
         const proc = createMockProcess({
             onRequest: (msg) => { requests.push(msg); },
@@ -2527,12 +2551,22 @@ describe('CodexAppServerClient sandbox integration', () => {
         const { CodexAppServerClient } = await import('./codexAppServerClient');
         const client = new CodexAppServerClient();
         const handled: Array<Record<string, unknown>> = [];
+        const markResponseSupplied = vi.fn(async () => {});
         const markDelivered = vi.fn(async () => {});
         const markAbandoned = vi.fn(async () => {});
+        client.setStableNotificationHandler((notification) => {
+            if (
+                notification.method === 'serverRequest/resolved'
+                && String(notification.params.requestId) === '88'
+            ) {
+                void markDelivered();
+            }
+        });
         client.setServerRequestHandler(async (request) => {
             handled.push(request as unknown as Record<string, unknown>);
             return {
                 response: { answers: { mode: { answers: ['safe'] } } },
+                markResponseSupplied,
                 markDelivered,
                 markAbandoned,
             };
@@ -2561,8 +2595,53 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(requests.find((message) => message.id === 88)?.result).toEqual({
             answers: { mode: { answers: ['safe'] } },
         });
-        expect(markDelivered).toHaveBeenCalledOnce();
+        await waitFor(() => markResponseSupplied.mock.calls.length === 1);
+        expect(markResponseSupplied).toHaveBeenCalledOnce();
+        expect(markDelivered).not.toHaveBeenCalled();
         expect(markAbandoned).not.toHaveBeenCalled();
+        pushJsonLine(proc.stdout, {
+            method: 'serverRequest/resolved',
+            params: { threadId: 'thread-1', requestId: 88 },
+        });
+        await waitFor(() => markDelivered.mock.calls.length === 1);
+        await client.disconnect();
+    });
+
+    it('abandons a provider response when stdin reports an asynchronous write failure', async () => {
+        const proc = createMockProcess();
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const markResponseSupplied = vi.fn(async () => {});
+        const markDelivered = vi.fn(async () => {});
+        const markAbandoned = vi.fn(async () => {});
+        client.setServerRequestHandler(async () => ({
+            response: { decision: 'accept' },
+            markResponseSupplied,
+            markDelivered,
+            markAbandoned,
+        }));
+
+        await client.connect();
+        const originalWrite = proc.stdin.write.bind(proc.stdin);
+        proc.stdin.write = (data: any, ...args: any[]) => {
+            const message = JSON.parse(typeof data === 'string' ? data : data.toString()) as MockRpcMessage;
+            if (message.id === 89 && message.result) {
+                const callback = args.find((value) => typeof value === 'function');
+                queueMicrotask(() => callback?.(new Error('simulated EPIPE')));
+                return false;
+            }
+            return originalWrite(data, ...args);
+        };
+        pushJsonLine(proc.stdout, {
+            id: 89,
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+        });
+
+        await waitFor(() => markAbandoned.mock.calls.length === 1);
+        expect(markResponseSupplied).not.toHaveBeenCalled();
+        expect(markDelivered).not.toHaveBeenCalled();
         await client.disconnect();
     });
 
@@ -2578,12 +2657,14 @@ describe('CodexAppServerClient sandbox integration', () => {
         const client = new CodexAppServerClient();
         let provideManagedResponse!: () => void;
         const responseGate = new Promise<void>((resolve) => { provideManagedResponse = resolve; });
+        const markResponseSupplied = vi.fn(async () => {});
         const markDelivered = vi.fn(async () => {});
         const markAbandoned = vi.fn(async () => {});
         client.setServerRequestHandler(async () => {
             await responseGate;
             return {
                 response: { decision: 'accept' },
+                markResponseSupplied,
                 markDelivered,
                 markAbandoned,
             };
@@ -2602,6 +2683,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         await waitFor(() => markAbandoned.mock.calls.length === 1);
 
         expect(markDelivered).not.toHaveBeenCalled();
+        expect(markResponseSupplied).not.toHaveBeenCalled();
         expect(secondRequests.some((message) => message.id === 91)).toBe(false);
         expect(firstRequests.some((message) => message.id === 91 && message.result)).toBe(false);
         await client.disconnect();
@@ -2614,6 +2696,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         const client = new CodexAppServerClient();
         const handler = vi.fn(async () => ({
             response: { decision: 'decline' },
+            markResponseSupplied: vi.fn(async () => {}),
             markDelivered: vi.fn(async () => {}),
             markAbandoned: vi.fn(async () => {}),
         }));

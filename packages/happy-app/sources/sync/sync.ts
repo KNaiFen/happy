@@ -70,7 +70,11 @@ import { isRigMetadataV1, rigCanUseAttachments, usesControlledSessionUi } from '
 import { AppSyncV4Client, type AppSyncV4AppliedEntity } from './syncV4Client';
 import { syncV4Persistence } from './syncV4Persistence.mmkv';
 import { HttpAppSyncV4Transport } from './syncV4Transport';
-import { CodexV4ClientRegistry } from './codexV4ClientRegistry';
+import {
+    CodexV4ClientRegistry,
+    isCodexV4SyncActive,
+    isCodexV4SyncEligible,
+} from './codexV4ClientRegistry';
 import {
     commandForCodexV4Input,
     createCodexV4Command,
@@ -165,19 +169,24 @@ class Sync {
 
     constructor() {
         this.codexV4Clients = new CodexV4ClientRegistry({
-            createClient: ({ sessionId, sessionKey, onEntity, onSnapshotReset }) => AppSyncV4Client.create({
+            createClient: ({ sessionId, sessionKey, onEntity, onEntities, onSnapshotReset }) => AppSyncV4Client.create({
                 sessionId,
                 sessionKey,
+                appVersion: Constants.expoConfig?.version || '0.0.0',
                 persistence: syncV4Persistence,
                 transport: new HttpAppSyncV4Transport(),
                 onEntity,
+                onEntities,
                 onSnapshotReset,
             }),
-            isEligible: (sessionId) => (
-                storage.getState().sessions[sessionId]?.metadata?.flavor === 'codex'
+            isEligible: (sessionId) => isCodexV4SyncEligible(
+                storage.getState().sessions[sessionId]?.metadata,
             ),
             onEntity: async (sessionId, event) => {
                 storage.getState().applyCodexV4Entity(sessionId, event);
+            },
+            onEntities: async (sessionId, events) => {
+                storage.getState().applyCodexV4Entities(sessionId, events);
             },
             onSnapshotReset: async (sessionId) => {
                 storage.getState().resetCodexV4Projection(sessionId);
@@ -328,8 +337,7 @@ class Sync {
 
 
     onSessionVisible = (sessionId: string) => {
-        const codexV4 = storage.getState().codexV4Sessions[sessionId];
-        if (codexV4?.activated) {
+        if (this.isCodexV4Activated(sessionId)) {
             this.codexV4Clients.invalidate(sessionId);
         } else {
             this.getMessagesSync(sessionId).invalidate();
@@ -347,8 +355,10 @@ class Sync {
 
     isCodexV4Activated(sessionId: string): boolean {
         const state = storage.getState();
-        return state.sessions[sessionId]?.metadata?.flavor === 'codex'
-            && state.codexV4Sessions[sessionId]?.activated === true;
+        return isCodexV4SyncActive(
+            state.sessions[sessionId]?.metadata,
+            state.codexV4Sessions[sessionId],
+        );
     }
 
     async publishCodexV4Command(
@@ -667,8 +677,7 @@ class Sync {
         const localId = options?.localKey ?? randomUUID();
 
         const flavor = session.metadata?.flavor;
-        const codexV4Projection = storage.getState().codexV4Sessions[sessionId];
-        const useCodexV4 = flavor === 'codex' && codexV4Projection?.activated === true;
+        const useCodexV4 = this.isCodexV4Activated(sessionId);
         const parsedCodexV4Input = useCodexV4
             ? parseCodexV4Input(text, session.metadata?.skills ?? [])
             : null;
@@ -768,7 +777,10 @@ class Sync {
             }
         }
 
-        if (useCodexV4 && codexV4Projection && parsedCodexV4Input) {
+        const codexV4Projection = useCodexV4
+            ? storage.getState().codexV4Sessions[sessionId]
+            : null;
+        if (codexV4Projection && parsedCodexV4Input) {
             const draft = commandForCodexV4Input({
                 parsed: parsedCodexV4Input,
                 projection: codexV4Projection,
@@ -2880,8 +2892,25 @@ class Sync {
     private applySessions = (sessions: (Omit<Session, "presence"> & {
         presence?: "online" | number;
     })[]) => {
-        const active = storage.getState().getActiveSessions();
+        const previousState = storage.getState();
+        const active = previousState.getActiveSessions();
+        const rolledBackCodexV4SessionIds = sessions.flatMap((session) => {
+            const previousSession = previousState.sessions[session.id];
+            const projection = previousState.codexV4Sessions[session.id];
+            return isCodexV4SyncActive(previousSession?.metadata, projection)
+                && !isCodexV4SyncEligible(session.metadata)
+                ? [session.id]
+                : [];
+        });
         storage.getState().applySessions(sessions);
+        for (const sessionId of rolledBackCodexV4SessionIds) {
+            this.messagesSync.get(sessionId)?.stop();
+            this.messagesSync.delete(sessionId);
+            this.sessionLastSeq.delete(sessionId);
+            this.sessionOldestSeq.delete(sessionId);
+            storage.getState().resetSessionMessages(sessionId);
+            this.getMessagesSync(sessionId).invalidate();
+        }
         const newActive = storage.getState().getActiveSessions();
         this.applySessionDiff(active, newActive);
     }
@@ -2903,7 +2932,7 @@ class Sync {
 
     private reconcileCodexV4Clients(sessions: Array<{ id: string; metadata: Session['metadata'] }>): void {
         this.codexV4Clients.reconcile(sessions.flatMap((session) => {
-            if (session.metadata?.flavor !== 'codex') return [];
+            if (!isCodexV4SyncEligible(session.metadata)) return [];
             const sessionKey = this.encryption.getSessionDataKey(session.id);
             return sessionKey ? [{ sessionId: session.id, sessionKey }] : [];
         }));

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CodexRelationEntityV4 } from '@slopus/happy-wire';
+import type { SyncV4MigrationJournalState } from '@/api/syncV4Journal';
 import type { ServerNotification, Thread, ThreadGoal } from './protocol';
+import type { CodexV4ChildThreadRoute } from './codexV4Migration';
 import {
     CodexV4ThreadRouter,
     type CodexV4SessionBinding,
@@ -9,6 +11,7 @@ import {
 class FakeMapper {
     readonly notifications: ServerNotification[] = [];
     readonly snapshots: Thread[] = [];
+    readonly stateSnapshots: Thread[] = [];
     readonly relations: CodexRelationEntityV4[] = [];
     readonly goals: Array<{ threadId: string; goal: ThreadGoal | null }> = [];
 
@@ -18,6 +21,10 @@ class FakeMapper {
 
     importThread(thread: Thread): void {
         this.snapshots.push(thread);
+    }
+
+    importThreadState(thread: Thread): void {
+        this.stateSnapshots.push(thread);
     }
 
     importGoal(threadId: string, goal: ThreadGoal | null): void {
@@ -34,11 +41,12 @@ class FakeMapper {
     async flush(): Promise<void> {}
 }
 
-function binding(sessionId: string) {
+function binding(sessionId: string, initialMigrationState?: SyncV4MigrationJournalState) {
     const mapper = new FakeMapper();
     const requestBroker = {
         handle: vi.fn(async () => ({
             response: { decision: 'accept' },
+            markResponseSupplied: vi.fn(async () => {}),
             markDelivered: vi.fn(async () => {}),
             markAbandoned: vi.fn(async () => {}),
         })),
@@ -46,11 +54,18 @@ function binding(sessionId: string) {
         markProviderResolved: vi.fn(async () => {}),
     };
     const close = vi.fn(async () => {});
+    let migrationState = initialMigrationState;
     const value = {
         sessionId,
         sessionKey: new Uint8Array(32),
         mapper,
-        syncClient: { flushOutboundOnce: vi.fn(async () => {}) },
+        syncClient: {
+            flushOutboundOnce: vi.fn(async () => {}),
+            getMigrationState: vi.fn(() => migrationState),
+            setMigrationState: vi.fn(async (_threadId: string, state: SyncV4MigrationJournalState) => {
+                migrationState = state;
+            }),
+        },
         commandProcessor: {},
         requestBroker,
         close,
@@ -187,6 +202,141 @@ describe('CodexV4ThreadRouter', () => {
         expect(nested.mapper.notifications).toHaveLength(1);
     });
 
+    it('hydrates the immediate parent when a nested child notification arrives first', async () => {
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        const nested = binding('happy-nested');
+        const createChildBinding = vi.fn(async (
+            route: CodexV4ChildThreadRoute,
+            parentBinding: CodexV4SessionBinding,
+        ) => {
+            if (route.thread.id === 'thread-child') {
+                expect(parentBinding.sessionId).toBe('happy-root');
+                return child.value;
+            }
+            expect(parentBinding.sessionId).toBe('happy-child');
+            return nested.value;
+        });
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async (threadId) => {
+                if (threadId === 'thread-child') return thread('thread-child', 'thread-root');
+                throw new Error(`unexpected read for ${threadId}`);
+            },
+            createChildBinding,
+        });
+        router.registerRootThread('thread-root');
+
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: thread('thread-nested', 'thread-child') },
+        });
+        await router.flush();
+
+        expect(createChildBinding).toHaveBeenCalledTimes(2);
+        expect(root.mapper.relations.map((relation) => relation.childThreadId)).toEqual(['thread-child']);
+        expect(child.mapper.relations.map((relation) => relation.childThreadId)).toEqual(['thread-nested']);
+        expect(root.mapper.relations.some((relation) => relation.childThreadId === 'thread-nested')).toBe(false);
+        expect(nested.mapper.notifications).toHaveLength(1);
+    });
+
+    it('keeps nested and direct-child completion updates on their immediate parent relation', async () => {
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        const nested = binding('happy-nested');
+        const bindings = new Map([
+            ['thread-child', child.value],
+            ['thread-nested', nested.value],
+        ]);
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async (threadId) => thread(
+                threadId,
+                threadId === 'thread-child' ? 'thread-root' : 'thread-child',
+            ),
+            createChildBinding: async (route) => bindings.get(route.thread.id)!,
+        });
+        router.registerRootThread('thread-root');
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: thread('thread-child', 'thread-root') },
+        });
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: thread('thread-nested', 'thread-child') },
+        });
+        await router.flush();
+
+        const activeTurn = (threadId: string, turnId: string): ServerNotification => ({
+            method: 'turn/started',
+            params: {
+                threadId,
+                turn: {
+                    id: turnId,
+                    items: [],
+                    itemsView: 'full',
+                    status: 'inProgress',
+                    error: null,
+                    startedAt: 3,
+                    completedAt: null,
+                    durationMs: null,
+                },
+            },
+        });
+        const completedTurn = (threadId: string, turnId: string): ServerNotification => ({
+            method: 'turn/completed',
+            params: {
+                threadId,
+                turn: {
+                    id: turnId,
+                    items: [],
+                    itemsView: 'full',
+                    status: 'completed',
+                    error: null,
+                    startedAt: 3,
+                    completedAt: 4,
+                    durationMs: 1,
+                },
+            },
+        });
+
+        router.handleNotification(activeTurn('thread-child', 'turn-child'));
+        router.handleNotification(activeTurn('thread-nested', 'turn-nested'));
+        await router.flush();
+        expect(root.mapper.relations.at(-1)).toMatchObject({ childThreadId: 'thread-child', status: 'active' });
+        expect(child.mapper.relations.at(-1)).toMatchObject({ childThreadId: 'thread-nested', status: 'active' });
+
+        router.handleNotification(completedTurn('thread-nested', 'turn-nested'));
+        await router.flush();
+        expect(child.mapper.relations.at(-1)).toMatchObject({ childThreadId: 'thread-nested', status: 'completed' });
+        expect(root.mapper.relations.at(-1)).toMatchObject({ childThreadId: 'thread-child', status: 'active' });
+
+        router.handleNotification(completedTurn('thread-child', 'turn-child'));
+        await router.flush();
+        expect(root.mapper.relations.at(-1)).toMatchObject({ childThreadId: 'thread-child', status: 'completed' });
+    });
+
+    it('refreshes a previously migrated child without replaying its historical items', async () => {
+        const root = binding('happy-root');
+        const child = binding('happy-child', 'ready');
+        const childThread = thread('thread-child', 'thread-root');
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => childThread,
+            createChildBinding: async () => child.value,
+        });
+        router.registerRootThread('thread-root');
+
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: childThread },
+        });
+        await router.flush();
+
+        expect(child.mapper.snapshots).toEqual([]);
+        expect(child.mapper.stateSnapshots).toEqual([childThread]);
+    });
+
     it('routes provider requests to the broker that owns the request thread', async () => {
         const root = binding('happy-root');
         const child = binding('happy-child');
@@ -298,6 +448,44 @@ describe('CodexV4ThreadRouter', () => {
 
         expect(createChildBinding).toHaveBeenCalledOnce();
         expect(root.mapper.relations).toHaveLength(1);
+    });
+
+    it('does not block root notifications while a child binding is being created', async () => {
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        let childBindingStarted!: () => void;
+        let releaseChildBinding!: () => void;
+        const started = new Promise<void>((resolve) => { childBindingStarted = resolve; });
+        const gate = new Promise<void>((resolve) => { releaseChildBinding = resolve; });
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async (threadId) => thread(threadId, 'thread-root'),
+            createChildBinding: async () => {
+                childBindingStarted();
+                await gate;
+                return child.value;
+            },
+        });
+        router.registerRootThread('thread-root');
+
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: thread('thread-child', 'thread-root') },
+        });
+        await started;
+        const rootNotification = {
+            method: 'thread/status/changed',
+            params: { threadId: 'thread-root', status: { type: 'active', activeFlags: [] } },
+        } as ServerNotification;
+        router.handleNotification(rootNotification);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(root.mapper.notifications).toEqual([rootNotification]);
+        expect(child.mapper.notifications).toEqual([]);
+
+        releaseChildBinding();
+        await router.flush();
+        expect(child.mapper.notifications).toHaveLength(1);
     });
 
     it('expires pending requests in every thread binding when the transport disconnects', async () => {

@@ -165,6 +165,39 @@ describe('CodexV4CommandProcessor', () => {
         processor.close();
     });
 
+    it('leaves a received command for the replacement processor when closed mid-transition', async () => {
+        const store = new FakeStore();
+        let releaseReceived!: () => void;
+        let receivedPersisted!: () => void;
+        const received = new Promise<void>((resolve) => { receivedPersisted = resolve; });
+        const gate = new Promise<void>((resolve) => { releaseReceived = resolve; });
+        const publish = store.publishCommandTransition.bind(store);
+        store.publishCommandTransition = async (pending, result, status) => {
+            const mutation = await publish(pending, result, status);
+            if (status === 'received') {
+                receivedPersisted();
+                await gate;
+            }
+            return mutation;
+        };
+        const execute = vi.fn(async () => ({ turnId: 'turn-1' }));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+        });
+
+        const handling = processor.handle(event(command()));
+        await received;
+        processor.close();
+        releaseReceived();
+        await handling;
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(store.statuses.get('command-1')).toBe('received');
+    });
+
     it('rejects commands whose provider idempotency key differs from commandId', async () => {
         const store = new FakeStore();
         const execute = vi.fn(async () => ({}));

@@ -5,6 +5,8 @@ import {
     type CodexRelationEntityV4,
 } from '@slopus/happy-wire';
 import type { SyncV4Client } from '@/api/syncV4Client';
+import { logger } from '@/ui/logger';
+import { createHash } from 'node:crypto';
 import type {
     CodexConnectionEvent,
     CodexManagedServerResponse,
@@ -51,7 +53,7 @@ export class CodexV4ThreadRouter {
     private readonly bindingPromisesByThread = new Map<string, Promise<CodexV4SessionBinding>>();
     private readonly lineagesByChild = new Map<string, RelationLineage>();
     private readonly relationsByChild = new Map<string, CodexRelationEntityV4>();
-    private pipeline: Promise<void> = Promise.resolve();
+    private readonly pipelinesByThread = new Map<string, Promise<void>>();
     private rootThreadId: string | null = null;
     private closed = false;
 
@@ -67,9 +69,19 @@ export class CodexV4ThreadRouter {
 
     handleNotification(notification: ServerNotification): void {
         if (this.closed) return;
-        this.pipeline = this.pipeline
+        const threadId = notificationThreadId(notification);
+        if (!threadId) return;
+        const previous = this.pipelinesByThread.get(threadId) ?? Promise.resolve();
+        let pipeline!: Promise<void>;
+        pipeline = previous
             .then(() => this.routeNotification(notification))
-            .catch((error) => { this.options.onError?.(error); });
+            .catch((error) => { this.options.onError?.(error); })
+            .finally(() => {
+                if (this.pipelinesByThread.get(threadId) === pipeline) {
+                    this.pipelinesByThread.delete(threadId);
+                }
+            });
+        this.pipelinesByThread.set(threadId, pipeline);
     }
 
     async handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse> {
@@ -107,7 +119,7 @@ export class CodexV4ThreadRouter {
     }
 
     async flush(): Promise<void> {
-        await this.pipeline;
+        await Promise.all([...this.pipelinesByThread.values()]);
         for (const binding of new Set(this.bindingsByThread.values())) {
             await binding.mapper.flush();
         }
@@ -130,6 +142,13 @@ export class CodexV4ThreadRouter {
 
         let binding = this.bindingsByThread.get(threadId);
         const snapshot = notification.method === 'thread/started' ? notification.params.thread : null;
+        if (!binding) {
+            logger.debug('[Codex v4] Orphan notification recovery', {
+                thread: createHash('sha256').update(threadId).digest('hex').slice(0, 16),
+                method: notification.method,
+                recovery: snapshot ? 'notificationSnapshot' : 'threadRead',
+            });
+        }
         if (!binding && snapshot) {
             binding = await this.bindingForSnapshot(snapshot);
         } else if (!binding) {
@@ -373,6 +392,8 @@ function migrationSink(binding: CodexV4SessionBinding): CodexV4MigrationSink {
         setSyncState: (state) => binding.mapper.setSyncState(state),
         flush: () => binding.mapper.flush(),
         flushOutboundOnce: () => binding.syncClient.flushOutboundOnce(),
+        getMigrationState: (threadId) => binding.syncClient.getMigrationState(threadId),
+        setMigrationState: (threadId, state) => binding.syncClient.setMigrationState(threadId, state),
     };
 }
 
@@ -382,19 +403,41 @@ async function activateChildBinding(
     goal: ThreadGoal | null,
 ): Promise<void> {
     const sink = migrationSink(binding);
-    await sink.prepareMigration(thread.id);
-    await sink.flush();
-    await sink.flushOutboundOnce();
-    await sink.setSyncState('importing');
-    await sink.flush();
-    await sink.flushOutboundOnce();
-    sink.importThread(thread);
-    sink.importGoal(thread.id, goal);
-    await sink.flush();
-    await sink.flushOutboundOnce();
-    await sink.setSyncState('ready');
-    await sink.flush();
-    await sink.flushOutboundOnce();
+    if (sink.getMigrationState(thread.id) === 'ready') {
+        await sink.setSyncState('ready');
+        binding.mapper.importThreadState(thread);
+        sink.importGoal(thread.id, goal);
+        await sink.flush();
+        await sink.flushOutboundOnce();
+        return;
+    }
+
+    try {
+        await sink.setMigrationState(thread.id, 'pending');
+        await sink.prepareMigration(thread.id);
+        await sink.flush();
+        await sink.flushOutboundOnce();
+        await sink.setSyncState('importing');
+        await sink.flush();
+        await sink.flushOutboundOnce();
+        await sink.setMigrationState(thread.id, 'importing');
+        sink.importThread(thread);
+        sink.importGoal(thread.id, goal);
+        await sink.flush();
+        await sink.flushOutboundOnce();
+        await sink.setSyncState('ready');
+        await sink.flush();
+        await sink.flushOutboundOnce();
+        await sink.setMigrationState(thread.id, 'ready');
+    } catch (error) {
+        await Promise.allSettled([
+            sink.setSyncState('error')
+                .then(() => sink.flush())
+                .then(() => sink.flushOutboundOnce()),
+            sink.setMigrationState(thread.id, 'error'),
+        ]);
+        throw error;
+    }
 }
 
 function notificationThreadId(notification: ServerNotification): string | null {

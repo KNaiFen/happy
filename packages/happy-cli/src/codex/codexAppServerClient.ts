@@ -168,6 +168,7 @@ export interface CodexServerRequest {
 
 export interface CodexManagedServerResponse {
     response: unknown;
+    markResponseSupplied(): Promise<void>;
     markDelivered(): Promise<void>;
     markAbandoned(): Promise<void>;
 }
@@ -916,11 +917,12 @@ export class CodexAppServerClient {
         assertMinimumCodexCliVersion();
         this.updateConnection({ connection: 'connecting', statusUnknown: true, error: null });
 
-        let command = 'codex';
-        let args = ['app-server', '--listen', 'stdio://'];
+        const appServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH?.trim();
+        let command = appServerPath ? process.execPath : 'codex';
+        let args = appServerPath ? [appServerPath] : ['app-server', '--listen', 'stdio://'];
         this.sandboxEnabled = false;
 
-        if (this.sandboxConfig?.enabled && process.platform !== 'win32') {
+        if (this.sandboxConfig?.enabled && process.platform !== 'win32' && !appServerPath) {
             try {
                 this.sandboxCleanup = await initializeSandbox(this.sandboxConfig, process.cwd());
                 const wrapped = await wrapForMcpTransport('codex', ['app-server', '--listen', 'stdio://']);
@@ -950,7 +952,9 @@ export class CodexAppServerClient {
             env.CODEX_SANDBOX = 'seatbelt';
         }
 
-        logger.debug(`[CodexAppServer] Spawning app-server transport; sandbox=${this.sandboxEnabled}`);
+        logger.debug(
+            `[CodexAppServer] Spawning app-server transport; sandbox=${this.sandboxEnabled}; override=${Boolean(appServerPath)}`,
+        );
 
         const epoch = ++this.processEpoch;
         this.seenServerRequestIds.clear();
@@ -1888,17 +1892,35 @@ export class CodexAppServerClient {
         logger.debug(`[CodexAppServer] → ${msg.method} (notification)`);
     }
 
-    private respond(id: number, result: unknown, sourceEpoch: number = this.processEpoch): boolean {
+    private async respond(
+        id: number,
+        result: unknown,
+        sourceEpoch: number = this.processEpoch,
+    ): Promise<boolean> {
         if (sourceEpoch !== this.processEpoch || !this.process?.stdin?.writable) return false;
+        const stdin = this.process.stdin;
         const msg: CodexWireResponse = { id, result };
-        try {
-            this.recordProtocolTrace('outbound', msg);
-            this.process.stdin.write(JSON.stringify(msg) + '\n');
-            logger.debug(`[CodexAppServer] → response (id=${id})`);
-            return true;
-        } catch {
-            return false;
-        }
+        this.recordProtocolTrace('outbound', msg);
+        return await new Promise<boolean>((resolve) => {
+            let settled = false;
+            const finish = (written: boolean) => {
+                if (settled) return;
+                settled = true;
+                stdin.off('error', onError);
+                stdin.off('close', onClose);
+                if (written) logger.debug(`[CodexAppServer] → response (id=${id})`);
+                resolve(written);
+            };
+            const onError = () => finish(false);
+            const onClose = () => finish(false);
+            stdin.once('error', onError);
+            stdin.once('close', onClose);
+            try {
+                stdin.write(JSON.stringify(msg) + '\n', (error) => finish(!error));
+            } catch {
+                finish(false);
+            }
+        });
     }
 
     private handleLine(line: string, sourceEpoch: number = this.processEpoch): void {
@@ -2087,11 +2109,14 @@ export class CodexAppServerClient {
                 method,
                 params,
             });
-            if (!this.respond(id, managed.response, sourceEpoch)) {
+            if (!await this.respond(id, managed.response, sourceEpoch)) {
                 await managed.markAbandoned();
                 return;
             }
-            await managed.markDelivered();
+            await managed.markResponseSupplied();
+            // stdin.write only confirms local handoff. The matching
+            // serverRequest/resolved notification is the provider ACK and is
+            // routed back to the owning request broker.
             return;
         }
 
@@ -2113,7 +2138,7 @@ export class CodexAppServerClient {
                 serverName,
                 message: params?.message,
             });
-            this.respond(id, this.mapDecisionToMcpElicitationResponse(decision, params), sourceEpoch);
+            await this.respond(id, this.mapDecisionToMcpElicitationResponse(decision, params), sourceEpoch);
             return;
         }
 
@@ -2147,7 +2172,7 @@ export class CodexAppServerClient {
                     cwd: params.cwd,
                     reason: params.reason,
                 });
-                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) }, sourceEpoch);
+                await this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) }, sourceEpoch);
             } finally {
                 this.pendingApprovalCallIds.delete(callId);
             }
@@ -2175,7 +2200,7 @@ export class CodexAppServerClient {
                         : undefined),
                     reason: params.reason,
                 });
-                this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) }, sourceEpoch);
+                await this.respond(id, { decision: this.mapDecisionToWire(decision, legacy) }, sourceEpoch);
             } finally {
                 this.pendingApprovalCallIds.delete(callId);
             }
@@ -2184,7 +2209,7 @@ export class CodexAppServerClient {
 
         // Unknown server request — respond so server doesn't hang
         logger.debug(`[CodexAppServer] Unknown server request: ${method}`);
-        this.respond(id, {}, sourceEpoch);
+        await this.respond(id, {}, sourceEpoch);
     }
 
     // The bare scoped key keeps the app's permission ↔ tool-call join for the

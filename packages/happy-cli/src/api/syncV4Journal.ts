@@ -2,15 +2,18 @@
  * Durable append-only state for Codex Sync v4.
  *
  * The journal is authoritative for outbound FIFO ordering, inbound replay,
- * receive cursors, entity revisions, and non-idempotent command state.
+ * receive cursors, entity revisions, non-idempotent command state, and
+ * provider requests that cannot survive an app-server process restart.
  */
 
 import {
     CodexCommandEntityV4Schema,
+    CodexRequestEntityV4Schema,
     SyncAckV4Schema,
     SyncChangeV4Schema,
     SyncMutationV4Schema,
     type CodexCommandEntityV4,
+    type CodexRequestEntityV4,
     type SyncAckV4,
     type SyncChangeV4,
     type SyncMutationV4,
@@ -42,8 +45,21 @@ export const SyncV4CommandJournalStatusSchema = z.enum([
 ]);
 export type SyncV4CommandJournalStatus = z.infer<typeof SyncV4CommandJournalStatusSchema>;
 
+export const SyncV4MigrationJournalStateSchema = z.enum([
+    "pending",
+    "importing",
+    "ready",
+    "error",
+]);
+export type SyncV4MigrationJournalState = z.infer<typeof SyncV4MigrationJournalStateSchema>;
+
 const journalRecordSchema = z.discriminatedUnion("kind", [
-    z.object({ version: z.literal(JOURNAL_VERSION), kind: z.literal("outbound"), mutation: SyncMutationV4Schema }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("outbound"),
+        mutation: SyncMutationV4Schema,
+        enqueuedAt: z.number().int().nonnegative().optional(),
+    }).strict(),
     z.object({ version: z.literal(JOURNAL_VERSION), kind: z.literal("ack"), acknowledgement: SyncAckV4Schema }).strict(),
     z.object({ version: z.literal(JOURNAL_VERSION), kind: z.literal("inbound"), change: SyncChangeV4Schema }).strict(),
     z.object({
@@ -90,6 +106,21 @@ const journalRecordSchema = z.discriminatedUnion("kind", [
         mutation: SyncMutationV4Schema,
         command: CodexCommandEntityV4Schema.optional(),
     }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("providerRequest"),
+        request: CodexRequestEntityV4Schema,
+        state: z.enum(["pending", "completed"]),
+        updatedAt: z.number().int().nonnegative(),
+        mutation: SyncMutationV4Schema.optional(),
+    }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("migration"),
+        threadId: z.string().min(1).max(512),
+        state: SyncV4MigrationJournalStateSchema,
+        updatedAt: z.number().int().nonnegative(),
+    }).strict(),
 ]);
 type JournalRecord = z.infer<typeof journalRecordSchema>;
 
@@ -97,6 +128,7 @@ interface SyncV4JournalOptions {
     rootDir: string;
     sessionId: string;
     compactionBytes?: number;
+    now?: () => number;
 }
 
 export interface SyncV4JournalSnapshot {
@@ -107,6 +139,15 @@ export interface SyncV4JournalSnapshot {
     entityRevisions: ReadonlyMap<string, number>;
     commandStatuses: ReadonlyMap<string, SyncV4CommandJournalStatus>;
     commands: ReadonlyMap<string, CodexCommandEntityV4>;
+    pendingProviderRequests: ReadonlyMap<string, CodexRequestEntityV4>;
+    migrationStates: ReadonlyMap<string, SyncV4MigrationJournalState>;
+}
+
+export interface SyncV4JournalDiagnostics {
+    pendingOutboundDepth: number;
+    pendingOutboundOldestAgeMs: number | null;
+    pendingInboundDepth: number;
+    pendingInboundOldestAgeMs: number | null;
 }
 
 export class SyncV4JournalCorruptionError extends Error {
@@ -131,6 +172,7 @@ export class SyncV4Journal {
             options.rootDir,
             producerId,
             options.compactionBytes ?? DEFAULT_COMPACTION_BYTES,
+            options.now ?? Date.now,
             loaded,
         );
     }
@@ -138,16 +180,20 @@ export class SyncV4Journal {
     private readonly lock = new AsyncLock();
     private receiveCursor = 0;
     private readonly pendingOutbound = new Map<string, SyncMutationV4>();
+    private readonly pendingOutboundEnqueuedAt = new Map<string, number>();
     private readonly pendingInbound = new Map<number, SyncChangeV4>();
     private readonly entityRevisions = new Map<string, number>();
     private readonly commandStatuses = new Map<string, SyncV4CommandJournalStatus>();
     private readonly commands = new Map<string, CodexCommandEntityV4>();
+    private readonly pendingProviderRequests = new Map<string, CodexRequestEntityV4>();
+    private readonly migrationStates = new Map<string, SyncV4MigrationJournalState>();
 
     private constructor(
         private readonly journalPath: string,
         private readonly rootDir: string,
         readonly producerId: string,
         private readonly compactionBytes: number,
+        private readonly now: () => number,
         records: JournalRecord[],
     ) {
         for (const record of records) this.applyRecord(record);
@@ -162,6 +208,8 @@ export class SyncV4Journal {
             entityRevisions: new Map(this.entityRevisions),
             commandStatuses: new Map(this.commandStatuses),
             commands: new Map(this.commands),
+            pendingProviderRequests: new Map(this.pendingProviderRequests),
+            migrationStates: new Map(this.migrationStates),
         };
     }
 
@@ -169,12 +217,25 @@ export class SyncV4Journal {
         return (this.entityRevisions.get(entityId) ?? 0) + 1;
     }
 
+    diagnostics(now: number = this.now()): SyncV4JournalDiagnostics {
+        const outboundOldestAt = minimum(this.pendingOutboundEnqueuedAt.values());
+        const inboundOldestAt = minimum([...this.pendingInbound.values()].map((change) => change.createdAt));
+        return {
+            pendingOutboundDepth: this.pendingOutbound.size,
+            pendingOutboundOldestAgeMs: outboundOldestAt === null ? null : Math.max(0, now - outboundOldestAt),
+            pendingInboundDepth: this.pendingInbound.size,
+            pendingInboundOldestAgeMs: inboundOldestAt === null ? null : Math.max(0, now - inboundOldestAt),
+        };
+    }
+
     async appendOutbound(mutations: SyncMutationV4[]): Promise<void> {
         if (mutations.length === 0) return;
+        const enqueuedAt = this.now();
         await this.appendRecords(mutations.map((mutation) => ({
             version: JOURNAL_VERSION,
             kind: "outbound",
             mutation,
+            enqueuedAt,
         })));
     }
 
@@ -249,7 +310,7 @@ export class SyncV4Journal {
             kind: "command",
             commandId,
             status,
-            updatedAt: Date.now(),
+            updatedAt: this.now(),
             ...(command ? { command } : {}),
         }]);
     }
@@ -265,9 +326,38 @@ export class SyncV4Journal {
             kind: "commandTransition",
             commandId,
             status,
-            updatedAt: Date.now(),
+            updatedAt: this.now(),
             mutation,
             ...(command ? { command } : {}),
+        }]);
+    }
+
+    async appendProviderRequestTransition(
+        request: CodexRequestEntityV4,
+        state: "pending" | "completed",
+        mutation: SyncMutationV4,
+    ): Promise<void> {
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "providerRequest",
+            request,
+            state,
+            updatedAt: this.now(),
+            mutation,
+        }]);
+    }
+
+    getMigrationState(threadId: string): SyncV4MigrationJournalState | undefined {
+        return this.migrationStates.get(threadId);
+    }
+
+    async setMigrationState(threadId: string, state: SyncV4MigrationJournalState): Promise<void> {
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "migration",
+            threadId,
+            state,
+            updatedAt: this.now(),
         }]);
     }
 
@@ -285,7 +375,13 @@ export class SyncV4Journal {
         await this.lock.inLock(async () => {
             const records: JournalRecord[] = [];
             for (const mutation of this.pendingOutbound.values()) {
-                records.push({ version: JOURNAL_VERSION, kind: "outbound", mutation });
+                const enqueuedAt = this.pendingOutboundEnqueuedAt.get(mutation.mutationId);
+                records.push({
+                    version: JOURNAL_VERSION,
+                    kind: "outbound",
+                    mutation,
+                    ...(enqueuedAt === undefined ? {} : { enqueuedAt }),
+                });
             }
             for (const change of [...this.pendingInbound.values()].sort((left, right) => left.seq - right.seq)) {
                 records.push({ version: JOURNAL_VERSION, kind: "inbound", change });
@@ -299,8 +395,26 @@ export class SyncV4Journal {
                     kind: "command",
                     commandId,
                     status,
-                    updatedAt: Date.now(),
+                    updatedAt: this.now(),
                     ...(this.commands.get(commandId) ? { command: this.commands.get(commandId) } : {}),
+                });
+            }
+            for (const request of this.pendingProviderRequests.values()) {
+                records.push({
+                    version: JOURNAL_VERSION,
+                    kind: "providerRequest",
+                    request,
+                    state: "pending",
+                    updatedAt: this.now(),
+                });
+            }
+            for (const [threadId, state] of this.migrationStates) {
+                records.push({
+                    version: JOURNAL_VERSION,
+                    kind: "migration",
+                    threadId,
+                    state,
+                    updatedAt: this.now(),
                 });
             }
             if (this.receiveCursor > 0) {
@@ -337,10 +451,20 @@ export class SyncV4Journal {
         switch (record.kind) {
             case "outbound":
                 this.pendingOutbound.set(record.mutation.mutationId, record.mutation);
+                if (record.enqueuedAt !== undefined) {
+                    this.pendingOutboundEnqueuedAt.set(
+                        record.mutation.mutationId,
+                        Math.min(
+                            this.pendingOutboundEnqueuedAt.get(record.mutation.mutationId) ?? record.enqueuedAt,
+                            record.enqueuedAt,
+                        ),
+                    );
+                }
                 this.applyRevision(record.mutation.entityId, record.mutation.revision);
                 return;
             case "ack":
                 this.pendingOutbound.delete(record.acknowledgement.mutationId);
+                this.pendingOutboundEnqueuedAt.delete(record.acknowledgement.mutationId);
                 return;
             case "inbound":
                 if (record.change.seq > this.receiveCursor) this.pendingInbound.set(record.change.seq, record.change);
@@ -368,9 +492,37 @@ export class SyncV4Journal {
                 return;
             case "commandTransition":
                 this.pendingOutbound.set(record.mutation.mutationId, record.mutation);
+                this.pendingOutboundEnqueuedAt.set(
+                    record.mutation.mutationId,
+                    Math.min(
+                        this.pendingOutboundEnqueuedAt.get(record.mutation.mutationId) ?? record.updatedAt,
+                        record.updatedAt,
+                    ),
+                );
                 this.applyRevision(record.mutation.entityId, record.mutation.revision);
                 this.commandStatuses.set(record.commandId, record.status);
                 if (record.command) this.commands.set(record.commandId, record.command);
+                return;
+            case "providerRequest":
+                if (record.mutation) {
+                    this.pendingOutbound.set(record.mutation.mutationId, record.mutation);
+                    this.pendingOutboundEnqueuedAt.set(
+                        record.mutation.mutationId,
+                        Math.min(
+                            this.pendingOutboundEnqueuedAt.get(record.mutation.mutationId) ?? record.updatedAt,
+                            record.updatedAt,
+                        ),
+                    );
+                    this.applyRevision(record.mutation.entityId, record.mutation.revision);
+                }
+                if (record.state === "pending") {
+                    this.pendingProviderRequests.set(record.request.providerId, record.request);
+                } else {
+                    this.pendingProviderRequests.delete(record.request.providerId);
+                }
+                return;
+            case "migration":
+                this.migrationStates.set(record.threadId, record.state);
         }
     }
 
@@ -387,6 +539,12 @@ export class SyncV4Journal {
             if (pendingSeq <= this.receiveCursor) this.pendingInbound.delete(pendingSeq);
         }
     }
+}
+
+function minimum(values: Iterable<number>): number | null {
+    let result: number | null = null;
+    for (const value of values) result = result === null ? value : Math.min(result, value);
+    return result;
 }
 
 async function loadOrCreateProducerId(rootDir: string): Promise<string> {

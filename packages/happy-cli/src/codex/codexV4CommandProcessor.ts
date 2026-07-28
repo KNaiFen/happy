@@ -106,6 +106,7 @@ export class CodexV4CommandProcessor {
             await this.transition(command, 'received');
             status = 'received';
         }
+        if (this.closed) return;
 
         if (status === 'executing' || status === 'resultUnknown') {
             await this.reconcile(command);
@@ -117,10 +118,13 @@ export class CodexV4CommandProcessor {
 
     private async execute(command: CodexCommandEntityV4): Promise<void> {
         await this.transition(command, 'executing');
+        if (this.closed) return;
         try {
             const outcome = await this.options.execute(command);
+            if (this.closed) return;
             await this.transition(command, 'succeeded', outcome);
         } catch (error) {
+            if (this.closed) return;
             if (this.isOutcomeUnknown(error)) {
                 await this.transition(command, 'resultUnknown', {
                     error: 'Provider RPC outcome is unknown; waiting for authoritative reconciliation',
@@ -139,6 +143,7 @@ export class CodexV4CommandProcessor {
             this.options.onError?.(error);
             return;
         }
+        if (this.closed) return;
 
         switch (result.action) {
             case 'succeeded':

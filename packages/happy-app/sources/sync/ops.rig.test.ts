@@ -7,7 +7,7 @@ const { sessionRPC, getState } = vi.hoisted(() => ({
 }));
 
 vi.mock('./apiSocket', () => ({ apiSocket: { sessionRPC } }));
-vi.mock('./sync', () => ({ sync: {} }));
+vi.mock('./sync', () => ({ sync: { isCodexV4Activated: () => false } }));
 vi.mock('./storage', () => ({ storage: { getState } }));
 
 describe('Rig session RPC capability gates', () => {

@@ -37,6 +37,25 @@ const command = {
     replacesCommandId: null,
 };
 
+const providerRequest = {
+    schemaVersion: 1 as const,
+    entityType: "codex.request" as const,
+    providerId: "thread-1\0request\0request-1",
+    createdAt: 100,
+    updatedAt: 100,
+    requestId: "request-1",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestType: "commandApproval" as const,
+    status: "pending" as const,
+    title: null,
+    prompt: "approve command",
+    options: {},
+    response: null,
+    resolvedAt: null,
+};
+
 afterEach(async () => {
     await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -44,7 +63,7 @@ afterEach(async () => {
 describe("SyncV4Journal", () => {
     it("preserves outbound FIFO until acknowledgements are durable", async () => {
         const rootDir = await createRoot();
-        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 1_000 });
         await journal.appendOutbound([
             mutation,
             { ...mutation, mutationId: "mutation-2", entityId: "entity-2" },
@@ -57,12 +76,18 @@ describe("SyncV4Journal", () => {
             status: "accepted",
         }]);
 
-        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 1_600 });
         expect(reopened.snapshot().pendingOutbound.map((entry) => entry.mutationId)).toEqual([
             "mutation-2",
             "mutation-3",
         ]);
         expect(reopened.nextRevision("entity-1")).toBe(2);
+        expect(reopened.diagnostics()).toEqual({
+            pendingOutboundDepth: 2,
+            pendingOutboundOldestAgeMs: 600,
+            pendingInboundDepth: 0,
+            pendingInboundOldestAgeMs: null,
+        });
     });
 
     it("replays inbound changes until the independent receive cursor advances", async () => {
@@ -76,6 +101,10 @@ describe("SyncV4Journal", () => {
         }));
         await journal.appendInbound(changes);
         expect(journal.snapshot().pendingInbound.map((entry) => entry.seq)).toEqual([1, 2]);
+        expect(journal.diagnostics(500)).toMatchObject({
+            pendingInboundDepth: 2,
+            pendingInboundOldestAgeMs: 399,
+        });
         await journal.advanceReceiveCursor(1);
 
         const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
@@ -118,6 +147,7 @@ describe("SyncV4Journal", () => {
         }]);
         await journal.advanceReceiveCursor(1);
         await journal.setCommandStatus("command-1", "resultUnknown", command);
+        await journal.setMigrationState("thread-1", "ready");
         await journal.compactIfNeeded();
 
         const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
@@ -128,6 +158,7 @@ describe("SyncV4Journal", () => {
         expect(snapshot.entityRevisions.get("entity-1")).toBe(1);
         expect(snapshot.commandStatuses.get("command-1")).toBe("resultUnknown");
         expect(snapshot.commands.get("command-1")).toEqual(command);
+        expect(snapshot.migrationStates.get("thread-1")).toBe("ready");
     });
 
     it("persists a command transition and its result mutation in one journal append", async () => {
@@ -146,6 +177,48 @@ describe("SyncV4Journal", () => {
         expect(snapshot.commands.get("command-1")).toEqual(command);
         expect(snapshot.pendingOutbound).toEqual([resultMutation]);
         expect(snapshot.entityRevisions.get("command-result-1")).toBe(1);
+    });
+
+    it("atomically tracks provider requests until a terminal entity is durable", async () => {
+        const rootDir = await createRoot();
+        const journal = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 200 });
+        const pendingMutation = {
+            ...mutation,
+            entityType: "codex.request" as const,
+            entityId: "provider-request-1",
+        };
+        await journal.appendProviderRequestTransition(providerRequest, "pending", pendingMutation);
+        await journal.appendAcknowledgements([{
+            mutationId: pendingMutation.mutationId,
+            seq: 1,
+            revision: 1,
+            status: "accepted",
+        }]);
+
+        const reopened = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 300 });
+        expect(reopened.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual(providerRequest);
+        await reopened.compact();
+        const compacted = await SyncV4Journal.open({ rootDir, sessionId: "session-1", now: () => 300 });
+        expect(compacted.snapshot().pendingProviderRequests.get(providerRequest.providerId)).toEqual(providerRequest);
+
+        const completedRequest = {
+            ...providerRequest,
+            status: "accepted" as const,
+            response: { decision: "accept" },
+            resolvedAt: 300,
+            updatedAt: 300,
+        };
+        const completedMutation = {
+            ...pendingMutation,
+            mutationId: "mutation-2",
+            revision: 2,
+        };
+        await compacted.appendProviderRequestTransition(completedRequest, "completed", completedMutation);
+
+        const completed = await SyncV4Journal.open({ rootDir, sessionId: "session-1" });
+        expect(completed.snapshot().pendingProviderRequests.size).toBe(0);
+        expect(completed.snapshot().pendingOutbound).toEqual([completedMutation]);
+        expect(completed.snapshot().entityRevisions.get("provider-request-1")).toBe(2);
     });
 
     it("drops an interrupted command transition as one logical record", async () => {

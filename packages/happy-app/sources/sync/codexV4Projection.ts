@@ -67,26 +67,48 @@ export function applyCodexV4ProjectionUpdate(
     current: CodexV4Projection,
     update: CodexV4ProjectionUpdate,
 ): CodexV4Projection {
-    const revisionKey = `${update.entity.entityType}:${update.entity.providerId}`;
-    if ((current.revisions[revisionKey] ?? 0) >= update.revision) return current;
+    return applyCodexV4ProjectionUpdates(current, [update]);
+}
 
-    const entityType = update.entity.entityType;
-    const bucket = { ...current.entities[entityType] } as Record<string, CodexEntityV4>;
-    if (update.op === 'delete') {
-        delete bucket[update.entity.providerId];
-    } else {
-        bucket[update.entity.providerId] = update.entity;
+export function applyCodexV4ProjectionUpdates(
+    current: CodexV4Projection,
+    updates: readonly CodexV4ProjectionUpdate[],
+): CodexV4Projection {
+    let revisions = current.revisions;
+    const changedBuckets = new Map<CodexEntityType, Record<string, CodexEntityV4>>();
+    let changed = false;
+
+    for (const update of updates) {
+        const revisionKey = `${update.entity.entityType}:${update.entity.providerId}`;
+        if ((revisions[revisionKey] ?? 0) >= update.revision) continue;
+        if (!changed) revisions = { ...current.revisions };
+        revisions[revisionKey] = update.revision;
+        changed = true;
+
+        const entityType = update.entity.entityType;
+        let bucket = changedBuckets.get(entityType);
+        if (!bucket) {
+            bucket = { ...current.entities[entityType] } as Record<string, CodexEntityV4>;
+            changedBuckets.set(entityType, bucket);
+        }
+        if (update.op === 'delete') {
+            delete bucket[update.entity.providerId];
+        } else {
+            bucket[update.entity.providerId] = update.entity;
+        }
     }
-    const entities = {
-        ...current.entities,
-        [entityType]: bucket,
-    } as CodexV4EntityBuckets;
+    if (!changed) return current;
+
+    let entities = current.entities;
+    for (const [entityType, bucket] of changedBuckets) {
+        entities = { ...entities, [entityType]: bucket } as CodexV4EntityBuckets;
+    }
     const runtime = newestEntity(Object.values(entities['codex.runtime']));
     const thread = newestEntity(Object.values(entities['codex.thread']));
     const activated = current.activated || runtime?.syncState === 'ready';
 
     return {
-        revisions: { ...current.revisions, [revisionKey]: update.revision },
+        revisions,
         entities,
         runtime,
         thread,
@@ -111,13 +133,31 @@ function newestEntity<T extends { updatedAt: number; providerId: string }>(entit
 
 function projectMessages(entities: CodexV4EntityBuckets): Message[] {
     const turns = new Map(Object.values(entities['codex.turn']).map((turn) => [turn.turnId, turn]));
+    const items = Object.values(entities['codex.item']);
     const parts = Object.values(entities['codex.part']);
     const requests = Object.values(entities['codex.request']);
     const relations = Object.values(entities['codex.relation']);
     const commands = Object.values(entities['codex.command']);
     const commandsById = new Map(commands.map((command) => [command.commandId, command]));
+    const partsByItem = new Map<string, CodexPartEntityV4[]>();
+    const requestsByItem = new Map<string, CodexRequestEntityV4[]>();
+    const relationsByItem = new Map<string, CodexRelationEntityV4>();
+    for (const part of parts) {
+        appendGrouped(partsByItem, itemKey(part.threadId, part.turnId, part.itemId), part);
+    }
+    for (const groupedParts of partsByItem.values()) groupedParts.sort(compareParts);
+    for (const request of requests) {
+        if (request.turnId === null || request.itemId === null) continue;
+        appendGrouped(requestsByItem, itemKey(request.threadId, request.turnId, request.itemId), request);
+    }
+    for (const relation of relations) {
+        if (relation.parentTurnId === null || relation.delegationItemId === null) continue;
+        const key = itemKey(relation.parentThreadId, relation.parentTurnId, relation.delegationItemId);
+        const current = relationsByItem.get(key);
+        if (!current || newestEntity([current, relation]) === relation) relationsByItem.set(key, relation);
+    }
     const providerUserMessageIds = new Set(
-        Object.values(entities['codex.item'])
+        items
             .filter((item) => item.itemType.toLowerCase() === 'usermessage' && item.clientId)
             .map((item) => item.clientId!),
     );
@@ -129,21 +169,12 @@ function projectMessages(entities: CodexV4EntityBuckets): Message[] {
     const messages: Message[] = [];
     const attachedRequestIds = new Set<string>();
 
-    for (const item of Object.values(entities['codex.item'])) {
-        const itemParts = parts
-            .filter((part) => part.threadId === item.threadId && part.turnId === item.turnId && part.itemId === item.itemId)
-            .sort(compareParts);
-        const itemRequests = requests.filter((request) => (
-            request.threadId === item.threadId
-            && request.turnId === item.turnId
-            && request.itemId === item.itemId
-        ));
+    for (const item of items) {
+        const key = itemKey(item.threadId, item.turnId, item.itemId);
+        const itemParts = partsByItem.get(key) ?? [];
+        const itemRequests = requestsByItem.get(key) ?? [];
         for (const request of itemRequests) attachedRequestIds.add(request.requestId);
-        const relation = relations.find((candidate) => (
-            candidate.parentThreadId === item.threadId
-            && candidate.parentTurnId === item.turnId
-            && candidate.delegationItemId === item.itemId
-        ));
+        const relation = relationsByItem.get(key);
         const projected = projectItem(item, itemParts, itemRequests, turns.get(item.turnId), relation);
         if (projected) messages.push(projected);
     }
@@ -175,6 +206,16 @@ function projectMessages(entities: CodexV4EntityBuckets): Message[] {
     return messages.sort((left, right) => (
         right.createdAt - left.createdAt || right.id.localeCompare(left.id)
     ));
+}
+
+function itemKey(threadId: string, turnId: string, itemId: string): string {
+    return JSON.stringify([threadId, turnId, itemId]);
+}
+
+function appendGrouped<T>(groups: Map<string, T[]>, key: string, value: T): void {
+    const group = groups.get(key);
+    if (group) group.push(value);
+    else groups.set(key, [value]);
 }
 
 function projectCommandResult(

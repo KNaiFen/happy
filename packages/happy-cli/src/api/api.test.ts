@@ -4,13 +4,15 @@ import axios from 'axios';
 import { connectionState } from '@/utils/serverConnectionErrors';
 
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
-const { mockPost, mockIsAxiosError } = vi.hoisted(() => ({
+const { mockGet, mockPost, mockIsAxiosError } = vi.hoisted(() => ({
+    mockGet: vi.fn(),
     mockPost: vi.fn(),
     mockIsAxiosError: vi.fn(() => true)
 }));
 
 vi.mock('axios', () => ({
     default: {
+        get: mockGet,
         post: mockPost,
         isAxiosError: mockIsAxiosError
     },
@@ -39,9 +41,10 @@ vi.mock('@/utils/deriveKey', () => ({
 }));
 
 // Mock configuration
-vi.mock('./configuration', () => ({
+vi.mock('@/configuration', () => ({
     configuration: {
-        serverUrl: 'https://api.example.com'
+        serverUrl: 'https://api.example.com',
+        currentCliVersion: '1.4.2',
     }
 }));
 
@@ -86,6 +89,74 @@ describe('Api server error handling', () => {
         };
 
         api = await ApiClient.create(mockCredential);
+    });
+
+    describe('isCodexSyncV4Enabled', () => {
+        it('uses v4 only when the server advertises the coordinated cutover', async () => {
+            mockGet.mockResolvedValueOnce({
+                data: {
+                    codex: {
+                        enabled: true,
+                        protocolVersion: 4,
+                        minimumHappyCliVersion: '1.4.2',
+                        minimumHappyAppVersion: '1.11.4',
+                        minimumCodexCliVersion: '0.145.0',
+                    },
+                },
+            });
+
+            await expect(api.isCodexSyncV4Enabled('0.145.0')).resolves.toBe(true);
+            expect(mockGet).toHaveBeenCalledWith(
+                expect.stringMatching(/\/v4\/capabilities$/),
+                expect.objectContaining({
+                    timeout: 10_000,
+                    headers: expect.objectContaining({
+                        'X-Happy-Client': expect.stringMatching(/^cli-coding-session\//),
+                    }),
+                }),
+            );
+        });
+
+        it('retains v3 only when the server explicitly disables v4 or lacks the endpoint', async () => {
+            mockGet.mockResolvedValueOnce({
+                data: {
+                    codex: {
+                        enabled: false,
+                        protocolVersion: 4,
+                        minimumHappyCliVersion: '9.0.0',
+                        minimumHappyAppVersion: '9.0.0',
+                        minimumCodexCliVersion: '9.0.0',
+                    },
+                },
+            }).mockRejectedValueOnce({ response: { status: 404 } });
+
+            await expect(api.isCodexSyncV4Enabled('0.145.0')).resolves.toBe(false);
+            await expect(api.isCodexSyncV4Enabled('0.145.0')).resolves.toBe(false);
+        });
+
+        it('blocks Codex startup when capabilities cannot be verified', async () => {
+            mockGet
+                .mockRejectedValueOnce({ code: 'ECONNREFUSED' })
+                .mockResolvedValueOnce({ data: { codex: { enabled: 'yes' } } });
+
+            await expect(api.isCodexSyncV4Enabled('0.145.0')).rejects.toThrow('unsafe v3 fallback');
+            await expect(api.isCodexSyncV4Enabled('0.145.0')).rejects.toThrow('invalid Codex Sync v4 capability');
+        });
+
+        it('enforces the Happy CLI and Codex CLI versions advertised by the server', async () => {
+            const capability = {
+                codex: {
+                    enabled: true,
+                    protocolVersion: 4,
+                    minimumHappyCliVersion: '1.4.2',
+                    minimumHappyAppVersion: '1.11.4',
+                    minimumCodexCliVersion: '0.146.0',
+                },
+            };
+            mockGet.mockResolvedValue({ data: capability });
+
+            await expect(api.isCodexSyncV4Enabled('0.145.0')).rejects.toThrow('Codex CLI 0.146.0 or newer');
+        });
     });
 
     describe('getOrCreateSession', () => {

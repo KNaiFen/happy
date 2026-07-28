@@ -2,6 +2,7 @@ import type {
     CodexEntityV4,
     CodexPartEntityV4,
     CodexRelationEntityV4,
+    CodexRequestEntityV4,
     SyncMutationOperationV4,
     SyncMutationV4,
 } from '@slopus/happy-wire';
@@ -10,7 +11,10 @@ import type { SyncV4Client, SyncV4PublishEntity } from '@/api/syncV4Client';
 import type { ServerNotification, Thread, ThreadItem, Turn } from './protocol';
 import { CodexSyncV4Mapper } from './codexSyncV4Mapper';
 
-class RecordingPublisher implements Pick<SyncV4Client, 'publishEntity' | 'publishEntities'> {
+class RecordingPublisher implements Pick<
+    SyncV4Client,
+    'publishEntity' | 'publishEntities' | 'publishProviderRequestTransition'
+> {
     readonly published: CodexEntityV4[] = [];
 
     async publishEntity(
@@ -26,6 +30,10 @@ class RecordingPublisher implements Pick<SyncV4Client, 'publishEntity' | 'publis
             this.published.push(entity);
             return mutationFor(entity, this.published.length, op ?? 'upsert');
         });
+    }
+
+    async publishProviderRequestTransition(request: CodexRequestEntityV4): Promise<SyncMutationV4> {
+        return await this.publishEntity(request);
     }
 
     latest<T extends CodexEntityV4['entityType']>(entityType: T): Array<Extract<CodexEntityV4, { entityType: T }>> {
@@ -101,6 +109,20 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('CodexSyncV4Mapper', () => {
+    it('refreshes an authoritative resumed thread state without replaying historical turns', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            initialSyncState: 'ready',
+        });
+        mapper.importThreadState(thread('thread-resumed', [turn('historical-turn', 'completed')]));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.thread')).toHaveLength(1);
+        expect(publisher.latest('codex.runtime')).toHaveLength(1);
+        expect(publisher.latest('codex.turn')).toHaveLength(0);
+    });
+
     it('projects goal updates and clears into the recoverable thread entity', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, {

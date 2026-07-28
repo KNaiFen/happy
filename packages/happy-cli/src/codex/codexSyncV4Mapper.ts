@@ -19,6 +19,8 @@ import {
     type CodexTurnEntityV4,
 } from '@slopus/happy-wire';
 import type { SyncV4Client } from '@/api/syncV4Client';
+import { logger } from '@/ui/logger';
+import { createHash } from 'node:crypto';
 import type {
     ServerNotification,
     Thread,
@@ -27,7 +29,10 @@ import type {
     Turn,
 } from './protocol';
 
-type SyncPublisher = Pick<SyncV4Client, 'publishEntity' | 'publishEntities'>;
+type SyncPublisher = Pick<
+    SyncV4Client,
+    'publishEntity' | 'publishEntities' | 'publishProviderRequestTransition'
+>;
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type ThreadTokenUsage = NonNullable<CodexThreadEntityV4['tokenUsage']>;
 type TokenUsageBreakdown = ThreadTokenUsage['total'];
@@ -68,6 +73,7 @@ export interface CodexSyncV4MapperDiagnostics {
     rawReasoningDeltaCount: number;
     authoritativeStreamMismatchCount: number;
     unknownNotificationMethods: Record<string, number>;
+    threadStatusTransitions: Record<string, number>;
 }
 
 const DEFAULT_FLUSH_INTERVAL_MS = 200;
@@ -84,6 +90,7 @@ export class CodexSyncV4Mapper {
     private readonly activeTurnByThread = new Map<string, string>();
     private readonly diagnosticSequenceByTurn = new Map<string, number>();
     private readonly unknownNotificationMethods = new Map<string, number>();
+    private readonly threadStatusTransitions = new Map<string, number>();
     private readonly liveGoalObserved = new Set<string>();
     private pipeline: Promise<void> = Promise.resolve();
     private lastError: unknown = null;
@@ -111,6 +118,11 @@ export class CodexSyncV4Mapper {
     importThread(thread: Thread): void {
         if (this.closed) return;
         void this.enqueue(() => this.applyThreadSnapshot(thread)).catch(() => undefined);
+    }
+
+    importThreadState(thread: Thread): void {
+        if (this.closed) return;
+        void this.enqueue(() => this.applyThreadSnapshot(thread, false)).catch(() => undefined);
     }
 
     importGoal(threadId: string, goal: ThreadGoal | null): void {
@@ -166,7 +178,7 @@ export class CodexSyncV4Mapper {
     async upsertRequest(request: CodexRequestEntityV4): Promise<void> {
         await this.enqueue(async () => {
             this.requests.set(request.providerId, request);
-            await this.publisher.publishEntity(request);
+            await this.publisher.publishProviderRequestTransition(request);
             await this.publishRuntimeRequestCounts(request.threadId);
         });
     }
@@ -208,6 +220,7 @@ export class CodexSyncV4Mapper {
             rawReasoningDeltaCount: this.rawReasoningDeltaCount,
             authoritativeStreamMismatchCount: this.authoritativeStreamMismatchCount,
             unknownNotificationMethods: Object.fromEntries(this.unknownNotificationMethods),
+            threadStatusTransitions: Object.fromEntries(this.threadStatusTransitions),
         };
     }
 
@@ -404,14 +417,15 @@ export class CodexSyncV4Mapper {
                 return;
             default:
                 const method = (notification as { method: string }).method;
-                this.unknownNotificationMethods.set(
-                    method,
-                    (this.unknownNotificationMethods.get(method) ?? 0) + 1,
-                );
+                const count = (this.unknownNotificationMethods.get(method) ?? 0) + 1;
+                this.unknownNotificationMethods.set(method, count);
+                if (count === 1 || (count & (count - 1)) === 0) {
+                    logger.debug('[Codex v4] Unknown notification method', { method, count });
+                }
         }
     }
 
-    private async applyThreadSnapshot(thread: Thread): Promise<void> {
+    private async applyThreadSnapshot(thread: Thread, includeTurns = true): Promise<void> {
         const now = this.now();
         const previous = this.threads.get(thread.id);
         const raw = thread as unknown as Record<string, unknown>;
@@ -446,18 +460,22 @@ export class CodexSyncV4Mapper {
             tokenUsage: previous?.tokenUsage ?? null,
         };
         const runtime = this.runtimeFor(thread.id, status, now);
+        this.recordThreadStatus(thread.id, status, previous?.status);
         this.threads.set(thread.id, entity);
         this.runtimes.set(thread.id, runtime);
         await this.publisher.publishEntities([{ entity }, { entity: runtime }]);
 
-        for (const turn of thread.turns) {
-            await this.applyTurn(thread.id, turn, turn.status === 'inProgress' ? 'started' : 'snapshot');
+        if (includeTurns) {
+            for (const turn of thread.turns) {
+                await this.applyTurn(thread.id, turn, turn.status === 'inProgress' ? 'started' : 'snapshot');
+            }
         }
 
         const projectedThread = this.threads.get(thread.id);
         if (projectedThread && !sameThreadStatus(projectedThread.status, status)) {
             const authoritative = { ...projectedThread, status, updatedAt };
             const authoritativeRuntime = this.runtimeFor(thread.id, status, now);
+            this.recordThreadStatus(thread.id, status, projectedThread.status);
             this.threads.set(thread.id, authoritative);
             this.runtimes.set(thread.id, authoritativeRuntime);
             await this.publisher.publishEntities([
@@ -472,6 +490,7 @@ export class CodexSyncV4Mapper {
         const thread = await this.ensureThread(threadId, now);
         const nextThread = { ...thread, status: normalizeThreadStatus(status), updatedAt: now };
         const runtime = this.runtimeFor(threadId, nextThread.status, now);
+        this.recordThreadStatus(threadId, nextThread.status, thread.status);
         this.threads.set(threadId, nextThread);
         this.runtimes.set(threadId, runtime);
         if (nextThread.status.type !== 'active') this.activeTurnByThread.delete(threadId);
@@ -664,6 +683,7 @@ export class CodexSyncV4Mapper {
                 : thread.status.type === 'systemError' ? thread.status : { type: 'idle' };
             const nextThread = { ...thread, status: threadStatus, updatedAt: now };
             const runtime = this.runtimeFor(threadId, threadStatus, now);
+            this.recordThreadStatus(threadId, threadStatus, thread.status);
             this.threads.set(threadId, nextThread);
             this.runtimes.set(threadId, runtime);
             await this.publisher.publishEntities([{ entity: nextThread }, { entity: runtime }]);
@@ -892,10 +912,27 @@ export class CodexSyncV4Mapper {
             tokenUsage: null,
         };
         const runtime = this.runtimeFor(threadId, thread.status, now, false);
+        this.recordThreadStatus(threadId, thread.status);
         this.threads.set(threadId, thread);
         this.runtimes.set(threadId, runtime);
         await this.publisher.publishEntities([{ entity: thread }, { entity: runtime }]);
         return thread;
+    }
+
+    private recordThreadStatus(
+        threadId: string,
+        status: CodexThreadStatusV4,
+        previous?: CodexThreadStatusV4,
+    ): void {
+        if (previous && sameThreadStatus(previous, status)) return;
+        const count = (this.threadStatusTransitions.get(status.type) ?? 0) + 1;
+        this.threadStatusTransitions.set(status.type, count);
+        logger.debug('[Codex v4] Thread status', {
+            thread: createHash('sha256').update(threadId).digest('hex').slice(0, 16),
+            status: status.type,
+            activeFlags: status.type === 'active' ? status.activeFlags : [],
+            count,
+        });
     }
 
     private async ensureTurn(

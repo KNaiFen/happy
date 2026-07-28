@@ -30,6 +30,7 @@ import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, s
 import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat, sessionKill, sessionArchive } from '@/sync/ops';
 import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
+import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { useSession } from '@/sync/storage';
 import { getSessionForkSource } from '@/utils/sessionFork';
 import { useHappyAction } from '@/hooks/useHappyAction';
@@ -641,7 +642,7 @@ export function SessionViewLoaded({
     const isTablet = useIsTablet();
     const realtimeStatus = useRealtimeStatus();
     const isCodexReadOnly = session.metadata?.codexReadOnly === true;
-    const isCodexV4Active = codexV4Session?.activated === true;
+    const isCodexV4Active = isCodexV4SyncActive(session.metadata, codexV4Session);
     const isSessionExecuting = isCodexV4Active
         ? codexV4Session.runtime?.execution.type === 'active'
         : session.thinking;

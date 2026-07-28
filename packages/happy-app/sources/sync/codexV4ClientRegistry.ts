@@ -9,8 +9,23 @@ export interface CodexV4RegistrySession {
     sessionKey: Uint8Array;
 }
 
+export function isCodexV4SyncEligible(metadata: {
+    flavor?: string | null;
+    codexSyncVersion?: number;
+} | null | undefined): boolean {
+    return metadata?.flavor === 'codex' && metadata.codexSyncVersion === 4;
+}
+
+export function isCodexV4SyncActive<TProjection extends { activated?: boolean }>(
+    metadata: Parameters<typeof isCodexV4SyncEligible>[0],
+    projection: TProjection | null | undefined,
+): projection is TProjection & { activated: true } {
+    return isCodexV4SyncEligible(metadata) && projection?.activated === true;
+}
+
 interface CodexV4ClientFactoryOptions<TEvent> extends CodexV4RegistrySession {
     onEntity: (event: TEvent) => Promise<void>;
+    onEntities: (events: readonly TEvent[]) => Promise<void>;
     onSnapshotReset: () => Promise<void>;
 }
 
@@ -18,6 +33,7 @@ interface CodexV4ClientRegistryOptions<TClient extends CodexV4RegistryClient, TE
     createClient: (options: CodexV4ClientFactoryOptions<TEvent>) => Promise<TClient>;
     isEligible: (sessionId: string) => boolean;
     onEntity: (sessionId: string, event: TEvent) => Promise<void>;
+    onEntities?: (sessionId: string, events: readonly TEvent[]) => Promise<void>;
     onSnapshotReset: (sessionId: string) => Promise<void>;
     onStartError?: (sessionId: string) => void;
 }
@@ -103,6 +119,17 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             onEntity: async (event) => {
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
                 await this.options.onEntity(session.sessionId, event);
+            },
+            onEntities: async (events) => {
+                if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
+                if (this.options.onEntities) {
+                    await this.options.onEntities(session.sessionId, events);
+                    return;
+                }
+                for (const event of events) {
+                    if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
+                    await this.options.onEntity(session.sessionId, event);
+                }
             },
             onSnapshotReset: async () => {
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;

@@ -94,6 +94,28 @@ export const httpRequestDurationHistogram = new Histogram({
     registers: [register]
 });
 
+export const syncV4MutationResultsCounter = new Counter({
+    name: 'sync_v4_mutation_results_total',
+    help: 'Total Codex Sync v4 mutation outcomes',
+    labelNames: ['result', 'client', 'client_type'] as const,
+    registers: [register]
+});
+
+export const syncV4ProjectionLagHistogram = new Histogram({
+    name: 'sync_v4_projection_lag_mutations',
+    help: 'Codex Sync v4 mutations between a receive cursor and the server watermark',
+    labelNames: ['client', 'client_type'] as const,
+    buckets: [0, 1, 5, 10, 50, 100, 500, 1_000, 10_000, 100_000],
+    registers: [register]
+});
+
+export const syncV4SnapshotFallbackCounter = new Counter({
+    name: 'sync_v4_snapshot_fallback_total',
+    help: 'Total Codex Sync v4 snapshot fallbacks caused by expired journals',
+    labelNames: ['reason', 'client', 'client_type'] as const,
+    registers: [register]
+});
+
 // Database count metrics
 export const databaseRecordCountGauge = new Gauge({
     name: 'database_records_total',

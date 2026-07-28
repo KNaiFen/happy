@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
     CodexV4ClientRegistry,
+    isCodexV4SyncActive,
+    isCodexV4SyncEligible,
     type CodexV4RegistryClient,
 } from './codexV4ClientRegistry';
 
@@ -39,6 +41,38 @@ class TestClient implements CodexV4RegistryClient {
 
 const session = { sessionId: 'session-1', sessionKey: new Uint8Array(32) };
 
+describe('isCodexV4SyncEligible', () => {
+    it('requires both the Codex flavor and the encrypted v4 cutover marker', () => {
+        expect(isCodexV4SyncEligible({ flavor: 'codex', codexSyncVersion: 4 })).toBe(true);
+        expect(isCodexV4SyncEligible({ flavor: 'codex' })).toBe(false);
+        expect(isCodexV4SyncEligible({ flavor: 'claude', codexSyncVersion: 4 })).toBe(false);
+        expect(isCodexV4SyncEligible({ flavor: null, codexSyncVersion: 4 })).toBe(false);
+        expect(isCodexV4SyncEligible(undefined)).toBe(false);
+    });
+});
+
+describe('isCodexV4SyncActive', () => {
+    it('falls back to v3 as soon as the cutover marker is removed', () => {
+        const activatedProjection = { activated: true };
+
+        expect(isCodexV4SyncActive(
+            { flavor: 'codex', codexSyncVersion: 4 },
+            activatedProjection,
+        )).toBe(true);
+        expect(isCodexV4SyncActive(
+            { flavor: 'codex' },
+            activatedProjection,
+        )).toBe(false);
+    });
+
+    it('does not switch before the local v4 projection is ready', () => {
+        expect(isCodexV4SyncActive(
+            { flavor: 'codex', codexSyncVersion: 4 },
+            { activated: false },
+        )).toBe(false);
+    });
+});
+
 describe('CodexV4ClientRegistry', () => {
     it('does not register a client when the session stops being Codex during startup', async () => {
         let eligible = true;
@@ -66,6 +100,7 @@ describe('CodexV4ClientRegistry', () => {
     it('drops callbacks from a client canceled by session deletion', async () => {
         let eligible = true;
         let deliver: ((event: TestEvent) => Promise<void>) | null = null;
+        let deliverBatch: ((events: readonly TestEvent[]) => Promise<void>) | null = null;
         let reset: (() => Promise<void>) | null = null;
         const received: TestEvent[] = [];
         let resetCount = 0;
@@ -73,12 +108,16 @@ describe('CodexV4ClientRegistry', () => {
         const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
             createClient: async (options) => {
                 deliver = options.onEntity;
+                deliverBatch = options.onEntities;
                 reset = options.onSnapshotReset;
                 return client;
             },
             isEligible: () => eligible,
             onEntity: async (_sessionId, event) => {
                 received.push(event);
+            },
+            onEntities: async (_sessionId, events) => {
+                received.push(...events);
             },
             onSnapshotReset: async () => {
                 resetCount += 1;
@@ -89,16 +128,21 @@ describe('CodexV4ClientRegistry', () => {
         await Promise.resolve();
         expect(deliver).not.toBeNull();
         await deliver!({ value: 'before-delete' });
+        await deliverBatch!([{ value: 'before-delete-batch' }]);
         await reset!();
 
         eligible = false;
         registry.reconcile([]);
         await deliver!({ value: 'after-delete' });
+        await deliverBatch!([{ value: 'after-delete-batch' }]);
         await reset!();
         client.started.resolve();
         await Promise.resolve();
 
-        expect(received).toEqual([{ value: 'before-delete' }]);
+        expect(received).toEqual([
+            { value: 'before-delete' },
+            { value: 'before-delete-batch' },
+        ]);
         expect(resetCount).toBe(1);
         expect(registry.hasClient(session.sessionId)).toBe(false);
         expect(registry.hasStartingClient(session.sessionId)).toBe(false);

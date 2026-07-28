@@ -18,6 +18,7 @@ import {
     type CodexEntityV4,
     type CodexCommandEntityV4,
     type CodexCommandResultEntityV4,
+    type CodexRequestEntityV4,
     type SyncAckV4,
     type SyncChangeV4,
     type SyncEntitySnapshotV4,
@@ -27,15 +28,17 @@ import {
     type SyncSnapshotResponseV4,
 } from "@slopus/happy-wire";
 import { configuration } from "@/configuration";
+import { logger } from "@/ui/logger";
 import { AsyncLock } from "@/utils/lock";
 import { InvalidateSync } from "@/utils/sync";
 import axios from "axios";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { SyncV4Crypto } from "./syncV4Crypto";
 import {
     SyncV4Journal,
     type SyncV4CommandJournalStatus,
+    type SyncV4MigrationJournalState,
 } from "./syncV4Journal";
 
 const CHANGES_PAGE_SIZE = 100;
@@ -174,6 +177,7 @@ export class SyncV4Client {
     private started = false;
     private disposed = false;
     private lifecycleGeneration = 0;
+    private readonly diagnosticSessionId: string;
 
     private constructor(
         readonly sessionId: string,
@@ -183,6 +187,7 @@ export class SyncV4Client {
         private readonly onEntity: (event: SyncV4AppliedEntity) => Promise<void>,
         private readonly pollIntervalMs: number,
     ) {
+        this.diagnosticSessionId = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
         this.sendSync = new InvalidateSync(() => this.flushOutboundForGeneration(this.lifecycleGeneration));
         this.receiveSync = new InvalidateSync(() => this.pullChangesForGeneration(this.lifecycleGeneration));
     }
@@ -200,6 +205,7 @@ export class SyncV4Client {
         if (this.disposed) throw new Error("Sync v4 client has been stopped");
         const generation = this.lifecycleGeneration;
         this.started = true;
+        this.logJournalDiagnostics("start");
         try {
             await this.processPendingInbound(generation);
             await Promise.all([
@@ -316,6 +322,42 @@ export class SyncV4Client {
         return mutation;
     }
 
+    async publishProviderRequestTransition(request: CodexRequestEntityV4): Promise<SyncMutationV4> {
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        const mutation = await this.publishLock.inLock(async () => {
+            this.assertCurrentGeneration(generation);
+            const entityId = await this.crypto.opaqueEntityId(request.entityType, request.providerId);
+            this.assertCurrentGeneration(generation);
+            const revision = this.journal.nextRevision(entityId);
+            const aad = {
+                sessionId: this.sessionId,
+                entityId,
+                entityType: request.entityType,
+                revision,
+                op: "upsert" as const,
+            };
+            const next = SyncMutationV4Schema.parse({
+                mutationId: randomUUID(),
+                producerId: this.producerId,
+                entityId,
+                entityType: request.entityType,
+                revision,
+                op: aad.op,
+                ciphertext: await this.crypto.encryptEntity(aad, request),
+            });
+            this.assertCurrentGeneration(generation);
+            await this.journal.appendProviderRequestTransition(
+                request,
+                request.status === "pending" ? "pending" : "completed",
+                next,
+            );
+            return next;
+        });
+        if (this.started) this.sendSync.invalidate();
+        return mutation;
+    }
+
     async flushOutboundOnce(): Promise<void> {
         await this.flushOutboundForGeneration(this.lifecycleGeneration);
     }
@@ -331,6 +373,11 @@ export class SyncV4Client {
                 if (!this.isCurrentGeneration(generation)) return;
                 validateAcknowledgements(batch, response.acknowledgements);
                 await this.journal.appendAcknowledgements(response.acknowledgements);
+                this.logJournalDiagnostics("ack", {
+                    accepted: response.acknowledgements.filter((ack) => ack.status === "accepted").length,
+                    duplicate: response.acknowledgements.filter((ack) => ack.status === "duplicate").length,
+                    superseded: response.acknowledgements.filter((ack) => ack.status === "superseded").length,
+                });
             }
             if (!this.isCurrentGeneration(generation)) return;
             await this.journal.compactIfNeeded();
@@ -354,6 +401,11 @@ export class SyncV4Client {
                 } catch (error) {
                     if (!this.isCurrentGeneration(generation)) return;
                     if (error instanceof SyncV4SnapshotRequiredError) {
+                        logger.debug("[Sync v4] Snapshot fallback", {
+                            session: this.diagnosticSessionId,
+                            minimumSeq: error.minimumSeq,
+                            highWatermark: error.highWatermark,
+                        });
                         await this.rebuildFromSnapshot(generation);
                         continue;
                     }
@@ -362,6 +414,14 @@ export class SyncV4Client {
                 if (!this.isCurrentGeneration(generation)) return;
                 if (response.highWatermark < cursor) {
                     throw new Error("Sync v4 server watermark moved backwards");
+                }
+                const projectionLag = response.highWatermark - cursor;
+                if (projectionLag > 0 || response.changes.length > 0) {
+                    logger.debug("[Sync v4] Projection lag", {
+                        session: this.diagnosticSessionId,
+                        mutations: projectionLag,
+                        pageSize: response.changes.length,
+                    });
                 }
                 if (response.changes.length === 0) {
                     if (response.hasMore || cursor < response.highWatermark) {
@@ -373,6 +433,7 @@ export class SyncV4Client {
                 await this.journal.appendInbound(response.changes);
                 if (!this.isCurrentGeneration(generation)) return;
                 await this.processPendingInbound(generation);
+                this.logJournalDiagnostics("projection");
                 if (!response.hasMore && this.receiveCursor >= response.highWatermark) break;
             }
             if (!this.isCurrentGeneration(generation)) return;
@@ -402,6 +463,14 @@ export class SyncV4Client {
         ));
     }
 
+    getPendingProviderRequests(): CodexRequestEntityV4[] {
+        return [...this.journal.snapshot().pendingProviderRequests.values()]
+            .sort((left, right) => (
+                left.createdAt - right.createdAt
+                || left.providerId.localeCompare(right.providerId)
+            ));
+    }
+
     async setCommandStatus(
         commandId: string,
         status: SyncV4CommandJournalStatus,
@@ -409,6 +478,17 @@ export class SyncV4Client {
     ): Promise<void> {
         this.assertCurrentGeneration(this.lifecycleGeneration);
         await this.journal.setCommandStatus(commandId, status, command);
+    }
+
+    getMigrationState(threadId: string): SyncV4MigrationJournalState | undefined {
+        return this.journal.getMigrationState(threadId);
+    }
+
+    async setMigrationState(threadId: string, state: SyncV4MigrationJournalState): Promise<void> {
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        await this.journal.setMigrationState(threadId, state);
+        this.assertCurrentGeneration(generation);
     }
 
     private async processPendingInbound(generation: number): Promise<void> {
@@ -478,6 +558,16 @@ export class SyncV4Client {
         } while (cursor);
         if (!this.isCurrentGeneration(generation)) return;
         await this.journal.completeSnapshot(appliedRevisions, highWatermark ?? 0);
+        this.logJournalDiagnostics("snapshot");
+    }
+
+    private logJournalDiagnostics(event: "start" | "ack" | "projection" | "snapshot", extra = {}): void {
+        logger.debug("[Sync v4] Journal", {
+            session: this.diagnosticSessionId,
+            event,
+            ...this.journal.diagnostics(),
+            ...extra,
+        });
     }
 
     private isCurrentGeneration(generation: number): boolean {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CodexRuntimeEntityV4 } from '@slopus/happy-wire';
+import type { SyncV4MigrationJournalState } from '@/api/syncV4Journal';
 import type { Thread, ThreadGoal, ThreadItem, Turn } from './protocol';
 import {
     childThreadReferences,
@@ -72,6 +73,8 @@ function activity(id: string, agentThreadId: string): ThreadItem {
 }
 
 class FakeSink implements CodexV4MigrationSink {
+    private readonly migrationStates = new Map<string, SyncV4MigrationJournalState>();
+
     constructor(readonly name: string, private readonly events: string[]) {}
 
     async prepareMigration(threadId: string): Promise<void> {
@@ -96,6 +99,15 @@ class FakeSink implements CodexV4MigrationSink {
 
     async flushOutboundOnce(): Promise<void> {
         this.events.push(`${this.name}:ack`);
+    }
+
+    getMigrationState(threadId: string): SyncV4MigrationJournalState | undefined {
+        return this.migrationStates.get(threadId);
+    }
+
+    async setMigrationState(threadId: string, state: SyncV4MigrationJournalState): Promise<void> {
+        this.migrationStates.set(threadId, state);
+        this.events.push(`${this.name}:migration:${threadId}:${state}`);
     }
 }
 
@@ -158,6 +170,7 @@ describe('CodexV4Migrator', () => {
             const readyIndex = events.indexOf(`${name}:state:ready`);
             expect(events[readyIndex + 1]).toBe(`${name}:flush`);
             expect(events[readyIndex + 2]).toBe(`${name}:ack`);
+            expect(events[readyIndex + 3]).toBe(`${name}:migration:${name}:ready`);
         }
     });
 
@@ -175,8 +188,13 @@ describe('CodexV4Migrator', () => {
         await expect(migrator.migrate(root)).rejects.toThrow('thread/read failed');
 
         expect(events).toContain('root:state:error');
+        expect(events).toContain('root:migration:root:error');
         expect(events).not.toContain('root:state:ready');
-        expect(events.slice(-2)).toEqual(['root:flush', 'root:ack']);
+        expect(events.slice(-3)).toEqual([
+            'root:flush',
+            'root:ack',
+            'root:migration:root:error',
+        ]);
     });
 
     it('deduplicates child references while preserving the first delegation lineage', () => {

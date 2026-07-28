@@ -4,24 +4,81 @@ import {
     RevisionConflictError,
 } from "@/app/api/routes/syncV4MutationClassifier";
 import { eventRouter } from "@/app/events/eventRouter";
+import {
+    getMetricsLabelsFromRequest,
+    syncV4MutationResultsCounter,
+    syncV4ProjectionLagHistogram,
+    syncV4SnapshotFallbackCounter,
+} from "@/app/monitoring/metrics2";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import {
+    isSyncV4VersionAtLeast,
     MAX_SYNC_V4_MUTATIONS_PER_BATCH,
     SyncMutationBatchV4Schema,
     SyncMutationV4Schema,
 } from "@slopus/happy-wire";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { type Fastify } from "../types";
 
 const JOURNAL_MINIMUM_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
 const JOURNAL_CLEANUP_INTERVAL = 1_024;
+const MINIMUM_HAPPY_CLI_VERSION = "1.4.2";
+const MINIMUM_HAPPY_APP_VERSION = "1.11.4";
+const MINIMUM_CODEX_CLI_VERSION = "0.145.0";
+
+type SyncV4ClientCompatibility =
+    | { compatible: true }
+    | { compatible: false; clientType: "happy-cli" | "happy-app" | "unknown"; minimumVersion: string | null };
+
+export function getSyncV4ClientCompatibility(header: unknown): SyncV4ClientCompatibility {
+    if (typeof header !== "string") {
+        return { compatible: false, clientType: "unknown", minimumVersion: null };
+    }
+    const match = /^([^/]+)\/(\d+\.\d+\.\d+)$/.exec(header);
+    if (!match) return { compatible: false, clientType: "unknown", minimumVersion: null };
+    const [, rawClientType, version] = match;
+    if (rawClientType === "cli-coding-session") {
+        return isSyncV4VersionAtLeast(version, MINIMUM_HAPPY_CLI_VERSION)
+            ? { compatible: true }
+            : { compatible: false, clientType: "happy-cli", minimumVersion: MINIMUM_HAPPY_CLI_VERSION };
+    }
+    if (["ios", "android", "web", "desktop", "macos", "windows"].includes(rawClientType)) {
+        return isSyncV4VersionAtLeast(version, MINIMUM_HAPPY_APP_VERSION)
+            ? { compatible: true }
+            : { compatible: false, clientType: "happy-app", minimumVersion: MINIMUM_HAPPY_APP_VERSION };
+    }
+    return { compatible: false, clientType: "unknown", minimumVersion: null };
+}
+
+async function requireCompatibleSyncV4Client(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const compatibility = getSyncV4ClientCompatibility(request.headers["x-happy-client"]);
+    if (compatibility.compatible) return;
+    await reply.code(426).send({
+        error: "syncV4UpgradeRequired",
+        clientType: compatibility.clientType,
+        minimumVersion: compatibility.minimumVersion,
+    });
+}
 
 export function isCodexSyncV4Enabled(
     value: string | undefined = process.env.HAPPY_CODEX_SYNC_V4_ENABLED,
 ): boolean {
     return value === "true" || value === "1";
+}
+
+export function v4CapabilitiesRoutes(app: Fastify): void {
+    app.get("/v4/capabilities", async (_request, reply) => reply.send({
+        codex: {
+            enabled: isCodexSyncV4Enabled(),
+            protocolVersion: 4,
+            minimumHappyCliVersion: MINIMUM_HAPPY_CLI_VERSION,
+            minimumHappyAppVersion: MINIMUM_HAPPY_APP_VERSION,
+            minimumCodexCliVersion: MINIMUM_CODEX_CLI_VERSION,
+        },
+    }));
 }
 
 const changesQuerySchema = z.object({
@@ -62,8 +119,14 @@ async function findOwnedSession(sessionId: string, accountId: string) {
  * Removes journal rows only after both safety windows have elapsed. Current
  * entity snapshots remain available, so expired cursors can always recover.
  */
-async function pruneMutationJournal(sessionId: string, highWatermark: number): Promise<void> {
-    if (highWatermark === 0 || highWatermark % JOURNAL_CLEANUP_INTERVAL !== 0) return;
+async function pruneMutationJournal(
+    sessionId: string,
+    previousHighWatermark: number,
+    highWatermark: number,
+): Promise<void> {
+    const previousCleanupBucket = Math.floor(previousHighWatermark / JOURNAL_CLEANUP_INTERVAL);
+    const currentCleanupBucket = Math.floor(highWatermark / JOURNAL_CLEANUP_INTERVAL);
+    if (currentCleanupBucket <= previousCleanupBucket) return;
     const maximumPrunableSeq = highWatermark - JOURNAL_MINIMUM_RECENT_RECORDS;
     if (maximumPrunableSeq <= 0) return;
     await db.sessionMutationV4.deleteMany({
@@ -77,7 +140,7 @@ async function pruneMutationJournal(sessionId: string, highWatermark: number): P
 
 export function v4SessionRoutes(app: Fastify): void {
     app.post("/v4/sessions/:sessionId/mutations", {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, requireCompatibleSyncV4Client],
         schema: {
             params: z.object({ sessionId: z.string() }),
             body: mutationsBodySchema,
@@ -189,7 +252,12 @@ export function v4SessionRoutes(app: Fastify): void {
                     });
                 }
 
-                return { acknowledgements, highWatermark, hasNewMutations: newClassifications.length > 0 };
+                return {
+                    acknowledgements,
+                    highWatermark,
+                    previousHighWatermark: highWatermark - newClassifications.length,
+                    hasNewMutations: newClassifications.length > 0,
+                };
             });
 
             if (result.hasNewMutations) {
@@ -198,14 +266,30 @@ export function v4SessionRoutes(app: Fastify): void {
                     payload: { type: "sync-v4-invalidate", sessionId, highWatermark: result.highWatermark },
                     recipientFilter: { type: "all-interested-in-session", sessionId },
                 });
-                await pruneMutationJournal(sessionId, result.highWatermark);
+                await pruneMutationJournal(
+                    sessionId,
+                    result.previousHighWatermark,
+                    result.highWatermark,
+                );
+            }
+            const metricLabels = getMetricsLabelsFromRequest(request);
+            for (const acknowledgement of result.acknowledgements) {
+                syncV4MutationResultsCounter.inc({ result: acknowledgement.status, ...metricLabels });
             }
             return reply.send({ acknowledgements: result.acknowledgements });
         } catch (error) {
             if (error instanceof RevisionConflictError) {
+                syncV4MutationResultsCounter.inc({
+                    result: "revision_conflict",
+                    ...getMetricsLabelsFromRequest(request),
+                });
                 return reply.code(409).send({ error: "revisionConflict", ...error.details });
             }
             if (error instanceof MutationConflictError) {
+                syncV4MutationResultsCounter.inc({
+                    result: "mutation_conflict",
+                    ...getMetricsLabelsFromRequest(request),
+                });
                 return reply.code(409).send({ error: "mutationConflict", mutationId: error.mutationId });
             }
             throw error;
@@ -213,7 +297,7 @@ export function v4SessionRoutes(app: Fastify): void {
     });
 
     app.get("/v4/sessions/:sessionId/changes", {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, requireCompatibleSyncV4Client],
         schema: {
             params: z.object({ sessionId: z.string() }),
             querystring: changesQuerySchema,
@@ -232,7 +316,10 @@ export function v4SessionRoutes(app: Fastify): void {
         if (afterSeq > session.syncV4Seq) {
             return reply.code(400).send({ error: "Invalid changes cursor" });
         }
+        const metricLabels = getMetricsLabelsFromRequest(request);
+        syncV4ProjectionLagHistogram.observe(metricLabels, session.syncV4Seq - afterSeq);
         if (afterSeq < session.syncV4Seq && (minimumSeq === null || afterSeq < minimumSeq - 1)) {
+            syncV4SnapshotFallbackCounter.inc({ reason: "journal_expired", ...metricLabels });
             return reply.code(410).send({
                 error: "snapshotRequired",
                 minimumSeq: minimumSeq ?? session.syncV4Seq + 1,
@@ -241,7 +328,7 @@ export function v4SessionRoutes(app: Fastify): void {
         }
 
         const rows = await db.sessionMutationV4.findMany({
-            where: { sessionId, seq: { gt: afterSeq } },
+            where: { sessionId, seq: { gt: afterSeq, lte: session.syncV4Seq } },
             orderBy: { seq: "asc" },
             take: limit + 1,
         });
@@ -265,7 +352,7 @@ export function v4SessionRoutes(app: Fastify): void {
     });
 
     app.get("/v4/sessions/:sessionId/snapshot", {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, requireCompatibleSyncV4Client],
         schema: {
             params: z.object({ sessionId: z.string() }),
             querystring: snapshotQuerySchema,

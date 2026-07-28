@@ -11,6 +11,7 @@ import type {
 import { describe, expect, it } from 'vitest';
 import {
     applyCodexV4ProjectionUpdate,
+    applyCodexV4ProjectionUpdates,
     createCodexV4Projection,
     resetCodexV4Projection,
     type CodexV4Projection,
@@ -89,6 +90,24 @@ function part(content: string, kind: CodexPartEntityV4['kind'] = 'text'): CodexP
 }
 
 describe('Codex v4 projection', () => {
+    it('applies a page of entity updates in order and ignores stale revisions', () => {
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: item, revision: 1, op: 'upsert' },
+            { entity: part('batched response'), revision: 1, op: 'upsert' },
+            { entity: { ...item, status: 'completed', completedAt: 13 }, revision: 2, op: 'upsert' },
+            { entity: { ...item, status: 'inProgress', completedAt: null }, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.entities['codex.item']['item-1']).toMatchObject({
+            status: 'completed',
+            completedAt: 13,
+        });
+        expect(projection.messages).toMatchObject([{
+            kind: 'agent-text',
+            text: 'batched response',
+        }]);
+    });
+
     it('clears snapshot-derived state without falling back after activation', () => {
         const runtime: CodexRuntimeEntityV4 = {
             schemaVersion: 1,

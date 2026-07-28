@@ -18,6 +18,17 @@ import chalk from 'chalk';
 import { Credentials } from '@/persistence';
 import { connectionState, isNetworkError } from '@/utils/serverConnectionErrors';
 import { deriveKey } from '@/utils/deriveKey';
+import {
+  isSyncV4VersionAtLeast,
+  SyncV4CapabilitiesSchema,
+} from '@slopus/happy-wire';
+
+export class CodexSyncV4CapabilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CodexSyncV4CapabilityError';
+  }
+}
 
 export class ApiClient {
 
@@ -31,6 +42,47 @@ export class ApiClient {
   private constructor(credential: Credentials) {
     this.credential = credential
     this.pushClient = new PushNotificationClient(credential.token, configuration.serverUrl)
+  }
+
+  async isCodexSyncV4Enabled(codexCliVersion: string): Promise<boolean> {
+    let response;
+    try {
+      response = await axios.get(`${configuration.serverUrl}/v4/capabilities`, {
+        headers: {
+          'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`,
+        },
+        timeout: 10_000,
+      });
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        logger.debug('[API] Sync v4 capability endpoint absent; using retained Codex v3 rollback adapter');
+        return false;
+      }
+      throw new CodexSyncV4CapabilityError(
+        'Cannot verify Codex Sync v4 compatibility because the Happy Server is unavailable. Codex was not started to avoid an unsafe v3 fallback.',
+      );
+    }
+
+    const parsed = SyncV4CapabilitiesSchema.safeParse(response.data);
+    if (!parsed.success) {
+      throw new CodexSyncV4CapabilityError(
+        'Happy Server returned an invalid Codex Sync v4 capability response. Update the Server before starting Codex.',
+      );
+    }
+
+    const capability = parsed.data.codex;
+    if (!capability.enabled) return false;
+    if (!isSyncV4VersionAtLeast(configuration.currentCliVersion, capability.minimumHappyCliVersion)) {
+      throw new CodexSyncV4CapabilityError(
+        `Happy CLI ${capability.minimumHappyCliVersion} or newer is required for Codex Sync v4; found ${configuration.currentCliVersion}.`,
+      );
+    }
+    if (!isSyncV4VersionAtLeast(codexCliVersion, capability.minimumCodexCliVersion)) {
+      throw new CodexSyncV4CapabilityError(
+        `Codex CLI ${capability.minimumCodexCliVersion} or newer is required by Happy Server; found ${codexCliVersion}.`,
+      );
+    }
+    return true;
   }
 
   /**

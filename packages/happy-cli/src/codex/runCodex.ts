@@ -36,7 +36,7 @@ import {
     mapCodexMcpMessageToSessionEnvelopes,
     mapCodexProcessorMessageToSessionEnvelopes,
 } from './utils/sessionProtocolMapper';
-import { resumeExistingThread } from './resumeExistingThread';
+import { resolveCodexResumeSyncStrategy, resumeExistingThread } from './resumeExistingThread';
 import { emitReadyIfIdle } from './emitReadyIfIdle';
 import { enqueueCodexUserText, isCodexClearText } from './codexClearCommand';
 import { downloadCodexFileEventAttachment } from './utils/attachmentEvents';
@@ -152,6 +152,7 @@ export async function runCodex(opts: {
     connectionState.setBackend('Codex');
 
     const api = await ApiClient.create(opts.credentials);
+    const codexSyncV4Enabled = await api.isCodexSyncV4Enabled(formatCodexCliVersion(codexCliVersion));
 
     // Log startup options
     logger.debug(`[codex] Starting with options: startedBy=${opts.startedBy || 'terminal'}`);
@@ -196,6 +197,7 @@ export async function runCodex(opts: {
         ...(forkedFromMessageId ? { forkedFromMessageId } : {}),
         ...(isSideChat ? { isSideChat: true } : {}),
     });
+    if (codexSyncV4Enabled) metadata.codexSyncVersion = 4;
     metadata.codexCapabilities = { queueSteering: supportsQueueSteering };
     if (supportsQueueSteering) {
         state.codexMessageQueue = { revision: 0, messages: [] };
@@ -1213,11 +1215,18 @@ export async function runCodex(opts: {
                 }
             },
         };
+        const recoveredProviderRequests = await binding.requestBroker.recoverPending(
+            binding.syncClient.getPendingProviderRequests(),
+        );
+        if (recoveredProviderRequests > 0) {
+            await binding.syncClient.flushOutboundOnce();
+        }
         await binding.commandProcessor.recoverPending();
         return binding;
     };
 
     bindCodexV4Session = async (target) => {
+        if (!codexSyncV4Enabled) return;
         // The offline session stub intentionally has no encryption material or
         // Sync v4 transport. The reconnection callback will bind the real
         // session once Happy Server is reachable again.
@@ -1235,6 +1244,10 @@ export async function runCodex(opts: {
             closeSession: false,
             ...(opts.resumeThreadId ? { ownedThreadId: opts.resumeThreadId } : {}),
         });
+        if (opts.resumeThreadId && rootBinding.syncClient.getMigrationState(opts.resumeThreadId) === 'ready') {
+            await rootBinding.mapper.setSyncState('ready');
+            codexV4CanonicalActive = true;
+        }
         const router = new CodexV4ThreadRouter({
             rootBinding,
             readThread: async (threadId) => (
@@ -1259,6 +1272,7 @@ export async function runCodex(opts: {
                     codexReadOnly: true,
                 });
                 child.metadata.codexThreadId = route.thread.id;
+                child.metadata.codexSyncVersion = 4;
                 child.metadata.codexCapabilities = { queueSteering: false };
                 const childResponse = await api.getOrCreateSession({
                     tag: identity.tag,
@@ -1311,7 +1325,9 @@ export async function runCodex(opts: {
         logger.debug('[codex]: client.connect begin');
         await client.connect();
         logger.debug('[codex]: client.connect done');
-        await bindCodexV4Session(pendingCodexV4Session ?? session);
+        if (codexSyncV4Enabled) {
+            await bindCodexV4Session(pendingCodexV4Session ?? session);
+        }
 
         const discoveredModels = await loadCodexModelCapabilities(client);
         codexModelCapabilities = discoveredModels;
@@ -1322,18 +1338,26 @@ export async function runCodex(opts: {
         }
 
         if (opts.resumeThreadId) {
+            const rootBinding = codexV4Runtime.rootBinding;
+            const migrationState = rootBinding?.syncClient.getMigrationState(opts.resumeThreadId);
+            const resumeSyncStrategy = resolveCodexResumeSyncStrategy(codexSyncV4Enabled, migrationState);
             const router = codexV4Runtime.router;
-            if (!router) throw new Error('Codex Sync v4 router is unavailable during migration');
-            router.registerRootThread(opts.resumeThreadId);
-            const migrator = new CodexV4Migrator({
-                rootSink: router.migrationSinkForRoot(),
-                readThread: async (threadId) => (
-                    await client.readThreadComplete({ threadId, emitSnapshot: false })
-                ).thread,
-                readGoal: async (threadId) => (await client.getGoal({ threadId })).goal,
-                resolveChildSink: (route) => router.migrationSinkForChild(route),
-            });
-            await migrator.prepareRoot(opts.resumeThreadId);
+            let migrator: CodexV4Migrator | null = null;
+            if (codexSyncV4Enabled) {
+                if (!router || !rootBinding) throw new Error('Codex Sync v4 router is unavailable during migration');
+                router.registerRootThread(opts.resumeThreadId);
+                if (resumeSyncStrategy.migrateToSyncV4) {
+                    migrator = new CodexV4Migrator({
+                        rootSink: router.migrationSinkForRoot(),
+                        readThread: async (threadId) => (
+                            await client.readThreadComplete({ threadId, emitSnapshot: false })
+                        ).thread,
+                        readGoal: async (threadId) => (await client.getGoal({ threadId })).goal,
+                        resolveChildSink: (route) => router.migrationSinkForChild(route),
+                    });
+                    await migrator.prepareRoot(opts.resumeThreadId);
+                }
+            }
             const resumed = await resumeExistingThread({
                 client,
                 session,
@@ -1341,14 +1365,25 @@ export async function runCodex(opts: {
                 threadId: opts.resumeThreadId,
                 cwd: process.cwd(),
                 mcpServers,
-                emitSnapshot: false,
+                emitSnapshot: resumeSyncStrategy.emitLegacySnapshot,
                 // Side chats start empty — keep the resume notice out of the UI.
                 announce: !isSideChat,
             });
             first = false;
             appendSystemPromptInjected = true;
-            await migrator.migrate(resumed.thread);
-            codexV4CanonicalActive = true;
+            if (migrator) {
+                await migrator.migrate(resumed.thread);
+                codexV4CanonicalActive = true;
+            } else if (codexSyncV4Enabled && rootBinding) {
+                rootBinding.mapper.importThreadState(resumed.thread);
+                rootBinding.mapper.importGoal(
+                    resumed.threadId,
+                    (await client.getGoal({ threadId: resumed.threadId })).goal,
+                );
+                await rootBinding.mapper.flush();
+                await rootBinding.syncClient.flushOutboundOnce();
+                codexV4CanonicalActive = true;
+            }
         }
 
         const forkCodexThreadId = process.env.HAPPY_FORK_CODEX_THREAD_ID;

@@ -4,10 +4,12 @@ import {
     SyncMutationBatchV4Schema,
     SyncSnapshotRequiredV4Schema,
     SyncSnapshotResponseV4Schema,
+    SyncV4CapabilitiesSchema,
     type SyncChangesResponseV4,
     type SyncMutationBatchResponseV4,
     type SyncMutationV4,
     type SyncSnapshotResponseV4,
+    type SyncV4Capabilities,
 } from '@slopus/happy-wire';
 import { apiSocket } from './apiSocket';
 import {
@@ -16,6 +18,12 @@ import {
 } from './syncV4Client';
 
 export class HttpAppSyncV4Transport implements AppSyncV4Transport {
+    async getCapabilities(): Promise<SyncV4Capabilities> {
+        const response = await apiSocket.request('/v4/capabilities');
+        if (!response.ok) throw new Error(`Sync v4 capability request failed: ${response.status}`);
+        return SyncV4CapabilitiesSchema.parse(await response.json());
+    }
+
     async postMutations(sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4> {
         const response = await apiSocket.request(
             `/v4/sessions/${encodeURIComponent(sessionId)}/mutations`,

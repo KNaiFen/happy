@@ -197,7 +197,16 @@ describe('resolveVisibleAgentGoalStatus', () => {
     });
 
     it('uses the recoverable v4 goal after activation', () => {
-        const visible = resolveVisibleAgentGoalStatus(sessionWith({ agentState: null }), {
+        const visible = resolveVisibleAgentGoalStatus(sessionWith({
+            agentState: null,
+            metadata: {
+                path: '/tmp/project',
+                host: 'local',
+                flavor: 'codex',
+                codexSyncVersion: 4,
+                codexThreadId: 'codex-thread-1',
+            },
+        }), {
             activated: true,
             thread: {
                 threadId: 'codex-thread-v4',
@@ -222,6 +231,13 @@ describe('resolveVisibleAgentGoalStatus', () => {
 
     it('does not fall back to stale v3 goal after v4 activation', () => {
         const session = sessionWith({
+            metadata: {
+                path: '/tmp/project',
+                host: 'local',
+                flavor: 'codex',
+                codexSyncVersion: 4,
+                codexThreadId: 'codex-thread-1',
+            },
             agentState: {
                 agentGoalStatus: {
                     status: 'active',
@@ -249,5 +265,33 @@ describe('resolveVisibleAgentGoalStatus', () => {
                 },
             },
         })).toBeNull();
+    });
+
+    it('falls back to the v3 goal when the v4 cutover marker is removed', () => {
+        const session = sessionWith({
+            metadata: {
+                path: '/tmp/project',
+                host: 'local',
+                flavor: 'codex',
+                codexThreadId: 'codex-thread-1',
+            },
+            agentState: {
+                agentGoalStatus: {
+                    status: 'active',
+                    source: 'codex',
+                    text: 'restored v3 goal',
+                    observedAt: 12_000,
+                    sourceSessionId: 'codex-thread-1',
+                },
+            },
+        });
+
+        expect(resolveVisibleAgentGoalStatus(session, {
+            activated: true,
+            thread: {
+                threadId: 'codex-thread-v4',
+                goal: null,
+            },
+        })?.text).toBe('restored v3 goal');
     });
 });

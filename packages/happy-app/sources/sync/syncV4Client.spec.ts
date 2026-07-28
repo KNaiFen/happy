@@ -7,6 +7,7 @@ import {
     type SyncMutationBatchResponseV4,
     type SyncMutationV4,
     type SyncSnapshotResponseV4,
+    type SyncV4Capabilities,
     type SyncV4Aad,
 } from '@slopus/happy-wire';
 import { describe, expect, it, vi } from 'vitest';
@@ -62,6 +63,19 @@ class FakeTransport implements AppSyncV4Transport {
     snapshots: SyncSnapshotResponseV4[] = [];
     requireSnapshot = false;
     failAfterCommit = false;
+    capabilities: SyncV4Capabilities = {
+        codex: {
+            enabled: true,
+            protocolVersion: 4,
+            minimumHappyCliVersion: '1.4.2',
+            minimumHappyAppVersion: '1.11.4',
+            minimumCodexCliVersion: '0.145.0',
+        },
+    };
+
+    async getCapabilities(): Promise<SyncV4Capabilities> {
+        return this.capabilities;
+    }
 
     async postMutations(_sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4> {
         this.posted.push(mutations);
@@ -130,15 +144,18 @@ async function client(
     applied: AppSyncV4AppliedEntity[] = [],
     handler?: (event: AppSyncV4AppliedEntity) => Promise<void>,
     snapshotReset?: () => Promise<void>,
+    batchHandler?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>,
 ): Promise<AppSyncV4Client> {
     return AppSyncV4Client.create({
         sessionId: 'session-1',
         sessionKey: new Uint8Array(32),
+        appVersion: '1.11.4',
         persistence: persistence(storage),
         transport,
         crypto: fakeCrypto,
         generateMutationId: () => `00000000-0000-4000-8000-${String(++mutationCounter).padStart(12, '0')}`,
         onEntity: handler ?? (async (event) => { applied.push(event); }),
+        onEntities: batchHandler,
         onSnapshotReset: snapshotReset ?? (async () => undefined),
     });
 }
@@ -148,6 +165,28 @@ function toChange(mutation: SyncMutationV4, seq: number): SyncChangeV4 {
 }
 
 describe('AppSyncV4Client', () => {
+    it('does not hydrate or pull when the coordinated cutover is disabled', async () => {
+        const transport = new FakeTransport();
+        transport.capabilities = {
+            ...transport.capabilities,
+            codex: { ...transport.capabilities.codex, enabled: false },
+        };
+        const receiver = await client(new MemoryStorage(), transport);
+
+        await expect(receiver.start()).rejects.toThrow('disabled by Happy Server');
+    });
+
+    it('refuses a v4 session when the App is below the advertised minimum', async () => {
+        const transport = new FakeTransport();
+        transport.capabilities = {
+            ...transport.capabilities,
+            codex: { ...transport.capabilities.codex, minimumHappyAppVersion: '1.12.0' },
+        };
+        const receiver = await client(new MemoryStorage(), transport);
+
+        await expect(receiver.start()).rejects.toThrow('Happy App 1.12.0 or newer');
+    });
+
     it('projects a local command immediately after its outbox write', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();
@@ -163,6 +202,30 @@ describe('AppSyncV4Client', () => {
             seq: null,
         }]);
         expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+    });
+
+    it('delivers a published entity group through one projection batch', async () => {
+        const storage = new MemoryStorage();
+        const batches: Array<readonly AppSyncV4AppliedEntity[]> = [];
+        const sender = await client(
+            storage,
+            new FakeTransport(),
+            [],
+            undefined,
+            undefined,
+            async (events) => { batches.push(events); },
+        );
+
+        await sender.publishEntities([
+            { entity: command('batched-command-1') },
+            { entity: command('batched-command-2') },
+        ]);
+
+        expect(batches).toHaveLength(1);
+        expect(batches[0].map((event) => event.entity.providerId)).toEqual([
+            'batched-command-1',
+            'batched-command-2',
+        ]);
     });
 
     it('hydrates an unacknowledged command from the outbox after restart', async () => {
@@ -294,6 +357,38 @@ describe('AppSyncV4Client', () => {
         const hydrated: AppSyncV4AppliedEntity[] = [];
         await (await client(storage, transport, hydrated)).hydrate();
         expect(hydrated.map((event) => event.source)).toEqual(['cache', 'cache']);
+    });
+
+    it('rebuilds from snapshot when an authenticated cache entity cannot be decrypted', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const valid = await publisher.publishEntity(command('recovered-command'));
+        persistence(storage).applyChanges('session-1', [{
+            ...toChange(valid, 1),
+            ciphertext: 'corrupt-cache-ciphertext',
+        }]);
+        const { mutationId: _mutationId, ...snapshot } = valid;
+        transport.snapshots = [{
+            entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+            highWatermark: 1,
+            nextCursor: null,
+        }];
+        const applied: AppSyncV4AppliedEntity[] = [];
+        let resetCount = 0;
+        const receiver = await client(storage, transport, applied, undefined, async () => {
+            resetCount += 1;
+        });
+
+        await receiver.hydrate();
+
+        expect(resetCount).toBe(1);
+        expect(applied).toMatchObject([{
+            entity: { commandId: 'recovered-command' },
+            source: 'snapshot',
+            revision: 1,
+        }]);
+        expect(receiver.receiveCursor).toBe(1);
     });
 
     it('removes entities omitted from a replacement snapshot projection', async () => {

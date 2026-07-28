@@ -1,5 +1,6 @@
 import type { CodexThreadEntityV4 } from '@slopus/happy-wire';
 import type { AgentGoalStatus, Session } from '@/sync/storageTypes';
+import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 
 export type VisibleAgentGoalStatus = AgentGoalStatus & { status: 'active'; text: string; sourceSessionId: string };
 
@@ -31,7 +32,7 @@ export function resolveVisibleAgentGoalStatus(
     session: GoalSession,
     codexV4?: CodexV4GoalProjection | null,
 ): VisibleAgentGoalStatus | null {
-    if (codexV4?.activated) {
+    if (isCodexV4SyncActive(session.metadata, codexV4)) {
         const goal = codexV4.thread?.goal;
         if (!goal || goal.status === 'complete') return null;
         return {

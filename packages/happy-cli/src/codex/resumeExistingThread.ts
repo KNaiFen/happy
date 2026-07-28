@@ -1,5 +1,6 @@
 import { trimIdent } from '@/utils/trimIdent';
 import type { Thread } from './protocol';
+import type { SyncV4MigrationJournalState } from '@/api/syncV4Journal';
 
 type ResumeThreadClient = {
     resumeThread: (opts: {
@@ -18,6 +19,22 @@ type ResumeThreadSession = {
 type ResumeThreadMessageBuffer = {
     addMessage: (message: string, type: 'status') => void;
 };
+
+export interface CodexResumeSyncStrategy {
+    emitLegacySnapshot: boolean;
+    migrateToSyncV4: boolean;
+}
+
+/** Keeps the resume snapshot and canonical migration on one coordinated branch. */
+export function resolveCodexResumeSyncStrategy(
+    syncV4Enabled: boolean,
+    migrationState?: SyncV4MigrationJournalState,
+): CodexResumeSyncStrategy {
+    return {
+        emitLegacySnapshot: !syncV4Enabled,
+        migrateToSyncV4: syncV4Enabled && migrationState !== 'ready',
+    };
+}
 
 export async function resumeExistingThread(opts: {
     client: ResumeThreadClient;

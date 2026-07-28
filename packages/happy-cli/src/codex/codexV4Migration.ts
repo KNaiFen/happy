@@ -1,6 +1,7 @@
 /** Transactional import of an official Codex thread tree into Sync v4. */
 
 import type { CodexRuntimeEntityV4 } from '@slopus/happy-wire';
+import type { SyncV4MigrationJournalState } from '@/api/syncV4Journal';
 import type { Thread } from './protocol';
 import type { ThreadGoal } from './protocol';
 
@@ -11,6 +12,8 @@ export interface CodexV4MigrationSink {
     setSyncState(syncState: CodexRuntimeEntityV4['syncState']): Promise<void>;
     flush(): Promise<void>;
     flushOutboundOnce(): Promise<void>;
+    getMigrationState(threadId: string): SyncV4MigrationJournalState | undefined;
+    setMigrationState(threadId: string, state: SyncV4MigrationJournalState): Promise<void>;
 }
 
 export interface CodexV4ChildThreadRoute {
@@ -95,15 +98,18 @@ export class CodexV4Migrator {
                 this.options.rootSink,
             ];
             for (const sink of activationOrder) {
+                const threadId = this.threadIdForSink(sink);
                 await sink.setSyncState('ready');
                 await sink.flush();
                 await sink.flushOutboundOnce();
+                await sink.setMigrationState(threadId, 'ready');
             }
         } catch (error) {
-            await Promise.allSettled([...this.sinks].map(async (sink) => {
+            await Promise.allSettled([...this.preparedThreads].map(async ([threadId, sink]) => {
                 await sink.setSyncState('error');
                 await sink.flush();
                 await sink.flushOutboundOnce();
+                await sink.setMigrationState(threadId, 'error');
             }));
             throw error;
         }
@@ -118,12 +124,21 @@ export class CodexV4Migrator {
         this.preparedThreads.set(threadId, sink);
         this.sinks.add(sink);
 
+        await sink.setMigrationState(threadId, 'pending');
         await sink.prepareMigration(threadId);
         await sink.flush();
         await sink.flushOutboundOnce();
         await sink.setSyncState('importing');
         await sink.flush();
         await sink.flushOutboundOnce();
+        await sink.setMigrationState(threadId, 'importing');
+    }
+
+    private threadIdForSink(sink: CodexV4MigrationSink): string {
+        for (const [threadId, candidate] of this.preparedThreads) {
+            if (candidate === sink) return threadId;
+        }
+        throw new Error('Codex migration sink has no prepared thread');
     }
 }
 
