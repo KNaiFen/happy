@@ -64,10 +64,14 @@ export class SyncV4Crypto {
 
     async encryptEntity(aad: SyncV4Aad, entity: CodexEntityV4): Promise<string> {
         this.assertAadSession(aad);
-        if (entity.entityType !== aad.entityType) {
+        const canonicalEntity = CodexEntityV4Schema.parse(entity);
+        if (canonicalEntity.entityType !== aad.entityType) {
             throw new Error("Sync v4 entity type does not match AAD");
         }
-        const expectedEntityId = await this.opaqueEntityId(entity.entityType, entity.providerId);
+        const expectedEntityId = await this.opaqueEntityId(
+            canonicalEntity.entityType,
+            canonicalEntity.providerId,
+        );
         if (expectedEntityId !== aad.entityId) {
             throw new Error("Sync v4 provider ID does not match opaque entity ID");
         }
@@ -79,7 +83,7 @@ export class SyncV4Crypto {
         const cipher = createCipheriv("chacha20-poly1305", this.entityAeadKey, nonce, {
             authTagLength: SYNC_V4_AUTH_TAG_BYTES,
         });
-        const plaintext = Buffer.from(JSON.stringify(entity), "utf8");
+        const plaintext = Buffer.from(JSON.stringify(canonicalEntity), "utf8");
         cipher.setAAD(Buffer.from(encodeSyncV4Aad(aad), "utf8"), { plaintextLength: plaintext.length });
         const ciphertext = Buffer.concat([
             cipher.update(plaintext),

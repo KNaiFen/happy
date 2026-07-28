@@ -40,6 +40,7 @@ interface CommandProcessorOptions {
     store: CommandStateStore;
     execute: (command: CodexCommandEntityV4) => Promise<CodexV4CommandOutcome>;
     reconcile: (command: CodexCommandEntityV4) => Promise<CodexV4CommandReconciliation>;
+    startPaused?: boolean;
     isOutcomeUnknown?: (error: unknown) => boolean;
     now?: () => number;
     reconcileIntervalMs?: number;
@@ -55,9 +56,11 @@ const TERMINAL_STATUSES = new Set<SyncV4CommandJournalStatus>([
 export class CodexV4CommandProcessor {
     private readonly inFlight = new Map<string, Promise<void>>();
     private readonly reconcileTimer: NodeJS.Timeout | null;
+    private executionPaused: boolean;
     private closed = false;
 
     constructor(private readonly options: CommandProcessorOptions) {
+        this.executionPaused = options.startPaused ?? false;
         const interval = options.reconcileIntervalMs ?? 1_000;
         this.reconcileTimer = interval > 0
             ? setInterval(() => { void this.recoverPending().catch((error) => options.onError?.(error)); }, interval)
@@ -75,6 +78,12 @@ export class CodexV4CommandProcessor {
         for (const { command } of this.options.store.getPendingCommands()) {
             await this.process(command);
         }
+    }
+
+    async resumeExecution(): Promise<void> {
+        if (this.closed) return;
+        this.executionPaused = false;
+        await this.recoverPending();
     }
 
     close(): void {
@@ -107,6 +116,7 @@ export class CodexV4CommandProcessor {
             status = 'received';
         }
         if (this.closed) return;
+        if (this.executionPaused) return;
 
         if (status === 'executing' || status === 'resultUnknown') {
             await this.reconcile(command);

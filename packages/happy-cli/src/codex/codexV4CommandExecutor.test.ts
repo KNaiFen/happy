@@ -94,6 +94,25 @@ describe('CodexV4CommandExecutor', () => {
         expect(result).toEqual({ threadId: 'thread-1', turnId: 'turn-1' });
     });
 
+    it('uses the canonical command thread when a payload also carries a thread target', async () => {
+        const client = fakeClient();
+        await executor(client).execute(command('turn.start', {
+            threadId: 'thread-payload',
+            text: 'hello',
+        }, {
+            threadId: 'thread-canonical',
+        }));
+
+        expect(client.resumeThread).toHaveBeenCalledWith(expect.objectContaining({
+            threadId: 'thread-canonical',
+        }));
+        expect(client.startTurnOnThread).toHaveBeenCalledWith(
+            'thread-canonical',
+            '[prepared] hello',
+            expect.any(Object),
+        );
+    });
+
     it('routes compact to one protocol call and never starts a text turn', async () => {
         const client = fakeClient();
         const result = await executor(client).execute(command('thread.compact', {}));

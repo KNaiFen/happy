@@ -122,7 +122,7 @@ describe('CodexV4Migrator', () => {
         const childSink = new FakeSink('child', events);
         const nestedSink = new FakeSink('nested', events);
         const root = thread('root', [turn('turn-root', [collab('delegate-1', ['child'])])]);
-        const child = thread('child', [turn('turn-child', [activity('activity-1', 'nested')])], 'root');
+        const child = thread('child', [turn('turn-child', [collab('delegate-2', ['nested'])])], 'root');
         const nested = thread('nested', [], 'child');
         const snapshots = new Map([[child.id, child], [nested.id, nested]]);
         const routes: string[] = [];
@@ -156,7 +156,7 @@ describe('CodexV4Migrator', () => {
 
         expect(routes).toEqual([
             'child:root:turn-root:delegate-1:1',
-            'nested:child:turn-child:activity-1:2',
+            'nested:child:turn-child:delegate-2:2',
         ]);
         expect(events).toContain('root:import:root');
         expect(events).toContain('child:import:child');
@@ -226,7 +226,7 @@ describe('CodexV4Migrator', () => {
         ]);
     });
 
-    it('deduplicates child references while preserving the first delegation lineage', () => {
+    it('uses only spawnAgent items for child lineage and ignores activity-only references', () => {
         const value = thread('root', [turn('turn-1', [
             collab('delegate-1', ['root', 'child', 'child']),
             activity('activity-2', 'child'),
@@ -235,7 +235,6 @@ describe('CodexV4Migrator', () => {
 
         expect(childThreadReferences(value)).toEqual([
             { childThreadId: 'child', parentTurnId: 'turn-1', delegationItemId: 'delegate-1' },
-            { childThreadId: 'nested', parentTurnId: 'turn-1', delegationItemId: 'activity-3' },
         ]);
     });
 });

@@ -451,4 +451,45 @@ describe("SyncV4Journal", () => {
         const reopened = await openJournal({ rootDir, sessionId: "session-1" });
         expect(reopened.getMigrationState("thread-1")).toBe("activating");
     });
+
+    it("recovers Codex orphan FIFO and thread classification after compaction", async () => {
+        const rootDir = await createRoot();
+        const journal = await openJournal({ rootDir, sessionId: "session-1", now: () => 100 });
+        const first = await journal.appendCodexOrphan("thread-child", {
+            method: "turn/started",
+            params: { threadId: "thread-child", turnId: "turn-1" },
+        });
+        const second = await journal.appendCodexOrphan("thread-child", {
+            method: "turn/completed",
+            params: { threadId: "thread-child", turnId: "turn-1" },
+        });
+        await journal.completeCodexOrphan(first.notificationId);
+        await journal.setCodexThreadRoute({
+            threadId: "thread-child",
+            kind: "providerChild",
+            parentThreadId: "thread-root",
+            parentTurnId: "turn-root",
+            delegationItemId: "item-spawn",
+            depth: 1,
+            status: "active",
+            activeTurnId: "turn-child",
+            coordinatedCommandId: "command-child",
+        });
+        await journal.compact();
+        await journal.close();
+
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
+        expect(reopened.snapshot().pendingCodexNotifications).toEqual([second]);
+        expect(reopened.snapshot().codexThreadRoutes.get("thread-child")).toEqual({
+            threadId: "thread-child",
+            kind: "providerChild",
+            parentThreadId: "thread-root",
+            parentTurnId: "turn-root",
+            delegationItemId: "item-spawn",
+            depth: 1,
+            status: "active",
+            activeTurnId: "turn-child",
+            coordinatedCommandId: "command-child",
+        });
+    });
 });

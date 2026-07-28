@@ -1,6 +1,8 @@
 import {
+    MAX_CODEX_SYNC_V4_PART_BYTES,
     SyncChangesResponseV4Schema,
     SyncSnapshotResponseV4Schema,
+    type CodexEntityV4,
     type CodexPartEntityV4,
     type SyncChangeV4,
     type SyncMutationBatchResponseV4,
@@ -137,6 +139,21 @@ afterEach(async () => {
 });
 
 describe("SyncV4Client", () => {
+    it("rejects invalid provider entities before allocating transport work", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const client = await createClient(root, transport);
+        const invalid = {
+            ...part("oversized"),
+            content: "\u754c".repeat(Math.floor(MAX_CODEX_SYNC_V4_PART_BYTES / 3) + 1),
+        } as CodexEntityV4;
+
+        await expect(client.publishEntity(invalid))
+            .rejects.toThrow(`part content exceeds ${MAX_CODEX_SYNC_V4_PART_BYTES} UTF-8 bytes`);
+        await client.flushOutboundOnce();
+        expect(transport.postedBatches).toEqual([]);
+    });
+
     it("assigns consecutive revisions to one entity within a durable batch", async () => {
         const root = await createRoot();
         const transport = new FakeTransport();

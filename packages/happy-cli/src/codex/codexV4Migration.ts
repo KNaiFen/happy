@@ -191,7 +191,7 @@ export function childThreadReferences(thread: Thread): ChildReference[] {
     const references = new Map<string, ChildReference>();
     for (const turn of thread.turns) {
         for (const item of turn.items) {
-            if (item.type === 'collabAgentToolCall') {
+            if (item.type === 'collabAgentToolCall' && item.tool === 'spawnAgent') {
                 for (const childThreadId of item.receiverThreadIds) {
                     if (!childThreadId || childThreadId === thread.id || references.has(childThreadId)) continue;
                     references.set(childThreadId, {
@@ -200,14 +200,6 @@ export function childThreadReferences(thread: Thread): ChildReference[] {
                         delegationItemId: item.id,
                     });
                 }
-            } else if (item.type === 'subAgentActivity') {
-                const childThreadId = item.agentThreadId;
-                if (!childThreadId || childThreadId === thread.id || references.has(childThreadId)) continue;
-                references.set(childThreadId, {
-                    childThreadId,
-                    parentTurnId: turn.id,
-                    delegationItemId: item.id,
-                });
             }
         }
     }

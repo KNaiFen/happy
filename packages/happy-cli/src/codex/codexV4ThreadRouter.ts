@@ -5,7 +5,13 @@ import {
     type CodexRelationEntityV4,
 } from '@slopus/happy-wire';
 import type { SyncV4Client } from '@/api/syncV4Client';
+import type {
+    SyncV4CodexNotification,
+    SyncV4CodexThreadRoute,
+    SyncV4CodexThreadRouteKind,
+} from '@/api/syncV4Journal';
 import { logger } from '@/ui/logger';
+import { AsyncLock } from '@/utils/lock';
 import { createHash } from 'node:crypto';
 import type {
     CodexConnectionEvent,
@@ -16,8 +22,19 @@ import type { CodexSyncV4Mapper } from './codexSyncV4Mapper';
 import type { CodexV4CommandProcessor } from './codexV4CommandProcessor';
 import type { CodexV4RequestBroker } from './codexV4RequestBroker';
 import type { CodexV4ChildThreadRoute, CodexV4MigrationSink } from './codexV4Migration';
-import { childThreadReferences, finalizeCodexV4Activation } from './codexV4Migration';
-import type { ServerNotification, Thread, ThreadGoal, ThreadStatus } from './protocol';
+import {
+    childThreadReferences,
+    CodexV4Migrator,
+    finalizeCodexV4Activation,
+} from './codexV4Migration';
+import type {
+    ServerNotification,
+    Thread,
+    ThreadGoal,
+    ThreadItem,
+    ThreadStatus,
+    Turn,
+} from './protocol';
 
 export interface CodexV4SessionBinding {
     sessionId: string;
@@ -26,6 +43,7 @@ export interface CodexV4SessionBinding {
     syncClient: SyncV4Client;
     commandProcessor: CodexV4CommandProcessor;
     requestBroker: CodexV4RequestBroker;
+    recover(): Promise<void>;
     close(): Promise<void>;
 }
 
@@ -39,60 +57,218 @@ interface ThreadRouterOptions {
     ) => Promise<CodexV4SessionBinding>;
     now?: () => number;
     onError?: (error: unknown) => void;
+    routeRegistrationWaitMs?: number;
 }
 
 interface RelationLineage {
+    kind: Extract<SyncV4CodexThreadRouteKind, 'providerChild' | 'detachedReview'>;
     parentThreadId: string;
     parentTurnId: string | null;
     delegationItemId: string | null;
     depth: number;
 }
 
+interface RouteRegistrationWaiter {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+}
+
+const ORPHAN_RETRY_BASE_MS = 250;
+const ORPHAN_RETRY_MAX_MS = 30_000;
+const DEFAULT_ROUTE_REGISTRATION_WAIT_MS = 5_000;
+
+class CodexRouteAwaitingRegistrationError extends Error {
+    constructor(readonly threadId: string) {
+        super('Codex thread is awaiting authoritative Happy route registration');
+        this.name = 'CodexRouteAwaitingRegistrationError';
+    }
+}
+
 export class CodexV4ThreadRouter {
     private readonly bindingsByThread = new Map<string, CodexV4SessionBinding>();
     private readonly bindingPromisesByThread = new Map<string, Promise<CodexV4SessionBinding>>();
     private readonly lineagesByChild = new Map<string, RelationLineage>();
+    private readonly routesByThread = new Map<string, SyncV4CodexThreadRoute>();
     private readonly relationsByChild = new Map<string, CodexRelationEntityV4>();
+    private readonly activeTurnByThread = new Map<string, string>();
     private readonly pipelinesByThread = new Map<string, Promise<void>>();
-    private rootThreadId: string | null = null;
+    private readonly hydratedThreads = new Set<string>();
+    private readonly threadsWithPendingOrphans = new Set<string>();
+    private readonly orphanRetryAttempts = new Map<string, number>();
+    private readonly orphanRetryTimers = new Map<string, NodeJS.Timeout>();
+    private readonly routeRegistrationWaiters = new Map<string, Set<RouteRegistrationWaiter>>();
+    private readonly routeLock = new AsyncLock();
     private closed = false;
 
-    constructor(private readonly options: ThreadRouterOptions) {}
-
-    registerRootThread(threadId: string): void {
-        if (this.rootThreadId && this.rootThreadId !== threadId) {
-            throw new Error('Codex root thread cannot change after Sync v4 routing starts');
+    constructor(private readonly options: ThreadRouterOptions) {
+        for (const route of options.rootBinding.syncClient.getCodexThreadRoutes().values()) {
+            this.restoreRoute(route);
         }
-        this.rootThreadId = threadId;
-        this.bindingsByThread.set(threadId, this.options.rootBinding);
+        for (const pending of options.rootBinding.syncClient.getPendingCodexNotifications()) {
+            this.threadsWithPendingOrphans.add(pending.threadId);
+        }
+    }
+
+    async registerRootThread(
+        threadId: string,
+        coordinatedCommandId?: string,
+    ): Promise<void> {
+        await this.persistRoute({
+            threadId,
+            kind: 'root',
+            parentThreadId: null,
+            parentTurnId: null,
+            delegationItemId: null,
+            depth: 0,
+            ...(coordinatedCommandId ? { coordinatedCommandId } : {}),
+        });
+        await this.retryPendingForThread(threadId);
+    }
+
+    async registerUserFork(
+        threadId: string,
+        forkedFromThreadId: string,
+        coordinatedCommandId?: string,
+    ): Promise<void> {
+        await this.persistRoute({
+            threadId,
+            kind: 'userFork',
+            parentThreadId: forkedFromThreadId,
+            parentTurnId: null,
+            delegationItemId: null,
+            depth: 0,
+            ...(coordinatedCommandId ? { coordinatedCommandId } : {}),
+        });
+        await this.retryPendingForThread(threadId);
+    }
+
+    async registerDetachedReview(
+        threadId: string,
+        parentThreadId: string,
+        parentTurnId: string | null = null,
+        coordinatedCommandId?: string,
+    ): Promise<void> {
+        if (threadId === parentThreadId) {
+            await this.registerRootThread(parentThreadId, coordinatedCommandId);
+            return;
+        }
+        await this.recordLineage(threadId, {
+            kind: 'detachedReview',
+            parentThreadId,
+            parentTurnId,
+            delegationItemId: null,
+            depth: await this.depthForParent(parentThreadId) + 1,
+        }, coordinatedCommandId);
+        await this.retryPendingForThread(threadId);
+    }
+
+    async migrateRootSnapshot(threadId: string): Promise<void> {
+        const sink = this.migrationSinkForRoot();
+        this.options.rootBinding.mapper.prepareSnapshotBarrier(threadId);
+        const state = sink.getMigrationState(threadId);
+        if (state === 'ready' || state === 'activating') {
+            const snapshot = await this.options.readThread(threadId);
+            const goal = this.options.readGoal ? await this.options.readGoal(threadId) : null;
+            this.options.rootBinding.mapper.importThreadState(snapshot);
+            this.options.rootBinding.mapper.importGoal(threadId, goal);
+            await sink.releaseMigrationBarrier(threadId);
+            await sink.flush();
+            await sink.flushOutboundOnce();
+            if (state === 'activating') {
+                await finalizeCodexV4Activation(sink, threadId);
+            } else {
+                await sink.setSyncState('ready');
+                await sink.flush();
+                await sink.flushOutboundOnce();
+            }
+            return;
+        }
+
+        const migrator = new CodexV4Migrator({
+            rootSink: sink,
+            readThread: this.options.readThread,
+            readGoal: this.options.readGoal,
+            resolveChildSink: (route) => this.migrationSinkForChild(route),
+        });
+        await migrator.prepareRoot(threadId);
+        await migrator.migrate(await this.options.readThread(threadId));
+    }
+
+    async recoverPendingNotifications(): Promise<void> {
+        const threadIds = new Set(
+            this.options.rootBinding.syncClient.getPendingCodexNotifications()
+                .map((pending) => pending.threadId),
+        );
+        await Promise.allSettled([...threadIds].map((threadId) => this.retryPendingForThread(threadId)));
+    }
+
+    async recoverActiveThreads(): Promise<void> {
+        const routes = [...this.routesByThread.values()].filter((route) => (
+            (route.kind === 'providerChild' || route.kind === 'detachedReview')
+            && (route.status === 'starting' || route.status === 'active')
+        ));
+        for (const route of routes) {
+            if (this.closed || this.bindingsByThread.has(route.threadId)) continue;
+            try {
+                await this.enqueueThread(route.threadId, async () => {
+                    const snapshot = await this.options.readThread(route.threadId);
+                    const binding = await this.bindingForSnapshot(snapshot);
+                    await binding.mapper.flush();
+                    this.hydratedThreads.add(route.threadId);
+                });
+            } catch (error) {
+                this.options.onError?.(error);
+            }
+        }
     }
 
     handleNotification(notification: ServerNotification): void {
         if (this.closed) return;
         const threadId = notificationThreadId(notification);
         if (!threadId) return;
-        const previous = this.pipelinesByThread.get(threadId) ?? Promise.resolve();
-        let pipeline!: Promise<void>;
-        pipeline = previous
-            .then(() => this.routeNotification(notification))
-            .catch((error) => { this.options.onError?.(error); })
-            .finally(() => {
-                if (this.pipelinesByThread.get(threadId) === pipeline) {
-                    this.pipelinesByThread.delete(threadId);
+        const task = async () => {
+            const canonical = canonicalOrphanNotification(notification);
+            if (
+                !this.bindingsByThread.has(threadId)
+                || this.threadsWithPendingOrphans.has(threadId)
+            ) {
+                if (!canonical) return;
+                await this.persistOrphan(threadId, canonical);
+                if (!this.orphanRetryTimers.has(threadId)) {
+                    await this.drainPendingNotifications(threadId);
                 }
-            });
-        this.pipelinesByThread.set(threadId, pipeline);
+                return;
+            }
+            try {
+                await this.routeNotification(notification, false, null);
+            } catch (error) {
+                if (canonical) await this.persistOrphan(threadId, canonical);
+                throw error;
+            }
+        };
+        void this.enqueueThread(threadId, task).catch((error) => {
+            this.options.onError?.(error);
+            this.scheduleOrphanRetry(threadId);
+        });
     }
 
     async handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse> {
         if (this.closed) throw new Error('Codex v4 thread router is closed');
         const threadId = requestThreadId(request);
-        const binding = await this.bindingForThread(threadId);
+        let binding: CodexV4SessionBinding;
+        try {
+            binding = await this.bindingForThread(threadId);
+        } catch (error) {
+            if (!(error instanceof CodexRouteAwaitingRegistrationError)) throw error;
+            await this.waitForRouteRegistration(threadId);
+            binding = await this.bindingForThread(threadId);
+        }
         return await binding.requestBroker.handle(request);
     }
 
     setConnection(event: CodexConnectionEvent): void {
-        for (const binding of new Set(this.bindingsByThread.values())) {
+        for (const binding of this.allBindings()) {
             void binding.mapper.setConnection(event.connection, {
                 statusUnknown: event.statusUnknown,
                 error: event.error,
@@ -110,6 +286,7 @@ export class CodexV4ThreadRouter {
 
     async migrationSinkForChild(route: CodexV4ChildThreadRoute): Promise<CodexV4MigrationSink> {
         const binding = await this.ensureChildBinding(route.thread, {
+            kind: 'providerChild',
             parentThreadId: route.parentThreadId,
             parentTurnId: route.parentTurnId,
             delegationItemId: route.delegationItemId,
@@ -120,7 +297,7 @@ export class CodexV4ThreadRouter {
 
     async flush(): Promise<void> {
         await Promise.all([...this.pipelinesByThread.values()]);
-        for (const binding of new Set(this.bindingsByThread.values())) {
+        for (const binding of this.allBindings()) {
             await binding.mapper.flush();
         }
     }
@@ -128,15 +305,32 @@ export class CodexV4ThreadRouter {
     async close(): Promise<void> {
         if (this.closed) return;
         this.closed = true;
-        await this.flush();
-        await Promise.allSettled(this.bindingPromisesByThread.values());
-        const bindings = new Set(this.bindingsByThread.values());
-        bindings.delete(this.options.rootBinding);
-        await Promise.allSettled([...bindings].map((binding) => binding.close()));
-        this.bindingsByThread.clear();
+        for (const timer of this.orphanRetryTimers.values()) clearTimeout(timer);
+        this.orphanRetryTimers.clear();
+        this.rejectRouteRegistrationWaiters(
+            new Error('Codex v4 thread router closed while waiting for route registration'),
+        );
+        let flushError: unknown = null;
+        try {
+            await this.flush();
+        } catch (error) {
+            flushError = error;
+        } finally {
+            await Promise.allSettled(this.bindingPromisesByThread.values());
+            const bindings = new Set(this.bindingsByThread.values());
+            bindings.delete(this.options.rootBinding);
+            await Promise.allSettled([...bindings].map((binding) => binding.close()));
+            this.bindingsByThread.clear();
+            this.activeTurnByThread.clear();
+        }
+        if (flushError) throw flushError;
     }
 
-    private async routeNotification(notification: ServerNotification): Promise<void> {
+    private async routeNotification(
+        notification: ServerNotification,
+        durableOrphan: boolean,
+        deliveryId: string | null,
+    ): Promise<void> {
         const threadId = notificationThreadId(notification);
         if (!threadId) return;
 
@@ -163,7 +357,25 @@ export class CodexV4ThreadRouter {
             }
         }
 
-        binding.mapper.handleNotification(notification);
+        let hydratedRoot = false;
+        if (
+            durableOrphan
+            && binding === this.options.rootBinding
+            && !snapshot
+            && !this.hydratedThreads.has(threadId)
+        ) {
+            const hydrated = await this.options.readThread(threadId);
+            binding.mapper.importThread(hydrated);
+            binding.mapper.importGoal(
+                threadId,
+                this.options.readGoal ? await this.options.readGoal(threadId) : null,
+            );
+            hydratedRoot = true;
+        }
+        if (durableOrphan && binding.mapper.isMigrationBarrierActive(threadId)) {
+            throw new Error('Codex orphan is waiting for the migration barrier');
+        }
+        await binding.mapper.handleNotification(notification, deliveryId);
         if (notification.method === 'serverRequest/resolved') {
             await binding.requestBroker.markProviderResolved(
                 notification.params.threadId,
@@ -173,22 +385,47 @@ export class CodexV4ThreadRouter {
         if (snapshot) await this.discoverChildren(snapshot);
         await this.discoverChildrenFromNotification(notification);
         await this.updateChildRelation(threadId, notification);
+        if (durableOrphan) await binding.mapper.flush();
+        if (snapshot || hydratedRoot || binding !== this.options.rootBinding) {
+            this.hydratedThreads.add(threadId);
+        }
     }
 
     private async bindingForSnapshot(thread: Thread): Promise<CodexV4SessionBinding> {
         const existing = this.bindingsByThread.get(thread.id);
         if (existing) return existing;
-        if (thread.id === this.rootThreadId || (!this.rootThreadId && !thread.parentThreadId)) {
-            this.registerRootThread(thread.id);
+
+        const registered = this.routesByThread.get(thread.id);
+        if (registered?.kind === 'root' || registered?.kind === 'userFork') {
+            this.bindingsByThread.set(thread.id, this.options.rootBinding);
             return this.options.rootBinding;
         }
 
-        const lineage = this.lineagesByChild.get(thread.id) ?? {
-            parentThreadId: requiredParentThreadId(thread),
-            parentTurnId: null,
-            delegationItemId: null,
-            depth: await this.depthForParent(requiredParentThreadId(thread)) + 1,
-        };
+        let lineage = this.lineagesByChild.get(thread.id);
+        if (lineage) assertSnapshotMatchesLineage(thread, lineage);
+        if (!lineage) {
+            const spawn = providerSpawnLineage(thread);
+            if (!spawn) {
+                if (thread.forkedFromId) {
+                    throw new Error('Codex user fork is awaiting explicit Happy session ownership');
+                }
+                if (isDetachedReviewSource(thread)) {
+                    throw new CodexRouteAwaitingRegistrationError(thread.id);
+                }
+                throw new CodexRouteAwaitingRegistrationError(thread.id);
+            }
+            lineage = {
+                kind: 'providerChild',
+                parentThreadId: spawn.parentThreadId,
+                parentTurnId: null,
+                delegationItemId: null,
+                depth: Math.max(
+                    spawn.depth,
+                    await this.depthForParent(spawn.parentThreadId) + 1,
+                ),
+            };
+            await this.recordLineage(thread.id, lineage);
+        }
         return await this.ensureChildBinding(thread, lineage);
     }
 
@@ -245,8 +482,12 @@ export class CodexV4ThreadRouter {
                 await activateChildBinding(binding, thread, goal);
             }
             this.bindingsByThread.set(thread.id, binding);
+            await binding.recover();
             return binding;
         } catch (error) {
+            if (this.bindingsByThread.get(thread.id) === binding) {
+                this.bindingsByThread.delete(thread.id);
+            }
             await binding.close().catch(() => undefined);
             throw error;
         }
@@ -259,15 +500,17 @@ export class CodexV4ThreadRouter {
         const binding = await this.bindingForSnapshot(snapshot);
         if (binding === this.options.rootBinding) binding.mapper.importThread(snapshot);
         await binding.mapper.flush();
+        this.hydratedThreads.add(threadId);
         return binding;
     }
 
     private async discoverChildren(thread: Thread): Promise<void> {
-        const parentDepth = thread.id === this.rootThreadId
+        const parentDepth = this.bindingsByThread.get(thread.id) === this.options.rootBinding
             ? 0
             : this.lineagesByChild.get(thread.id)?.depth ?? 0;
         for (const child of childThreadReferences(thread)) {
             await this.recordLineage(child.childThreadId, {
+                kind: 'providerChild',
                 parentThreadId: thread.id,
                 parentTurnId: child.parentTurnId,
                 delegationItemId: child.delegationItemId,
@@ -279,15 +522,16 @@ export class CodexV4ThreadRouter {
     private async discoverChildrenFromNotification(notification: ServerNotification): Promise<void> {
         if (notification.method !== 'item/started' && notification.method !== 'item/completed') return;
         const item = notification.params.item;
-        const childThreadIds = item.type === 'collabAgentToolCall'
+        const childThreadIds = item.type === 'collabAgentToolCall' && item.tool === 'spawnAgent'
             ? item.receiverThreadIds
-            : item.type === 'subAgentActivity' ? [item.agentThreadId] : [];
-        const parentDepth = notification.params.threadId === this.rootThreadId
+            : [];
+        const parentDepth = this.bindingsByThread.get(notification.params.threadId) === this.options.rootBinding
             ? 0
             : this.lineagesByChild.get(notification.params.threadId)?.depth ?? 0;
         for (const childThreadId of childThreadIds) {
             if (!childThreadId || childThreadId === notification.params.threadId) continue;
             await this.recordLineage(childThreadId, {
+                kind: 'providerChild',
                 parentThreadId: notification.params.threadId,
                 parentTurnId: notification.params.turnId,
                 delegationItemId: item.id,
@@ -296,41 +540,67 @@ export class CodexV4ThreadRouter {
         }
     }
 
-    private async recordLineage(childThreadId: string, incoming: RelationLineage): Promise<void> {
-        const current = this.lineagesByChild.get(childThreadId);
-        if (current && current.parentThreadId !== incoming.parentThreadId) {
-            throw new Error('Codex child thread reported conflicting parents');
-        }
-        const next: RelationLineage = current ? {
-            parentThreadId: current.parentThreadId,
-            parentTurnId: current.parentTurnId ?? incoming.parentTurnId,
-            delegationItemId: current.delegationItemId ?? incoming.delegationItemId,
-            depth: Math.min(current.depth, incoming.depth),
-        } : incoming;
-        this.lineagesByChild.set(childThreadId, next);
+    private async recordLineage(
+        childThreadId: string,
+        incoming: RelationLineage,
+        coordinatedCommandId?: string,
+    ): Promise<void> {
+        await this.routeLock.inLock(async () => {
+            const current = this.lineagesByChild.get(childThreadId);
+            if (
+                current
+                && (
+                    current.parentThreadId !== incoming.parentThreadId
+                    || current.kind !== incoming.kind
+                )
+            ) {
+                throw new Error('Codex child thread reported conflicting parents');
+            }
+            const candidate: RelationLineage = current ? {
+                kind: current.kind,
+                parentThreadId: current.parentThreadId,
+                parentTurnId: current.parentTurnId ?? incoming.parentTurnId,
+                delegationItemId: current.delegationItemId ?? incoming.delegationItemId,
+                depth: Math.min(current.depth, incoming.depth),
+            } : incoming;
+            const currentRoute = this.routesByThread.get(childThreadId);
+            const persisted = await this.persistRouteLocked({
+                threadId: childThreadId,
+                kind: candidate.kind,
+                parentThreadId: candidate.parentThreadId,
+                parentTurnId: candidate.parentTurnId,
+                delegationItemId: candidate.delegationItemId,
+                depth: candidate.depth,
+                status: currentRoute?.status ?? 'starting',
+                activeTurnId: currentRoute?.activeTurnId ?? null,
+                ...(coordinatedCommandId ? { coordinatedCommandId } : {}),
+            });
+            const next = this.lineagesByChild.get(persisted.threadId);
+            if (!next) throw new Error('Codex child route did not restore its lineage');
 
-        const relation = this.relationsByChild.get(childThreadId);
-        if (
-            !relation
-            || (
-                relation.parentTurnId === next.parentTurnId
-                && relation.delegationItemId === next.delegationItemId
-                && relation.depth === next.depth
-            )
-        ) {
-            return;
-        }
-        const updated = {
-            ...relation,
-            parentTurnId: next.parentTurnId,
-            delegationItemId: next.delegationItemId,
-            depth: next.depth,
-            updatedAt: this.now(),
-        };
-        const parentBinding = this.bindingsByThread.get(updated.parentThreadId);
-        if (!parentBinding) return;
-        await parentBinding.mapper.upsertRelation(updated);
-        this.relationsByChild.set(childThreadId, updated);
+            const relation = this.relationsByChild.get(childThreadId);
+            if (
+                !relation
+                || (
+                    relation.parentTurnId === next.parentTurnId
+                    && relation.delegationItemId === next.delegationItemId
+                    && relation.depth === next.depth
+                )
+            ) {
+                return;
+            }
+            const updated = {
+                ...relation,
+                parentTurnId: next.parentTurnId,
+                delegationItemId: next.delegationItemId,
+                depth: next.depth,
+                updatedAt: this.now(),
+            };
+            const parentBinding = this.bindingsByThread.get(updated.parentThreadId);
+            if (!parentBinding) return;
+            await parentBinding.mapper.upsertRelation(updated);
+            this.relationsByChild.set(childThreadId, updated);
+        });
     }
 
     private async publishRelation(
@@ -338,48 +608,109 @@ export class CodexV4ThreadRouter {
         childBinding: CodexV4SessionBinding,
         lineage: RelationLineage,
     ): Promise<void> {
-        const parentBinding = this.bindingsByThread.get(lineage.parentThreadId);
-        if (!parentBinding) throw new Error('Codex child relation has no parent session binding');
-        const now = this.now();
-        const relation: CodexRelationEntityV4 = {
-            schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
-            entityType: 'codex.relation',
-            providerId: `${lineage.parentThreadId}\0relation\0${thread.id}`,
-            createdAt: toEpochMs(thread.createdAt, now),
-            updatedAt: now,
-            parentThreadId: lineage.parentThreadId,
-            childThreadId: thread.id,
-            parentTurnId: lineage.parentTurnId,
-            delegationItemId: lineage.delegationItemId,
-            parentSessionId: parentBinding.sessionId,
-            childSessionId: childBinding.sessionId,
-            depth: lineage.depth,
-            status: relationStatus(thread.status),
-        };
-        await parentBinding.mapper.upsertRelation(relation);
-        this.relationsByChild.set(thread.id, relation);
+        await this.routeLock.inLock(async () => {
+            const resolvedLineage = this.lineagesByChild.get(thread.id) ?? lineage;
+            const parentBinding = this.bindingsByThread.get(resolvedLineage.parentThreadId);
+            if (!parentBinding) throw new Error('Codex child relation has no parent session binding');
+            const now = this.now();
+            const activeTurnId = activeTurnIdFromSnapshot(thread);
+            if (activeTurnId) this.activeTurnByThread.set(thread.id, activeTurnId);
+            const status = activeTurnId ? 'active' : relationStatus(thread.status);
+            const route: SyncV4CodexThreadRoute = {
+                threadId: thread.id,
+                kind: resolvedLineage.kind,
+                parentThreadId: resolvedLineage.parentThreadId,
+                parentTurnId: resolvedLineage.parentTurnId,
+                delegationItemId: resolvedLineage.delegationItemId,
+                depth: resolvedLineage.depth,
+                status,
+                activeTurnId,
+            };
+            const relation: CodexRelationEntityV4 = {
+                schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+                entityType: 'codex.relation',
+                providerId: `${resolvedLineage.parentThreadId}\0relation\0${thread.id}`,
+                createdAt: toEpochMs(thread.createdAt, now),
+                updatedAt: now,
+                parentThreadId: resolvedLineage.parentThreadId,
+                childThreadId: thread.id,
+                parentTurnId: resolvedLineage.parentTurnId,
+                delegationItemId: resolvedLineage.delegationItemId,
+                parentSessionId: parentBinding.sessionId,
+                childSessionId: childBinding.sessionId,
+                depth: resolvedLineage.depth,
+                status,
+            };
+            if (isRecoverableRelationStatus(status)) {
+                await this.persistRouteLocked(route);
+                await parentBinding.mapper.upsertRelation(relation);
+            } else {
+                await parentBinding.mapper.upsertRelation(relation);
+                await this.persistRouteLocked(route);
+            }
+            this.relationsByChild.set(thread.id, relation);
+        });
     }
 
     private async updateChildRelation(threadId: string, notification: ServerNotification): Promise<void> {
-        const relation = this.relationsByChild.get(threadId);
-        if (!relation) return;
-        const status = notification.method === 'turn/started'
-            ? 'active'
-            : notification.method === 'turn/completed'
-                ? turnRelationStatus(notification.params.turn.status)
-                : notification.method === 'thread/status/changed'
-                    ? relationStatus(notification.params.status)
-                    : relation.status;
-        if (status === relation.status) return;
-        const next = { ...relation, status, updatedAt: this.now() };
-        const parentBinding = this.bindingsByThread.get(next.parentThreadId);
-        if (!parentBinding) return;
-        await parentBinding.mapper.upsertRelation(next);
-        this.relationsByChild.set(threadId, next);
+        await this.routeLock.inLock(async () => {
+            const relation = this.relationsByChild.get(threadId);
+            if (!relation) return;
+            let status = relation.status;
+            if (notification.method === 'turn/started') {
+                this.activeTurnByThread.set(threadId, notification.params.turn.id);
+                status = 'active';
+            } else if (notification.method === 'turn/completed') {
+                const activeTurnId = this.activeTurnByThread.get(threadId);
+                if (activeTurnId && activeTurnId !== notification.params.turn.id) return;
+                if (activeTurnId === notification.params.turn.id) {
+                    this.activeTurnByThread.delete(threadId);
+                }
+                status = turnRelationStatus(notification.params.turn.status);
+            } else if (notification.method === 'thread/status/changed') {
+                if (notification.params.status.type !== 'active') {
+                    this.activeTurnByThread.delete(threadId);
+                }
+                status = relationStatus(notification.params.status);
+            } else if (
+                notification.method === 'thread/archived'
+                || notification.method === 'thread/closed'
+                || notification.method === 'thread/deleted'
+            ) {
+                this.activeTurnByThread.delete(threadId);
+                status = 'completed';
+            }
+            const activeTurnId = this.activeTurnByThread.get(threadId) ?? null;
+            const route = this.routesByThread.get(threadId);
+            const nextRoute = route && (
+                route.kind === 'providerChild' || route.kind === 'detachedReview'
+            )
+                ? {
+                    ...route,
+                    status,
+                    activeTurnId,
+                }
+                : null;
+            if (status === relation.status) {
+                if (nextRoute) await this.persistRouteLocked(nextRoute);
+                return;
+            }
+            const next = { ...relation, status, updatedAt: this.now() };
+            const parentBinding = this.bindingsByThread.get(next.parentThreadId);
+            if (!parentBinding) return;
+            if (isRecoverableRelationStatus(status)) {
+                if (nextRoute) await this.persistRouteLocked(nextRoute);
+                await parentBinding.mapper.upsertRelation(next);
+            } else {
+                await parentBinding.mapper.upsertRelation(next);
+                if (nextRoute) await this.persistRouteLocked(nextRoute);
+            }
+            this.relationsByChild.set(threadId, next);
+        });
     }
 
     private async depthForParent(parentThreadId: string): Promise<number> {
-        if (parentThreadId === this.rootThreadId) return 0;
+        if (this.bindingsByThread.get(parentThreadId) === this.options.rootBinding) return 0;
         const known = this.lineagesByChild.get(parentThreadId);
         if (known) return known.depth;
         const parent = await this.options.readThread(parentThreadId);
@@ -387,8 +718,232 @@ export class CodexV4ThreadRouter {
         return this.lineagesByChild.get(parentThreadId)?.depth ?? 0;
     }
 
+    private enqueueThread(threadId: string, task: () => Promise<void>): Promise<void> {
+        const previous = this.pipelinesByThread.get(threadId) ?? Promise.resolve();
+        const run = previous.then(task);
+        let tracked!: Promise<void>;
+        tracked = run
+            .catch(() => undefined)
+            .finally(() => {
+                if (this.pipelinesByThread.get(threadId) === tracked) {
+                    this.pipelinesByThread.delete(threadId);
+                }
+            });
+        this.pipelinesByThread.set(threadId, tracked);
+        return run;
+    }
+
+    private async drainPendingNotifications(threadId: string): Promise<void> {
+        const pending = this.options.rootBinding.syncClient.getPendingCodexNotifications()
+            .filter((entry) => entry.threadId === threadId);
+        for (const entry of pending) {
+            if (this.closed) return;
+            await this.routeNotification(
+                entry.notification as unknown as ServerNotification,
+                true,
+                entry.notificationId,
+            );
+            await this.options.rootBinding.syncClient.completeCodexOrphan(entry.notificationId);
+        }
+        if (
+            !this.options.rootBinding.syncClient.getPendingCodexNotifications()
+                .some((entry) => entry.threadId === threadId)
+        ) {
+            this.threadsWithPendingOrphans.delete(threadId);
+            this.clearOrphanRetry(threadId);
+        }
+    }
+
+    private async persistOrphan(
+        threadId: string,
+        notification: ServerNotification,
+    ): Promise<void> {
+        await this.options.rootBinding.syncClient.persistCodexOrphan(
+            threadId,
+            notification as unknown as SyncV4CodexNotification,
+        );
+        this.threadsWithPendingOrphans.add(threadId);
+    }
+
+    private async retryPendingForThread(threadId: string): Promise<void> {
+        if (
+            this.closed
+            || !this.threadsWithPendingOrphans.has(threadId)
+        ) {
+            return;
+        }
+        try {
+            await this.enqueueThread(threadId, () => this.drainPendingNotifications(threadId));
+        } catch (error) {
+            this.options.onError?.(error);
+            this.scheduleOrphanRetry(threadId);
+        }
+    }
+
+    private scheduleOrphanRetry(threadId: string): void {
+        if (this.closed || this.orphanRetryTimers.has(threadId)) return;
+        if (!this.threadsWithPendingOrphans.has(threadId)) return;
+        const attempt = (this.orphanRetryAttempts.get(threadId) ?? 0) + 1;
+        this.orphanRetryAttempts.set(threadId, attempt);
+        const delay = Math.min(
+            ORPHAN_RETRY_MAX_MS,
+            ORPHAN_RETRY_BASE_MS * (2 ** Math.min(attempt - 1, 16)),
+        );
+        const timer = setTimeout(() => {
+            this.orphanRetryTimers.delete(threadId);
+            void this.retryPendingForThread(threadId);
+        }, delay);
+        timer.unref();
+        this.orphanRetryTimers.set(threadId, timer);
+    }
+
+    private clearOrphanRetry(threadId: string): void {
+        const timer = this.orphanRetryTimers.get(threadId);
+        if (timer) clearTimeout(timer);
+        this.orphanRetryTimers.delete(threadId);
+        this.orphanRetryAttempts.delete(threadId);
+    }
+
+    private async persistRoute(route: SyncV4CodexThreadRoute): Promise<SyncV4CodexThreadRoute> {
+        return await this.routeLock.inLock(() => this.persistRouteLocked(route));
+    }
+
+    private async persistRouteLocked(
+        route: SyncV4CodexThreadRoute,
+    ): Promise<SyncV4CodexThreadRoute> {
+        const current = this.routesByThread.get(route.threadId);
+        let resolved = route;
+        if (current) {
+            const bothRootOwned = isRootOwnedRoute(current) && isRootOwnedRoute(route);
+            if (!bothRootOwned && (
+                current.kind !== route.kind
+                || current.parentThreadId !== route.parentThreadId
+            )) {
+                throw new Error('Codex thread reported conflicting route classifications');
+            }
+            resolved = bothRootOwned
+                ? {
+                    ...current,
+                    ...(route.coordinatedCommandId
+                        ? { coordinatedCommandId: route.coordinatedCommandId }
+                        : {}),
+                }
+                : {
+                    ...route,
+                    parentTurnId: current.parentTurnId ?? route.parentTurnId,
+                    delegationItemId: current.delegationItemId ?? route.delegationItemId,
+                    depth: Math.min(current.depth, route.depth),
+                    ...(route.status === undefined && current.status !== undefined
+                        ? { status: current.status }
+                        : {}),
+                    ...(route.activeTurnId === undefined && current.activeTurnId !== undefined
+                        ? { activeTurnId: current.activeTurnId }
+                        : {}),
+                    ...(route.coordinatedCommandId === undefined
+                        && current.coordinatedCommandId !== undefined
+                        ? { coordinatedCommandId: current.coordinatedCommandId }
+                        : {}),
+                };
+            if (sameRoute(current, resolved)) return current;
+        }
+        await this.options.rootBinding.syncClient.persistCodexThreadRoute(resolved);
+        this.restoreRoute(resolved);
+        this.resolveRouteRegistrationWaiters(resolved.threadId);
+        return resolved;
+    }
+
+    private restoreRoute(route: SyncV4CodexThreadRoute): void {
+        this.routesByThread.set(route.threadId, route);
+        if (isRootOwnedRoute(route)) {
+            this.bindingsByThread.set(route.threadId, this.options.rootBinding);
+            this.lineagesByChild.delete(route.threadId);
+            return;
+        }
+        if (route.kind !== 'providerChild' && route.kind !== 'detachedReview') {
+            throw new Error('Codex thread route has an unsupported classification');
+        }
+        this.lineagesByChild.set(route.threadId, {
+            kind: route.kind,
+            parentThreadId: requiredRouteParentThreadId(route),
+            parentTurnId: route.parentTurnId,
+            delegationItemId: route.delegationItemId,
+            depth: route.depth,
+        });
+        if (route.activeTurnId) {
+            this.activeTurnByThread.set(route.threadId, route.activeTurnId);
+        } else {
+            this.activeTurnByThread.delete(route.threadId);
+        }
+    }
+
     private now(): number {
         return Math.max(0, Math.trunc(this.options.now?.() ?? Date.now()));
+    }
+
+    private allBindings(): Set<CodexV4SessionBinding> {
+        return new Set([
+            this.options.rootBinding,
+            ...this.bindingsByThread.values(),
+        ]);
+    }
+
+    private async waitForRouteRegistration(threadId: string): Promise<void> {
+        if (this.closed) throw new Error('Codex v4 thread router is closed');
+        if (this.routesByThread.has(threadId)) return;
+        const waitMs = Math.max(
+            0,
+            Math.trunc(
+                this.options.routeRegistrationWaitMs
+                ?? DEFAULT_ROUTE_REGISTRATION_WAIT_MS,
+            ),
+        );
+        await new Promise<void>((resolve, reject) => {
+            let waiter!: RouteRegistrationWaiter;
+            const timer = setTimeout(() => {
+                this.removeRouteRegistrationWaiter(threadId, waiter);
+                reject(new Error(
+                    'Codex provider request arrived before authoritative route registration',
+                ));
+            }, waitMs);
+            timer.unref();
+            waiter = { resolve, reject, timer };
+            const waiters = this.routeRegistrationWaiters.get(threadId) ?? new Set();
+            waiters.add(waiter);
+            this.routeRegistrationWaiters.set(threadId, waiters);
+            if (this.routesByThread.has(threadId)) {
+                this.resolveRouteRegistrationWaiters(threadId);
+            }
+        });
+    }
+
+    private resolveRouteRegistrationWaiters(threadId: string): void {
+        const waiters = this.routeRegistrationWaiters.get(threadId);
+        if (!waiters) return;
+        this.routeRegistrationWaiters.delete(threadId);
+        for (const waiter of waiters) {
+            clearTimeout(waiter.timer);
+            waiter.resolve();
+        }
+    }
+
+    private rejectRouteRegistrationWaiters(error: Error): void {
+        for (const waiters of this.routeRegistrationWaiters.values()) {
+            for (const waiter of waiters) {
+                clearTimeout(waiter.timer);
+                waiter.reject(error);
+            }
+        }
+        this.routeRegistrationWaiters.clear();
+    }
+
+    private removeRouteRegistrationWaiter(
+        threadId: string,
+        waiter: RouteRegistrationWaiter,
+    ): void {
+        const waiters = this.routeRegistrationWaiters.get(threadId);
+        if (!waiters) return;
+        waiters.delete(waiter);
+        if (waiters.size === 0) this.routeRegistrationWaiters.delete(threadId);
     }
 }
 
@@ -477,9 +1032,81 @@ function requestThreadId(request: CodexServerRequest): string {
     return threadId;
 }
 
-function requiredParentThreadId(thread: Thread): string {
-    if (!thread.parentThreadId) throw new Error('Unknown Codex thread has no parentThreadId');
-    return thread.parentThreadId;
+function providerSpawnLineage(thread: Thread): { parentThreadId: string; depth: number } | null {
+    if (
+        !thread.parentThreadId
+        || !thread.source
+        || typeof thread.source !== 'object'
+        || !('subAgent' in thread.source)
+    ) {
+        return null;
+    }
+    const subAgent = thread.source.subAgent;
+    if (
+        !subAgent
+        || typeof subAgent !== 'object'
+        || !('thread_spawn' in subAgent)
+        || !subAgent.thread_spawn
+        || typeof subAgent.thread_spawn !== 'object'
+    ) {
+        return null;
+    }
+    const spawn = subAgent.thread_spawn;
+    if (spawn.parent_thread_id !== thread.parentThreadId) {
+        throw new Error('Codex provider child source conflicts with parentThreadId');
+    }
+    return {
+        parentThreadId: thread.parentThreadId,
+        depth: Math.max(1, Math.trunc(spawn.depth)),
+    };
+}
+
+function isDetachedReviewSource(thread: Thread): boolean {
+    return Boolean(
+        thread.source
+        && typeof thread.source === 'object'
+        && 'subAgent' in thread.source
+        && thread.source.subAgent === 'review',
+    );
+}
+
+function assertSnapshotMatchesLineage(thread: Thread, lineage: RelationLineage): void {
+    if (thread.parentThreadId && thread.parentThreadId !== lineage.parentThreadId) {
+        throw new Error('Codex child snapshot conflicts with its persisted parent route');
+    }
+    const spawn = providerSpawnLineage(thread);
+    if (spawn && (
+        lineage.kind !== 'providerChild'
+        || spawn.parentThreadId !== lineage.parentThreadId
+    )) {
+        throw new Error('Codex child snapshot conflicts with its persisted route classification');
+    }
+    if (isDetachedReviewSource(thread) && lineage.kind !== 'detachedReview') {
+        throw new Error('Codex review snapshot conflicts with its persisted route classification');
+    }
+}
+
+function isRootOwnedRoute(
+    route: SyncV4CodexThreadRoute,
+): route is SyncV4CodexThreadRoute & { kind: 'root' | 'userFork' } {
+    return route.kind === 'root' || route.kind === 'userFork';
+}
+
+function requiredRouteParentThreadId(route: SyncV4CodexThreadRoute): string {
+    if (!route.parentThreadId) throw new Error('Codex child route has no parent thread');
+    return route.parentThreadId;
+}
+
+function sameRoute(left: SyncV4CodexThreadRoute, right: SyncV4CodexThreadRoute): boolean {
+    return left.threadId === right.threadId
+        && left.kind === right.kind
+        && left.parentThreadId === right.parentThreadId
+        && left.parentTurnId === right.parentTurnId
+        && left.delegationItemId === right.delegationItemId
+        && left.depth === right.depth
+        && left.status === right.status
+        && left.activeTurnId === right.activeTurnId
+        && left.coordinatedCommandId === right.coordinatedCommandId;
 }
 
 function relationStatus(status: ThreadStatus): CodexRelationEntityV4['status'] {
@@ -495,7 +1122,145 @@ function turnRelationStatus(status: string): CodexRelationEntityV4['status'] {
     return status === 'inProgress' ? 'active' : 'completed';
 }
 
+function isRecoverableRelationStatus(status: CodexRelationEntityV4['status']): boolean {
+    return status === 'starting' || status === 'active';
+}
+
+function activeTurnIdFromSnapshot(thread: Thread): string | null {
+    for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+        if (thread.turns[index].status === 'inProgress') return thread.turns[index].id;
+    }
+    return null;
+}
+
 function toEpochMs(value: number, fallback: number): number {
     if (!Number.isFinite(value) || value < 0) return fallback;
     return Math.trunc(value < 10_000_000_000 ? value * 1_000 : value);
+}
+
+const CANONICAL_ORPHAN_METHODS = new Set([
+    'thread/started',
+    'thread/status/changed',
+    'thread/name/updated',
+    'thread/settings/updated',
+    'thread/tokenUsage/updated',
+    'thread/goal/updated',
+    'thread/goal/cleared',
+    'turn/started',
+    'turn/completed',
+    'turn/plan/updated',
+    'turn/diff/updated',
+    'item/started',
+    'item/completed',
+    'item/agentMessage/delta',
+    'item/plan/delta',
+    'item/reasoning/summaryPartAdded',
+    'item/reasoning/summaryTextDelta',
+    'item/commandExecution/outputDelta',
+    'item/fileChange/outputDelta',
+    'item/fileChange/patchUpdated',
+    'item/mcpToolCall/progress',
+    'warning',
+    'guardianWarning',
+    'error',
+    'serverRequest/resolved',
+    'model/rerouted',
+    'mcpServer/startupStatus/updated',
+    'thread/archived',
+    'thread/closed',
+    'thread/deleted',
+]);
+
+const KNOWN_THREAD_ITEM_TYPES = new Set([
+    'userMessage',
+    'hookPrompt',
+    'agentMessage',
+    'plan',
+    'reasoning',
+    'commandExecution',
+    'fileChange',
+    'mcpToolCall',
+    'dynamicToolCall',
+    'collabAgentToolCall',
+    'subAgentActivity',
+    'webSearch',
+    'imageView',
+    'sleep',
+    'imageGeneration',
+    'enteredReviewMode',
+    'exitedReviewMode',
+    'contextCompaction',
+]);
+
+function canonicalOrphanNotification(notification: ServerNotification): ServerNotification | null {
+    if (!CANONICAL_ORPHAN_METHODS.has(notification.method)) return null;
+    switch (notification.method) {
+        case 'thread/started':
+            return {
+                ...notification,
+                params: {
+                    ...notification.params,
+                    thread: sanitizeThreadForJournal(notification.params.thread),
+                },
+            };
+        case 'turn/started':
+        case 'turn/completed':
+            return {
+                ...notification,
+                params: {
+                    ...notification.params,
+                    turn: sanitizeTurnForJournal(notification.params.turn),
+                },
+            } as ServerNotification;
+        case 'item/started':
+        case 'item/completed':
+            return {
+                ...notification,
+                params: {
+                    ...notification.params,
+                    item: sanitizeItemForJournal(notification.params.item),
+                },
+            } as ServerNotification;
+        default:
+            return notification;
+    }
+}
+
+function sanitizeThreadForJournal(thread: Thread): Thread {
+    return {
+        ...thread,
+        turns: thread.turns.map(sanitizeTurnForJournal),
+    };
+}
+
+function sanitizeTurnForJournal(turn: Turn): Turn {
+    return {
+        ...turn,
+        items: turn.items.map(sanitizeItemForJournal),
+    };
+}
+
+function sanitizeItemForJournal(item: ThreadItem): ThreadItem {
+    const raw = item as unknown as Record<string, unknown>;
+    if (
+        typeof raw.type !== 'string'
+        || typeof raw.id !== 'string'
+        || !KNOWN_THREAD_ITEM_TYPES.has(raw.type)
+    ) {
+        return {
+            type: typeof raw.type === 'string' ? raw.type.slice(0, 128) : '<missing>',
+            id: typeof raw.id === 'string' ? raw.id.slice(0, 512) : '__unknown_item__',
+        } as unknown as ThreadItem;
+    }
+    if (raw.type === 'reasoning') {
+        return {
+            type: 'reasoning',
+            id: raw.id,
+            summary: Array.isArray(raw.summary)
+                ? raw.summary.filter((part): part is string => typeof part === 'string')
+                : [],
+            content: [],
+        };
+    }
+    return item;
 }

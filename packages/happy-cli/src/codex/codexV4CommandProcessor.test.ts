@@ -165,6 +165,30 @@ describe('CodexV4CommandProcessor', () => {
         processor.close();
     });
 
+    it('persists inbound commands while paused and executes them only after routing is ready', async () => {
+        const store = new FakeStore();
+        const execute = vi.fn(async () => ({ threadId: 'thread-1', turnId: 'turn-1' }));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+            startPaused: true,
+        });
+
+        await processor.handle(event(command()));
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(store.statuses.get('command-1')).toBe('received');
+        expect(store.commands.get('command-1')).toEqual(command());
+
+        await processor.resumeExecution();
+
+        expect(execute).toHaveBeenCalledOnce();
+        expect(store.statuses.get('command-1')).toBe('succeeded');
+        processor.close();
+    });
+
     it('durably records the execution context before invoking the provider RPC', async () => {
         const store = new FakeStore();
         const pending = command({ payload: { text: 'persist me' } });

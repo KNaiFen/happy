@@ -32,7 +32,7 @@ export interface SetupOfflineReconnectionOptions {
      * Callback invoked when session is swapped after reconnection.
      * Use this to update the session reference in the calling code.
      */
-    onSessionSwap: (newSession: ApiSessionClient) => void;
+    onSessionSwap: (newSession: ApiSessionClient) => void | Promise<void>;
 }
 
 /**
@@ -92,8 +92,14 @@ export function setupOfflineReconnection(opts: SetupOfflineReconnectionOptions):
                 const resp = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
                 if (!resp) throw new Error('Server unavailable');
                 const realSession = api.sessionSyncClient(resp);
-                // Notify caller to swap the session reference
-                onSessionSwap(realSession);
+                try {
+                    // A session is not reconnected until provider-specific
+                    // synchronization has finished binding to it.
+                    await onSessionSwap(realSession);
+                } catch (error) {
+                    await realSession.close().catch(() => undefined);
+                    throw error;
+                }
                 return realSession;
             },
             onNotify: (msg) => {

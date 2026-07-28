@@ -196,7 +196,7 @@ export class CodexV4CommandExecutor {
                 if (optionalString(payload.unsupportedArguments)) {
                     throw new Error('mcp.status.list does not accept arguments');
                 }
-                const threadId = optionalString(payload.threadId) ?? command.threadId;
+                const threadId = command.threadId ?? optionalString(payload.threadId);
                 const result = await this.options.client.listMcpServerStatus({ threadId });
                 return { threadId, result: { servers: result } };
             }
@@ -230,7 +230,7 @@ export class CodexV4CommandExecutor {
         command: CodexCommandEntityV4,
         payload: Record<string, unknown>,
     ): Promise<CodexV4CommandOutcome> {
-        let threadId = optionalString(payload.threadId) ?? command.threadId;
+        let threadId = command.threadId ?? optionalString(payload.threadId);
         if (!threadId) {
             const started = await this.options.client.startThread({
                 model: optionalString(payload.model) ?? undefined,

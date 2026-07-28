@@ -100,20 +100,54 @@ R2 实施约束：
 - [x] migration 建立 snapshot/live barrier，旧 snapshot 不得覆盖 live delta。
 - [x] `ready` mutation ACK 与本地 migration 状态通过可恢复的 activating
       状态协调。
-- [ ] orphan notification 进入持久 FIFO，绑定失败可重试并最终 snapshot
+- [x] orphan notification 进入持久 FIFO，绑定失败可重试并最终 snapshot
       对账。
 - [x] 进程退出恢复所有 active thread，不依赖 selected thread。
-- [ ] 区分 provider child、用户 fork、detached review 和 sibling 通信。
+- [x] 区分 provider child、用户 fork、detached review 和 sibling 通信。
 - [x] turn/thread 状态单调，旧 turn 完成不能结束另一个 active turn。
 - [x] interrupt 超时只触发重连协调，不直接产生权威 completed/idle。
 - [x] resume 不使用陈旧配置放宽 approval/sandbox 权限。
 - [x] server request handler 总是返回 response 或协议 error。
 - [x] provider request 的 pending、response-ready、supplied、resolved 和
       outcome-unknown 状态可跨进程恢复。
-- [ ] stable-v2 UserInput 和 ThreadItem 使用 exhaustive mapper；未知 stable
+- [x] stable-v2 UserInput 和 ThreadItem 使用 exhaustive mapper；未知 stable
       variant 产生受控诊断而不是空 item。
-- [ ] warning/error ID 跨重启不碰撞，错误码保持结构化。
-- [ ] finalized stream 释放大内容，snapshot 批量投影避免重复发布。
+- [x] warning/error ID 跨重启不碰撞，错误码保持结构化。
+- [x] finalized stream 释放大内容，snapshot 批量投影避免重复发布。
+- [x] command 与 payload 同时声明 thread target 时必须一致，ownership 校验
+      与实际 RPC 不得使用不同优先级。
+- [x] child 的 thread-scoped 只读查询不得省略 thread target 后回退到
+      app-server 全局 selected thread；`mcp.status.list` 必须显式命中该
+      child，只有真正全局的 skills/model 查询可无 thread。
+- [x] Happy Server 初始离线、provider 已创建 root thread 后再绑定 v4 时，
+      必须登记 route 并通过 snapshot/live barrier 导入既有历史。
+- [x] 初始离线重连只有在 v4 binding/migration 完成后才算成功；失败必须关闭
+      临时 session 并进入既有无限退避，不得留下无 Router 的假在线状态。
+- [x] 持久 route 的 `activeTurnId=null` 必须清除内存旧 active turn，避免迟到
+      completion 错误阻断后续 relation 收敛。
+- [x] child relation 与 route 的跨 journal 提交顺序必须可恢复：active 先写
+      route，terminal 先写 relation，任一边界崩溃后 snapshot 都能收敛。
+- [x] parent `spawnAgent` 首次登记的 child route 必须持久化为 `starting`；
+      即使尚无 child notification/orphan，CLI 重启也必须主动读取官方
+      snapshot 并恢复 child binding。
+- [x] Router 必须等待 Mapper 将 live notification 投影写入 durable outbox；
+      Mapper 异步失败不得只记内部错误，必须转存 durable orphan 后重放。
+- [x] 同一 thread 一旦存在 durable orphan，后续 live notification 必须先
+      追加到同一 FIFO 再投影；不得越过失败记录造成 started/completed 或
+      active/idle 顺序反转。
+- [x] Router close 即使 flush 失败也必须关闭所有 child binding/socket，并在
+      清理完成后再向调用方保留原错误。
+- [x] provider RPC 成功且 route 已提交、commandResult 未提交的崩溃边界，
+      必须通过 route 中的 coordinated commandId 恢复成功；没有该 receipt
+      时继续 outcome-unknown/notReplayed，绝不猜测或重放非幂等 RPC。
+- [x] app-server 在 thread/review RPC 响应后同一 stdout chunk 内立即发送
+      provider request 时，Router 必须等待并发 route 登记后再绑定；等待
+      仍未形成权威 route 才返回协议错误，不得把真实 root/review 请求误拒绝。
+- [x] 尚未创建或登记任何 thread 的 root binding 仍必须接收 connection
+      变化、pending request 断连处理和 flush，不能因 route map 为空而漏状态。
+- [x] CLI 在计算 opaque ID 和加密前必须用 Wire canonical schema 校验出站
+      entity；不得让只满足 TypeScript 静态类型、但运行时越界或结构无效的
+      provider 数据进入 durable outbox，随后在 App 解密投影时永久卡住 cursor。
 
 R3 实施顺序与状态机：
 
@@ -222,6 +256,90 @@ R3 第三切片本地门禁：CLI typecheck/build 通过，`99` 个测试文件�
 `946/946` 单元测试通过；其中定向 `85/85` 覆盖五态顺序、每个响应写入
 边界、旧 journal 兼容、handler 失败、未知方法和禁止二次 response。
 
+R3 第四切片按以下持久路由与分类规则实现：
+
+```txt
+首次看到未绑定 thread 的 notification
+│
+├─ root session journal fsync orphanEnqueued
+├─ 按该 thread 的 journal FIFO 顺序 hydrate + classify
+├─ 建立或恢复目标 binding
+├─ mapper 应用 notification，并将产生的 mutation fsync 到 outbox
+└─ root session journal fsync orphanCompleted
+```
+
+- orphan 记录包含随机持久 ID、thread ID、接收时间和 canonical stable-v2
+  notification JSON；完成记录只引用持久 ID。raw reasoning delta 不入队，
+  thread/turn/item snapshot 中的 reasoning `content` 在落盘前剥离，只保留
+  reasoning summary。compact 只保留未完成 orphan，截断尾行沿用 Sync v4
+  journal 的恢复规则。
+- 每个 thread 的 orphan 严格 FIFO；绑定、hydrate 或 projection 失败时不得
+  删除原记录。失败使用有上限的指数退避重试，进程重启时先重放 journal，
+  后续官方 snapshot 仍作为权威状态对账。
+- 持久 notification ID 作为 warning/error/unknown-variant 诊断的幂等种子；
+  mutation 已落 outbox 但 completion 尚未 fsync 时重放，不得生成第二张诊断
+  item。root/user fork 在重放非 snapshot orphan 前先 hydrate 官方 snapshot。
+- journal 同时保存 thread route classification，避免 detached review 或
+  user fork 在“RPC 已成功、进程尚未完成通知路由”边界崩溃后失去归属。
+- child route 同时保存最后 relation status 与 active turn ID。CLI 重启时
+  只对 `starting/active` route 读取官方 snapshot 并恢复 child binding，
+  不扫描或打开全部历史 child session；snapshot 的新权威状态回写 route。
+- 恢复旧会话时必须先建立 mapper migration barrier，再注册 root route 或
+  重放 orphan；否则恢复通知会先进入投影，随后被官方迁移 snapshot 覆盖。
+- 新 Router 必须先成为 runtime 当前实例并安装 stable notification、
+  server request 和 connection handler，再恢复持久命令与 orphan。relay
+  重连窗口不得让仍在运行的 turn 或审批落到空 handler。
+- Sync v4 client 启动拉取到的 command 必须先以 `received` 状态持久化，
+  在 Router 就绪前暂停执行。root 与 child binding 都只能在 route ownership
+  可用后恢复命令，避免启动、fork、review 或无 thread 的 `turn.start`
+  已在 provider 成功但本地没有 route。
+- 命令目标校验同时读取 command/payload 的有效 thread ID。root binding
+  只允许已持久化的 root/user-fork route、初始 owned thread，以及显式
+  `thread.resume` 的新归属；child binding 只允许自己的 thread。无 thread
+  的 `turn.start` 成功后必须登记 root route，user fork 后续命令不得再被
+  单一 `ownedThreadId` 错误拒绝。
+- child binding 的命令白名单只包含 `thread.read`、`skills.list`、
+  `mcp.status.list` 和 `model.list` 查询；`request.resolve` 会改变 provider
+  状态，必须与 turn、审批、用户输入及 MCP response 写操作一起拒绝。
+- provider RPC 已成功但 route 或 metadata 协调失败时，command 必须进入
+  outcome-unknown，不得错误标记为普通 failed，也不得自动重放非幂等调用。
+- JSONL stdout 的多行由 Node readline 同步派发，而请求 Promise 的续体在
+  microtask 中执行；因此 provider request 绑定遇到“权威 root/review route
+  即将由同一 RPC 续体登记”时，允许做有界 route-registration 协调等待。
+  该等待只保护 JSON-RPC 派发竞态，不得作为 turn 完成超时；超时后仍必须
+  返回协议错误，且不能把未知无 parent thread 猜成 root。
+- root 只能由显式 `thread/start`、`thread/resume` 或当前会话发起并确认的
+  `thread/fork` 注册。未知且没有 `parentThreadId` 的 thread 不得自动成为
+  root。用户 fork 继续归属当前可写 Happy session，不建立 child relation。
+- provider child 必须由官方 `source.subAgent.thread_spawn` 与
+  `parentThreadId` 一致地证明，或由当前 parent 的 `spawnAgent`
+  collaboration item 预先登记。`sendInput`、`resumeAgent`、`wait`、
+  `closeAgent` 的 receiver 只是通信目标，不产生父子关系；
+  `subAgentActivity` 也不单独推断 lineage。
+- inline review 的 `reviewThreadId` 等于原 thread，继续使用原 binding。
+  detached review 只由 `review/start` 的返回值登记 parent，并创建独立、
+  隐藏、只读 side session；单凭 `source.subAgent.review` 不猜 parent。
+- route 持久化、lineage 合并和 relation 首次发布、补全、生命周期状态更新
+  必须使用同一串行临界区，覆盖 child snapshot、parent `spawnAgent` item
+  与 child completed 交错到达的竞态。已登记 child 的官方
+  `parentThreadId`/`source` 不得与持久 route 冲突。
+- relation 维护每个 child 的当前 active turn；迟到的旧
+  `turn/completed` 只能更新该 turn 的实体，不得把已有新 active turn 的
+  relation 或父 runtime `activeSubagentCount` 改成 completed。
+- mapper 对 `UserInput` 和 `ThreadItem` 使用编译期 exhaustive switch；
+  runtime 未知 variant 生成不含原始 payload 的受控诊断。raw reasoning
+  仍只在 CLI diagnostics 计数；正文、分段数和字节数均不进入 entity、
+  part、journal 或日志。
+- reasoning snapshot 写入 orphan journal 时按 0.145.0 stable-v2 字段白名单
+  重建，只保留 `type`、`id` 和 summary，并清空 content；不得通过对象展开
+  保留未来新增或未验证的 raw 字段。
+- warning/error item 使用随机稳定长度 ID，避免进程重启后序号复用。
+  error part 和 item arguments 保留官方 message、code、details 与
+  `willRetry`，同时不记录明文到日志。
+- finalized stream 在 mutation 持久化后立即删除正文和 chunk；只保留有界
+  LRU completion marker，超限淘汰旧 marker。snapshot 导入每个 thread
+  只发布一次 thread/runtime 基线，逐 turn 导入不得重复发布这两个实体。
+
 R3 分为四个可独立验证的提交：
 
 1. mapper durable publication boundary、迁移 `activating` 恢复和
@@ -231,6 +349,12 @@ R3 分为四个可独立验证的提交：
 3. provider request 五态持久恢复，以及 server request 必答/协议错误；
 4. orphan durable FIFO、provider child/user fork/detached review/sibling 分类、
    stable-v2 exhaustive item/input mapper、诊断 ID 与 stream/batch 内存治理。
+
+R3 第四切片本地门禁：CLI typecheck/build 通过，`101` 个测试文件、
+`993/993` 单元测试通过；其中 `10` 个定向文件、`127/127` 覆盖
+crypto/client canonical 门禁、durable orphan FIFO、
+route/lineage 恢复、启动门禁、动态 ownership、child 只读、迟到 turn、
+reasoning 脱敏、结构化诊断和 stream/batch 内存治理。
 
 ### R4 App
 
@@ -322,6 +446,45 @@ R3 分为四个可独立验证的提交：
   unknown/失败的 server request 必须返回 JSON-RPC error。
   dependency audit job 不启用无依赖安装场景下的 pnpm cache；CI、Smoke
   Test 和版本构建工作流统一使用 Node 24 runtime 对应的 action 版本。
+- 2026-07-28：R3 第四切片锁定 durable orphan journal 与完成边界；
+  root/user fork、provider child、detached review 和 sibling communication
+  使用显式 route classification，禁止根据无 parent 的未知 thread 猜 root，
+  并增加 exhaustive stable-v2 projection、结构化诊断及有界 stream marker。
+- 2026-07-28：R3 第四切片提交前审查发现恢复顺序、启动期 command 执行、
+  user fork 动态 ownership、无 thread `turn.start` route、post-RPC 协调结果、
+  relation 首次发布竞态和 reasoning 对象展开仍有丢失或泄露窗口；以上项目
+  加入本切片强制门禁，修复及回归测试完成前不得提交。
+- 2026-07-28：R3 第四切片完成。migration barrier 先于 route/orphan 恢复，
+  stable notification/request handler 先于 command 恢复安装；command ingress
+  在 Router ready 前持久暂停，root/user fork/child ownership 与 post-RPC
+  outcome-unknown 均在持久 route 上协调。child relation 生命周期串行化并
+  保存 active turn，bound projection 失败回落 durable orphan；reasoning
+  journal 按 stable-v2 白名单重建。CLI build/typecheck、`100` 个测试文件和
+  `973/973` 单元测试全部通过。
+- 2026-07-28：R3 第四切片最终审查新增三项门禁：拒绝 command/payload
+  thread target 冲突；补齐“provider 先运行、Happy Server 后连通”的 root
+  snapshot 迁移；route 恢复时显式清除空 active turn。三项修复及回归测试
+  完成前撤回 R3-4 提交就绪结论。
+- 2026-07-28：R3 第四切片提交前最终控制流复核确认 Node readline 会在
+  同一 stdout chunk 内同步派发响应后的 provider request，而命令续体稍后
+  才登记 root/review route；新增有界 route-registration 协调门禁。同时
+  补充无任何 route 时 root binding 仍需接收 connection/flush 的门禁。
+- 2026-07-28：差异安全审查确认 Sync v4 入站解密执行 canonical schema
+  校验，但 CLI 出站加密此前只依赖静态类型；新增加密前 schema 门禁，防止
+  运行时越界 provider entity 被 Server 持久化后在 App 侧阻塞接收 cursor。
+- 2026-07-28：R3-4 崩溃边界复核发现 parent `spawnAgent` 只登记 lineage、
+  child 首个通知尚未到达时，持久 route 没有状态，重启恢复会跳过仍运行的
+  child；新增初始 `starting` route 与无 orphan 主动恢复门禁。
+- 2026-07-28：R3-4 每线程时序复核发现 bound notification 投影失败转为
+  orphan 后，后续 live notification 仍可直接越过；新增 live/orphan 统一
+  FIFO 门禁，避免 turn 与 child relation 状态倒序。
+- 2026-07-28：R3-4 ownership 复核发现 child 的无 target
+  `mcp.status.list` 会回退到 app-server selected thread；新增 thread-scoped
+  查询必须显式命中 owned child 的门禁。
+- 2026-07-28：R3-4 最终本地门禁完成。CLI build/typecheck、`101/101`
+  测试文件和 `993/993` 单元测试通过；`10` 个定向文件、`127/127` 覆盖
+  canonical 出站、route 注册竞态、live/orphan FIFO、无 orphan child 恢复、
+  ownership、迁移、请求恢复和离线重连。
 - 2026-07-28：R2 完成。CLI session 初始化和关闭使用 generation 隔离；
   journal 增加单 writer lease、durability poison、可回收字节压缩和终态
   command receipt；显式 outbound flush 固定调用时集合，后台 outbound 使用

@@ -21,13 +21,14 @@ import {
 import type { SyncV4Client } from '@/api/syncV4Client';
 import type { SyncV4ProviderRequestJournalState } from '@/api/syncV4Journal';
 import { logger } from '@/ui/logger';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
     ServerNotification,
     Thread,
     ThreadGoal,
     ThreadItem,
     Turn,
+    UserInput,
 } from './protocol';
 
 type SyncPublisher = Pick<
@@ -46,6 +47,8 @@ interface MapperOptions {
     protocolVersion?: string;
     initialSyncState?: CodexRuntimeEntityV4['syncState'];
     flushIntervalMs?: number;
+    finalizedStreamMarkerLimit?: number;
+    diagnosticId?: () => string;
     now?: () => number;
     onError?: (error: unknown) => void;
 }
@@ -72,17 +75,35 @@ interface PartStream {
     timer: NodeJS.Timeout | null;
 }
 
+interface DiagnosticContent {
+    message: string;
+    code?: string | null;
+    details?: string | null;
+    willRetry?: boolean | null;
+    category?: 'unknownStableVariant';
+    union?: 'ThreadItem' | 'UserInput';
+    variant?: string;
+}
+
+interface BufferedNotification {
+    notification: ServerNotification;
+    deliveryId: string | null;
+}
+
 export interface CodexSyncV4MapperDiagnostics {
     rawReasoningUtf8Bytes: number;
     rawReasoningDeltaCount: number;
     authoritativeStreamMismatchCount: number;
     unknownNotificationMethods: Record<string, number>;
+    unknownStableVariants: Record<string, number>;
     threadStatusTransitions: Record<string, number>;
     activeStreamCount: number;
     finalizedStreamCount: number;
 }
 
 const DEFAULT_FLUSH_INTERVAL_MS = 200;
+const DEFAULT_FINALIZED_STREAM_MARKER_LIMIT = 50_000;
+const MAX_INLINE_ITEM_ARGUMENT_BYTES = 32 * 1024;
 const TEXT_ENCODER = new TextEncoder();
 
 export class CodexSyncV4Mapper {
@@ -93,11 +114,11 @@ export class CodexSyncV4Mapper {
     private readonly requests = new Map<string, CodexRequestEntityV4>();
     private readonly relations = new Map<string, CodexRelationEntityV4>();
     private readonly streams = new Map<string, PartStream>();
-    private readonly finalizedStreams = new Set<string>();
-    private readonly migrationBarriers = new Map<string, ServerNotification[]>();
+    private readonly finalizedStreams = new Map<string, true>();
+    private readonly migrationBarriers = new Map<string, BufferedNotification[]>();
     private readonly activeTurnByThread = new Map<string, string>();
-    private readonly diagnosticSequenceByTurn = new Map<string, number>();
     private readonly unknownNotificationMethods = new Map<string, number>();
+    private readonly unknownStableVariants = new Map<string, number>();
     private readonly threadStatusTransitions = new Map<string, number>();
     private readonly liveGoalObserved = new Set<string>();
     private pipeline: Promise<void> = Promise.resolve();
@@ -118,15 +139,20 @@ export class CodexSyncV4Mapper {
         this.syncState = options.initialSyncState ?? 'ready';
     }
 
-    handleNotification(notification: ServerNotification): void {
-        if (this.closed) return;
+    handleNotification(
+        notification: ServerNotification,
+        deliveryId: string | null = null,
+    ): Promise<void> {
+        if (this.closed) return Promise.resolve();
         const threadId = notificationThreadId(notification);
         const barrier = threadId ? this.migrationBarriers.get(threadId) : undefined;
         if (barrier) {
-            barrier.push(notification);
-            return;
+            barrier.push({ notification, deliveryId });
+            return Promise.resolve();
         }
-        void this.enqueue(() => this.applyNotification(notification)).catch(() => undefined);
+        const projection = this.enqueue(() => this.applyNotification(notification, deliveryId));
+        void projection.catch(() => undefined);
+        return projection;
     }
 
     importThread(thread: Thread): void {
@@ -190,10 +216,19 @@ export class CodexSyncV4Mapper {
 
     async prepareMigration(threadId: string): Promise<void> {
         if (this.closed) return;
-        if (!this.migrationBarriers.has(threadId)) this.migrationBarriers.set(threadId, []);
+        this.prepareSnapshotBarrier(threadId);
         await this.enqueue(async () => {
             await this.ensureThread(threadId, this.now());
         });
+    }
+
+    prepareSnapshotBarrier(threadId: string): void {
+        if (this.closed) return;
+        if (!this.migrationBarriers.has(threadId)) this.migrationBarriers.set(threadId, []);
+    }
+
+    isMigrationBarrierActive(threadId: string): boolean {
+        return this.migrationBarriers.has(threadId);
     }
 
     async releaseMigrationBarrier(threadId: string): Promise<void> {
@@ -202,7 +237,9 @@ export class CodexSyncV4Mapper {
         if (!buffered) return;
         this.migrationBarriers.delete(threadId);
         await this.enqueue(async () => {
-            for (const notification of buffered) await this.applyNotification(notification);
+            for (const entry of buffered) {
+                await this.applyNotification(entry.notification, entry.deliveryId);
+            }
         });
     }
 
@@ -281,6 +318,7 @@ export class CodexSyncV4Mapper {
             rawReasoningDeltaCount: this.rawReasoningDeltaCount,
             authoritativeStreamMismatchCount: this.authoritativeStreamMismatchCount,
             unknownNotificationMethods: Object.fromEntries(this.unknownNotificationMethods),
+            unknownStableVariants: Object.fromEntries(this.unknownStableVariants),
             threadStatusTransitions: Object.fromEntries(this.threadStatusTransitions),
             activeStreamCount: this.streams.size,
             finalizedStreamCount: this.finalizedStreams.size,
@@ -296,10 +334,13 @@ export class CodexSyncV4Mapper {
         return run;
     }
 
-    private async applyNotification(notification: ServerNotification): Promise<void> {
+    private async applyNotification(
+        notification: ServerNotification,
+        deliveryId: string | null,
+    ): Promise<void> {
         switch (notification.method) {
             case 'thread/started':
-                await this.applyThreadSnapshot(notification.params.thread);
+                await this.applyThreadSnapshot(notification.params.thread, true, deliveryId);
                 return;
             case 'thread/status/changed':
                 await this.applyThreadStatus(notification.params.threadId, notification.params.status);
@@ -324,10 +365,22 @@ export class CodexSyncV4Mapper {
                 await this.applyThreadGoal(notification.params.threadId, null, false);
                 return;
             case 'turn/started':
-                await this.applyTurn(notification.params.threadId, notification.params.turn, 'started');
+                await this.applyTurn(
+                    notification.params.threadId,
+                    notification.params.turn,
+                    'started',
+                    true,
+                    deliveryId,
+                );
                 return;
             case 'turn/completed':
-                await this.applyTurn(notification.params.threadId, notification.params.turn, 'completed');
+                await this.applyTurn(
+                    notification.params.threadId,
+                    notification.params.turn,
+                    'completed',
+                    true,
+                    deliveryId,
+                );
                 return;
             case 'turn/plan/updated':
                 await this.applyTurnPlan(notification.params);
@@ -342,6 +395,7 @@ export class CodexSyncV4Mapper {
                     notification.params.item,
                     'started',
                     notification.params.startedAtMs,
+                    deliveryId,
                 );
                 return;
             case 'item/completed':
@@ -351,6 +405,7 @@ export class CodexSyncV4Mapper {
                     notification.params.item,
                     'completed',
                     notification.params.completedAtMs,
+                    deliveryId,
                 );
                 return;
             case 'item/agentMessage/delta':
@@ -406,18 +461,36 @@ export class CodexSyncV4Mapper {
                 return;
             case 'warning':
                 if (notification.params.threadId) {
-                    await this.applyDiagnostic(notification.params.threadId, null, 'warning', notification.params.message);
+                    await this.applyDiagnostic(
+                        notification.params.threadId,
+                        null,
+                        'warning',
+                        { message: notification.params.message },
+                        deliveryId,
+                    );
                 }
                 return;
             case 'guardianWarning':
-                await this.applyDiagnostic(notification.params.threadId, null, 'warning', notification.params.message);
+                await this.applyDiagnostic(
+                    notification.params.threadId,
+                    null,
+                    'warning',
+                    { message: notification.params.message },
+                    deliveryId,
+                );
                 return;
             case 'error':
                 await this.applyDiagnostic(
                     notification.params.threadId,
                     notification.params.turnId,
                     'error',
-                    notification.params.error.message,
+                    {
+                        message: notification.params.error.message,
+                        code: codexErrorCode(notification.params.error.codexErrorInfo),
+                        details: notification.params.error.additionalDetails,
+                        willRetry: notification.params.willRetry,
+                    },
+                    deliveryId,
                 );
                 return;
             case 'thread/compacted':
@@ -488,7 +561,11 @@ export class CodexSyncV4Mapper {
         }
     }
 
-    private async applyThreadSnapshot(thread: Thread, includeTurns = true): Promise<void> {
+    private async applyThreadSnapshot(
+        thread: Thread,
+        includeTurns = true,
+        diagnosticSeed: string | null = null,
+    ): Promise<void> {
         const now = this.now();
         const previous = this.threads.get(thread.id);
         const raw = thread as unknown as Record<string, unknown>;
@@ -529,22 +606,16 @@ export class CodexSyncV4Mapper {
         this.runtimes.set(thread.id, runtime);
 
         if (includeTurns) {
-            for (const turn of thread.turns) {
-                await this.applyTurn(thread.id, turn, turn.status === 'inProgress' ? 'started' : 'snapshot');
+            for (let turnIndex = 0; turnIndex < thread.turns.length; turnIndex += 1) {
+                const turn = thread.turns[turnIndex];
+                await this.applyTurn(
+                    thread.id,
+                    turn,
+                    turn.status === 'inProgress' ? 'started' : 'snapshot',
+                    false,
+                    diagnosticSeed ? `${diagnosticSeed}\0turn\0${turnIndex}` : null,
+                );
             }
-        }
-
-        const projectedThread = this.threads.get(thread.id);
-        if (projectedThread && !sameThreadStatus(projectedThread.status, status)) {
-            const authoritative = { ...projectedThread, status, updatedAt };
-            const authoritativeRuntime = this.runtimeFor(thread.id, status, now);
-            await this.publisher.publishEntities([
-                { entity: authoritative },
-                { entity: authoritativeRuntime },
-            ]);
-            this.recordThreadStatus(thread.id, status, projectedThread.status);
-            this.threads.set(thread.id, authoritative);
-            this.runtimes.set(thread.id, authoritativeRuntime);
         }
     }
 
@@ -689,6 +760,8 @@ export class CodexSyncV4Mapper {
         threadId: string,
         turn: Turn,
         phase: 'started' | 'completed' | 'snapshot',
+        updateThreadStatus = true,
+        diagnosticSeed: string | null = null,
     ): Promise<void> {
         const now = this.now();
         await this.ensureThread(threadId, now);
@@ -729,18 +802,20 @@ export class CodexSyncV4Mapper {
         else if (this.activeTurnByThread.get(threadId) === turn.id) this.activeTurnByThread.delete(threadId);
 
         const fallbackTime = startedAt ?? entity.createdAt;
-        for (const item of turn.items) {
+        for (let itemIndex = 0; itemIndex < turn.items.length; itemIndex += 1) {
+            const item = turn.items[itemIndex];
             await this.applyItem(
                 threadId,
                 turn.id,
                 item,
                 status === 'inProgress' ? 'started' : 'completed',
                 status === 'inProgress' ? fallbackTime : completedAt ?? fallbackTime,
+                diagnosticSeed ? `${diagnosticSeed}\0item\0${itemIndex}` : null,
             );
         }
 
         const thread = this.threads.get(threadId);
-        if (thread) {
+        if (thread && updateThreadStatus) {
             const threadStatus: CodexThreadStatusV4 = status === 'inProgress'
                 ? { type: 'active', activeFlags: [] }
                 : this.activeTurnByThread.has(threadId)
@@ -797,13 +872,26 @@ export class CodexSyncV4Mapper {
         item: ThreadItem,
         phase: 'started' | 'completed',
         eventAt: number,
+        diagnosticSeed: string | null = null,
     ): Promise<void> {
+        const runtimeItem: unknown = item;
+        if (!isKnownThreadItem(runtimeItem)) {
+            await this.applyUnknownStableVariant(
+                threadId,
+                turnId,
+                'ThreadItem',
+                runtimeVariant(runtimeItem),
+                diagnosticSeed,
+            );
+            return;
+        }
+        const stableItem = runtimeItem;
         const now = this.now();
         await this.ensureTurn(threadId, turnId, now);
-        const key = itemKey(threadId, turnId, item.id);
+        const key = itemKey(threadId, turnId, stableItem.id);
         const previous = this.items.get(key);
         const at = toEpochMs(eventAt, now);
-        const raw = item as unknown as Record<string, unknown>;
+        const raw = stableItem as unknown as Record<string, unknown>;
         const incomingStatus = stringOrNull(raw.status) ?? (phase === 'completed' ? 'completed' : 'inProgress');
         const wasCompleted = previous?.completedAt !== null && previous?.completedAt !== undefined;
         const completed = phase === 'completed' || wasCompleted;
@@ -815,8 +903,8 @@ export class CodexSyncV4Mapper {
             updatedAt: now,
             threadId,
             turnId,
-            itemId: item.id,
-            itemType: item.type,
+            itemId: stableItem.id,
+            itemType: stableItem.type,
             status: wasCompleted && phase === 'started' ? previous.status : incomingStatus,
             parentItemId: stringOrNull(raw.parentItemId),
             clientId: stringOrNull(raw.clientId),
@@ -829,80 +917,172 @@ export class CodexSyncV4Mapper {
             exitCode: intOrNull(raw.exitCode),
             durationMs: nonnegativeIntOrNull(raw.durationMs),
             server: stringOrNull(raw.server),
-            tool: itemTool(item),
-            arguments: itemArguments(item),
+            tool: itemTool(stableItem),
+            arguments: itemArguments(stableItem),
         };
         await this.publisher.publishEntity(entity);
         this.items.set(key, entity);
-        await this.captureItemContent(threadId, turnId, item, completed);
-        if (completed) await this.finalizeItemStreams(threadId, turnId, item.id);
+        await this.captureItemContent(threadId, turnId, stableItem, diagnosticSeed);
+        if (completed) await this.finalizeItemStreams(threadId, turnId, stableItem.id);
     }
 
     private async captureItemContent(
         threadId: string,
         turnId: string,
         item: ThreadItem,
-        final: boolean,
+        diagnosticSeed: string | null,
     ): Promise<void> {
         const base = { threadId, turnId, itemId: item.id };
-        if (item.type === 'userMessage') {
-            const text = item.content
-                .map((entry) => ('text' in entry && typeof entry.text === 'string' ? entry.text : ''))
-                .filter(Boolean)
-                .join('\n');
-            if (text) await this.setStreamContent(this.ensureStream({ ...base, kind: 'userInput', index: 0, contentType: 'text' }), text, true);
-        } else if (item.type === 'agentMessage' && item.text) {
-            await this.setStreamContent(this.ensureStream({ ...base, kind: 'text', index: 0, contentType: 'text' }), item.text, true);
-        } else if (item.type === 'plan' && item.text) {
-            await this.setStreamContent(this.ensureStream({ ...base, kind: 'plan', index: 0, contentType: 'text' }), item.text, true);
-        } else if (item.type === 'reasoning') {
-            for (let index = 0; index < item.summary.length; index += 1) {
+        switch (item.type) {
+            case 'userMessage':
+                for (let index = 0; index < item.content.length; index += 1) {
+                    const input: unknown = item.content[index];
+                    if (!isKnownUserInput(input)) {
+                        await this.applyUnknownStableVariant(
+                            threadId,
+                            turnId,
+                            'UserInput',
+                            runtimeVariant(input),
+                            diagnosticSeed
+                                ? `${diagnosticSeed}\0userInput\0${index}`
+                                : null,
+                        );
+                        continue;
+                    }
+                    const projected = userInputPart(input);
+                    await this.setStreamContent(
+                        this.ensureStream({
+                            ...base,
+                            kind: 'userInput',
+                            index,
+                            contentType: projected.contentType,
+                        }),
+                        projected.content,
+                        true,
+                    );
+                }
+                return;
+            case 'hookPrompt':
+                if (item.fragments.length > 0) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'userInput', index: 0, contentType: 'json' }),
+                        stringifyJson(item.fragments),
+                        true,
+                    );
+                }
+                return;
+            case 'agentMessage':
+                if (item.text) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'text', index: 0, contentType: 'text' }),
+                        item.text,
+                        true,
+                    );
+                }
+                return;
+            case 'plan':
+                if (item.text) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'plan', index: 0, contentType: 'text' }),
+                        item.text,
+                        true,
+                    );
+                }
+                return;
+            case 'reasoning':
+                for (let index = 0; index < item.summary.length; index += 1) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'reasoningSummary', index, contentType: 'text' }),
+                        item.summary[index],
+                        true,
+                    );
+                }
+                return;
+            case 'commandExecution':
+                if (item.aggregatedOutput) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'commandOutput', index: 0, contentType: 'text' }),
+                        item.aggregatedOutput,
+                        true,
+                    );
+                }
+                return;
+            case 'fileChange':
+                if (item.changes.length > 0) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'patch', index: 0, contentType: 'json' }),
+                        stringifyJson(item.changes),
+                        true,
+                    );
+                }
+                return;
+            case 'mcpToolCall':
                 await this.setStreamContent(
-                    this.ensureStream({ ...base, kind: 'reasoningSummary', index, contentType: 'text' }),
-                    item.summary[index],
+                    this.ensureStream({ ...base, kind: 'mcpProgress', index: 0, contentType: 'json' }),
+                    stringifyJson({
+                        arguments: item.arguments,
+                        appContext: item.appContext,
+                        pluginId: item.pluginId,
+                    }),
                     true,
                 );
-            }
-            // item.content is raw reasoning and intentionally remains local.
-        } else if (item.type === 'commandExecution' && item.aggregatedOutput) {
-            await this.setStreamContent(
-                this.ensureStream({ ...base, kind: 'commandOutput', index: 0, contentType: 'text' }),
-                item.aggregatedOutput,
-                true,
-            );
-        } else if (item.type === 'fileChange' && item.changes.length > 0) {
-            await this.setStreamContent(
-                this.ensureStream({ ...base, kind: 'patch', index: 0, contentType: 'json' }),
-                stringifyJson(item.changes),
-                true,
-            );
-        } else if (item.type === 'mcpToolCall' && (item.result || item.error)) {
-            await this.setStreamContent(
-                this.ensureStream({ ...base, kind: 'mcpProgress', index: 1, contentType: 'json' }),
-                stringifyJson({ result: item.result, error: item.error }),
-                true,
-            );
-        } else if (item.type === 'dynamicToolCall' && item.contentItems) {
-            await this.setStreamContent(
-                this.ensureStream({ ...base, kind: 'mcpProgress', index: 1, contentType: 'json' }),
-                stringifyJson({ contentItems: item.contentItems, success: item.success }),
-                true,
-            );
-        } else if (item.type === 'collabAgentToolCall' && item.prompt) {
-            await this.setStreamContent(
-                this.ensureStream({ ...base, kind: 'text', index: 0, contentType: 'text' }),
-                item.prompt,
-                true,
-            );
-        } else if ((item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') && item.review) {
-            await this.setStreamContent(
-                this.ensureStream({ ...base, kind: 'text', index: 0, contentType: 'text' }),
-                item.review,
-                true,
-            );
+                if (item.result || item.error) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'mcpProgress', index: 1, contentType: 'json' }),
+                        stringifyJson({ result: item.result, error: item.error }),
+                        true,
+                    );
+                }
+                return;
+            case 'dynamicToolCall':
+                await this.setStreamContent(
+                    this.ensureStream({ ...base, kind: 'mcpProgress', index: 0, contentType: 'json' }),
+                    stringifyJson({ arguments: item.arguments }),
+                    true,
+                );
+                if (item.contentItems) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'mcpProgress', index: 1, contentType: 'json' }),
+                        stringifyJson({ contentItems: item.contentItems, success: item.success }),
+                        true,
+                    );
+                }
+                return;
+            case 'collabAgentToolCall':
+                if (item.prompt) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'text', index: 0, contentType: 'text' }),
+                        item.prompt,
+                        true,
+                    );
+                }
+                return;
+            case 'subAgentActivity':
+            case 'webSearch':
+            case 'imageView':
+            case 'sleep':
+            case 'imageGeneration':
+                await this.setStreamContent(
+                    this.ensureStream({ ...base, kind: 'mcpProgress', index: 0, contentType: 'json' }),
+                    stringifyJson(itemContentPayload(item)),
+                    true,
+                );
+                return;
+            case 'enteredReviewMode':
+            case 'exitedReviewMode':
+                if (item.review) {
+                    await this.setStreamContent(
+                        this.ensureStream({ ...base, kind: 'text', index: 0, contentType: 'text' }),
+                        item.review,
+                        true,
+                    );
+                }
+                return;
+            case 'contextCompaction':
+                return;
+            default:
+                assertNever(item);
         }
-
-        if (final) await this.finalizeItemStreams(threadId, turnId, item.id);
     }
 
     private async applyDelta(
@@ -930,24 +1110,60 @@ export class CodexSyncV4Mapper {
         threadId: string,
         requestedTurnId: string | null,
         kind: 'warning' | 'error',
-        content: string,
+        content: DiagnosticContent,
+        diagnosticSeed: string | null = null,
     ): Promise<void> {
         const now = this.now();
         const turnId = requestedTurnId ?? this.activeTurnByThread.get(threadId) ?? '__runtime_events__';
         const turn = await this.ensureTurn(threadId, turnId, now, requestedTurnId ? 'inProgress' : 'completed');
-        const sequenceKey = turnKey(threadId, turnId);
-        const sequence = (this.diagnosticSequenceByTurn.get(sequenceKey) ?? 0) + 1;
-        this.diagnosticSequenceByTurn.set(sequenceKey, sequence);
-        const itemId = `__${kind}_${sequence}__`;
+        const diagnosticId = diagnosticSeed
+            ? createHash('sha256').update(diagnosticSeed).digest('hex').slice(0, 32)
+            : this.options.diagnosticId?.() ?? randomUUID();
+        const itemId = `__${kind}_${diagnosticId}__`;
         const item = await this.ensureItem(threadId, turnId, itemId, kind, now);
-        const completed = { ...item, status: 'completed', completedAt: now, updatedAt: now };
+        const completed = {
+            ...item,
+            status: 'completed',
+            completedAt: now,
+            arguments: asBoundedJsonValue(content),
+            updatedAt: now,
+        };
         await this.publisher.publishEntity(completed);
         this.items.set(item.providerId, completed);
-        const stream = this.ensureStream({ threadId, turnId, itemId, kind, index: 0, contentType: 'text' });
-        this.appendStream(stream, content);
+        const structured = kind === 'error' || content.category === 'unknownStableVariant';
+        const stream = this.ensureStream({
+            threadId,
+            turnId,
+            itemId,
+            kind,
+            index: 0,
+            contentType: structured ? 'json' : 'text',
+        });
+        this.appendStream(stream, structured ? stringifyJson(content) : content.message);
         stream.finalized = true;
         await this.flushStream(stream);
         if (turn.status === 'completed') await this.publisher.publishEntity(turn);
+    }
+
+    private async applyUnknownStableVariant(
+        threadId: string,
+        turnId: string,
+        union: 'ThreadItem' | 'UserInput',
+        variant: string,
+        diagnosticSeed: string | null,
+    ): Promise<void> {
+        const key = `${union}:${variant}`;
+        const count = (this.unknownStableVariants.get(key) ?? 0) + 1;
+        this.unknownStableVariants.set(key, count);
+        if (count === 1 || (count & (count - 1)) === 0) {
+            logger.debug('[Codex v4] Unknown stable variant', { union, variant, count });
+        }
+        await this.applyDiagnostic(threadId, turnId, 'warning', {
+            message: `Unsupported Codex ${union} variant`,
+            category: 'unknownStableVariant',
+            union,
+            variant,
+        }, diagnosticSeed ? `${diagnosticSeed}\0${union}\0${variant}` : null);
     }
 
     private async ensureThread(threadId: string, now: number): Promise<CodexThreadEntityV4> {
@@ -1155,6 +1371,8 @@ export class CodexSyncV4Mapper {
         const existing = this.streams.get(key);
         if (existing) return existing;
         if (this.finalizedStreams.has(key)) {
+            this.finalizedStreams.delete(key);
+            this.finalizedStreams.set(key, true);
             return { ...input, key, chunks: [], finalized: true, timer: null };
         }
         const stream: PartStream = { ...input, key, chunks: [], finalized: false, timer: null };
@@ -1263,7 +1481,20 @@ export class CodexSyncV4Mapper {
             }
         }
         if (stream.finalized) {
-            this.finalizedStreams.add(stream.key);
+            this.finalizedStreams.delete(stream.key);
+            this.finalizedStreams.set(stream.key, true);
+            const markerLimit = Math.max(
+                0,
+                Math.trunc(
+                    this.options.finalizedStreamMarkerLimit
+                    ?? DEFAULT_FINALIZED_STREAM_MARKER_LIMIT,
+                ),
+            );
+            while (this.finalizedStreams.size > markerLimit) {
+                const oldest = this.finalizedStreams.keys().next().value;
+                if (typeof oldest !== 'string') break;
+                this.finalizedStreams.delete(oldest);
+            }
             this.streams.delete(stream.key);
             stream.chunks = [];
         }
@@ -1352,26 +1583,263 @@ function emptyThreadSettings(): CodexThreadEntityV4['settings'] {
 }
 
 function itemTool(item: ThreadItem): string | null {
-    if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall') return item.tool;
-    if (item.type === 'collabAgentToolCall') return item.tool;
-    return null;
+    switch (item.type) {
+        case 'mcpToolCall':
+        case 'dynamicToolCall':
+        case 'collabAgentToolCall':
+            return item.tool;
+        case 'userMessage':
+        case 'hookPrompt':
+        case 'agentMessage':
+        case 'plan':
+        case 'reasoning':
+        case 'commandExecution':
+        case 'fileChange':
+        case 'subAgentActivity':
+        case 'webSearch':
+        case 'imageView':
+        case 'sleep':
+        case 'imageGeneration':
+        case 'enteredReviewMode':
+        case 'exitedReviewMode':
+        case 'contextCompaction':
+            return null;
+        default:
+            return assertNever(item);
+    }
 }
 
 function itemArguments(item: ThreadItem): JsonValue {
-    if (item.type === 'mcpToolCall' || item.type === 'dynamicToolCall') return asJsonValue(item.arguments);
-    if (item.type === 'collabAgentToolCall') {
-        return asJsonValue({
-            senderThreadId: item.senderThreadId,
-            receiverThreadIds: item.receiverThreadIds,
-            model: item.model,
-            reasoningEffort: item.reasoningEffort,
-            agentsStates: item.agentsStates,
-        });
+    switch (item.type) {
+        case 'userMessage':
+            return asBoundedJsonValue({
+                content: item.content.map((input) => (
+                    isKnownUserInput(input)
+                        ? userInputMetadata(input)
+                        : { type: runtimeVariant(input) }
+                )),
+            });
+        case 'hookPrompt':
+            return asBoundedJsonValue({
+                fragmentCount: item.fragments.length,
+                hookRunIds: item.fragments.map((fragment) => fragment.hookRunId),
+            });
+        case 'agentMessage':
+            return asBoundedJsonValue({ memoryCitation: item.memoryCitation });
+        case 'plan':
+            return null;
+        case 'reasoning':
+            return asBoundedJsonValue({
+                summaryPartCount: item.summary.length,
+            });
+        case 'commandExecution':
+            return asBoundedJsonValue({
+                source: item.source,
+                status: item.status,
+                commandActions: item.commandActions,
+            });
+        case 'fileChange':
+            return asBoundedJsonValue({
+                status: item.status,
+                changeCount: item.changes.length,
+            });
+        case 'mcpToolCall':
+            return asBoundedJsonValue({
+                status: item.status,
+                appContext: item.appContext,
+                pluginId: item.pluginId,
+                durationMs: item.durationMs,
+            });
+        case 'dynamicToolCall':
+            return asBoundedJsonValue({
+                namespace: item.namespace,
+                status: item.status,
+                success: item.success,
+                durationMs: item.durationMs,
+            });
+        case 'collabAgentToolCall':
+            return asBoundedJsonValue({
+                senderThreadId: item.senderThreadId,
+                receiverThreadIds: item.receiverThreadIds,
+                model: item.model,
+                reasoningEffort: item.reasoningEffort,
+                agentsStates: item.agentsStates,
+            });
+        case 'subAgentActivity':
+            return asBoundedJsonValue({
+                kind: item.kind,
+                agentThreadId: item.agentThreadId,
+                agentPath: item.agentPath,
+            });
+        case 'webSearch':
+            return asBoundedJsonValue({
+                query: item.query,
+                action: item.action,
+                resultCount: item.results?.length ?? 0,
+            });
+        case 'imageView':
+            return asBoundedJsonValue({ path: item.path });
+        case 'sleep':
+            return asBoundedJsonValue({ durationMs: item.durationMs });
+        case 'imageGeneration':
+            return asBoundedJsonValue({
+                status: item.status,
+                revisedPrompt: item.revisedPrompt,
+                resultUtf8Bytes: utf8ByteLength(item.result),
+                savedPath: item.savedPath ?? null,
+            });
+        case 'enteredReviewMode':
+        case 'exitedReviewMode':
+        case 'contextCompaction':
+            return null;
+        default:
+            return assertNever(item);
     }
-    if (item.type === 'subAgentActivity') {
-        return asJsonValue({ kind: item.kind, agentThreadId: item.agentThreadId, agentPath: item.agentPath });
+}
+
+function itemContentPayload(
+    item: Extract<
+        ThreadItem,
+        | { type: 'subAgentActivity' }
+        | { type: 'webSearch' }
+        | { type: 'imageView' }
+        | { type: 'sleep' }
+        | { type: 'imageGeneration' }
+    >,
+): JsonValue {
+    switch (item.type) {
+        case 'subAgentActivity':
+            return asJsonValue({
+                kind: item.kind,
+                agentThreadId: item.agentThreadId,
+                agentPath: item.agentPath,
+            });
+        case 'webSearch':
+            return asJsonValue({
+                query: item.query,
+                action: item.action,
+                results: item.results,
+            });
+        case 'imageView':
+            return asJsonValue({ path: item.path });
+        case 'sleep':
+            return asJsonValue({ durationMs: item.durationMs });
+        case 'imageGeneration':
+            return asJsonValue({
+                status: item.status,
+                revisedPrompt: item.revisedPrompt,
+                result: item.result,
+                savedPath: item.savedPath ?? null,
+            });
+        default:
+            return assertNever(item);
     }
-    return null;
+}
+
+function userInputPart(input: UserInput): {
+    content: string;
+    contentType: CodexPartEntityV4['contentType'];
+} {
+    switch (input.type) {
+        case 'text':
+            return { content: input.text, contentType: 'text' };
+        case 'image':
+        case 'localImage':
+        case 'audio':
+        case 'localAudio':
+        case 'skill':
+        case 'mention':
+            return { content: stringifyJson(input), contentType: 'json' };
+        default:
+            return assertNever(input);
+    }
+}
+
+function userInputMetadata(input: UserInput): JsonValue {
+    switch (input.type) {
+        case 'text':
+            return asJsonValue({ type: input.type, textElements: input.text_elements });
+        case 'image':
+        case 'localImage':
+            return asJsonValue({ type: input.type, detail: input.detail ?? null });
+        case 'audio':
+        case 'localAudio':
+            return asJsonValue({ type: input.type });
+        case 'skill':
+        case 'mention':
+            return asJsonValue({ type: input.type, name: input.name });
+        default:
+            return assertNever(input);
+    }
+}
+
+const KNOWN_THREAD_ITEM_TYPES = new Set([
+    'userMessage',
+    'hookPrompt',
+    'agentMessage',
+    'plan',
+    'reasoning',
+    'commandExecution',
+    'fileChange',
+    'mcpToolCall',
+    'dynamicToolCall',
+    'collabAgentToolCall',
+    'subAgentActivity',
+    'webSearch',
+    'imageView',
+    'sleep',
+    'imageGeneration',
+    'enteredReviewMode',
+    'exitedReviewMode',
+    'contextCompaction',
+]);
+
+const KNOWN_USER_INPUT_TYPES = new Set([
+    'text',
+    'image',
+    'localImage',
+    'audio',
+    'localAudio',
+    'skill',
+    'mention',
+]);
+
+function isKnownThreadItem(value: unknown): value is ThreadItem {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    return typeof record.id === 'string'
+        && typeof record.type === 'string'
+        && KNOWN_THREAD_ITEM_TYPES.has(record.type);
+}
+
+function isKnownUserInput(value: unknown): value is UserInput {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const type = (value as Record<string, unknown>).type;
+    return typeof type === 'string' && KNOWN_USER_INPUT_TYPES.has(type);
+}
+
+function runtimeVariant(value: unknown): string {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '<invalid>';
+    const type = (value as Record<string, unknown>).type;
+    return typeof type === 'string' && type.length > 0
+        ? type.slice(0, 128)
+        : '<missing>';
+}
+
+function asBoundedJsonValue(value: unknown): JsonValue {
+    const normalized = asJsonValue(value);
+    const encoded = JSON.stringify(normalized);
+    const bytes = utf8ByteLength(encoded);
+    if (bytes <= MAX_INLINE_ITEM_ARGUMENT_BYTES) return normalized;
+    return {
+        truncated: true,
+        utf8Bytes: bytes,
+        sha256: createHash('sha256').update(encoded).digest('hex'),
+    };
+}
+
+function assertNever(value: never): never {
+    throw new Error(`Unhandled Codex stable-v2 variant: ${runtimeVariant(value)}`);
 }
 
 function asJsonValue(value: unknown): JsonValue {
@@ -1389,9 +1857,13 @@ function stringifyJson(value: unknown): string {
 }
 
 function codexErrorCode(value: unknown): string | null {
+    if (typeof value === 'string' && value.length > 0) return value;
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
-    return stringOrNull(record.type) ?? stringOrNull(record.code);
+    return stringOrNull(record.type)
+        ?? stringOrNull(record.code)
+        ?? Object.keys(record)[0]
+        ?? null;
 }
 
 function newChunk(createdAt: number): StreamChunk {

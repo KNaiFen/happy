@@ -6,6 +6,9 @@
  */
 
 import {
+    CodexCommandResultEntityV4Schema,
+    CodexEntityV4Schema,
+    CodexRequestEntityV4Schema,
     MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH,
     MAX_SYNC_V4_MUTATIONS_PER_BATCH,
     SyncChangesResponseV4Schema,
@@ -37,8 +40,11 @@ import { join } from "node:path";
 import { SyncV4Crypto } from "./syncV4Crypto";
 import {
     SyncV4Journal,
+    type SyncV4CodexNotification,
+    type SyncV4CodexThreadRoute,
     type SyncV4CommandJournalStatus,
     type SyncV4MigrationJournalState,
+    type SyncV4PendingCodexNotification,
     type SyncV4PendingProviderRequest,
     type SyncV4ProviderRequestJournalState,
 } from "./syncV4Journal";
@@ -268,13 +274,17 @@ export class SyncV4Client {
 
     async publishEntities(entries: SyncV4PublishEntity[]): Promise<SyncMutationV4[]> {
         if (entries.length === 0) return [];
+        const canonicalEntries = entries.map((entry) => ({
+            ...entry,
+            entity: CodexEntityV4Schema.parse(entry.entity),
+        }));
         const generation = this.lifecycleGeneration;
         this.assertCurrentGeneration(generation);
         const mutations = await this.publishLock.inLock(async () => {
             this.assertCurrentGeneration(generation);
             const pendingRevisions = new Map<string, number>();
             const nextMutations: SyncMutationV4[] = [];
-            for (const entry of entries) {
+            for (const entry of canonicalEntries) {
                 const entityId = await this.crypto.opaqueEntityId(entry.entity.entityType, entry.entity.providerId);
                 this.assertCurrentGeneration(generation);
                 const revision = (pendingRevisions.get(entityId) ?? this.journal.nextRevision(entityId) - 1) + 1;
@@ -310,17 +320,21 @@ export class SyncV4Client {
         result: CodexCommandResultEntityV4,
         status: SyncV4CommandJournalStatus,
     ): Promise<SyncMutationV4> {
+        const canonicalResult = CodexCommandResultEntityV4Schema.parse(result);
         const generation = this.lifecycleGeneration;
         this.assertCurrentGeneration(generation);
         const mutation = await this.publishLock.inLock(async () => {
             this.assertCurrentGeneration(generation);
-            const entityId = await this.crypto.opaqueEntityId(result.entityType, result.providerId);
+            const entityId = await this.crypto.opaqueEntityId(
+                canonicalResult.entityType,
+                canonicalResult.providerId,
+            );
             this.assertCurrentGeneration(generation);
             const revision = this.journal.nextRevision(entityId);
             const aad = {
                 sessionId: this.sessionId,
                 entityId,
-                entityType: result.entityType,
+                entityType: canonicalResult.entityType,
                 revision,
                 op: "upsert" as const,
             };
@@ -328,10 +342,10 @@ export class SyncV4Client {
                 mutationId: randomUUID(),
                 producerId: this.producerId,
                 entityId,
-                entityType: result.entityType,
+                entityType: canonicalResult.entityType,
                 revision,
                 op: aad.op,
-                ciphertext: await this.crypto.encryptEntity(aad, result),
+                ciphertext: await this.crypto.encryptEntity(aad, canonicalResult),
             });
             this.assertCurrentGeneration(generation);
             await this.journal.appendCommandTransition(command.commandId, status, next, command);
@@ -348,17 +362,21 @@ export class SyncV4Client {
             : "resolved",
         response: CodexRequestEntityV4["response"] = request.response,
     ): Promise<SyncMutationV4> {
+        const canonicalRequest = CodexRequestEntityV4Schema.parse(request);
         const generation = this.lifecycleGeneration;
         this.assertCurrentGeneration(generation);
         const mutation = await this.publishLock.inLock(async () => {
             this.assertCurrentGeneration(generation);
-            const entityId = await this.crypto.opaqueEntityId(request.entityType, request.providerId);
+            const entityId = await this.crypto.opaqueEntityId(
+                canonicalRequest.entityType,
+                canonicalRequest.providerId,
+            );
             this.assertCurrentGeneration(generation);
             const revision = this.journal.nextRevision(entityId);
             const aad = {
                 sessionId: this.sessionId,
                 entityId,
-                entityType: request.entityType,
+                entityType: canonicalRequest.entityType,
                 revision,
                 op: "upsert" as const,
             };
@@ -366,14 +384,14 @@ export class SyncV4Client {
                 mutationId: randomUUID(),
                 producerId: this.producerId,
                 entityId,
-                entityType: request.entityType,
+                entityType: canonicalRequest.entityType,
                 revision,
                 op: aad.op,
-                ciphertext: await this.crypto.encryptEntity(aad, request),
+                ciphertext: await this.crypto.encryptEntity(aad, canonicalRequest),
             });
             this.assertCurrentGeneration(generation);
             await this.journal.appendProviderRequestTransition(
-                request,
+                canonicalRequest,
                 state,
                 next,
                 response,
@@ -575,6 +593,39 @@ export class SyncV4Client {
         const generation = this.lifecycleGeneration;
         this.assertCurrentGeneration(generation);
         await this.journal.setMigrationState(threadId, state);
+        this.assertCurrentGeneration(generation);
+    }
+
+    getPendingCodexNotifications(): readonly SyncV4PendingCodexNotification[] {
+        return this.journal.snapshot().pendingCodexNotifications;
+    }
+
+    getCodexThreadRoutes(): ReadonlyMap<string, SyncV4CodexThreadRoute> {
+        return this.journal.snapshot().codexThreadRoutes;
+    }
+
+    async persistCodexOrphan(
+        threadId: string,
+        notification: SyncV4CodexNotification,
+    ): Promise<SyncV4PendingCodexNotification> {
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        const pending = await this.journal.appendCodexOrphan(threadId, notification);
+        this.assertCurrentGeneration(generation);
+        return pending;
+    }
+
+    async completeCodexOrphan(notificationId: string): Promise<void> {
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        await this.journal.completeCodexOrphan(notificationId);
+        this.assertCurrentGeneration(generation);
+    }
+
+    async persistCodexThreadRoute(route: SyncV4CodexThreadRoute): Promise<void> {
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        await this.journal.setCodexThreadRoute(route);
         this.assertCurrentGeneration(generation);
     }
 

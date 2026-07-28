@@ -78,6 +78,39 @@ export type SyncV4ProviderRequestJournalState = z.infer<
     typeof SyncV4ProviderRequestJournalStateSchema
 >;
 
+export const SyncV4CodexThreadRouteKindSchema = z.enum([
+    "root",
+    "userFork",
+    "providerChild",
+    "detachedReview",
+]);
+export type SyncV4CodexThreadRouteKind = z.infer<typeof SyncV4CodexThreadRouteKindSchema>;
+
+const syncV4CodexNotificationSchema = z.object({
+    method: z.string().min(1).max(256),
+    params: z.json(),
+}).strict();
+export type SyncV4CodexNotification = z.infer<typeof syncV4CodexNotificationSchema>;
+
+export const SyncV4CodexThreadRouteSchema = z.object({
+    threadId: z.string().min(1).max(512),
+    kind: SyncV4CodexThreadRouteKindSchema,
+    parentThreadId: z.string().min(1).max(512).nullable(),
+    parentTurnId: z.string().min(1).max(512).nullable(),
+    delegationItemId: z.string().min(1).max(512).nullable(),
+    depth: z.number().int().nonnegative().max(1_000),
+    status: z.enum([
+        "starting",
+        "active",
+        "completed",
+        "failed",
+        "interrupted",
+    ]).optional(),
+    activeTurnId: z.string().min(1).max(512).nullable().optional(),
+    coordinatedCommandId: z.string().min(1).max(512).optional(),
+}).strict();
+export type SyncV4CodexThreadRoute = z.infer<typeof SyncV4CodexThreadRouteSchema>;
+
 // Read journals written by the first Sync v4 implementation. Compaction
 // rewrites this legacy terminal state as no provider-request record.
 const syncV4ProviderRequestRecordStateSchema = z.union([
@@ -154,6 +187,25 @@ const journalRecordSchema = z.discriminatedUnion("kind", [
         state: SyncV4MigrationJournalStateSchema,
         updatedAt: z.number().int().nonnegative(),
     }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("codexOrphanEnqueued"),
+        notificationId: z.string().uuid(),
+        threadId: z.string().min(1).max(512),
+        notification: syncV4CodexNotificationSchema,
+        receivedAt: z.number().int().nonnegative(),
+    }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("codexOrphanCompleted"),
+        notificationId: z.string().uuid(),
+    }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("codexThreadRoute"),
+        route: SyncV4CodexThreadRouteSchema,
+        updatedAt: z.number().int().nonnegative(),
+    }).strict(),
 ]);
 type JournalRecord = z.infer<typeof journalRecordSchema>;
 
@@ -174,6 +226,8 @@ export interface SyncV4JournalSnapshot {
     commands: ReadonlyMap<string, CodexCommandEntityV4>;
     pendingProviderRequests: ReadonlyMap<string, SyncV4PendingProviderRequest>;
     migrationStates: ReadonlyMap<string, SyncV4MigrationJournalState>;
+    pendingCodexNotifications: readonly SyncV4PendingCodexNotification[];
+    codexThreadRoutes: ReadonlyMap<string, SyncV4CodexThreadRoute>;
 }
 
 export interface SyncV4PendingProviderRequest {
@@ -183,6 +237,13 @@ export interface SyncV4PendingProviderRequest {
         "pending" | "responseReady" | "responseSupplied"
     >;
     response: CodexRequestEntityV4["response"];
+}
+
+export interface SyncV4PendingCodexNotification {
+    notificationId: string;
+    threadId: string;
+    notification: SyncV4CodexNotification;
+    receivedAt: number;
 }
 
 export interface SyncV4JournalDiagnostics {
@@ -255,6 +316,8 @@ export class SyncV4Journal {
     private readonly commands = new Map<string, CodexCommandEntityV4>();
     private readonly pendingProviderRequests = new Map<string, SyncV4PendingProviderRequest>();
     private readonly migrationStates = new Map<string, SyncV4MigrationJournalState>();
+    private readonly pendingCodexNotifications = new Map<string, SyncV4PendingCodexNotification>();
+    private readonly codexThreadRoutes = new Map<string, SyncV4CodexThreadRoute>();
     private poisonedCause: unknown = null;
     private closed = false;
     private closePromise: Promise<void> | null = null;
@@ -282,6 +345,8 @@ export class SyncV4Journal {
             commands: new Map(this.commands),
             pendingProviderRequests: new Map(this.pendingProviderRequests),
             migrationStates: new Map(this.migrationStates),
+            pendingCodexNotifications: [...this.pendingCodexNotifications.values()],
+            codexThreadRoutes: new Map(this.codexThreadRoutes),
         };
     }
 
@@ -445,6 +510,41 @@ export class SyncV4Journal {
         }]);
     }
 
+    async appendCodexOrphan(
+        threadId: string,
+        notification: SyncV4CodexNotification,
+    ): Promise<SyncV4PendingCodexNotification> {
+        const pending = {
+            notificationId: randomUUID(),
+            threadId,
+            notification: syncV4CodexNotificationSchema.parse(notification),
+            receivedAt: this.now(),
+        };
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "codexOrphanEnqueued",
+            ...pending,
+        }]);
+        return pending;
+    }
+
+    async completeCodexOrphan(notificationId: string): Promise<void> {
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "codexOrphanCompleted",
+            notificationId,
+        }]);
+    }
+
+    async setCodexThreadRoute(route: SyncV4CodexThreadRoute): Promise<void> {
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "codexThreadRoute",
+            route: SyncV4CodexThreadRouteSchema.parse(route),
+            updatedAt: this.now(),
+        }]);
+    }
+
     async compactIfNeeded(): Promise<void> {
         this.assertWritable();
         await this.lock.inLock(async () => {
@@ -535,6 +635,21 @@ export class SyncV4Journal {
                 kind: "migration",
                 threadId,
                 state,
+                updatedAt: this.now(),
+            });
+        }
+        for (const pending of this.pendingCodexNotifications.values()) {
+            records.push({
+                version: JOURNAL_VERSION,
+                kind: "codexOrphanEnqueued",
+                ...pending,
+            });
+        }
+        for (const route of this.codexThreadRoutes.values()) {
+            records.push({
+                version: JOURNAL_VERSION,
+                kind: "codexThreadRoute",
+                route,
                 updatedAt: this.now(),
             });
         }
@@ -664,6 +779,20 @@ export class SyncV4Journal {
                 return;
             case "migration":
                 this.migrationStates.set(record.threadId, record.state);
+                return;
+            case "codexOrphanEnqueued":
+                this.pendingCodexNotifications.set(record.notificationId, {
+                    notificationId: record.notificationId,
+                    threadId: record.threadId,
+                    notification: record.notification,
+                    receivedAt: record.receivedAt,
+                });
+                return;
+            case "codexOrphanCompleted":
+                this.pendingCodexNotifications.delete(record.notificationId);
+                return;
+            case "codexThreadRoute":
+                this.codexThreadRoutes.set(record.route.threadId, record.route);
         }
     }
 
