@@ -581,20 +581,25 @@ export async function runCodex(opts: {
                     permissionHandler.abortAll();
                 }
 
-                // Request interruption, then force-restart Codex app-server if
-                // it doesn't settle quickly (long-running shell commands).
+                // Request interruption, then restart Codex app-server for an
+                // authoritative snapshot if it does not settle quickly.
                 if (client) {
                     const abortResult = await client.abortTurnWithFallback({
                         gracePeriodMs: 3000,
                         forceRestartOnTimeout: true,
                     });
                     if (abortResult.forcedRestart) {
-                        logger.warn('[Codex] Forced app-server restart after interrupt timeout');
+                        logger.warn('[Codex] Restarted app-server to reconcile interrupt outcome');
+                        const message = abortResult.statusUnknown
+                            ? abortResult.resumedThread
+                                ? 'Codex backend was restarted after the interrupt timeout. The previous thread was resumed, but the task state is still being reconciled.'
+                                : 'Codex backend was restarted after the interrupt timeout, but the previous thread could not be resumed. The task state is unknown.'
+                            : abortResult.aborted
+                                ? 'Codex backend was restarted after the interrupt timeout and confirmed that the active task was interrupted.'
+                                : 'Codex backend was restarted after the interrupt timeout and the task reached a terminal state during reconciliation.';
                         session.sendSessionEvent({
                             type: 'message',
-                            message: abortResult.resumedThread
-                                ? 'Force-stopped active task after interrupt timeout. Codex backend was restarted and the previous thread was resumed.'
-                                : 'Force-stopped active task after interrupt timeout. Codex backend was restarted, but the previous thread could not be resumed.',
+                            message,
                         });
                     }
                 }

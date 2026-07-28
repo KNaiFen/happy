@@ -102,11 +102,11 @@ R2 实施约束：
       状态协调。
 - [ ] orphan notification 进入持久 FIFO，绑定失败可重试并最终 snapshot
       对账。
-- [ ] 进程退出恢复所有 active thread，不依赖 selected thread。
+- [x] 进程退出恢复所有 active thread，不依赖 selected thread。
 - [ ] 区分 provider child、用户 fork、detached review 和 sibling 通信。
-- [ ] turn/thread 状态单调，旧 turn 完成不能结束另一个 active turn。
-- [ ] interrupt 超时只触发重连协调，不直接产生权威 completed/idle。
-- [ ] resume 不使用陈旧配置放宽 approval/sandbox 权限。
+- [x] turn/thread 状态单调，旧 turn 完成不能结束另一个 active turn。
+- [x] interrupt 超时只触发重连协调，不直接产生权威 completed/idle。
+- [x] resume 不使用陈旧配置放宽 approval/sandbox 权限。
 - [ ] server request handler 总是返回 response 或协议 error。
 - [ ] provider request 的 pending、response-ready、supplied、resolved 和
       outcome-unknown 状态可跨进程恢复。
@@ -145,6 +145,48 @@ pending -> importing -> activating -> ready
 restart at activating
 └─ flush existing outbox -> republish ready if needed -> ACK -> persist ready
 ```
+
+R3 第二切片按以下权威恢复流实现：
+
+```txt
+app-server unexpected exit
+│
+├─ CodexThreadRegistry.activeThreadIds()
+│  └─ pending start、inProgress turn 或 thread.status=active 全部纳入
+│
+├─ 单次 transport restart + initialize
+│
+├─ 对每个 active thread 顺序 thread/resume
+│  ├─ approvalPolicy = on-request
+│  ├─ sandbox = read-only
+│  ├─ 不复用旧 permissive approval/sandbox defaults
+│  └─ 不改变 selectedThreadId
+│
+├─ 恢复原 selectedThreadId
+└─ 只由 resume snapshot、thread/status/changed 或 turn/completed
+   协调每个 turn；缺少权威终态时继续 statusUnknown
+```
+
+```txt
+interrupt grace timeout
+│
+├─ 不调用 settleForcedInterrupt()
+├─ 不合成 turn_aborted / completed / idle
+├─ restart app-server + conservative thread/resume
+├─ snapshot turn.status = interrupted -> authoritative aborted
+├─ snapshot/status 仍为 active          -> 保持等待并继续协调
+└─ resume 失败或缺少目标 turn          -> statusUnknown，不宣称 force-stopped
+```
+
+状态合并约束：
+
+- terminal turn 不得被迟到的 `inProgress` snapshot 回退；
+- 较旧 `thread.updatedAt` snapshot 不得覆盖较新的 thread status；
+- 旧 turn 完成只能结算自己的 completion，不能清除另一个 active turn；
+- `turn/start` 仍 pending、尚无 turn ID 时，interrupt 协调结果必须读取同一
+  registry completion，不得从恢复前的空 turn ID 推断；
+- 直接 stable-v2 `thread/status/changed` 和 `turn/completed` 仍是权威边界；
+- 自动恢复只收紧权限；用户发起的显式 resume 继续使用显式参数。
 
 R3 分为四个可独立验证的提交：
 
@@ -238,6 +280,9 @@ R3 分为四个可独立验证的提交：
   drift、索引和级联门禁，R1 完成。首轮 CI 同时确认 pnpm script 会优先命中
   Codium 的 `codex 0.130.0`；协议生成门禁改为显式传入全局
   npm prefix 下的 `codex 0.145.0` binary，不改变 stable-v2 约束。
+- 2026-07-28：R3 第二切片完成全部 active thread 的保守恢复、selection
+  隔离、turn/thread 单调合并和 interrupt 权威协调；`turn/interrupt` 的
+  `{}` ACK 不再被视为终态，pending start 也通过 registry completion 对账。
   dependency audit job 不启用无依赖安装场景下的 pnpm cache；CI、Smoke
   Test 和版本构建工作流统一使用 Node 24 runtime 对应的 action 版本。
 - 2026-07-28：R2 完成。CLI session 初始化和关闭使用 generation 隔离；

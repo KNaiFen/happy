@@ -42,6 +42,23 @@ function thread(id: string, status: ThreadStatus, turns: Turn[] = []): Thread {
 }
 
 describe('CodexThreadRegistry', () => {
+    it('enumerates every active thread independently of selection', () => {
+        const registry = new CodexThreadRegistry();
+        registry.selectThread('selected-idle');
+        registry.registerThread(thread('selected-idle', { type: 'idle' }));
+        registry.beginTurn('pending-start');
+        registry.registerThread(thread('status-active', { type: 'active', activeFlags: [] }));
+        registry.registerTurn('turn-active', turn('turn-active-1'));
+        registry.registerThread(thread('completed', { type: 'idle' }, [turn('completed-1', 'completed')]));
+
+        expect(registry.activeThreadIds()).toEqual([
+            'pending-start',
+            'status-active',
+            'turn-active',
+        ]);
+        expect(registry.selectedThreadIdValue).toBe('selected-idle');
+    });
+
     it('keeps parent and child active turns isolated under interleaved notifications', async () => {
         const registry = new CodexThreadRegistry();
         registry.selectThread('parent');
@@ -93,6 +110,77 @@ describe('CodexThreadRegistry', () => {
             status: 'completed',
             source: 'snapshot',
         });
+    });
+
+    it('does not regress a terminal turn when a late in-progress snapshot arrives', async () => {
+        const registry = new CodexThreadRegistry();
+        const wait = registry.beginTurn('thread-1');
+        registry.registerTurn('thread-1', turn('turn-1'));
+        registry.registerTurn('thread-1', turn('turn-1', 'completed'));
+        await expect(wait.promise).resolves.toMatchObject({ status: 'completed' });
+
+        registry.registerTurn('thread-1', turn('turn-1', 'inProgress'), 'snapshot');
+
+        expect(registry.getThread('thread-1')?.turns.get('turn-1')).toMatchObject({
+            status: 'completed',
+            settled: true,
+        });
+        expect(registry.hasPendingTurn('thread-1')).toBe(false);
+    });
+
+    it('does not let an older thread snapshot overwrite newer runtime state', () => {
+        const registry = new CodexThreadRegistry();
+        registry.registerThread({
+            ...thread('thread-1', { type: 'active', activeFlags: [] }, [turn('turn-new')]),
+            updatedAt: 20,
+        }, 'snapshot');
+
+        registry.registerThread({
+            ...thread('thread-1', { type: 'active', activeFlags: [] }, [turn('turn-old')]),
+            updatedAt: 10,
+        }, 'snapshot');
+
+        expect(registry.getThread('thread-1')).toMatchObject({
+            status: { type: 'active' },
+            activeTurnId: 'turn-new',
+        });
+        expect(registry.getThread('thread-1')?.turns.has('turn-old')).toBe(false);
+        expect(registry.hasPendingTurn('thread-1')).toBe(true);
+    });
+
+    it('does not let a late older in-progress turn replace the current active turn', () => {
+        const registry = new CodexThreadRegistry();
+        registry.registerTurn('thread-1', {
+            ...turn('turn-new'),
+            startedAt: 20,
+        });
+        registry.registerTurn('thread-1', {
+            ...turn('turn-old'),
+            startedAt: 10,
+        });
+
+        expect(registry.getThread('thread-1')?.activeTurnId).toBe('turn-new');
+        expect(registry.hasPendingTurn('thread-1')).toBe(true);
+    });
+
+    it('does not let an older turn completion clear a newer active turn', () => {
+        const registry = new CodexThreadRegistry();
+        registry.registerTurn('thread-1', {
+            ...turn('turn-old'),
+            startedAt: 10,
+        });
+        registry.registerTurn('thread-1', {
+            ...turn('turn-new'),
+            startedAt: 20,
+        });
+
+        registry.registerTurn('thread-1', {
+            ...turn('turn-old', 'completed'),
+            startedAt: 10,
+        });
+
+        expect(registry.getThread('thread-1')?.activeTurnId).toBe('turn-new');
+        expect(registry.hasPendingTurn('thread-1')).toBe(true);
     });
 
     it('does not bind a pending start to an older turn in a resume snapshot', async () => {

@@ -5,7 +5,7 @@ export interface CodexTurnCompletion {
     turnId: string | null;
     status: TurnStatus;
     aborted: boolean;
-    source: 'turn' | 'threadStatus' | 'snapshot' | 'forcedInterrupt';
+    source: 'turn' | 'threadStatus' | 'snapshot';
 }
 
 export interface CodexTurnWaitHandle {
@@ -62,6 +62,33 @@ export class CodexThreadRegistry {
         return this.selectedThread?.activeTurnId ?? null;
     }
 
+    activeThreadIds(): string[] {
+        const active: string[] = [];
+        for (const [threadId, runtime] of this.threads) {
+            const turn = runtime.activeTurnId
+                ? runtime.turns.get(runtime.activeTurnId)
+                : null;
+            if (
+                this.pendingStarts.has(threadId)
+                || runtime.status.type === 'active'
+                || (turn?.status === 'inProgress' && !turn.settled)
+            ) {
+                active.push(threadId);
+            }
+        }
+        return active;
+    }
+
+    pendingCompletion(threadId: string): Promise<CodexTurnCompletion> | null {
+        const pending = this.pendingStarts.get(threadId);
+        if (pending) return pending.controller.promise;
+        const runtime = this.threads.get(threadId);
+        if (!runtime?.activeTurnId) return null;
+        return this.turnCompletions.get(turnKey(threadId, runtime.activeTurnId))?.promise
+            ?? runtime.turns.get(runtime.activeTurnId)?.completion
+            ?? null;
+    }
+
     selectThread(threadId: string): CodexThreadRuntime {
         const { runtime } = this.ensureThread(threadId);
         this.selectedThreadId = threadId;
@@ -113,13 +140,31 @@ export class CodexThreadRegistry {
 
     registerThread(thread: Thread, source: 'response' | 'snapshot' = 'response'): CodexThreadRuntime {
         const { runtime } = this.ensureThread(thread.id);
-        runtime.snapshot = thread;
-        runtime.status = thread.status;
         runtime.placeholder = false;
         runtime.hydrationRequested = true;
 
-        for (const turn of thread.turns) this.registerTurn(thread.id, turn, source === 'snapshot' ? 'snapshot' : 'turn');
-        if (thread.status.type !== 'active') this.settleFromThreadStatus(runtime, source === 'snapshot' ? 'snapshot' : 'threadStatus');
+        const previousUpdatedAt = typeof runtime.snapshot?.updatedAt === 'number'
+            ? runtime.snapshot.updatedAt
+            : Number.NEGATIVE_INFINITY;
+        const incomingUpdatedAt = typeof thread.updatedAt === 'number'
+            ? thread.updatedAt
+            : previousUpdatedAt;
+        if (
+            source === 'snapshot'
+            && runtime.snapshot
+            && incomingUpdatedAt < previousUpdatedAt
+        ) {
+            return runtime;
+        }
+
+        for (const turn of thread.turns) {
+            this.registerTurn(thread.id, turn, source === 'snapshot' ? 'snapshot' : 'turn');
+        }
+        runtime.snapshot = thread;
+        runtime.status = thread.status;
+        if (thread.status.type !== 'active') {
+            this.settleFromThreadStatus(runtime, source === 'snapshot' ? 'snapshot' : 'threadStatus');
+        }
         return runtime;
     }
 
@@ -190,8 +235,18 @@ export class CodexThreadRegistry {
             };
             thread.turns.set(turn.id, runtime);
         } else {
-            runtime.snapshot = turn;
-            runtime.status = turn.status;
+            if (isTerminalTurnStatus(runtime.status)) {
+                runtime.snapshot = {
+                    ...turn,
+                    status: runtime.status,
+                    error: runtime.snapshot?.error ?? turn.error,
+                    completedAt: runtime.snapshot?.completedAt ?? turn.completedAt,
+                    durationMs: runtime.snapshot?.durationMs ?? turn.durationMs,
+                };
+            } else {
+                runtime.snapshot = turn;
+                runtime.status = turn.status;
+            }
         }
 
         const pending = this.pendingStarts.get(threadId);
@@ -205,42 +260,21 @@ export class CodexThreadRegistry {
             runtime.completion = pending.controller.promise;
         }
 
-        if (turn.status === 'inProgress') {
-            thread.activeTurnId = turn.id;
+        if (runtime.status === 'inProgress') {
+            const activeTurn = thread.activeTurnId
+                ? thread.turns.get(thread.activeTurnId)
+                : null;
+            if (
+                !activeTurn
+                || activeTurn.turnId === turn.id
+                || isTurnNewer(runtime, activeTurn)
+            ) {
+                thread.activeTurnId = turn.id;
+            }
         } else {
             this.settleTurn(thread, runtime, source);
         }
         return runtime;
-    }
-
-    settleForcedInterrupt(threadId: string, turnId: string | null): void {
-        const thread = this.threads.get(threadId);
-        if (!thread) return;
-        const resolvedTurnId = turnId ?? thread.activeTurnId;
-        if (!resolvedTurnId) {
-            const pending = this.pendingStarts.get(threadId);
-            if (pending) {
-                this.pendingStarts.delete(threadId);
-                pending.controller.resolve({
-                    threadId,
-                    turnId: null,
-                    status: 'interrupted',
-                    aborted: true,
-                    source: 'forcedInterrupt',
-                });
-            }
-            return;
-        }
-        const runtime = thread.turns.get(resolvedTurnId) ?? {
-            turnId: resolvedTurnId,
-            snapshot: null,
-            status: 'interrupted' as const,
-            completion: null,
-            settled: false,
-        };
-        thread.turns.set(resolvedTurnId, runtime);
-        runtime.status = 'interrupted';
-        this.settleTurn(thread, runtime, 'forcedInterrupt');
     }
 
     hasPendingTurn(threadId: string): boolean {
@@ -328,4 +362,16 @@ function createCompletionController(): CompletionController {
 
 function turnKey(threadId: string, turnId: string): string {
     return `${threadId}\0${turnId}`;
+}
+
+function isTerminalTurnStatus(status: TurnStatus): boolean {
+    return status === 'completed' || status === 'interrupted' || status === 'failed';
+}
+
+function isTurnNewer(candidate: CodexTurnRuntime, current: CodexTurnRuntime): boolean {
+    const candidateStartedAt = candidate.snapshot?.startedAt;
+    const currentStartedAt = current.snapshot?.startedAt;
+    return typeof candidateStartedAt === 'number'
+        && typeof currentStartedAt === 'number'
+        && candidateStartedAt > currentStartedAt;
 }

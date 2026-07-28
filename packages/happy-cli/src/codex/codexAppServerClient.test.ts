@@ -641,6 +641,118 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it('recovers every active root and child thread without changing selection', async () => {
+        const firstRequests: MockRpcMessage[] = [];
+        const secondRequests: MockRpcMessage[] = [];
+        let startedThreads = 0;
+        const proc1 = createMockProcess({
+            pid: 4201,
+            onRequest: (msg, stdout) => {
+                firstRequests.push(msg);
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    const threadId = startedThreads++ === 0 ? 'thread-child' : 'thread-root';
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: {
+                                id: threadId,
+                                status: { type: 'idle' },
+                                turns: [],
+                            },
+                            model: 'gpt-test',
+                        },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    const threadId = msg.params.threadId as string;
+                    const turnId = threadId === 'thread-root' ? 'turn-root' : 'turn-child';
+                    setTimeout(() => {
+                        const turn = {
+                            id: turnId,
+                            items: [],
+                            status: 'inProgress',
+                            error: null,
+                        };
+                        pushJsonLine(stdout, { id: msg.id, result: { turn } });
+                        pushJsonLine(stdout, {
+                            method: 'turn/started',
+                            params: { threadId, turn },
+                        });
+                    }, 0);
+                }
+            },
+        });
+        const proc2 = createMockProcess({
+            pid: 4202,
+            onRequest: (msg, stdout) => {
+                secondRequests.push(msg);
+                if (msg.method === 'thread/resume' && msg.id != null) {
+                    const threadId = msg.params.threadId as string;
+                    const turnId = threadId === 'thread-root' ? 'turn-root' : 'turn-child';
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            thread: {
+                                id: threadId,
+                                status: { type: 'active', activeFlags: [] },
+                                turns: [{
+                                    id: turnId,
+                                    items: [],
+                                    status: 'inProgress',
+                                    error: null,
+                                }],
+                            },
+                            model: 'gpt-test',
+                        },
+                    }), 0);
+                }
+                // Reconciliation reads stay pending until disconnect rejects
+                // them; no terminal state is invented for either thread.
+            },
+        });
+        mockSpawn
+            .mockImplementationOnce(() => proc1)
+            .mockImplementationOnce(() => proc2);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        await client.startThread({
+            model: 'gpt-test',
+            approvalPolicy: 'never',
+            sandbox: 'danger-full-access',
+        });
+        await client.startThread({
+            model: 'gpt-test',
+            approvalPolicy: 'never',
+            sandbox: 'danger-full-access',
+        });
+        await client.startTurnOnThread('thread-child', 'child work');
+        await client.startTurnOnThread('thread-root', 'root work');
+        expect(firstRequests.filter((request) => request.method === 'turn/start')).toHaveLength(2);
+        expect(client.threadId).toBe('thread-root');
+
+        proc1.emit('exit', 1, null);
+        await waitFor(() => (
+            secondRequests.filter((request) => request.method === 'thread/resume').length === 2
+        ));
+
+        const resumeRequests = secondRequests.filter((request) => request.method === 'thread/resume');
+        expect(resumeRequests.map((request) => request.params.threadId).sort()).toEqual([
+            'thread-child',
+            'thread-root',
+        ]);
+        for (const request of resumeRequests) {
+            expect(request.params).toEqual(expect.objectContaining({
+                approvalPolicy: 'on-request',
+                sandbox: 'read-only',
+            }));
+        }
+        expect(client.threadId).toBe('thread-root');
+
+        await client.disconnect();
+    });
+
     it('cleans up a pending start after a definitive turn/start error', async () => {
         let turnStarts = 0;
         const proc = createMockProcess({
@@ -903,7 +1015,7 @@ describe('CodexAppServerClient sandbox integration', () => {
 
                 if (msg.method === 'turn/interrupt' && msg.id != null) {
                     setTimeout(() => {
-                        pushJsonLine(stdout, { id: msg.id, result: { abortReason: 'interrupted' } });
+                        pushJsonLine(stdout, { id: msg.id, result: {} });
                     }, 0);
                 }
             },
@@ -919,7 +1031,17 @@ describe('CodexAppServerClient sandbox integration', () => {
                         pushJsonLine(stdout, {
                             id: msg.id,
                             result: {
-                                thread: { id: 'thread-1', path: '/tmp/thread-1' },
+                                thread: {
+                                    id: 'thread-1',
+                                    path: '/tmp/thread-1',
+                                    status: { type: 'idle' },
+                                    turns: [{
+                                        id: 'turn-1',
+                                        items: [],
+                                        status: 'interrupted',
+                                        error: null,
+                                    }],
+                                },
                                 model: 'gpt-test',
                                 modelProvider: 'openai',
                                 cwd: '/tmp/project',
@@ -989,13 +1111,9 @@ describe('CodexAppServerClient sandbox integration', () => {
             aborted: true,
             forcedRestart: true,
             resumedThread: true,
+            statusUnknown: false,
         });
-        expect(events).toContainEqual(expect.objectContaining({
-            type: 'turn_aborted',
-            reason: 'interrupted',
-            turn_id: 'turn-1',
-            forced_restart: true,
-        }));
+        expect(events.filter((event) => event.type === 'turn_aborted')).toHaveLength(0);
 
         const resumeRequest = secondProcessRequests.find((msg) => msg.method === 'thread/resume');
         expect(resumeRequest?.params).toEqual(expect.objectContaining({
@@ -1082,7 +1200,17 @@ describe('CodexAppServerClient sandbox integration', () => {
                         pushJsonLine(stdout, {
                             id: msg.id,
                             result: {
-                                thread: { id: 'thread-stuck-interrupt', path: '/tmp/thread-stuck-interrupt' },
+                                thread: {
+                                    id: 'thread-stuck-interrupt',
+                                    path: '/tmp/thread-stuck-interrupt',
+                                    status: { type: 'active', activeFlags: [] },
+                                    turns: [{
+                                        id: 'turn-stuck-interrupt',
+                                        items: [],
+                                        status: 'inProgress',
+                                        error: null,
+                                    }],
+                                },
                                 model: 'gpt-test',
                                 modelProvider: 'openai',
                                 cwd: '/tmp/project',
@@ -1114,6 +1242,8 @@ describe('CodexAppServerClient sandbox integration', () => {
         const pendingTurn = client.sendTurnAndWait('hang on interrupt', { turnTimeoutMs: 5000 });
         await waitFor(() => firstProcessRequests.some((msg) => msg.method === 'turn/start'));
         await waitFor(() => client.turnId === 'turn-stuck-interrupt');
+        let pendingSettled = false;
+        void pendingTurn.then(() => { pendingSettled = true; });
 
         const startedAt = Date.now();
         const abortResult = await client.abortTurnWithFallback({
@@ -1122,15 +1252,30 @@ describe('CodexAppServerClient sandbox integration', () => {
         });
 
         expect(Date.now() - startedAt).toBeLessThan(1000);
-        await expect(pendingTurn).resolves.toEqual({ aborted: true });
+        expect(pendingSettled).toBe(false);
         expect(firstProcessRequests.some((msg) => msg.method === 'turn/interrupt')).toBe(true);
         expect(abortResult).toEqual({
             hadActiveTurn: true,
-            aborted: true,
+            aborted: false,
             forcedRestart: true,
             resumedThread: true,
+            statusUnknown: true,
         });
         expect(secondProcessRequests.some((msg) => msg.method === 'thread/resume')).toBe(true);
+
+        pushJsonLine(proc2.stdout, {
+            method: 'turn/completed',
+            params: {
+                threadId: 'thread-stuck-interrupt',
+                turn: {
+                    id: 'turn-stuck-interrupt',
+                    items: [],
+                    status: 'interrupted',
+                    error: null,
+                },
+            },
+        });
+        await expect(pendingTurn).resolves.toEqual({ aborted: true });
 
         await client.disconnect();
     });

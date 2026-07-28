@@ -29,7 +29,7 @@ import {
     isCodexCliVersionAtLeast,
     readCodexCliVersion,
 } from './codexCliVersion';
-import { CodexThreadRegistry } from './codexThreadRegistry';
+import { CodexThreadRegistry, type CodexTurnCompletion } from './codexThreadRegistry';
 import type { CodexProtocolTraceDirection, CodexProtocolTraceSink } from './codexProtocolTrace';
 import type {
     ApprovalPolicy,
@@ -360,7 +360,8 @@ export class CodexAppServerClient {
     private readonly pendingInterrupts = new Map<string, Promise<void>>();
     private readonly pendingCompactions = new Map<string, PendingCompaction>();
     private readonly unknownTurnReconciliations = new Map<string, Promise<void>>();
-    private recoveryPromise: Promise<boolean> | null = null;
+    private recoveryPromise: Promise<Set<string>> | null = null;
+    private readonly recoveredThreadEpochs = new Map<string, number>();
     private notificationProtocol: 'unknown' | 'legacy' | 'raw' = 'unknown';
     private completedTurnIds = new Set<string>();
     private rawFileChangesByItemId = new Map<string, LegacyPatchChanges>();
@@ -997,9 +998,9 @@ export class CodexAppServerClient {
                 this.pending.delete(id);
             }
             this.rejectPendingCompactions(epoch, `Codex process exited (code=${code})`);
-            const threadId = this.threadId;
-            if (threadId && this.threads.hasPendingTurn(threadId)) {
-                void this.recoverThreadAfterUnexpectedExit(threadId);
+            const activeThreadIds = this.threads.activeThreadIds();
+            if (activeThreadIds.length > 0) {
+                void this.recoverThreadsAfterUnexpectedExit(activeThreadIds, this.threadId);
             }
         });
 
@@ -1054,6 +1055,7 @@ export class CodexAppServerClient {
             if (!opts?.preserveThreadState) {
                 this.threads.clear(new Error('Codex client disconnected'));
                 this.threadDefaults.clear();
+                this.recoveredThreadEpochs.clear();
             }
             return;
         }
@@ -1091,6 +1093,7 @@ export class CodexAppServerClient {
         if (!opts?.preserveThreadState) {
             this.threads.clear(new Error('Codex client disconnected'));
             this.threadDefaults.clear();
+            this.recoveredThreadEpochs.clear();
         }
 
         // Fail in-flight requests from this process generation.
@@ -1253,6 +1256,7 @@ export class CodexAppServerClient {
         sandbox?: SandboxMode;
         mcpServers?: Record<string, unknown>;
         emitSnapshot?: boolean;
+        selectThread?: boolean;
     }): Promise<{ threadId: string; model: string; thread: ProtocolThread }> {
         const threadId = opts?.threadId ?? this.threadId;
         if (!threadId) {
@@ -1287,7 +1291,7 @@ export class CodexAppServerClient {
                 'snapshot',
                 opts?.emitSnapshot !== false,
             );
-            this.threads.selectThread(response.thread.id);
+            if (opts?.selectThread !== false) this.threads.selectThread(response.thread.id);
             this.rememberThreadDefaults(response.thread.id, nextDefaults);
         }) as ThreadResumeResponse;
         const thread = resumedSnapshot ?? this.normalizeProtocolThread(result.thread);
@@ -1487,35 +1491,93 @@ export class CodexAppServerClient {
     }
 
     private async restartAndResumeThread(threadId: string): Promise<boolean> {
-        if (this.recoveryPromise) return await this.recoveryPromise;
+        const resumed = await this.restartAndResumeThreads([threadId], this.threadId);
+        return resumed.has(threadId);
+    }
+
+    private async restartAndResumeThreads(
+        threadIds: string[],
+        selectedThreadId: string | null,
+    ): Promise<Set<string>> {
+        if (this.recoveryPromise) {
+            const resumed = await this.recoveryPromise;
+            const missing = threadIds.filter((threadId) => (
+                this.recoveredThreadEpochs.get(threadId) !== this.processEpoch
+            ));
+            if (!this.connected || missing.length === 0) return resumed;
+            const additional = await this.resumeThreadsConservatively(missing, selectedThreadId);
+            return new Set([...resumed, ...additional]);
+        }
 
         const recovery = (async () => {
             await this.disconnectInternal({ preserveThreadState: true });
             await this.connect();
-            await this.resumeThread({ threadId });
-            return true;
+            return await this.resumeThreadsConservatively(threadIds, selectedThreadId);
         })();
         this.recoveryPromise = recovery;
         try {
             return await recovery;
         } catch (error) {
-            logger.warn(`[CodexAppServer] Failed to resume thread after reconnect (${errorKind(error)})`);
+            logger.warn(`[CodexAppServer] Failed to resume threads after reconnect (${errorKind(error)})`);
             await this.disconnectInternal({ preserveThreadState: true });
-            return false;
+            return new Set();
         } finally {
             if (this.recoveryPromise === recovery) this.recoveryPromise = null;
         }
     }
 
-    private async recoverThreadAfterUnexpectedExit(threadId: string): Promise<void> {
-        const resumed = await this.restartAndResumeThread(threadId);
-        if (!resumed) {
-            logger.warn('[CodexAppServer] Active turn remains unknown after app-server exit');
+    private async resumeThreadsConservatively(
+        threadIds: string[],
+        selectedThreadId: string | null,
+    ): Promise<Set<string>> {
+        const resumed = new Set<string>();
+        try {
+            for (const threadId of new Set(threadIds)) {
+                if (this.recoveredThreadEpochs.get(threadId) === this.processEpoch) {
+                    resumed.add(threadId);
+                    continue;
+                }
+                try {
+                    await this.resumeThread({
+                        threadId,
+                        approvalPolicy: 'on-request',
+                        sandbox: 'read-only',
+                        selectThread: false,
+                    });
+                    this.recoveredThreadEpochs.set(threadId, this.processEpoch);
+                    resumed.add(threadId);
+                } catch (error) {
+                    logger.warn(`[CodexAppServer] Conservative thread recovery failed (${errorKind(error)})`);
+                }
+            }
+        } finally {
+            if (selectedThreadId && this.threads.getThread(selectedThreadId)) {
+                this.threads.selectThread(selectedThreadId);
+            }
+        }
+        return resumed;
+    }
+
+    private async recoverThreadsAfterUnexpectedExit(
+        threadIds: string[],
+        selectedThreadId: string | null,
+    ): Promise<void> {
+        const resumed = await this.restartAndResumeThreads(threadIds, selectedThreadId);
+        if (resumed.size !== new Set(threadIds).size) {
+            logger.warn('[CodexAppServer] One or more active turns remain unknown after app-server exit');
+        }
+        for (const threadId of threadIds) {
+            if (!this.threads.hasPendingTurn(threadId)) continue;
+            this.reconcileUnknownTurn(
+                threadId,
+                this.threads.pendingCompletion(threadId) ?? undefined,
+            );
         }
     }
 
-    private reconcileUnknownTurn(threadId: string, completion: Promise<unknown>): void {
+    private reconcileUnknownTurn(threadId: string, completion?: Promise<unknown>): void {
         if (this.unknownTurnReconciliations.has(threadId)) return;
+        const completionSignal = completion ?? new Promise<never>(() => {});
 
         let reconciliation!: Promise<void>;
         reconciliation = (async () => {
@@ -1527,12 +1589,12 @@ export class CodexAppServerClient {
                     authoritativeRead.catch((error) => {
                         logger.debug(`[CodexAppServer] Unknown turn reconciliation failed (${errorKind(error)})`);
                     }),
-                    completion.then(() => undefined, () => undefined),
+                    completionSignal.then(() => undefined, () => undefined),
                 ]);
                 if (!this.threads.hasPendingTurn(threadId)) break;
                 await Promise.race([
                     new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
-                    completion.then(() => undefined, () => undefined),
+                    completionSignal.then(() => undefined, () => undefined),
                 ]);
             }
         })().finally(() => {
@@ -1568,49 +1630,108 @@ export class CodexAppServerClient {
     }
 
     /**
-     * Request turn interruption and optionally force-restart the app-server if
-     * the turn does not settle within a short grace period.
+     * Request turn interruption and optionally restart the app-server for
+     * authoritative reconciliation if the turn does not settle quickly.
      */
     async abortTurnWithFallback(opts?: {
         gracePeriodMs?: number;
         forceRestartOnTimeout?: boolean;
-    }): Promise<{ hadActiveTurn: boolean; aborted: boolean; forcedRestart: boolean; resumedThread: boolean }> {
+    }): Promise<{
+        hadActiveTurn: boolean;
+        aborted: boolean;
+        forcedRestart: boolean;
+        resumedThread: boolean;
+        statusUnknown: boolean;
+    }> {
         const threadId = this.threadId;
         const hadActiveTurn = this.hasPendingTurnCompletion(threadId);
 
         // No active turn pending in this client call-site.
         if (!threadId || !hadActiveTurn) {
-            return { hadActiveTurn: false, aborted: false, forcedRestart: false, resumedThread: false };
+            return {
+                hadActiveTurn: false,
+                aborted: false,
+                forcedRestart: false,
+                resumedThread: false,
+                statusUnknown: false,
+            };
         }
 
+        const pendingTurnId = this.threads.getThread(threadId)?.activeTurnId ?? null;
+        const completion = this.threads.pendingCompletion(threadId);
         const gracePeriodMs = opts?.gracePeriodMs ?? CodexAppServerClient.ABORT_GRACE_MS;
         // Best-effort interrupt request first, but do not block the fallback on
         // the interrupt RPC itself. Codex can stop emitting responses while a
-        // tool/subagent/MCP call is wedged, and in that case the restart fallback
-        // is the mechanism that actually makes Stop Execution reliable.
+        // tool/subagent/MCP call is wedged. Restarting only restores the
+        // coordination channel; it is not proof that the turn was interrupted.
         void this.interruptTurn({ timeoutMs: Math.max(1, gracePeriodMs) });
 
         const settled = await this.waitForTurnCompletion(threadId, gracePeriodMs);
         if (settled) {
-            return { hadActiveTurn: true, aborted: true, forcedRestart: false, resumedThread: false };
+            let authoritativeCompletion: CodexTurnCompletion | null = null;
+            if (completion) {
+                try {
+                    authoritativeCompletion = await completion;
+                } catch {
+                    // A rejected wait is not an authoritative provider terminal state.
+                }
+            }
+            const status = authoritativeCompletion?.status ?? (pendingTurnId
+                ? this.threads.getThread(threadId)?.turns.get(pendingTurnId)?.status
+                : null);
+            const statusUnknown = status === null
+                || status === undefined
+                || status === 'inProgress';
+            return {
+                hadActiveTurn: true,
+                aborted: !statusUnknown && status === 'interrupted',
+                forcedRestart: false,
+                resumedThread: false,
+                statusUnknown,
+            };
         }
 
         const shouldForceRestart = opts?.forceRestartOnTimeout ?? true;
         if (!shouldForceRestart) {
-            return { hadActiveTurn: true, aborted: false, forcedRestart: false, resumedThread: false };
+            return {
+                hadActiveTurn: true,
+                aborted: false,
+                forcedRestart: false,
+                resumedThread: false,
+                statusUnknown: true,
+            };
         }
 
-        logger.warn(`[CodexAppServer] interrupt did not settle turn in ${gracePeriodMs}ms; force-restarting app-server`);
-        const pendingTurnId = this.threads.getThread(threadId)?.activeTurnId ?? null;
-        this.threads.settleForcedInterrupt(threadId, pendingTurnId);
-        this.eventHandler?.({
-            type: 'turn_aborted',
-            reason: 'interrupted',
-            ...(pendingTurnId ? { turn_id: pendingTurnId } : {}),
-            forced_restart: true,
-        });
+        logger.warn(`[CodexAppServer] interrupt did not settle turn in ${gracePeriodMs}ms; restarting app-server for authoritative reconciliation`);
         const resumedThread = await this.reconnectAndResumeThread();
-        return { hadActiveTurn: true, aborted: true, forcedRestart: true, resumedThread };
+        const stillPending = this.threads.hasPendingTurn(threadId);
+        let authoritativeCompletion: CodexTurnCompletion | null = null;
+        if (completion && !stillPending) {
+            try {
+                authoritativeCompletion = await completion;
+            } catch {
+                // A rejected wait is not an authoritative provider terminal state.
+            }
+        }
+        const reconciledTurnId = pendingTurnId ?? authoritativeCompletion?.turnId ?? null;
+        const turn = reconciledTurnId
+            ? this.threads.getThread(threadId)?.turns.get(reconciledTurnId)
+            : null;
+        const reconciledStatus = authoritativeCompletion?.status ?? turn?.status ?? null;
+        const statusUnknown = !resumedThread
+            || stillPending
+            || reconciledStatus === null
+            || reconciledStatus === 'inProgress';
+        if (statusUnknown) {
+            this.reconcileUnknownTurn(threadId, completion ?? undefined);
+        }
+        return {
+            hadActiveTurn: true,
+            aborted: !statusUnknown && reconciledStatus === 'interrupted',
+            forcedRestart: true,
+            resumedThread,
+            statusUnknown,
+        };
     }
 
     /**
@@ -1833,9 +1954,9 @@ export class CodexAppServerClient {
             `[CodexAppServer] Clearing selected thread state: activeTurn=${turnId ? 'yes' : 'no'}`,
         );
         if (threadId) {
-            this.threads.settleForcedInterrupt(threadId, turnId);
             this.threads.forgetThread(threadId, new Error('Selected Codex thread cleared'));
             this.threadDefaults.delete(threadId);
+            this.recoveredThreadEpochs.delete(threadId);
         }
         this.completedTurnIds.clear();
         this.rawFileChangesByItemId.clear();
@@ -2020,9 +2141,9 @@ export class CodexAppServerClient {
         try {
             proc.kill('SIGTERM');
         } catch { /* process already unavailable */ }
-        const threadId = this.threadId;
-        if (threadId && this.threads.hasPendingTurn(threadId)) {
-            void this.recoverThreadAfterUnexpectedExit(threadId);
+        const activeThreadIds = this.threads.activeThreadIds();
+        if (activeThreadIds.length > 0) {
+            void this.recoverThreadsAfterUnexpectedExit(activeThreadIds, this.threadId);
         }
     }
 
