@@ -608,8 +608,9 @@ R6 场景与性能口径：
 
 1. 修复代码并保持 v4 Server flag 关闭。
 2. 推进受影响包 patch 版本；本轮最低目标：
-   CLI `1.4.3`、App `1.11.6`、Server `1.1.13`、Wire `0.1.2`。App
-   `1.11.5` 已进入首轮云端 CI，后续 Tauri 格式修复按仓库规则使用新 patch。
+   CLI `1.4.3`、App `1.11.7`、Server `1.1.13`、Wire `0.1.2`。App
+   `1.11.5` 已进入首轮云端 CI；后续 Tauri 格式与 lockfile 修复按仓库规则
+   各自使用新 patch。
 3. 本地通过四包 typecheck、unit test、build、协议模拟和 migration gate。
 4. 推送 `origin/codex/sync-v4`，等待所有 PR CI。
 5. CI 失败时修复、再次推进受影响 patch 版本、提交并推送。
@@ -814,3 +815,9 @@ R6 场景与性能口径：
   Rust 风格；云端日志给出了确定性 rustfmt diff。修复限定为应用该 diff，
   App 推进到 `1.11.6`，再提交并重跑全部 required jobs；本地仍不安装
   Rust/Tauri 工具链。
+- 2026-07-28：提交 `bdc50de` 的 push CI `30380523592` 已通过 rustfmt，
+  随后 `cargo check --locked` 在编译前拒绝会被更新的 `Cargo.lock`。
+  从 lock 的 `app` 根节点解析全部 561 个 package 与无歧义依赖边后，确认
+  唯一不可达集合为 `tauri-plugin-http@2.5.2`、
+  `tauri-plugin-fs@2.4.2` 和 `data-url@0.3.2`。修复限定为删除这三个
+  package block，App 推进到 `1.11.7`，再由云端 locked check 验证。
