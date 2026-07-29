@@ -34,6 +34,8 @@
 10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断；`1.1.16` 在 Docker builder
     类型检查时发现缺少 App 跨包契约 schema。修复版本目标为 Server `1.1.17`。
     CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包变化推进版本。
+11. runtime OS 依赖限制为 TLS 根证书和健康检查使用的 `curl`。Server 没有
+    调用 `ffmpeg`，纯 relay 镜像不得携带未使用的音视频与图形依赖树。
 
 ## 发行包契约
 
@@ -158,3 +160,6 @@ secret 和 named volume 必须保持原值。
   runtime 门禁，但 Docker builder 的 Server typecheck 因未复制 App 的 4 个纯
   Zod 跨包契约 schema 报 TS2307；这些文件只加入 builder，不进入最终 runtime。
   `1.1.16` 已运行发行 workflow，目标推进到 `1.1.17`，不得复用失败版本。
+- 2026-07-29：失败镜像日志显示未使用的 `ffmpeg` 依赖树安装耗时约 98 秒；仓库
+  检索确认 Server 不调用它。`1.1.17` 同步移除 `ffmpeg`，缩小镜像、攻击面和
+  Trivy 扫描面，只保留 `ca-certificates` 与 `curl`。
