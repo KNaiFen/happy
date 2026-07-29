@@ -46,6 +46,14 @@ RUN SKIP_HAPPY_WIRE_BUILD=1 pnpm install --frozen-lockfile
 COPY packages/happy-wire packages/happy-wire
 COPY packages/happy-server packages/happy-server
 
+# A Server contract spec typechecks against these App-owned pure Zod schemas.
+# They remain in the builder and are not copied into the relay runtime image.
+COPY packages/happy-app/sources/sync/apiTypes.ts \
+    packages/happy-app/sources/sync/profile.ts \
+    packages/happy-app/sources/sync/friendTypes.ts \
+    packages/happy-app/sources/sync/feedTypes.ts \
+    packages/happy-app/sources/sync/
+
 RUN pnpm --filter @slopus/happy-wire build \
     && pnpm --filter happy-server-self-host generate \
     && pnpm --filter happy-server-self-host build \
