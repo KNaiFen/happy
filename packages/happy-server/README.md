@@ -52,6 +52,27 @@ This uses:
 
 Data persists in the `happy-data` Docker volume across container restarts.
 
+### Debian 13 amd64 offline relay bundle
+
+Server patch releases also produce a versioned GitHub Actions artifact for
+Debian 13 x86_64 hosts. This artifact is API-only: it contains the relay,
+embedded PGlite database, local attachment storage, Compose configuration,
+SBOM, and an offline Docker image. It does not contain the Happy Web App.
+
+After downloading the matching
+`happy-relay-server-X.Y.Z-debian13-amd64.tar.gz` artifact:
+
+```bash
+tar -xzf happy-relay-server-X.Y.Z-debian13-amd64.tar.gz
+cd happy-relay
+./install.sh
+```
+
+The installer verifies checksums, generates a file-backed master secret, runs
+database migrations, and waits for a database-backed health check. It binds to
+`127.0.0.1:3005` and leaves Codex Sync v4 disabled by default. See the bundled
+`README.md` before exposing plain HTTP on a trusted LAN or enabling v4.
+
 ### Environment Variables
 
 | Variable | Required | Default | Description |

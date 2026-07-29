@@ -1,0 +1,205 @@
+name: Build Debian 13 amd64 relay bundle on version bump
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/happy-server/package.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: debian13-relay-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout version history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect Server version bump
+        id: version
+        run: node scripts/ci/detect-package-version-change.cjs packages/happy-server/package.json "${{ github.event.before }}"
+
+  validate:
+    name: Validate relay source and Server runtime
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Generate Prisma client
+        run: pnpm --filter happy-server-self-host generate
+
+      - name: Typecheck Server
+        run: pnpm --filter happy-server-self-host typecheck
+
+      - name: Test Server
+        run: pnpm --filter happy-server-self-host test
+
+      - name: Build Server runtime
+        run: pnpm --filter happy-server-self-host build
+
+      - name: Lint deployment shell scripts
+        run: |
+          shellcheck \
+            packages/happy-server/deploy/debian13-amd64/entrypoint.sh \
+            packages/happy-server/deploy/debian13-amd64/install.sh \
+            packages/happy-server/deploy/debian13-amd64/relayctl.sh \
+            scripts/ci/package-debian13-relay-bundle.sh \
+            scripts/ci/verify-debian13-relay-bundle.sh \
+            scripts/ci/test-debian13-relay-bundle.sh
+
+      - name: Validate Compose configuration
+        run: |
+          CONFIG_DIR="$RUNNER_TEMP/happy-relay-config"
+          mkdir -p "$CONFIG_DIR/secrets"
+          cp packages/happy-server/deploy/debian13-amd64/compose.yaml "$CONFIG_DIR/compose.yaml"
+          sed "s/__VERSION__/$VERSION/g" \
+            packages/happy-server/deploy/debian13-amd64/env.example > "$CONFIG_DIR/.env"
+          printf '%064d\n' 0 > "$CONFIG_DIR/secrets/master-secret"
+          docker compose \
+            --project-directory "$CONFIG_DIR" \
+            --env-file "$CONFIG_DIR/.env" \
+            --file "$CONFIG_DIR/compose.yaml" \
+            config --quiet
+
+  build:
+    name: Build and exercise offline relay bundle
+    needs: [version, validate]
+    if: needs.version.outputs.changed == 'true' && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      IMAGE: happy-relay-server:${{ needs.version.outputs.version }}-debian13-amd64
+      BUNDLE_DIR: dist/relay-bundle
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build Debian 13 amd64 relay image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: packages/happy-server/deploy/debian13-amd64/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            HAPPY_SERVER_VERSION=${{ env.VERSION }}
+            VCS_REF=${{ github.sha }}
+            SOURCE_URL=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=debian13-relay-amd64
+          cache-to: type=gha,mode=max,scope=debian13-relay-amd64
+
+      - name: Verify image identity and relay-only contents
+        run: |
+          test "$(docker image inspect "$IMAGE" --format '{{.Architecture}}')" = amd64
+          test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')" = "$VERSION"
+          test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          docker run --rm --entrypoint sh "$IMAGE" -ec '
+            . /etc/os-release
+            test "$ID" = debian
+            test "$VERSION_ID" = 13
+            test "$(id -u)" -ne 0
+            test -f /opt/happy-server/dist/standalone.mjs
+            test -d /opt/happy-server/prisma/migrations
+            test ! -e /opt/happy-server/webapp/index.html
+          '
+
+      - name: Block Critical image vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: CRITICAL
+
+      - name: Prepare bundle output
+        run: mkdir -p "$BUNDLE_DIR"
+
+      - name: Generate CycloneDX image SBOM
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          format: cyclonedx
+          output: dist/relay-bundle/sbom.cdx.json
+          exit-code: '0'
+
+      - name: Package offline relay bundle
+        run: |
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH="$(git show --no-patch --format=%ct "$GITHUB_SHA")"
+          scripts/ci/package-debian13-relay-bundle.sh \
+            --version "$VERSION" \
+            --image "$IMAGE" \
+            --sbom "$BUNDLE_DIR/sbom.cdx.json" \
+            --output-dir "$BUNDLE_DIR"
+
+      - name: Verify final bundle structure and checksums
+        run: |
+          scripts/ci/verify-debian13-relay-bundle.sh \
+            "$BUNDLE_DIR/happy-relay-server-$VERSION-debian13-amd64.tar.gz" \
+            "$VERSION"
+
+      - name: Exercise delivered installer and relay lifecycle
+        env:
+          GITHUB_ACTIONS: 'true'
+        run: |
+          scripts/ci/test-debian13-relay-bundle.sh \
+            "$BUNDLE_DIR/happy-relay-server-$VERSION-debian13-amd64.tar.gz" \
+            "$VERSION"
+
+      - name: Upload Debian 13 relay bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: happy-relay-server-${{ env.VERSION }}-debian13-amd64
+          path: |
+            ${{ env.BUNDLE_DIR }}/happy-relay-server-${{ env.VERSION }}-debian13-amd64.tar.gz
+            ${{ env.BUNDLE_DIR }}/happy-relay-server-${{ env.VERSION }}-debian13-amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30

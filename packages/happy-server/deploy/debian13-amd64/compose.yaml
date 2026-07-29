@@ -1,0 +1,51 @@
+name: happy-relay
+
+services:
+  happy-relay:
+    image: "${HAPPY_RELAY_IMAGE:?HAPPY_RELAY_IMAGE is required}"
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${HAPPY_RELAY_BIND_ADDRESS:-127.0.0.1}:${HAPPY_RELAY_PORT:-3005}:3005"
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+      PGLITE_DIR: /data/pglite
+      HOST: 0.0.0.0
+      PORT: "3005"
+      PUBLIC_URL: "${HAPPY_RELAY_PUBLIC_URL:-http://localhost:3005}"
+      METRICS_ENABLED: "false"
+      HAPPY_CODEX_SYNC_V4_ENABLED: "${HAPPY_CODEX_SYNC_V4_ENABLED:-false}"
+      HAPPY_MASTER_SECRET_FILE: /run/secrets/happy_master_secret
+    volumes:
+      - happy-data:/data
+    secrets:
+      - source: happy_master_secret
+        target: happy_master_secret
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:3005/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  happy-data:
+
+secrets:
+  happy_master_secret:
+    file: ./secrets/master-secret
