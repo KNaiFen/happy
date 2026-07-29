@@ -164,6 +164,8 @@ secret 和 named volume 必须保持原值。
 
 ## 状态
 
+**结果：已完成。**
+
 - 2026-07-29：计划建立；范围按用户确认收窄为纯 relay，不包含 Web App。
 - 2026-07-29：完成专用 Debian 13 amd64 非 root 镜像、PGlite named volume、
   Compose secret、loopback 默认绑定、幂等安装器、无数据删除的管理脚本、离线
@@ -225,3 +227,19 @@ secret 和 named volume 必须保持原值。
   `RelationshipStatus`，Node 24 拒绝加载。`1.1.21` 不得复用；`1.1.22` 必须修复
   最终 production dependency tree 的 Prisma ESM/CJS 互操作，并把该树上的真实
   Node import 前移为镜像构建门禁，避免再次等待 120 秒健康超时才发现入口错误。
+- 2026-07-29：`1.1.22` 分支 CI run `30461004843` 全绿；main CI run
+  `30462083670` 首次仅因共享 runner 抖动导致健康 HTTP 流 p95 为 `870.9 ms`
+  而超过 `750 ms` 门禁，同一提交的分支测试已通过。未降低阈值，使用 GitHub
+  原生失败 job 重跑后 attempt 2 全绿，真实 Codex turn 持续 `10m57s`。
+- 2026-07-29：发行 run `30462077531` 全绿。最终生产部署树完成 Prisma generate
+  后，Node 24 对 standalone 入口、`PrismaClient` 和 `RelationshipStatus` 的真实
+  import 门禁通过；Debian 13 amd64 镜像身份、strict Critical Trivy、CycloneDX
+  SBOM、root 路径替换防护、非 root 容器、无 secret 环境泄漏、空环境安装、重复
+  安装、重启、PGlite 持久化和 v4 切换均通过。Artifact ID 为 `8728592362`：
+  `https://github.com/KNaiFen/happy/actions/runs/30462077531/artifacts/8728592362`。
+- 2026-07-29：已下载并复验
+  `dist/release-artifacts/happy-relay-server-1.1.22-debian13-amd64.tar.gz`；外层
+  SHA-256 为
+  `1eed607fde802c5bfb4a04313200178ccfb452dfe94ac7dec3c4358959f6e505`，sidecar
+  校验和内部 `SHA256SUMS` 全部通过。发行范围仍为纯 relay，不包含 Web App，
+  本计划关闭。
