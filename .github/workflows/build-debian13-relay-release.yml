@@ -99,6 +99,14 @@ jobs:
             });
           '
 
+      - name: Validate deployed production runtime contract
+        run: |
+          PROD_DIR="$RUNNER_TEMP/happy-server-production"
+          pnpm --filter happy-server-self-host deploy --prod --legacy "$PROD_DIR"
+          pnpm --dir "$PROD_DIR" exec prisma generate \
+            --schema="$PROD_DIR/prisma/schema.prisma"
+          node scripts/ci/verify-deployed-server-runtime.mjs "$PROD_DIR"
+
       - name: Validate Compose configuration
         run: |
           CONFIG_DIR="$RUNNER_TEMP/happy-relay-config"

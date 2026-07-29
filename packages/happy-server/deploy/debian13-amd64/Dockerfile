@@ -58,6 +58,8 @@ RUN pnpm --filter @slopus/happy-wire build \
     && pnpm --filter happy-server-self-host generate \
     && pnpm --filter happy-server-self-host build \
     && pnpm --filter happy-server-self-host deploy --prod --legacy /opt/happy-server \
+    && pnpm --dir /opt/happy-server exec prisma generate --schema=/opt/happy-server/prisma/schema.prisma \
+    && node /repo/scripts/ci/verify-deployed-server-runtime.mjs /opt/happy-server \
     && mkdir -p /opt/happy-data \
     && test -f /opt/happy-server/dist/standalone.mjs \
     && test -d /opt/happy-server/prisma/migrations \

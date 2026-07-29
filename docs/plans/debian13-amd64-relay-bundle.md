@@ -38,7 +38,7 @@
    修复失败发行必须再次推进 Server patch，不复用已运行版本。
 10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断；`1.1.16` 缺少 App 跨包契约
     schema；`1.1.17` 被 runtime Critical CVE 门禁阻断。修复版本目标为 Server
-    `1.1.21`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
+    `1.1.22`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
     变化推进版本。
 11. runtime 使用官方 `gcr.io/distroless/nodejs24-debian13:nonroot` amd64 镜像。
     入口、健康检查和生命周期断言使用 Node，不携带 shell、npm、Perl、curl、
@@ -94,6 +94,9 @@ Compose project name 固定为 `happy-relay`，确保从新版本目录运行时
 - 运行 Wire build、Server typecheck、Server unit tests 和 Server runtime build。
 - 直接导入构建后的 `dist/standalone.mjs`，确认 distroless 入口依赖的
   `runMigrations` 与 `serve` 导出没有被 bundler 丢弃。
+- 在 `pnpm deploy --prod --legacy` 产生的最终生产依赖树中再次使用 Node 24 导入
+  `dist/standalone.mjs`；只在 workspace 根依赖上导入不足以证明镜像中的
+  ESM/CommonJS 互操作正确。
 - 使用 ShellCheck、Compose config 和包结构检查验证安装/管理脚本。
 - 在镜像构建前用合成的九文件 tarball 回归验包器：脚本中的说明性占位符字面量
   不得误报，唯一模板输出 `env.example` 中的未解析占位符必须阻断。
@@ -214,3 +217,11 @@ secret 和 named volume 必须保持原值。
   宿主 `0700` 父目录保护，不引入环境泄漏或第二份持久 secret。最终安全审查同时
   要求安装器和管理脚本拒绝 secret 目录、文件符号链接和多重硬链接，生命周期
   测试覆盖 root 路径替换场景。
+- 2026-07-29：`1.1.21` 分支 CI run `30457361452` 与 main CI run `30458364083`
+  全绿，真实 Codex turn 分别持续 `10m56s` 和 `11m5s`。发行 run `30458364326`
+  通过源码/runtime 校验、镜像身份、严格 Critical Trivy、SBOM、最终 tarball 和
+  root 安装器的链接防护、secret 生成及 Compose 创建，但生产容器启动时失败：
+  standalone ESM 从部署后的 CommonJS `@prisma/client` 读取具名导出
+  `RelationshipStatus`，Node 24 拒绝加载。`1.1.21` 不得复用；`1.1.22` 必须修复
+  最终 production dependency tree 的 Prisma ESM/CJS 互操作，并把该树上的真实
+  Node import 前移为镜像构建门禁，避免再次等待 120 秒健康超时才发现入口错误。
