@@ -109,6 +109,9 @@ jobs:
           HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
         run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
 
+      - name: Verify generated Android manifest
+        run: node scripts/ci/verify-generated-android-manifest.cjs packages/happy-app/android/app/src/main/AndroidManifest.xml
+
       - name: Restore matching Android signing key
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -148,16 +151,39 @@ jobs:
           MANIFEST="$RUNNER_TEMP/manifest.txt"
           SIGNATURE="$RUNNER_TEMP/signature.txt"
           APP_CONFIG="$RUNNER_TEMP/app.config.json"
+          UPDATES_METADATA="$RUNNER_TEMP/updates-metadata.txt"
+
+          require_fixed() {
+            local needle="$1"
+            local file="$2"
+            local message="$3"
+            if ! grep -Fq "$needle" "$file"; then
+              echo "$message" >&2
+              exit 1
+            fi
+          }
 
           "$TOOLS/aapt" dump badging "$APK" | tee "$BADGING"
-          grep -Fq "package: name='com.ex3ndr.happy'" "$BADGING"
-          grep -Fq "versionName='${VERSION}'" "$BADGING"
-          grep -Fq "targetSdkVersion:'36'" "$BADGING"
-          grep -Fq "native-code: 'arm64-v8a'" "$BADGING"
+          require_fixed "package: name='com.ex3ndr.happy'" "$BADGING" 'APK package mismatch.'
+          require_fixed "versionName='${VERSION}'" "$BADGING" 'APK versionName mismatch.'
+          require_fixed "targetSdkVersion:'36'" "$BADGING" 'APK target SDK must be 36.'
+          require_fixed "native-code: 'arm64-v8a'" "$BADGING" 'APK must contain ARM64 native code only.'
 
           "$TOOLS/aapt2" dump xmltree --file AndroidManifest.xml "$APK" > "$MANIFEST"
-          grep -Eq 'usesCleartextTraffic.*(0xffffffff|true)' "$MANIFEST"
-          grep -A1 'expo.modules.updates.ENABLED' "$MANIFEST" | grep -Fq '=false'
+          if ! grep -Eq 'usesCleartextTraffic.*(0xffffffff|true)' "$MANIFEST"; then
+            echo 'APK manifest is missing android:usesCleartextTraffic=true.' >&2
+            grep -E 'application|usesCleartextTraffic' "$MANIFEST" >&2 || true
+            exit 1
+          fi
+          if ! grep -A2 'expo.modules.updates.ENABLED' "$MANIFEST" > "$UPDATES_METADATA"; then
+            echo 'APK manifest is missing expo.modules.updates.ENABLED metadata.' >&2
+            exit 1
+          fi
+          if ! grep -Fq '=false' "$UPDATES_METADATA"; then
+            echo 'APK manifest must set expo.modules.updates.ENABLED=false.' >&2
+            cat "$UPDATES_METADATA" >&2
+            exit 1
+          fi
           if grep -Eq 'EXPO_UPDATE_URL|u\.expo\.dev' "$MANIFEST"; then
             echo 'OTA update URL must not be present in the APK manifest.' >&2
             exit 1
@@ -178,7 +204,7 @@ jobs:
           NODE
 
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee "$SIGNATURE"
-          grep -Fq "Signer #1 certificate SHA-256 digest: ${EXPECTED_CERT_SHA256}" "$SIGNATURE"
+          require_fixed "Signer #1 certificate SHA-256 digest: ${EXPECTED_CERT_SHA256}" "$SIGNATURE" 'APK signing certificate mismatch.'
           "$TOOLS/zipalign" -c -P 16 4 "$APK"
 
           mkdir -p artifacts

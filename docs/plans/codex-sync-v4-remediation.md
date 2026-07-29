@@ -487,7 +487,8 @@ CLI/App 必须直接引用 `MAX_SYNC_V4_SNAPSHOT_ENTITIES_PER_PAGE`，transport
       `allowInsecureHttp`，默认关闭，首次启用显示风险确认；该值不得进入账户
       Settings 同步，避免一台设备的确认静默放宽其他设备。
 - [x] CLI 对 HTTP 自定义 relay 输出一次清晰的安全降级提示。
-- [x] Android production 配置 cleartext，并在 CI introspection 中断言。
+- [x] Android production 通过 config plugin 把 cleartext 写入生成 manifest，
+      并在 prebuild 后与最终 APK 两层 CI introspection 中断言。
 - [x] iOS production 允许已确认的 HTTP relay，并在 CI 检查 ATS 结果。
 - [x] Tauri REST 使用受控 native transport；Rust 必须同时校验请求 URL 与
       已提交 relay base 同源、HTTP 已显式授权，并拒绝跨源重定向。不得把
@@ -805,7 +806,7 @@ App/CLI local operation
 
 1. 修复代码并保持 v4 Server flag 关闭。
 2. 推进受影响包 patch 版本；本轮最低目标：
-   CLI `1.4.5`、App `1.11.10`、Server `1.1.14`、Wire `0.1.3`。App
+   CLI `1.4.5`、App `1.11.11`、Server `1.1.14`、Wire `0.1.3`。App
    `1.11.5` 已进入首轮云端 CI；后续 Tauri 格式、lockfile 闭包与可诊断
    lock drift 门禁及权威 feature-resolution lock 修复按仓库规则各自使用
    新 patch。
@@ -1206,3 +1207,20 @@ App/CLI local operation
   隔离缓存下的 `pnpm 10.11.0` 验证且未改写 lockfile。Server Bun runtime、
   Tauri fmt/check/test 和真实十分钟 turn 继续由本次 GitHub required jobs
   复验；历史 job `90372107716` 已证明十分钟权威完成门禁通过。
+- 2026-07-29：提交 `a4e0236` 的 branch push CI `30425492797`、PR CI
+  `30425494285`、CLI Smoke `30425494279` 与 main CI `30426187769` 全绿；
+  CLI `1.4.5` release `30426187763` 成功并完成 tgz 验包。Android
+  `1.11.10` release `30426187767` 在生成 APK 后的 manifest cleartext
+  introspection 失败。差异确认 Expo 55 的 `Android` 配置类型和 prebuild
+  不消费任意 `android.usesCleartextTraffic` 字段：该值只进入
+  `assets/app.config`，未进入最终 manifest。修复改为专用
+  `withAndroidManifest` config plugin，并在耗时 Gradle 编译前增加生成态
+  manifest 结构化门禁；最终 APK grep 失败必须输出具体断言而非静默退出。
+  失败版本不复用，App 推进到 `1.11.11` 后重新运行完整 CI 与 Android release。
+- 2026-07-29：Android manifest 修复本地门禁完成。production Expo prebuild
+  生成的 `<application>` 已包含 `android:usesCleartextTraffic="true"`，OTA
+  enabled metadata 为 false 且 update URL 不存在；专用结构化 verifier
+  通过。App `84/84` 文件、`952/952` 单测、typecheck、production Web
+  export、HTTP 平台配置、四个 workflow YAML 和 `git diff --check` 全部通过。
+  最终 APK 的包名、版本、SDK、ABI、manifest、签名和 16 KiB 校验继续由
+  App `1.11.11` 云端 release 执行。

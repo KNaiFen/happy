@@ -230,7 +230,8 @@ export default {
                         }
                     }
                 }
-            ]
+            ],
+            require("./plugins/withTrustedHttpRelayAndroid.js")
         ],
         updates: disableOtaUpdates
             ? { enabled: false }
