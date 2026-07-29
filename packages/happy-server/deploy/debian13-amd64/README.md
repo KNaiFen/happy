@@ -27,6 +27,10 @@ cd happy-relay
 `/health` 完成真实数据库查询。重复执行 `./install.sh` 会保留原 secret、配置和
 `happy-relay_happy-data` 数据卷。
 
+宿主 secret 始终保存在权限为 `0700` 的 `secrets/` 目录和 `0600` 文件中。
+`install.sh`/`relayctl.sh` 仅在调用 Compose 的子进程中短暂提供 secret 来源，
+容器内以 UID/GID `65532`、模式 `0400` 只读挂载，不进入容器环境或 `.env`。
+
 新安装默认仅监听 `127.0.0.1:3005`，Codex Sync v4 默认关闭。常用管理命令：
 
 ```bash

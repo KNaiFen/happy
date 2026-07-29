@@ -107,7 +107,8 @@ jobs:
           sed "s/__VERSION__/$VERSION/g" \
             packages/happy-server/deploy/debian13-amd64/env.example > "$CONFIG_DIR/.env"
           printf '%064d\n' 0 > "$CONFIG_DIR/secrets/master-secret"
-          docker compose \
+          HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$CONFIG_DIR/secrets/master-secret")" \
+            docker compose \
             --project-directory "$CONFIG_DIR" \
             --env-file "$CONFIG_DIR/.env" \
             --file "$CONFIG_DIR/compose.yaml" \

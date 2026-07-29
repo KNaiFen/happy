@@ -24,13 +24,15 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 temporary_dir="$(mktemp -d)"
 bundle_root="$temporary_dir/happy-relay"
 
-compose() {
+compose() (
+    HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$bundle_root/secrets/master-secret")"
+    export HAPPY_RELAY_MASTER_SECRET
     docker compose \
         --project-directory "$bundle_root" \
         --env-file "$bundle_root/.env" \
         --file "$bundle_root/compose.yaml" \
         "$@"
-}
+)
 
 container_node() {
     compose exec -T happy-relay /nodejs/bin/node "$@"
@@ -120,7 +122,10 @@ container_id="$(compose ps --quiet happy-relay)"
 [[ "$(docker inspect "$container_id" --format '{{.Config.User}}')" == "65532:65532" ]] \
     || die "container is not configured to run as the distroless nonroot user"
 container_node -e '
+    const fs = require("node:fs");
     if (typeof process.getuid !== "function" || process.getuid() !== 65532) process.exit(1);
+    const secret = fs.statSync("/run/secrets/happy_master_secret");
+    if (secret.uid !== 65532 || secret.gid !== 65532 || (secret.mode & 0o777) !== 0o400) process.exit(1);
 '
 docker inspect "$container_id" --format '{{json .HostConfig.CapDrop}}' | grep -q '"ALL"' \
     || die "container does not drop all Linux capabilities"
@@ -130,7 +135,7 @@ docker inspect "$container_id" --format '{{json .HostConfig.Tmpfs}}' | grep -q '
     || die "container does not provide a writable /tmp tmpfs"
 
 if docker inspect "$container_id" --format '{{range .Config.Env}}{{println .}}{{end}}' \
-    | grep -q '^HANDY_MASTER_SECRET='; then
+    | grep -Eq '^(HANDY_MASTER_SECRET|HAPPY_RELAY_MASTER_SECRET)='; then
     die "master secret leaked into the container environment"
 fi
 

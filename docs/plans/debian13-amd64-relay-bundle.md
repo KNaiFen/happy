@@ -17,8 +17,11 @@
    Compose named volume 跨重启、升级和重新解压安装包保留。
 3. 镜像使用非 root 用户运行，Compose 启用 `no-new-privileges`、删除全部
    Linux capabilities、使用只读根文件系统并为 `/tmp` 提供 tmpfs。
-4. `HANDY_MASTER_SECRET` 由安装脚本首次生成到本地 secret 文件，通过
-   Compose secret 只读挂载；不得写入镜像、`.env`、日志或 Artifact 元数据。
+4. `HANDY_MASTER_SECRET` 由安装脚本首次生成到本地 `0600` secret 文件。管理
+   脚本仅在调用 Compose 时把它短暂提供给 environment-backed Compose secret，
+   再以 UID/GID `65532` 和模式 `0400` 只读挂载；不得写入容器环境、镜像、
+   `.env`、日志或 Artifact 元数据。file-backed secret 不可用，因为 Compose
+   的 bind mount 会忽略 `uid/gid/mode`，导致固定非 root UID 无法读取 `0600` 文件。
 5. 新安装默认只绑定 `127.0.0.1:3005`。暴露到局域网必须显式修改 bind 和
    `PUBLIC_URL`；HTTP 仍只适用于可信网络，主动 MITM 下不承诺 token、ACK、
    server identity、metadata 或零丢失。
@@ -33,7 +36,7 @@
    修复失败发行必须再次推进 Server patch，不复用已运行版本。
 10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断；`1.1.16` 缺少 App 跨包契约
     schema；`1.1.17` 被 runtime Critical CVE 门禁阻断。修复版本目标为 Server
-    `1.1.19`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
+    `1.1.20`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
     变化推进版本。
 11. runtime 使用官方 `gcr.io/distroless/nodejs24-debian13:nonroot` amd64 镜像。
     入口、健康检查和生命周期断言使用 Node，不携带 shell、npm、Perl、curl、
@@ -113,6 +116,8 @@ Compose project name 固定为 `happy-relay`，确保从新版本目录运行时
 - 使用 `relayctl.sh enable-v4` 切换后确认 capability 为 `enabled=true`，再切回
   `false`，证明开关可逆且不会删除数据库。
 - 检查容器实际 security options、只读根文件系统和 dropped capabilities。
+- 检查容器内 secret 的 UID/GID 均为 `65532`、模式为 `0400`，并确认
+  `HANDY_MASTER_SECRET` 与 Compose secret 来源变量都不在容器配置环境中。
 
 ### Artifact 门禁
 
@@ -186,3 +191,11 @@ secret 和 named volume 必须保持原值。
   用于再次处理已版本化 `env.example` 的字面量 `__VERSION__`，产生确定性误报。
   `1.1.18` 不得复用；`1.1.19` 删除安装阶段的多余二次模板化，并把占位符检查
   限定到唯一模板输入 `env.example`，不再扫描脚本、SBOM 或压缩镜像二进制。
+- 2026-07-29：`1.1.19` 分支 CI run `30450943994` 与 main CI run
+  `30451805026` 全绿；发行 run `30451805083` 通过镜像、身份、严格 Trivy、SBOM、
+  合成验包回归和最终 tarball 校验，但真实安装时 distroless UID `65532` 无法读取
+  宿主 `0600` file-backed Compose secret，服务按预期拒绝启动。Docker 官方文档
+  明确 file 来源底层使用 bind mount 且静默忽略 `uid/gid/mode`，仅 environment
+  来源支持所有权映射。`1.1.19` 不得复用；`1.1.20` 保留宿主文件 `0600`，通过
+  管理脚本短暂提供 environment-backed secret，并断言两个 secret 变量都不进入
+  容器配置环境。

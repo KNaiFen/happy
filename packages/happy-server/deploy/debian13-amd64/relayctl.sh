@@ -14,13 +14,15 @@ die() {
     exit 1
 }
 
-compose() {
+compose() (
+    HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$secret_file")"
+    export HAPPY_RELAY_MASTER_SECRET
     docker compose \
         --project-directory "$script_dir" \
         --env-file "$env_file" \
         --file "$compose_file" \
         "$@"
-}
+)
 
 wait_for_health() {
     attempt=1

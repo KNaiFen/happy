@@ -21,13 +21,15 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
-compose() {
+compose() (
+    HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$secret_file")"
+    export HAPPY_RELAY_MASTER_SECRET
     docker compose \
         --project-directory "$script_dir" \
         --env-file "$env_file" \
         --file "$compose_file" \
         "$@"
-}
+)
 
 validate_secret() {
     secret_value="$(tr -d '\r\n' < "$secret_file")"
