@@ -60,7 +60,7 @@ write_env_file() {
             END { if (!replaced) print replacement }
         ' "$env_file" > "$temporary_env"
     else
-        sed "s/__VERSION__/$version/g" "$script_dir/env.example" > "$temporary_env"
+        cp "$script_dir/env.example" "$temporary_env"
     fi
 
     chmod 600 "$temporary_env"
@@ -92,7 +92,6 @@ wait_for_health() {
 
 require_command docker
 require_command sha256sum
-require_command sed
 require_command awk
 require_command mktemp
 require_command grep

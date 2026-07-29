@@ -33,7 +33,7 @@
    修复失败发行必须再次推进 Server patch，不复用已运行版本。
 10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断；`1.1.16` 缺少 App 跨包契约
     schema；`1.1.17` 被 runtime Critical CVE 门禁阻断。修复版本目标为 Server
-    `1.1.18`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
+    `1.1.19`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
     变化推进版本。
 11. runtime 使用官方 `gcr.io/distroless/nodejs24-debian13:nonroot` amd64 镜像。
     入口、健康检查和生命周期断言使用 Node，不携带 shell、npm、Perl、curl、
@@ -90,6 +90,8 @@ Compose project name 固定为 `happy-relay`，确保从新版本目录运行时
 - 直接导入构建后的 `dist/standalone.mjs`，确认 distroless 入口依赖的
   `runMigrations` 与 `serve` 导出没有被 bundler 丢弃。
 - 使用 ShellCheck、Compose config 和包结构检查验证安装/管理脚本。
+- 在镜像构建前用合成的九文件 tarball 回归验包器：脚本中的说明性占位符字面量
+  不得误报，唯一模板输出 `env.example` 中的未解析占位符必须阻断。
 
 ### 镜像门禁
 
@@ -178,3 +180,9 @@ secret 和 named volume 必须保持原值。
   影响 32 位。`1.1.17` 不得复用；`1.1.18` 改用官方 Node 24 Debian 13
   distroless nonroot runtime，彻底移除 npm、Perl、shell 和多余 OS 工具，同时
   保持 Critical 门禁不放宽。
+- 2026-07-29：`1.1.18` 分支 CI run `30448712684` 与 main CI run
+  `30449521598` 全绿；发行 run `30449522912` 的 distroless 镜像构建、身份检查、
+  严格 Critical Trivy 和 SBOM 均通过，但最终验包器递归扫描到 `install.sh` 中
+  用于再次处理已版本化 `env.example` 的字面量 `__VERSION__`，产生确定性误报。
+  `1.1.18` 不得复用；`1.1.19` 删除安装阶段的多余二次模板化，并把占位符检查
+  限定到唯一模板输入 `env.example`，不再扫描脚本、SBOM 或压缩镜像二进制。

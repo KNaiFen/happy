@@ -122,11 +122,11 @@ node -e '
     sha256sum --check SHA256SUMS
 )
 
-grep -Fxq "HAPPY_RELAY_IMAGE=happy-relay-server:${version}-debian13-amd64" "$bundle_root/env.example" \
-    || die "env.example image tag does not match VERSION"
-if grep -Rq '__VERSION__' "$bundle_root"; then
+if grep -Fq '__VERSION__' "$bundle_root/env.example"; then
     die "bundle still contains an unresolved version placeholder"
 fi
+grep -Fxq "HAPPY_RELAY_IMAGE=happy-relay-server:${version}-debian13-amd64" "$bundle_root/env.example" \
+    || die "env.example image tag does not match VERSION"
 
 node -e '
     const fs = require("node:fs");

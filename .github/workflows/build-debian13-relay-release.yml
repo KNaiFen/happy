@@ -82,7 +82,11 @@ jobs:
             packages/happy-server/deploy/debian13-amd64/relayctl.sh \
             scripts/ci/package-debian13-relay-bundle.sh \
             scripts/ci/verify-debian13-relay-bundle.sh \
+            scripts/ci/test-verify-debian13-relay-bundle.sh \
             scripts/ci/test-debian13-relay-bundle.sh
+
+      - name: Test final bundle verifier
+        run: scripts/ci/test-verify-debian13-relay-bundle.sh
 
       - name: Validate distroless Node runtime contract
         run: |
