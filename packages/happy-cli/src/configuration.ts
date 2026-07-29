@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import packageJson from '../package.json'
+import { normalizeRelayOrigin } from '@/utils/serverUrl'
 
 class Configuration {
   public readonly serverUrl: string
@@ -53,10 +54,11 @@ class Configuration {
     // Settings are read sync here (avoid circular import with persistence.ts).
     // webappUrl must follow the same chain as serverUrl, otherwise `happy server`
     // self-host points the API at localhost but auth still opens the prod webapp.
-    this.serverUrl =
+    this.serverUrl = normalizeRelayOrigin(
       process.env.HAPPY_SERVER_URL ||
       readSettingsStringSync(this.settingsFile, 'serverUrl') ||
       'https://api.cluster-fluster.com'
+    )
     this.webappUrl =
       process.env.HAPPY_WEBAPP_URL ||
       readSettingsStringSync(this.settingsFile, 'webappUrl') ||

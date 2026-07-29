@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ApiClient } from '@/api/api';
-import type { ApiSessionClient } from '@/api/apiSession';
+import type { ApiSessionClientContract } from '@/api/apiSession';
 import type { AgentMessage } from '@/agent/core';
 import { AcpBackend, type AcpPermissionHandler } from './AcpBackend';
 import { DefaultTransport } from '@/agent/transport';
@@ -407,7 +407,7 @@ function resolveRequestedLegacyModelCode(models: SessionModelState, requested: s
 class GenericAcpPermissionHandler extends BasePermissionHandler implements AcpPermissionHandler {
   private readonly logPrefix: string;
 
-  constructor(session: ApiSessionClient, agentName: string) {
+  constructor(session: ApiSessionClientContract, agentName: string) {
     super(session);
     this.logPrefix = `[${agentName}]`;
   }
@@ -480,7 +480,7 @@ export async function runAcp(opts: {
     logAcp('muted', `Happy Session ID: ${response.id}`);
   }
 
-  let session: ApiSessionClient;
+  let session: ApiSessionClientContract;
   let permissionHandler: GenericAcpPermissionHandler;
   const { session: initialSession, reconnectionHandle } = setupOfflineReconnection({
     api,

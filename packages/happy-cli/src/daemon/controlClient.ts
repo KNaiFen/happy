@@ -5,6 +5,7 @@
 
 import { logger } from '@/ui/logger';
 import { clearDaemonState, readDaemonState } from '@/persistence';
+import type { DaemonLocallyPersistedState } from '@/persistence';
 import { Metadata } from '@/api/types';
 import { configuration } from '@/configuration';
 
@@ -182,8 +183,8 @@ export async function checkIfDaemonRunningAndCleanupStaleState(): Promise<boolea
  * 
  * @returns true if versions match, false if versions differ or no daemon running
  */
-export async function isDaemonRunningCurrentlyInstalledHappyVersion(): Promise<boolean> {
-  logger.debug('[DAEMON CONTROL] Checking if daemon is running same version');
+export async function isDaemonRunningForCurrentProfile(): Promise<boolean> {
+  logger.debug('[DAEMON CONTROL] Checking if daemon matches current CLI and relay profile');
   const runningDaemon = await checkIfDaemonRunningAndCleanupStaleState();
   if (!runningDaemon) {
     logger.debug('[DAEMON CONTROL] No daemon running, returning false');
@@ -211,8 +212,26 @@ export async function isDaemonRunningCurrentlyInstalledHappyVersion(): Promise<b
   // reader agree whenever they're executing the same `dist/` bundle, and still
   // correctly detects real npm upgrades (the new bundle has a new baked version).
   const currentCliVersion = configuration.currentCliVersion;
-  logger.debug(`[DAEMON CONTROL] Current CLI version: ${currentCliVersion}, Daemon started with version: ${state.startedWithCliVersion}`);
-  return currentCliVersion === state.startedWithCliVersion;
+  const matches = daemonStateMatchesCurrentProfile(
+    state,
+    currentCliVersion,
+    configuration.serverUrl,
+  );
+  logger.debug('[DAEMON CONTROL] Daemon profile comparison', {
+    versionMatches: currentCliVersion === state.startedWithCliVersion,
+    serverOriginMatches: configuration.serverUrl === state.serverOrigin,
+    hasRecordedServerOrigin: typeof state.serverOrigin === 'string',
+  });
+  return matches;
+}
+
+export function daemonStateMatchesCurrentProfile(
+  state: DaemonLocallyPersistedState,
+  cliVersion: string,
+  serverOrigin: string,
+): boolean {
+  return state.startedWithCliVersion === cliVersion
+    && state.serverOrigin === serverOrigin;
 }
 
 export async function cleanupDaemonState(): Promise<void> {

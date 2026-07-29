@@ -8,10 +8,13 @@
  */
 
 import type { ApiClient } from '@/api/api';
-import type { ApiSessionClient } from '@/api/apiSession';
+import type { ApiSessionClientContract } from '@/api/apiSession';
 import type { AgentState, Metadata, Session } from '@/api/types';
 import { configuration } from '@/configuration';
-import { createOfflineSessionStub } from '@/utils/offlineSessionStub';
+import {
+    createOfflineSessionStub,
+    type OfflineApiSessionClientController,
+} from '@/utils/offlineSessionStub';
 import { startOfflineReconnection } from '@/utils/serverConnectionErrors';
 
 /**
@@ -32,7 +35,7 @@ export interface SetupOfflineReconnectionOptions {
      * Callback invoked when session is swapped after reconnection.
      * Use this to update the session reference in the calling code.
      */
-    onSessionSwap: (newSession: ApiSessionClient) => void | Promise<void>;
+    onSessionSwap: (newSession: ApiSessionClientContract) => void | Promise<void>;
 }
 
 /**
@@ -40,9 +43,9 @@ export interface SetupOfflineReconnectionOptions {
  */
 export interface SetupOfflineReconnectionResult {
     /** The session client (stub if offline, real if connected) */
-    session: ApiSessionClient;
+    session: ApiSessionClientContract;
     /** Handle to the reconnection process, null if connected */
-    reconnectionHandle: ReturnType<typeof startOfflineReconnection<ApiSessionClient>> | null;
+    reconnectionHandle: ReturnType<typeof startOfflineReconnection<ApiSessionClientContract>> | null;
     /** Whether we're in offline mode */
     isOffline: boolean;
 }
@@ -77,26 +80,35 @@ export interface SetupOfflineReconnectionResult {
 export function setupOfflineReconnection(opts: SetupOfflineReconnectionOptions): SetupOfflineReconnectionResult {
     const { api, sessionTag, metadata, state, response, onSessionSwap } = opts;
 
-    let session: ApiSessionClient;
-    let reconnectionHandle: ReturnType<typeof startOfflineReconnection<ApiSessionClient>> | null = null;
+    let session: ApiSessionClientContract;
+    let offlineSession: OfflineApiSessionClientController | null = null;
+    let reconnectionHandle: ReturnType<typeof startOfflineReconnection<ApiSessionClientContract>> | null = null;
 
     // Note: connectionState.notifyOffline() was already called by api.ts with error details
     if (!response) {
         // Create a no-op session stub for offline mode using shared utility
-        session = createOfflineSessionStub(sessionTag);
+        offlineSession = createOfflineSessionStub(sessionTag, metadata, state);
+        session = offlineSession;
 
         // Start background reconnection
-        reconnectionHandle = startOfflineReconnection<ApiSessionClient>({
+        reconnectionHandle = startOfflineReconnection<ApiSessionClientContract>({
             serverUrl: configuration.serverUrl,
             onReconnected: async () => {
-                const resp = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
+                const resp = await api.getOrCreateSession({
+                    tag: sessionTag,
+                    metadata: session.getMetadata() ?? metadata,
+                    state: session.getAgentState() ?? state,
+                });
                 if (!resp) throw new Error('Server unavailable');
                 const realSession = api.sessionSyncClient(resp);
                 try {
+                    await offlineSession?.attach(realSession);
                     // A session is not reconnected until provider-specific
                     // synchronization has finished binding to it.
                     await onSessionSwap(realSession);
+                    session = realSession;
                 } catch (error) {
+                    offlineSession?.detach(realSession);
                     await realSession.close().catch(() => undefined);
                     throw error;
                 }

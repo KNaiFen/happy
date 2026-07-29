@@ -8,11 +8,13 @@ import { FileHandle } from 'node:fs/promises'
 import { readFile, writeFile, mkdir, open, unlink, rename, stat } from 'node:fs/promises'
 import { existsSync, writeFileSync, readFileSync, unlinkSync, renameSync, linkSync } from 'node:fs'
 import { constants } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { configuration } from '@/configuration'
 import * as z from 'zod';
 import { encodeBase64, decodeBase64 } from '@/api/encryption';
 import type { Metadata } from '@/api/types';
 import { logger } from '@/ui/logger';
+import { normalizeRelayOrigin } from '@/utils/serverUrl';
 
 export const SandboxConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -75,6 +77,8 @@ export interface DaemonLocallyPersistedState {
   httpPort: number;
   startTime: string;
   startedWithCliVersion: string;
+  serverOrigin?: string;
+  machineRegistrationStatus?: 'pending' | 'registered';
   lastHeartbeat?: string;
   daemonLogPath?: string;
 }
@@ -212,6 +216,7 @@ export async function updateSettings(
 
 const credentialsSchema = z.object({
   token: z.string(),
+  serverOrigin: z.string().optional(),
   secret: z.string().base64().nullish(), // Legacy
   encryption: z.object({
     publicKey: z.string().base64(),
@@ -221,6 +226,7 @@ const credentialsSchema = z.object({
 
 export type Credentials = {
   token: string,
+  serverOrigin?: string,
   encryption: {
     type: 'legacy', secret: Uint8Array
   } | {
@@ -235,9 +241,13 @@ export async function readCredentials(): Promise<Credentials | null> {
   try {
     const keyBase64 = (await readFile(configuration.privateKeyFile, 'utf8'));
     const credentials = credentialsSchema.parse(JSON.parse(keyBase64));
+    const serverOrigin = credentials.serverOrigin
+      ? normalizeRelayOrigin(credentials.serverOrigin)
+      : undefined;
     if (credentials.secret) {
       return {
         token: credentials.token,
+        ...(serverOrigin ? { serverOrigin } : {}),
         encryption: {
           type: 'legacy',
           secret: new Uint8Array(Buffer.from(credentials.secret, 'base64'))
@@ -246,6 +256,7 @@ export async function readCredentials(): Promise<Credentials | null> {
     } else if (credentials.encryption) {
       return {
         token: credentials.token,
+        ...(serverOrigin ? { serverOrigin } : {}),
         encryption: {
           type: 'dataKey',
           publicKey: new Uint8Array(Buffer.from(credentials.encryption.publicKey, 'base64')),
@@ -260,23 +271,39 @@ export async function readCredentials(): Promise<Credentials | null> {
 }
 
 export async function writeCredentialsLegacy(credentials: { secret: Uint8Array, token: string }): Promise<void> {
-  if (!existsSync(configuration.happyHomeDir)) {
-    await mkdir(configuration.happyHomeDir, { recursive: true })
-  }
-  await writeFile(configuration.privateKeyFile, JSON.stringify({
+  await writeCredentialsFile({
     secret: encodeBase64(credentials.secret),
-    token: credentials.token
-  }, null, 2));
+    token: credentials.token,
+    serverOrigin: configuration.serverUrl,
+  });
 }
 
 export async function writeCredentialsDataKey(credentials: { publicKey: Uint8Array, machineKey: Uint8Array, token: string }): Promise<void> {
+  await writeCredentialsFile({
+    encryption: {
+      publicKey: encodeBase64(credentials.publicKey),
+      machineKey: encodeBase64(credentials.machineKey),
+    },
+    token: credentials.token,
+    serverOrigin: configuration.serverUrl,
+  });
+}
+
+async function writeCredentialsFile(credentials: Record<string, unknown>): Promise<void> {
   if (!existsSync(configuration.happyHomeDir)) {
     await mkdir(configuration.happyHomeDir, { recursive: true })
   }
-  await writeFile(configuration.privateKeyFile, JSON.stringify({
-    encryption: { publicKey: encodeBase64(credentials.publicKey), machineKey: encodeBase64(credentials.machineKey) },
-    token: credentials.token
-  }, null, 2));
+  const temporaryFile = `${configuration.privateKeyFile}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryFile, JSON.stringify(credentials, null, 2), {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
+    await rename(temporaryFile, configuration.privateKeyFile);
+  } finally {
+    await unlink(temporaryFile).catch(() => undefined);
+  }
 }
 
 export async function clearCredentials(): Promise<void> {

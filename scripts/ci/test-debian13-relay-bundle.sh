@@ -65,6 +65,170 @@ assert_capability() {
     ' "$expected"
 }
 
+create_encrypted_business_state() {
+    container_node -e '
+        const nacl = require("tweetnacl");
+
+        async function request(path, options = {}) {
+            const response = await fetch(`http://127.0.0.1:3005${path}`, options);
+            const body = await response.json();
+            if (!response.ok) {
+                throw new Error(`${options.method ?? "GET"} ${path} returned ${response.status}`);
+            }
+            return body;
+        }
+
+        async function main() {
+            const keypair = nacl.sign.keyPair();
+            const challenge = nacl.randomBytes(32);
+            const signature = nacl.sign.detached(challenge, keypair.secretKey);
+            const auth = await request("/v1/auth", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Happy-Client": "cli/ci",
+                },
+                body: JSON.stringify({
+                    publicKey: Buffer.from(keypair.publicKey).toString("base64"),
+                    challenge: Buffer.from(challenge).toString("base64"),
+                    signature: Buffer.from(signature).toString("base64"),
+                }),
+            });
+            if (typeof auth.token !== "string" || auth.token.length === 0) {
+                throw new Error("relay authentication did not return a token");
+            }
+
+            const authorization = {
+                Authorization: `Bearer ${auth.token}`,
+                "Content-Type": "application/json",
+                "X-Happy-Client": "cli/ci",
+            };
+            const machineId = `ci-byte-machine-${Date.now()}`;
+            const sessionTag = `ci-byte-session-${Date.now()}`;
+            const machineKey = Buffer.from([0, 1, 2, 127, 128, 254, 255]).toString("base64");
+            const sessionKey = Buffer.from([255, 254, 128, 127, 2, 1, 0]).toString("base64");
+
+            const machine = await request("/v1/machines", {
+                method: "POST",
+                headers: authorization,
+                body: JSON.stringify({
+                    id: machineId,
+                    metadata: "ci-encrypted-machine-metadata",
+                    dataEncryptionKey: machineKey,
+                }),
+            });
+            if (
+                machine.machine?.id !== machineId
+                || machine.machine?.dataEncryptionKey !== machineKey
+            ) {
+                throw new Error("machine create did not round-trip its encrypted key");
+            }
+
+            const session = await request("/v1/sessions", {
+                method: "POST",
+                headers: authorization,
+                body: JSON.stringify({
+                    tag: sessionTag,
+                    metadata: "ci-encrypted-session-metadata",
+                    agentState: null,
+                    dataEncryptionKey: sessionKey,
+                }),
+            });
+            if (
+                typeof session.session?.id !== "string"
+                || session.session?.dataEncryptionKey !== sessionKey
+            ) {
+                throw new Error("session create did not round-trip its encrypted key");
+            }
+
+            const machines = await request("/v1/machines", {
+                headers: authorization,
+            });
+            const sessions = await request("/v1/sessions", {
+                headers: authorization,
+            });
+            if (
+                !Array.isArray(machines)
+                || !machines.some(item => (
+                    item.id === machineId
+                    && item.dataEncryptionKey === machineKey
+                ))
+            ) {
+                throw new Error("machine list did not return the encrypted key");
+            }
+            if (
+                !Array.isArray(sessions.sessions)
+                || !sessions.sessions.some(item => (
+                    item.id === session.session.id
+                    && item.dataEncryptionKey === sessionKey
+                ))
+            ) {
+                throw new Error("session list did not return the encrypted key");
+            }
+
+            process.stdout.write(JSON.stringify({
+                token: auth.token,
+                machineId,
+                machineKey,
+                sessionId: session.session.id,
+                sessionKey,
+            }));
+        }
+
+        main().catch(error => {
+            console.error(error);
+            process.exit(1);
+        });
+    '
+}
+
+assert_encrypted_business_state() {
+    state="$1"
+    container_node -e '
+        async function request(path, token) {
+            const response = await fetch(`http://127.0.0.1:3005${path}`, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "X-Happy-Client": "cli/ci",
+                },
+            });
+            if (!response.ok) {
+                throw new Error(`GET ${path} returned ${response.status}`);
+            }
+            return response.json();
+        }
+
+        async function main() {
+            const expected = JSON.parse(process.argv[1]);
+            const machines = await request("/v1/machines", expected.token);
+            const sessions = await request("/v1/sessions", expected.token);
+            if (
+                !Array.isArray(machines)
+                || !machines.some(item => (
+                    item.id === expected.machineId
+                    && item.dataEncryptionKey === expected.machineKey
+                ))
+            ) {
+                throw new Error("persisted machine key is missing or changed");
+            }
+            if (
+                !Array.isArray(sessions.sessions)
+                || !sessions.sessions.some(item => (
+                    item.id === expected.sessionId
+                    && item.dataEncryptionKey === expected.sessionKey
+                ))
+            ) {
+                throw new Error("persisted session key is missing or changed");
+            }
+        }
+
+        main().catch(error => {
+            console.error(error);
+            process.exit(1);
+        });
+    ' "$state"
+}
+
 assert_installer_rejects_secret_link() {
     link_kind="$1"
     case_root="$temporary_dir/link-$link_kind"
@@ -141,6 +305,7 @@ container_node -e '
         .catch(() => process.exit(1));
 '
 assert_capability false
+business_state="$(create_encrypted_business_state)"
 
 container_node -e '
     const fs = require("node:fs");
@@ -164,6 +329,7 @@ container_node -e '
     if (fs.readFileSync("/data/ci-persistence-marker", "utf8") !== "persisted\n") process.exit(1);
 '
 assert_capability false
+assert_encrypted_business_state "$business_state"
 
 "$bundle_root/relayctl.sh" enable-v4
 assert_capability true
@@ -212,4 +378,4 @@ container_node -e '
     if (fs.readFileSync("/data/ci-persistence-marker", "utf8") !== "persisted\n") process.exit(1);
 '
 
-echo "Verified install, idempotency, persistence, security, and v4 toggling for Happy relay $expected_version"
+echo "Verified install, encrypted business state, persistence, security, and v4 toggling for Happy relay $expected_version"

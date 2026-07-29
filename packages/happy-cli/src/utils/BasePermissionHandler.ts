@@ -8,7 +8,7 @@
  */
 
 import { logger } from "@/ui/logger";
-import { ApiSessionClient } from "@/api/apiSession";
+import type { ApiSessionClientContract } from "@/api/apiSession";
 import { AgentState } from "@/api/types";
 
 /**
@@ -45,7 +45,7 @@ export interface PermissionResult {
  */
 export abstract class BasePermissionHandler {
     protected pendingRequests = new Map<string, PendingRequest>();
-    protected session: ApiSessionClient;
+    protected session: ApiSessionClientContract;
     private isResetting = false;
 
     /**
@@ -53,7 +53,7 @@ export abstract class BasePermissionHandler {
      */
     protected abstract getLogPrefix(): string;
 
-    constructor(session: ApiSessionClient) {
+    constructor(session: ApiSessionClientContract) {
         this.session = session;
         this.setupRpcHandler();
     }
@@ -62,7 +62,7 @@ export abstract class BasePermissionHandler {
      * Update the session reference (used after offline reconnection swaps sessions).
      * This is critical for avoiding stale session references after onSessionSwap.
      */
-    updateSession(newSession: ApiSessionClient): void {
+    updateSession(newSession: ApiSessionClientContract): void {
         logger.debug(`${this.getLogPrefix()} Session reference updated`);
         this.session = newSession;
         // Re-setup RPC handler with new session

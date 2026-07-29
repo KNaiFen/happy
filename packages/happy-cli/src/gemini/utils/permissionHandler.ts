@@ -6,7 +6,7 @@
  */
 
 import { logger } from "@/ui/logger";
-import { ApiSessionClient } from "@/api/apiSession";
+import type { ApiSessionClientContract } from "@/api/apiSession";
 import type { PermissionMode } from '@/api/types';
 import {
     BasePermissionHandler,
@@ -23,7 +23,7 @@ export type { PermissionResult, PendingRequest };
 export class GeminiPermissionHandler extends BasePermissionHandler {
     private currentPermissionMode: PermissionMode = 'default';
 
-    constructor(session: ApiSessionClient) {
+    constructor(session: ApiSessionClientContract) {
         super(session);
     }
 
@@ -34,7 +34,7 @@ export class GeminiPermissionHandler extends BasePermissionHandler {
     /**
      * Update session reference (override for type visibility)
      */
-    updateSession(newSession: ApiSessionClient): void {
+    updateSession(newSession: ApiSessionClientContract): void {
         super.updateSession(newSession);
     }
 
@@ -158,4 +158,3 @@ export class GeminiPermissionHandler extends BasePermissionHandler {
         });
     }
 }
-

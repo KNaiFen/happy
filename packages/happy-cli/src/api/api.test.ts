@@ -514,6 +514,19 @@ describe('Api server error handling', () => {
             consoleSpy.mockRestore();
         });
 
+        it('rejects 401 with the relay-specific login recovery command', async () => {
+            mockPost.mockRejectedValue({
+                response: { status: 401 },
+                isAxiosError: true,
+            });
+
+            await expect(api.getOrCreateSession({
+                tag: 'test-tag',
+                metadata: testMetadata,
+                state: null,
+            })).rejects.toThrow('happy auth login --force');
+        });
+
         it('should re-throw non-connection errors', async () => {
             // Mock axios to throw a different type of error (e.g., authentication error)
             const authError = new Error('Invalid API key');
@@ -534,7 +547,7 @@ describe('Api server error handling', () => {
     });
 
     describe('getOrCreateMachine', () => {
-        it('should return minimal machine object when server is unreachable (ECONNREFUSED)', async () => {
+        it('returns pending instead of inventing a registered machine when the relay is unreachable', async () => {
             connectionState.reset();
             const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -550,18 +563,7 @@ describe('Api server error handling', () => {
                 }
             });
 
-            expect(result).toEqual({
-                id: 'test-machine',
-                encryptionKey: expect.any(Uint8Array),
-                encryptionVariant: 'legacy',
-                metadata: testMachineMetadata,
-                metadataVersion: 0,
-                daemonState: {
-                    status: 'running',
-                    pid: 1234
-                },
-                daemonStateVersion: 0,
-            });
+            expect(result).toBeNull();
 
             expect(consoleSpy).toHaveBeenCalledWith(
                 expect.stringContaining('⚠️  Happy server unreachable')
@@ -570,7 +572,7 @@ describe('Api server error handling', () => {
             consoleSpy.mockRestore();
         });
 
-        it('should return minimal machine object when server endpoint returns 404', async () => {
+        it('returns pending instead of inventing a registered machine on 404', async () => {
             connectionState.reset();
             const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -585,15 +587,7 @@ describe('Api server error handling', () => {
                 metadata: testMachineMetadata
             });
 
-            expect(result).toEqual({
-                id: 'test-machine',
-                encryptionKey: expect.any(Uint8Array),
-                encryptionVariant: 'legacy',
-                metadata: testMachineMetadata,
-                metadataVersion: 0,
-                daemonState: null,
-                daemonStateVersion: 0,
-            });
+            expect(result).toBeNull();
 
             // New unified format via connectionState.fail()
             expect(consoleSpy).toHaveBeenCalledWith(
@@ -604,6 +598,36 @@ describe('Api server error handling', () => {
             );
 
             consoleSpy.mockRestore();
+        });
+
+        it('returns pending on a relay 5xx response', async () => {
+            connectionState.reset();
+            const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+            mockPost.mockRejectedValue({
+                response: { status: 500 },
+                isAxiosError: true,
+            });
+
+            await expect(api.getOrCreateMachine({
+                machineId: 'test-machine',
+                metadata: testMachineMetadata,
+            })).resolves.toBeNull();
+            expect(consoleSpy).toHaveBeenCalledWith(
+                expect.stringContaining('Machine registration failed: 500'),
+            );
+            consoleSpy.mockRestore();
+        });
+
+        it('rejects 401 with the relay-specific login recovery command', async () => {
+            mockPost.mockRejectedValue({
+                response: { status: 401 },
+                isAxiosError: true,
+            });
+
+            await expect(api.getOrCreateMachine({
+                machineId: 'test-machine',
+                metadata: testMachineMetadata,
+            })).rejects.toThrow('happy auth login --force');
         });
     });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     getInsecureRelayWarning,
     isInsecureHttpUrl,
+    normalizeRelayOrigin,
     resolveServerUrls,
 } from './serverUrl';
 
@@ -59,6 +60,26 @@ describe('resolveServerUrls', () => {
             port: 3005,
             publicUrl,
         })).toThrow();
+    });
+});
+
+describe('normalizeRelayOrigin', () => {
+    it.each([
+        [' http://42.193.149.89:53586/ ', 'http://42.193.149.89:53586'],
+        ['https://relay.example.test/', 'https://relay.example.test'],
+        ['http://[2001:db8::1]:3005/', 'http://[2001:db8::1]:3005'],
+    ])('normalizes %s to %s', (input, expected) => {
+        expect(normalizeRelayOrigin(input)).toBe(expected);
+    });
+
+    it.each([
+        'ftp://relay.example.test',
+        'http://user:secret@relay.example.test',
+        'http://relay.example.test/base',
+        'http://relay.example.test?token=secret',
+        'not-a-url',
+    ])('rejects invalid relay identity input: %s', (input) => {
+        expect(() => normalizeRelayOrigin(input)).toThrow();
     });
 });
 

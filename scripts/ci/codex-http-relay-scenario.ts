@@ -303,6 +303,7 @@ async function runHttpRelayScenario(): Promise<void> {
 
         manualTraceIds.push(await verifyCorsAndTrace(baseUrl));
         const token = await createToken(baseUrl);
+        const machineState = await createMachine(baseUrl, token);
         const sessionKey = randomBytes(32);
         const sessionId = await createSession(baseUrl, token, sessionKey, {
             tag: `codex-http-scenario-${Date.now()}`,
@@ -927,6 +928,7 @@ async function runHttpRelayScenario(): Promise<void> {
         await pruneFirstMutation(root, sessionId);
         relay = startRelay(root, port, masterSecret);
         await waitForHealth(baseUrl, relay);
+        await assertMachine(baseUrl, token, machineState);
 
         fallbackApp = await createAppRuntime(
             sessionId,
@@ -1892,6 +1894,58 @@ async function createSession(
     const body = await response.json() as { session?: { id?: unknown } };
     assert.equal(typeof body.session?.id, 'string');
     return body.session.id;
+}
+
+async function createMachine(
+    baseUrl: string,
+    token: string,
+): Promise<{ id: string; dataEncryptionKey: string }> {
+    const id = `codex-http-machine-${Date.now()}`;
+    const dataEncryptionKey = randomBytes(81).toString('base64');
+    const response = await fetch(`${baseUrl}/v1/machines`, {
+        method: 'POST',
+        headers: {
+            ...relayHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            id,
+            metadata: Buffer.from('encrypted-machine-metadata').toString('base64'),
+            dataEncryptionKey,
+        }),
+    });
+    assert.equal(response.status, 200, `machine create returned HTTP ${response.status}`);
+    const body = await response.json() as {
+        machine?: {
+            id?: unknown;
+            dataEncryptionKey?: unknown;
+        };
+    };
+    assert.equal(body.machine?.id, id);
+    assert.equal(body.machine?.dataEncryptionKey, dataEncryptionKey);
+    const machine = { id, dataEncryptionKey };
+    await assertMachine(baseUrl, token, machine);
+    return machine;
+}
+
+async function assertMachine(
+    baseUrl: string,
+    token: string,
+    expected: { id: string; dataEncryptionKey: string },
+): Promise<void> {
+    const response = await fetch(`${baseUrl}/v1/machines`, {
+        headers: relayHeaders(token),
+    });
+    assert.equal(response.status, 200, `machine list returned HTTP ${response.status}`);
+    const machines = await response.json() as Array<{
+        id?: unknown;
+        dataEncryptionKey?: unknown;
+    }>;
+    assert(Array.isArray(machines));
+    assert(machines.some((machine) => (
+        machine.id === expected.id
+        && machine.dataEncryptionKey === expected.dataEncryptionKey
+    )), 'machine list did not preserve the encrypted device key');
 }
 
 async function verifyCorsAndTrace(baseUrl: string): Promise<string> {

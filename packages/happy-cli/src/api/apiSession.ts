@@ -320,6 +320,7 @@ function buildMultipartUploadBody(
 }
 
 export class ApiSessionClient extends EventEmitter {
+    readonly isOffline: boolean = false;
     private readonly token: string;
     readonly sessionId: string;
     private metadata: Metadata | null;
@@ -1116,6 +1117,10 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadata;
     }
 
+    getAgentState(): AgentState | null {
+        return this.agentState;
+    }
+
     /**
      * Update session metadata
      * @param handler - Handler function that returns the updated metadata
@@ -1249,6 +1254,8 @@ export class ApiSessionClient extends EventEmitter {
         }
     }
 }
+
+export type ApiSessionClientContract = Omit<ApiSessionClient, keyof EventEmitter> & EventEmitter;
 
 function hasSameOrigin(candidateUrl: string, serverUrl: string): boolean {
     try {

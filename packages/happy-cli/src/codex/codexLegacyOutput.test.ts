@@ -1,9 +1,30 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { CodexLegacyOutput } from './codexLegacyOutput';
+import {
+    CodexLegacyOutput,
+    shouldSuppressCodexLegacyOutput,
+} from './codexLegacyOutput';
 import { mapCodexMcpMessageToSessionEnvelopes } from './utils/sessionProtocolMapper';
 
 describe('CodexLegacyOutput', () => {
+    it('suppresses v3 output while a confirmed v4 session is offline', () => {
+        expect(shouldSuppressCodexLegacyOutput({
+            canonicalV4Active: false,
+            syncV4Enabled: true,
+            sessionOffline: true,
+        })).toBe(true);
+        expect(shouldSuppressCodexLegacyOutput({
+            canonicalV4Active: false,
+            syncV4Enabled: false,
+            sessionOffline: true,
+        })).toBe(false);
+        expect(shouldSuppressCodexLegacyOutput({
+            canonicalV4Active: true,
+            syncV4Enabled: true,
+            sessionOffline: false,
+        })).toBe(true);
+    });
+
     it('blocks v3 writes after canonical activation without suppressing presence or push', () => {
         let canonicalV4Active = false;
         const session = {

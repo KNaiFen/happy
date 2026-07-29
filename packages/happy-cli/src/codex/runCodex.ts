@@ -33,7 +33,7 @@ import { registerKillSessionHandler } from "@/claude/registerKillSessionHandler"
 import { connectionState } from '@/utils/serverConnectionErrors';
 import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import type { PermissionMode } from '@/api/types';
-import type { ApiSessionClient } from '@/api/apiSession';
+import type { ApiSessionClientContract } from '@/api/apiSession';
 import { resolveCodexExecutionPolicy, shouldAutoApproveCodexApproval } from './executionPolicy';
 import {
     mapCodexMcpMessageToSessionEnvelopes,
@@ -95,7 +95,10 @@ import {
     runCodexShutdownSteps,
     type CodexShutdownStage,
 } from './codexShutdown';
-import { CodexLegacyOutput } from './codexLegacyOutput';
+import {
+    CodexLegacyOutput,
+    shouldSuppressCodexLegacyOutput,
+} from './codexLegacyOutput';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -464,7 +467,7 @@ export async function runCodex(opts: {
     }
 
     // Handle server unreachable case - create offline stub with hot reconnection
-    let session: ApiSessionClient;
+    let session: ApiSessionClientContract;
     // Permission handler declared here so it can be updated in onSessionSwap callback
     // (assigned later at line ~385 after client setup)
     let permissionHandler: CodexPermissionHandler;
@@ -475,8 +478,8 @@ export async function runCodex(opts: {
         router: null as CodexV4ThreadRouter | null,
     };
     let boundCodexV4SessionId: string | null = null;
-    let bindCodexV4Session: ((target: ApiSessionClient) => Promise<void>) | null = null;
-    let pendingCodexV4Session: ApiSessionClient | null = null;
+    let bindCodexV4Session: ((target: ApiSessionClientContract) => Promise<void>) | null = null;
+    let pendingCodexV4Session: ApiSessionClientContract | null = null;
     let codexV4CanonicalActive = false;
     const closeCodexV4Runtime = async (): Promise<void> => {
         client.setStableNotificationHandler(null);
@@ -530,10 +533,14 @@ export async function runCodex(opts: {
     session = initialSession;
     const legacyOutput = new CodexLegacyOutput(
         () => session,
-        () => codexV4CanonicalActive,
+        () => shouldSuppressCodexLegacyOutput({
+            canonicalV4Active: codexV4CanonicalActive,
+            syncV4Enabled: codexSyncV4Enabled,
+            sessionOffline: session.isOffline,
+        }),
     );
     const sendLegacyCodexSessionEvent = (
-        event: Parameters<ApiSessionClient['sendSessionEvent']>[0],
+        event: Parameters<ApiSessionClientContract['sendSessionEvent']>[0],
     ): void => legacyOutput.sendSessionEvent(event);
 
     // On reconnect, un-archive the session and skip replaying old messages.
@@ -1330,7 +1337,7 @@ export async function runCodex(opts: {
     const requiresCodexV4Migration = Boolean(opts.resumeThreadId);
 
     const createCodexV4Binding = async (bindingOptions: {
-        target: ApiSessionClient;
+        target: ApiSessionClientContract;
         initialSyncState: 'pending' | 'ready';
         readOnly: boolean;
         closeSession: boolean;
@@ -1518,10 +1525,8 @@ export async function runCodex(opts: {
 
     bindCodexV4Session = async (target) => {
         if (!codexSyncV4Enabled) return;
-        // The offline session stub intentionally has no encryption material or
-        // Sync v4 transport. The reconnection callback will bind the real
-        // session once Happy Server is reachable again.
-        if (typeof target.enableSyncV4 !== 'function') {
+        // The reconnection callback binds the real session once the relay is reachable.
+        if (target.isOffline) {
             pendingCodexV4Session = target;
             return;
         }

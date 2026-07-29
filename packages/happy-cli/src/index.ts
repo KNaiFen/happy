@@ -10,12 +10,12 @@
 import chalk from 'chalk'
 import { runClaude, StartOptions } from '@/claude/runClaude'
 import { logger } from './ui/logger'
-import { readCredentials, readSettings } from './persistence'
+import { readCredentials, readDaemonState, readSettings } from './persistence'
 import { authAndSetupMachineIfNeeded } from './ui/auth'
 import packageJson from '../package.json'
 import { z } from 'zod'
 import { startDaemon } from './daemon/run'
-import { checkIfDaemonRunningAndCleanupStaleState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './daemon/controlClient'
+import { stopDaemon } from './daemon/controlClient'
 import { getLatestDaemonLog } from './ui/logger'
 import { killRunawayHappyProcesses } from './daemon/doctor'
 import { install } from './daemon/install'
@@ -27,14 +27,12 @@ import { handleAuthCommand } from './commands/auth'
 import { handleConnectCommand } from './commands/connect'
 import { handleSandboxCommand } from './commands/sandbox'
 import { handleServerCommand } from './commands/server'
-import { spawnHappyCLI } from './utils/spawnHappyCLI'
 import { claudeCliPath } from './claude/claudeLocal'
 import { execFileSync } from 'node:child_process'
 import { extractNoSandboxFlag } from './utils/sandboxFlags'
 import { handleResumeCommand } from '@/resume/handleResumeCommand'
 import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
-import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
 import { configuration } from './configuration'
 import { getInsecureRelayWarning, isInsecureHttpUrl } from './utils/serverUrl'
 
@@ -538,29 +536,21 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       return
 
     } else if (daemonSubcommand === 'start') {
-      // Spawn detached daemon process
-      const child = spawnHappyCLI(['daemon', 'start-sync'], {
-        detached: true,
-        stdio: 'ignore',
-        env: sanitizeSessionEnvironment(process.env)
-      });
-      child.unref();
-
-      // Wait for daemon to write state file (up to 5 seconds)
-      let started = false;
-      for (let i = 0; i < 50; i++) {
-        if (await checkIfDaemonRunningAndCleanupStaleState()) {
-          started = true;
-          break;
+      try {
+        await authAndSetupMachineIfNeeded()
+        await ensureDaemonRunning()
+        const state = await readDaemonState()
+        if (state?.machineRegistrationStatus === 'registered') {
+          console.log('Daemon started successfully');
+        } else {
+          console.log(`Daemon started; relay registration is pending for ${configuration.serverUrl}`)
         }
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-
-      if (started) {
-        console.log('Daemon started successfully');
-      } else {
-        console.error('Failed to start daemon');
-        process.exit(1);
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+        if (process.env.DEBUG) {
+          console.error(error)
+        }
+        process.exit(1)
       }
       process.exit(0);
     } else if (daemonSubcommand === 'start-sync') {

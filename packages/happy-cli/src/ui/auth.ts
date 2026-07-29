@@ -184,7 +184,8 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Cre
                                     type: 'legacy',
                                     secret: decrypted
                                 },
-                                token: token
+                                token: token,
+                                serverOrigin: configuration.serverUrl,
                             };
                         } else {
                             if (decrypted[0] === 0) {
@@ -201,7 +202,8 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Cre
                                         publicKey: credentials.publicKey,
                                         machineKey: credentials.machineKey
                                     },
-                                    token: token
+                                    token: token,
+                                    serverOrigin: configuration.serverUrl,
                                 };
                             } else {
                                 console.log('\n\nFailed to decrypt response. Please try again.');
@@ -250,7 +252,9 @@ export function decryptWithEphemeralKey(encryptedBundle: Uint8Array, recipientSe
  * Ensure authentication and machine setup
  * This replaces the onboarding flow and ensures everything is ready
  */
-export async function authAndSetupMachineIfNeeded(): Promise<{
+export async function authAndSetupMachineIfNeeded(options: {
+    skipRelayProbeForBoundCredentials?: boolean;
+} = {}): Promise<{
     credentials: Credentials;
     machineId: string;
 }> {
@@ -271,6 +275,9 @@ export async function authAndSetupMachineIfNeeded(): Promise<{
     } else {
         logger.debug('[AUTH] Using existing credentials');
     }
+    credentials = await scopeCredentialsToCurrentRelay(credentials, {
+        skipProbeForBoundOrigin: options.skipRelayProbeForBoundCredentials,
+    });
 
     // Make sure we have a machine ID
     // Server machine entity will be created either by the daemon or by the CLI
@@ -287,4 +294,66 @@ export async function authAndSetupMachineIfNeeded(): Promise<{
     logger.debug(`[AUTH] Machine ID: ${settings.machineId}`);
 
     return { credentials, machineId: settings.machineId! };
+}
+
+export async function scopeCredentialsToCurrentRelay(
+    credentials: Credentials,
+    options: { skipProbeForBoundOrigin?: boolean } = {},
+): Promise<Credentials> {
+    const currentOrigin = configuration.serverUrl;
+    if (credentials.serverOrigin && credentials.serverOrigin !== currentOrigin) {
+        throw new Error(
+            `Happy credentials are bound to ${credentials.serverOrigin}, not ${currentOrigin}. `
+            + 'Run `happy auth login --force` for the configured relay.',
+        );
+    }
+    const needsOriginBinding = credentials.serverOrigin === undefined;
+    if (options.skipProbeForBoundOrigin && !needsOriginBinding) {
+        return credentials;
+    }
+
+    try {
+        await axios.get(`${currentOrigin}/v1/account/settings`, {
+            headers: {
+                Authorization: `Bearer ${credentials.token}`,
+                'X-Happy-Client': `cli/${configuration.currentCliVersion}`,
+            },
+            timeout: 10_000,
+        });
+    } catch (error) {
+        if (
+            axios.isAxiosError(error)
+            && (error.response?.status === 401 || error.response?.status === 403)
+        ) {
+            throw new Error(
+                `Happy authentication is not valid for ${currentOrigin}. `
+                + 'Run `happy auth login --force` for the configured relay.',
+            );
+        }
+        logger.debug('[AUTH] Could not verify legacy credential relay origin yet', {
+            serverOrigin: currentOrigin,
+            status: axios.isAxiosError(error) ? error.response?.status : undefined,
+        });
+        return credentials;
+    }
+
+    if (!needsOriginBinding) {
+        return credentials;
+    }
+    if (credentials.encryption.type === 'legacy') {
+        await writeCredentialsLegacy({
+            secret: credentials.encryption.secret,
+            token: credentials.token,
+        });
+    } else {
+        await writeCredentialsDataKey({
+            publicKey: credentials.encryption.publicKey,
+            machineKey: credentials.encryption.machineKey,
+            token: credentials.token,
+        });
+    }
+    return {
+        ...credentials,
+        serverOrigin: currentOrigin,
+    };
 }

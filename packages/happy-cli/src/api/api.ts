@@ -49,6 +49,16 @@ export class CodexSyncV4CapabilityError extends Error {
   }
 }
 
+export class HappyRelayAuthenticationError extends Error {
+  constructor(operation: string) {
+    super(
+      `${operation} was rejected by ${configuration.serverUrl}. `
+      + 'Run `happy auth login --force` for the configured relay.',
+    );
+    this.name = 'HappyRelayAuthenticationError';
+  }
+}
+
 export class ApiClient {
 
   static async create(credential: Credentials) {
@@ -297,6 +307,9 @@ export class ApiClient {
         errorKind: classifySyncV4DiagnosticError(error),
         httpStatus: safeAxiosStatus(error),
       });
+      if (safeAxiosStatus(error) === 401) {
+        throw new HappyRelayAuthenticationError('Session creation');
+      }
 
       // Check if it's a connection error
       if (error && typeof error === 'object' && 'code' in error) {
@@ -352,7 +365,7 @@ export class ApiClient {
     machineId: string,
     metadata: MachineMetadata,
     daemonState?: DaemonState,
-  }): Promise<Machine> {
+  }): Promise<Machine | null> {
 
     // Resolve encryption key
     let dataEncryptionKey: Uint8Array | null = null;
@@ -371,17 +384,6 @@ export class ApiClient {
       encryptionKey = this.credential.encryption.secret;
       encryptionVariant = 'legacy';
     }
-
-    // Helper to create minimal machine object for offline mode (DRY)
-    const createMinimalMachine = (): Machine => ({
-      id: opts.machineId,
-      encryptionKey: encryptionKey,
-      encryptionVariant: encryptionVariant,
-      metadata: opts.metadata,
-      metadataVersion: 0,
-      daemonState: opts.daemonState || null,
-      daemonStateVersion: 0,
-    });
 
     // Create machine
     try {
@@ -429,13 +431,17 @@ export class ApiClient {
           errorCode: error.code,
           url: `${configuration.serverUrl}/v1/machines`
         });
-        return createMinimalMachine();
+        return null;
       }
 
       // Handle 403/409 - server rejected request due to authorization conflict
       // This is NOT "server unreachable" - server responded, so don't use connectionState
       if (axios.isAxiosError(error) && error.response?.status) {
         const status = error.response.status;
+
+        if (status === 401) {
+          throw new HappyRelayAuthenticationError('Machine registration');
+        }
 
         if (status === 403 || status === 409) {
           // Re-auth conflict: machine registered to old account, re-association not allowed
@@ -454,7 +460,7 @@ export class ApiClient {
           console.log(chalk.yellow(
             `   → Open a GitHub issue if this problem persists`
           ));
-          return createMinimalMachine();
+          throw new Error(`Machine registration was rejected with status ${status}`);
         }
 
         // Handle 5xx - server error, use offline mode with auto-reconnect
@@ -465,7 +471,7 @@ export class ApiClient {
             url: `${configuration.serverUrl}/v1/machines`,
             details: ['Server encountered an error, will retry automatically']
           });
-          return createMinimalMachine();
+          return null;
         }
 
         // Handle 404 - endpoint may not be available yet
@@ -475,7 +481,7 @@ export class ApiClient {
             errorCode: '404',
             url: `${configuration.serverUrl}/v1/machines`
           });
-          return createMinimalMachine();
+          return null;
         }
       }
 

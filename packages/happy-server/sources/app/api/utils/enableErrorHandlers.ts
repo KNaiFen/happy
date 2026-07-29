@@ -10,30 +10,22 @@ export function enableErrorHandlers(app: Fastify, options: EnableErrorHandlersOp
     // Global error handler
     app.setErrorHandler(async (error: FastifyError, request, reply) => {
         const isSyncV4Request = typeof request.syncV4TraceId === 'string';
-        const method = request.method;
-        const url = request.url;
-        const userAgent = request.headers['user-agent'] || 'unknown';
-        const ip = request.ip || 'unknown';
+        const statusCode = isSyncV4Request
+            ? safeSyncV4StatusCode(error, reply.statusCode)
+            : safeStatusCode(error, reply.statusCode);
 
-        // Log the error with comprehensive context
         if (!isSyncV4Request) {
+            const errorCode = safeErrorCode(error);
             log({
                 module: 'fastify-error',
                 level: 'error',
-                method,
-                url,
-                userAgent,
-                ip,
-                statusCode: error.statusCode || 500,
-                errorCode: error.code,
-                stack: error.stack
-            }, `Unhandled error: ${error.message}`);
+                method: request.method,
+                route: request.routeOptions?.url || 'unmatched',
+                statusCode,
+                errorKind: classifyError(errorCode, statusCode),
+                ...(errorCode ? { errorCode } : {}),
+            }, 'Request failed');
         }
-
-        // Return appropriate error response
-        const statusCode = isSyncV4Request
-            ? safeSyncV4StatusCode(error, reply.statusCode)
-            : error.statusCode || 500;
 
         if (isSyncV4Request) {
             return reply.code(statusCode).send({
@@ -50,8 +42,8 @@ export function enableErrorHandlers(app: Fastify, options: EnableErrorHandlersOp
         } else {
             // Client errors - can expose more details
             return reply.code(statusCode).send({
-                error: error.name || 'Error',
-                message: error.message || 'An error occurred',
+                error: safeErrorName(error),
+                message: safeClientErrorMessage(error),
                 statusCode
             });
         }
@@ -71,49 +63,13 @@ export function enableErrorHandlers(app: Fastify, options: EnableErrorHandlersOp
         });
     }
 
-    // Error hook for additional logging
-    app.addHook('onError', async (request, reply, error) => {
-        if (typeof request.syncV4TraceId === 'string') return;
-        const method = request.method;
-        const url = request.url;
-        const duration = (Date.now() - (request.startTime || Date.now())) / 1000;
-
-        log({
-            module: 'fastify-hook-error',
-            level: 'error',
-            method,
-            url,
-            duration,
-            statusCode: reply.statusCode || error.statusCode || 500,
-            errorName: error.name,
-            errorCode: error.code
-        }, `Request error: ${error.message}`);
-    });
-
-    // Handle uncaught exceptions in routes
-    app.addHook('preHandler', async (request, reply) => {
-        // Store original reply.send to catch errors in response serialization
-        const originalSend = reply.send.bind(reply);
-        reply.send = function (payload: any) {
-            try {
-                return originalSend(payload);
-            } catch (error: any) {
-                if (typeof request.syncV4TraceId !== 'string') {
-                    log({
-                        module: 'fastify-serialization-error',
-                        level: 'error',
-                        method: request.method,
-                        url: request.url,
-                        stack: error.stack
-                    }, `Response serialization error: ${error.message}`);
-                }
-                throw error;
-            }
-        };
-    });
 }
 
 function safeSyncV4StatusCode(error: unknown, replyStatus: number): number {
+    return safeStatusCode(error, replyStatus);
+}
+
+function safeStatusCode(error: unknown, replyStatus: number): number {
     try {
         const statusCode = error && (typeof error === 'object' || typeof error === 'function')
             ? (error as { statusCode?: unknown }).statusCode
@@ -125,4 +81,59 @@ function safeSyncV4StatusCode(error: unknown, replyStatus: number): number {
         // Fall through to the already-sanitized reply status or a fixed 500.
     }
     return replyStatus >= 400 && replyStatus <= 599 ? replyStatus : 500;
+}
+
+function safeErrorCode(error: unknown): string | undefined {
+    try {
+        const code = error && (typeof error === 'object' || typeof error === 'function')
+            ? (error as { code?: unknown }).code
+            : undefined;
+        if (
+            typeof code === 'string'
+            && (/^P\d{4}$/.test(code) || /^FST_ERR_[A-Z0-9_]{1,64}$/.test(code))
+        ) {
+            return code;
+        }
+    } catch {
+        // External errors may expose hostile property getters.
+    }
+    return undefined;
+}
+
+function classifyError(
+    errorCode: string | undefined,
+    statusCode: number,
+): 'prisma' | 'validation' | 'http' | 'unknown' {
+    if (errorCode?.startsWith('P')) return 'prisma';
+    if (errorCode?.startsWith('FST_ERR_')) return 'validation';
+    if (statusCode >= 400 && statusCode < 500) return 'http';
+    return 'unknown';
+}
+
+function safeErrorName(error: unknown): string {
+    try {
+        const name = error && (typeof error === 'object' || typeof error === 'function')
+            ? (error as { name?: unknown }).name
+            : undefined;
+        if (typeof name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name)) {
+            return name;
+        }
+    } catch {
+        // Fall through to the fixed client-facing name.
+    }
+    return 'Error';
+}
+
+function safeClientErrorMessage(error: unknown): string {
+    try {
+        const message = error && (typeof error === 'object' || typeof error === 'function')
+            ? (error as { message?: unknown }).message
+            : undefined;
+        if (typeof message === 'string' && message.length <= 512) {
+            return message;
+        }
+    } catch {
+        // Fall through to the fixed client-facing message.
+    }
+    return 'An error occurred';
 }

@@ -1,7 +1,12 @@
 import { logger } from '@/ui/logger'
-import { checkIfDaemonRunningAndCleanupStaleState, isDaemonRunningCurrentlyInstalledHappyVersion } from './controlClient'
+import {
+  checkIfDaemonRunningAndCleanupStaleState,
+  isDaemonRunningForCurrentProfile,
+  stopDaemon,
+} from './controlClient'
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI'
 import { sanitizeSessionEnvironment } from './sessionEnvironment'
+import { configuration } from '@/configuration'
 
 const DAEMON_READY_TIMEOUT_MS = 5000
 const DAEMON_READY_POLL_INTERVAL_MS = 100
@@ -9,8 +14,13 @@ const DAEMON_READY_POLL_INTERVAL_MS = 100
 export async function ensureDaemonRunning(): Promise<void> {
   logger.debug('Ensuring Happy background service is running & matches our version...')
 
-  if (await isDaemonRunningCurrentlyInstalledHappyVersion()) {
+  if (await isDaemonRunningForCurrentProfile()) {
     return
+  }
+
+  if (await checkIfDaemonRunningAndCleanupStaleState()) {
+    logger.debug('Stopping daemon that belongs to a different CLI or relay profile...')
+    await stopDaemon()
   }
 
   logger.debug('Starting Happy background service...')
@@ -28,12 +38,15 @@ export async function ensureDaemonRunning(): Promise<void> {
   // silently lost — which later breaks resume-happy-session.
   const deadline = Date.now() + DAEMON_READY_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if (await checkIfDaemonRunningAndCleanupStaleState()) {
+    if (await isDaemonRunningForCurrentProfile()) {
       logger.debug('Happy background service is ready')
       return
     }
     await new Promise(resolve => setTimeout(resolve, DAEMON_READY_POLL_INTERVAL_MS))
   }
 
-  logger.debug(`Happy background service did not become ready within ${DAEMON_READY_TIMEOUT_MS}ms; continuing anyway`)
+  throw new Error(
+    `Happy daemon did not become ready for ${configuration.serverUrl} `
+    + `within ${DAEMON_READY_TIMEOUT_MS}ms`,
+  )
 }

@@ -1060,7 +1060,7 @@ importers:
         specifier: ^1.2.0
         version: 1.4.1
       '@electric-sql/pglite':
-        specifier: ^0.3.15
+        specifier: 0.3.15
         version: 0.3.15
       '@fastify/bearer-auth':
         specifier: ^10.1.1
@@ -1114,8 +1114,8 @@ importers:
         specifier: ^5.0.3
         version: 5.0.5
       pglite-prisma-adapter:
-        specifier: ^0.7.2
-        version: 0.7.2(@electric-sql/pglite@0.3.15)(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3))
+        specifier: 0.6.1
+        version: 0.6.1(@electric-sql/pglite@0.3.15)(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3))
       pino:
         specifier: ^10.3.0
         version: 10.3.0
@@ -1189,6 +1189,12 @@ importers:
       dotenv-cli:
         specifier: ^8.0.0
         version: 8.0.0
+      pglite-0316:
+        specifier: npm:@electric-sql/pglite@0.3.16
+        version: '@electric-sql/pglite@0.3.16'
+      pglite-prisma-adapter-072:
+        specifier: npm:pglite-prisma-adapter@0.7.2
+        version: pglite-prisma-adapter@0.7.2(@electric-sql/pglite@0.3.15)(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3))
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@20.19.39)(typescript@5.9.3)
@@ -2088,6 +2094,9 @@ packages:
 
   '@electric-sql/pglite@0.3.15':
     resolution: {integrity: sha512-Cj++n1Mekf9ETfdc16TlDi+cDDQF0W7EcbyRHYOAeZdsAe8M/FJg18itDTSwyHfar2WIezawM9o0EKaRGVKygQ==}
+
+  '@electric-sql/pglite@0.3.16':
+    resolution: {integrity: sha512-mZkZfOd9OqTMHsK+1cje8OSzfAQcpD7JmILXTl5ahdempjUDdmg4euf1biDex5/LfQIDJ3gvCu6qDgdnDxfJmA==}
 
   '@electron-toolkit/preload@3.0.2':
     resolution: {integrity: sha512-TWWPToXd8qPRfSXwzf5KVhpXMfONaUuRAZJHsKthKgZR/+LqX1dZVSSClQ8OTAEduvLGdecljCsoT2jSshfoUg==}
@@ -4017,6 +4026,9 @@ packages:
   '@prisma/config@6.19.2':
     resolution: {integrity: sha512-kadBGDl+aUswv/zZMk9Mx0C8UZs1kjao8H9/JpI4Wh4SHZaM7zkTwiKn/iFLfRg+XtOAo/Z/c6pAYhijKl0nzQ==}
 
+  '@prisma/debug@6.10.1':
+    resolution: {integrity: sha512-k2YT53cWxv9OLjW4zSYTZ6Z7j0gPfCzcr2Mj99qsuvlxr8WAKSZ2NcSR0zLf/mP4oxnYG842IMj3utTgcd7CaA==}
+
   '@prisma/debug@6.19.2':
     resolution: {integrity: sha512-lFnEZsLdFLmEVCVNdskLDCL8Uup41GDfU0LUfquw+ercJC8ODTuL0WNKgOKmYxCJVvFwf0OuZBzW99DuWmoH2A==}
 
@@ -4025,6 +4037,9 @@ packages:
 
   '@prisma/dmmf@6.19.2':
     resolution: {integrity: sha512-ZHGDQlnrWKwFPAOvJ8hVbmIqNPdE0XXptTeYqmUGhYMDySSts60O8g3KNY1uAqr3nHiyDcpaGIpO1MBYoDW6gQ==}
+
+  '@prisma/driver-adapter-utils@6.10.1':
+    resolution: {integrity: sha512-MJ7NiiMA5YQUD1aMHiOcLmRpW0U0NTpygyeuLMxHXnKbcq+HX/cy10qilFMLVzpveuIEHuwxziR67z6i0K1MKA==}
 
   '@prisma/driver-adapter-utils@7.2.0':
     resolution: {integrity: sha512-gzrUcbI9VmHS24Uf+0+7DNzdIw7keglJsD5m/MHxQOU68OhGVzlphQRobLiDMn8CHNA2XN8uugwKjudVtnfMVQ==}
@@ -10164,6 +10179,12 @@ packages:
   perfect-debounce@2.1.0:
     resolution: {integrity: sha512-LjgdTytVFXeUgtHZr9WYViYSM/g8MkcTPYDlPa3cDqMirHjKiSZPYd6DoL7pK8AJQr+uWkQvCjHNdiMqsrJs+g==}
 
+  pglite-prisma-adapter@0.6.1:
+    resolution: {integrity: sha512-Qb2rVecLSSngq+xPBLzMcqFkrCgCXNi2cuVAa009kOMiinqUmdGkEw6ZKpL0zeiEc9+YbLOy3PY8uKtMPA4P3Q==}
+    peerDependencies:
+      '@electric-sql/pglite': '>=0.2.0'
+      '@prisma/client': '>= 6.10.0'
+
   pglite-prisma-adapter@0.7.2:
     resolution: {integrity: sha512-NqLXIUguFbgEHpIoyCvAbpEurbK+AUukiv96gIogVnNYWBdhAU0idfTXcJrsS7OdWenYa8QxEQM2ND1cTQrU4g==}
     peerDependencies:
@@ -13724,6 +13745,8 @@ snapshots:
 
   '@electric-sql/pglite@0.3.15': {}
 
+  '@electric-sql/pglite@0.3.16': {}
+
   '@electron-toolkit/preload@3.0.2(electron@41.2.1)':
     dependencies:
       electron: 41.2.1
@@ -15860,11 +15883,17 @@ snapshots:
     transitivePeerDependencies:
       - magicast
 
+  '@prisma/debug@6.10.1': {}
+
   '@prisma/debug@6.19.2': {}
 
   '@prisma/debug@7.2.0': {}
 
   '@prisma/dmmf@6.19.2': {}
+
+  '@prisma/driver-adapter-utils@6.10.1':
+    dependencies:
+      '@prisma/debug': 6.10.1
 
   '@prisma/driver-adapter-utils@7.2.0':
     dependencies:
@@ -23182,6 +23211,13 @@ snapshots:
   perfect-debounce@1.0.0: {}
 
   perfect-debounce@2.1.0: {}
+
+  pglite-prisma-adapter@0.6.1(@electric-sql/pglite@0.3.15)(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)):
+    dependencies:
+      '@electric-sql/pglite': 0.3.15
+      '@prisma/client': 6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)
+      '@prisma/driver-adapter-utils': 6.10.1
+      postgres-array: 3.0.4
 
   pglite-prisma-adapter@0.7.2(@electric-sql/pglite@0.3.15)(@prisma/client@6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)):
     dependencies:

@@ -17,7 +17,7 @@ import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock, releaseDaemonLock, readPersistedSessions, persistSession } from '@/persistence';
 import type { PersistedSession } from '@/persistence';
 
-import { cleanupDaemonState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
+import { cleanupDaemonState, isDaemonRunningForCurrentProfile, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
 import { statSync } from 'fs';
 import { join } from 'path';
@@ -37,6 +37,8 @@ import {
   discoverCodexAgentCapabilities,
   mergeCodexAgentCapabilities,
 } from '@/codex/codexModelCapabilities';
+import { delay } from '@/utils/time';
+import { machineRegistrationRetryDelay } from './machineRegistration';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
@@ -153,17 +155,17 @@ export async function startDaemon(): Promise<void> {
 
   // Check if already running
   // Check if running daemon version matches current CLI version
-  const runningDaemonVersionMatches = await isDaemonRunningCurrentlyInstalledHappyVersion();
-  if (!runningDaemonVersionMatches) {
+  const runningDaemonProfileMatches = await isDaemonRunningForCurrentProfile();
+  if (!runningDaemonProfileMatches) {
     // TODO: This hand-rolled self-restart path is awkward to reason about and awkward to test.
     // We should probably migrate this daemon to native system service management
     // (launchd/systemd, similar to OpenClaw's model), so startup/start-at-login and upgrades
     // are owned by the OS instead of by the daemon trying to replace itself in-process.
-    logger.debug('[DAEMON RUN] Daemon version mismatch detected, restarting daemon with current CLI version');
+    logger.debug('[DAEMON RUN] Daemon profile mismatch detected, restarting for current CLI and relay');
     await stopDaemon();
   } else {
-    logger.debug('[DAEMON RUN] Daemon version matches, keeping existing daemon');
-    console.log('Daemon already running with matching version');
+    logger.debug('[DAEMON RUN] Daemon profile matches, keeping existing daemon');
+    console.log('Daemon already running for the current CLI and relay');
     process.exit(0);
   }
 
@@ -186,7 +188,9 @@ export async function startDaemon(): Promise<void> {
     }
 
     // Ensure auth and machine registration BEFORE anything else
-    const { credentials, machineId } = await authAndSetupMachineIfNeeded();
+    const { credentials, machineId } = await authAndSetupMachineIfNeeded({
+      skipRelayProbeForBoundCredentials: true,
+    });
     logger.debug('[DAEMON RUN] Auth and machine setup complete');
     const codexCapabilitiesPromise = initialMachineMetadata.cliAvailability?.codex
       ? discoverCodexAgentCapabilities()
@@ -835,6 +839,8 @@ export async function startDaemon(): Promise<void> {
       httpPort: controlPort,
       startTime: new Date().toLocaleString(),
       startedWithCliVersion: packageJson.version,
+      serverOrigin: configuration.serverUrl,
+      machineRegistrationStatus: 'pending',
       daemonLogPath: logger.logFilePath
     };
     writeDaemonState(fileState);
@@ -870,12 +876,43 @@ export async function startDaemon(): Promise<void> {
     // Get or create machine
     const codexCapabilities = await codexCapabilitiesPromise;
     const machineMetadata = mergeCodexAgentCapabilities(initialMachineMetadata, codexCapabilities);
-    const machine = await api.getOrCreateMachine({
-      machineId,
-      metadata: machineMetadata,
-      daemonState: initialDaemonState
+    let machine = null;
+    let shutdownRequestedDuringRegistration = false;
+    const shutdownDuringRegistration = resolvesWhenShutdownRequested.then(() => {
+      shutdownRequestedDuringRegistration = true;
     });
+    let registrationFailureCount = 0;
+    while (!machine && !shutdownRequestedDuringRegistration) {
+      machine = await api.getOrCreateMachine({
+        machineId,
+        metadata: machineMetadata,
+        daemonState: initialDaemonState
+      });
+      if (!machine) {
+        const retryDelayMs = machineRegistrationRetryDelay(registrationFailureCount);
+        registrationFailureCount += 1;
+        logger.debug('[DAEMON RUN] Machine registration pending; retrying after relay recovery', {
+          retryDelayMs,
+        });
+        await Promise.race([
+          delay(retryDelayMs),
+          shutdownDuringRegistration,
+        ]);
+      }
+    }
+    if (!machine) {
+      await stopControlServer();
+      await cleanupDaemonState();
+      await stopCaffeinate();
+      await releaseDaemonLock(daemonLockHandle);
+      return;
+    }
     logger.debug(`[DAEMON RUN] Machine registered: ${machine.id}`);
+    const registeredFileState: DaemonLocallyPersistedState = {
+      ...fileState,
+      machineRegistrationStatus: 'registered',
+    };
+    writeDaemonState(registeredFileState);
 
     // Create realtime machine session
     const apiMachine = api.machineSyncClient(machine);
@@ -950,7 +987,7 @@ export async function startDaemon(): Promise<void> {
 
         // Release ownership BEFORE spawning the new daemon. Otherwise the spawned
         // `happy daemon start` reads our still-present daemon.state.json, sees
-        // isDaemonRunningCurrentlyInstalledHappyVersion() === true, and exits —
+        // isDaemonRunningForCurrentProfile() === true, and exits —
         // leaving nothing running once we also exit.
         apiMachine.shutdown();
         await stopControlServer();
@@ -986,6 +1023,8 @@ export async function startDaemon(): Promise<void> {
           httpPort: controlPort,
           startTime: fileState.startTime,
           startedWithCliVersion: packageJson.version,
+          serverOrigin: configuration.serverUrl,
+          machineRegistrationStatus: 'registered',
           lastHeartbeat: new Date().toLocaleString(),
           daemonLogPath: fileState.daemonLogPath
         };

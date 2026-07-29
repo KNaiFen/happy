@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import React from 'react';
 import { render, type Instance as InkInstance } from 'ink';
 import { ApiClient } from '@/api/api';
-import type { ApiSessionClient } from '@/api/apiSession';
+import type { ApiSessionClientContract } from '@/api/apiSession';
 import { AcpSessionManager } from '@/agent/acp/AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
 import { logger } from '@/ui/logger';
@@ -73,7 +73,7 @@ export async function runAgy(opts: RunAgyOptions): Promise<void> {
     log(`Happy Session ID: ${response.id}`);
   }
 
-  let session: ApiSessionClient;
+  let session: ApiSessionClientContract;
   const { session: initialSession, reconnectionHandle } = setupOfflineReconnection({
     api,
     sessionTag,

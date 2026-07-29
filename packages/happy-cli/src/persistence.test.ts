@@ -1,8 +1,14 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { acquireDaemonLock, releaseDaemonLock, SandboxConfigSchema } from './persistence';
+import {
+    acquireDaemonLock,
+    readCredentials,
+    releaseDaemonLock,
+    SandboxConfigSchema,
+    writeCredentialsLegacy,
+} from './persistence';
 
 const mockConfiguration = vi.hoisted(() => ({
     daemonLockFile: '',
@@ -10,6 +16,9 @@ const mockConfiguration = vi.hoisted(() => ({
     isDaemonProcess: false,
     logsDir: '/tmp',
     sessionsFile: '',
+    happyHomeDir: '',
+    privateKeyFile: '',
+    serverUrl: 'http://relay.example.test:3005',
 }));
 
 vi.mock('@/configuration', () => ({
@@ -132,5 +141,47 @@ describe('acquireDaemonLock', () => {
 
         expect(lockHandle).toBeNull();
         expect(readFileSync(mockConfiguration.daemonLockFile, 'utf-8')).toBe(String(process.pid));
+    });
+});
+
+describe('credential relay origin', () => {
+    let testDir: string;
+
+    beforeEach(() => {
+        testDir = mkdtempSync(join(tmpdir(), 'happy-credentials-'));
+        mockConfiguration.happyHomeDir = testDir;
+        mockConfiguration.privateKeyFile = join(testDir, 'access.key');
+        mockConfiguration.serverUrl = 'http://relay.example.test:3005';
+    });
+
+    afterEach(() => {
+        rmSync(testDir, { recursive: true, force: true });
+    });
+
+    it('atomically persists the normalized relay origin with mode 0600', async () => {
+        await writeCredentialsLegacy({
+            secret: new Uint8Array(32).fill(7),
+            token: 'test-token',
+        });
+
+        const raw = JSON.parse(readFileSync(mockConfiguration.privateKeyFile, 'utf8'));
+        expect(raw.serverOrigin).toBe('http://relay.example.test:3005');
+        expect(statSync(mockConfiguration.privateKeyFile).mode & 0o777).toBe(0o600);
+        await expect(readCredentials()).resolves.toEqual(expect.objectContaining({
+            token: 'test-token',
+            serverOrigin: 'http://relay.example.test:3005',
+        }));
+    });
+
+    it('keeps legacy credentials without an origin readable for one-time validation', async () => {
+        writeFileSync(mockConfiguration.privateKeyFile, JSON.stringify({
+            secret: Buffer.alloc(32, 3).toString('base64'),
+            token: 'legacy-token',
+        }));
+
+        await expect(readCredentials()).resolves.toEqual(expect.objectContaining({
+            token: 'legacy-token',
+        }));
+        expect((await readCredentials())?.serverOrigin).toBeUndefined();
     });
 });

@@ -54,6 +54,25 @@ export function getInsecureRelayWarning(serverUrl: string): string {
     );
 }
 
+export function normalizeRelayOrigin(value: string): string {
+    let parsed: URL;
+    try {
+        parsed = new URL(value.trim());
+    } catch {
+        throw new Error('Happy Server URL is invalid');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('Happy Server URL must use HTTP or HTTPS');
+    }
+    if (parsed.username || parsed.password) {
+        throw new Error('Happy Server URL cannot contain credentials');
+    }
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+        throw new Error('Happy Server URL must be an origin without path, query, or fragment');
+    }
+    return parsed.origin;
+}
+
 function safeDisplayOrigin(value: string): string {
     try {
         return new URL(value).origin;
@@ -92,20 +111,19 @@ function formatUrlHost(host: string): string {
 }
 
 function normalizePublicUrl(value: string): string {
-    let parsed: URL;
     try {
-        parsed = new URL(value.trim());
-    } catch {
+        return normalizeRelayOrigin(value);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (message.includes('must use HTTP or HTTPS')) {
+            throw new Error('--public-url must use HTTP or HTTPS');
+        }
+        if (message.includes('cannot contain credentials')) {
+            throw new Error('--public-url cannot contain credentials');
+        }
+        if (message.includes('must be an origin')) {
+            throw new Error('--public-url must be an origin without path, query, or fragment');
+        }
         throw new Error('Invalid --public-url');
     }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        throw new Error('--public-url must use HTTP or HTTPS');
-    }
-    if (parsed.username || parsed.password) {
-        throw new Error('--public-url cannot contain credentials');
-    }
-    if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
-        throw new Error('--public-url must be an origin without path, query, or fragment');
-    }
-    return parsed.origin;
 }

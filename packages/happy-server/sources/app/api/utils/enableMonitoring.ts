@@ -26,20 +26,35 @@ export function enableMonitoring(app: Fastify) {
 
     app.get('/health', async (request, reply) => {
         try {
-            // Test database connectivity
-            await db.$queryRaw`SELECT 1`;
+            const rows = await db.$queryRaw<Array<{ byteaProbe: Uint8Array }>>`
+                SELECT decode('0001feff', 'hex') AS "byteaProbe"
+            `;
+            const probe = rows[0]?.byteaProbe;
+            if (
+                !(probe instanceof Uint8Array)
+                || probe.length !== 4
+                || probe[0] !== 0
+                || probe[1] !== 1
+                || probe[2] !== 254
+                || probe[3] !== 255
+            ) {
+                throw new Error("Invalid database BYTEA probe");
+            }
             reply.send({
                 status: 'ok',
                 timestamp: new Date().toISOString(),
                 service: 'happy-server'
             });
-        } catch (error) {
-            log({ module: 'health', level: 'error' }, `Health check failed: ${error}`);
+        } catch {
+            log(
+                { module: 'health', level: 'error', errorKind: 'database' },
+                'Database health check failed',
+            );
             reply.code(503).send({
                 status: 'error',
                 timestamp: new Date().toISOString(),
                 service: 'happy-server',
-                error: 'Database connectivity failed'
+                error: 'Database health check failed'
             });
         }
     });

@@ -12,7 +12,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { AddressInfo } from "node:net";
 import { z } from "zod";
 import { logger } from "@/ui/logger";
-import { ApiSessionClient } from "@/api/apiSession";
+import type { ApiSessionClientContract } from "@/api/apiSession";
 import { randomUUID } from "node:crypto";
 
 function createMcpServer(handler: (title: string) => Promise<{ success: boolean; error?: string }>): McpServer {
@@ -57,7 +57,7 @@ function createMcpServer(handler: (title: string) => Promise<{ success: boolean;
     return mcp;
 }
 
-export async function startHappyServer(client: ApiSessionClient) {
+export async function startHappyServer(client: ApiSessionClientContract) {
     logger.debug(`[happyMCP] server:start sessionId=${client.sessionId}`);
 
     const handler = async (title: string) => {

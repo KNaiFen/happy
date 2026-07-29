@@ -14,7 +14,7 @@ import os from 'node:os';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ApiClient } from '@/api/api';
-import type { ApiSessionClient } from '@/api/apiSession';
+import type { ApiSessionClientContract } from '@/api/apiSession';
 import { AcpSessionManager } from '@/agent/acp/AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
 import { logger } from '@/ui/logger';
@@ -167,7 +167,7 @@ export async function runOpenClaw(opts: RunOpenClawOptions): Promise<void> {
     log(`Happy Session ID: ${response.id}`);
   }
 
-  let session: ApiSessionClient;
+  let session: ApiSessionClientContract;
   const { session: initialSession, reconnectionHandle } = setupOfflineReconnection({
     api,
     sessionTag,

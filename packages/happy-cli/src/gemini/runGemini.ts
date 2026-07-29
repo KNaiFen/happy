@@ -29,7 +29,7 @@ import { encodeBase64 } from '@/api/encryption';
 import { registerKillSessionHandler } from '@/claude/registerKillSessionHandler';
 import { connectionState } from '@/utils/serverConnectionErrors';
 import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
-import type { ApiSessionClient } from '@/api/apiSession';
+import type { ApiSessionClientContract } from '@/api/apiSession';
 
 import { createGeminiBackend } from '@/agent/factories/gemini';
 import type { AgentBackend, AgentMessage } from '@/agent';
@@ -134,7 +134,7 @@ export async function runGemini(opts: {
   const response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
 
   // Handle server unreachable case - create offline stub with hot reconnection
-  let session: ApiSessionClient;
+  let session: ApiSessionClientContract;
   // Permission handler declared here so it can be updated in onSessionSwap callback
   // (assigned later after Happy server setup)
   let permissionHandler: GeminiPermissionHandler;
@@ -142,7 +142,7 @@ export async function runGemini(opts: {
   // Session swap synchronization to prevent race conditions during message processing
   // When a swap is requested during processing, it's queued and applied after the current cycle
   let isProcessingMessage = false;
-  let pendingSessionSwap: ApiSessionClient | null = null;
+  let pendingSessionSwap: ApiSessionClientContract | null = null;
 
   /**
    * Apply a pending session swap. Called between message processing cycles.

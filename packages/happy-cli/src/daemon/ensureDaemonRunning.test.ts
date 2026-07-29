@@ -3,8 +3,9 @@ import { SESSION_SCOPED_ENV_KEYS } from './sessionEnvironment'
 
 const mocks = vi.hoisted(() => ({
   mockLoggerDebug: vi.fn(),
-  mockIsDaemonRunningCurrentlyInstalledHappyVersion: vi.fn(),
+  mockIsDaemonRunningForCurrentProfile: vi.fn(),
   mockCheckIfDaemonRunningAndCleanupStaleState: vi.fn(),
+  mockStopDaemon: vi.fn(),
   mockSpawnHappyCLI: vi.fn(),
 }))
 
@@ -15,8 +16,9 @@ vi.mock('@/ui/logger', () => ({
 }))
 
 vi.mock('./controlClient', () => ({
-  isDaemonRunningCurrentlyInstalledHappyVersion: mocks.mockIsDaemonRunningCurrentlyInstalledHappyVersion,
+  isDaemonRunningForCurrentProfile: mocks.mockIsDaemonRunningForCurrentProfile,
   checkIfDaemonRunningAndCleanupStaleState: mocks.mockCheckIfDaemonRunningAndCleanupStaleState,
+  stopDaemon: mocks.mockStopDaemon,
 }))
 
 vi.mock('@/utils/spawnHappyCLI', () => ({
@@ -32,14 +34,15 @@ describe('ensureDaemonRunning', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.mockCheckIfDaemonRunningAndCleanupStaleState.mockResolvedValue(false)
+    mocks.mockStopDaemon.mockResolvedValue(undefined)
     mocks.mockSpawnHappyCLI.mockReturnValue({
       unref: vi.fn(),
     })
-    mocks.mockCheckIfDaemonRunningAndCleanupStaleState.mockResolvedValue(true)
   })
 
   it('returns without spawning when the daemon is already running', async () => {
-    mocks.mockIsDaemonRunningCurrentlyInstalledHappyVersion.mockResolvedValue(true)
+    mocks.mockIsDaemonRunningForCurrentProfile.mockResolvedValue(true)
 
     await ensureDaemonRunning()
 
@@ -52,13 +55,13 @@ describe('ensureDaemonRunning', () => {
 
   it('starts the daemon and waits for readiness when the installed version is not running', async () => {
     const mockUnref = vi.fn()
-    mocks.mockIsDaemonRunningCurrentlyInstalledHappyVersion.mockResolvedValue(false)
+    mocks.mockIsDaemonRunningForCurrentProfile
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
     mocks.mockSpawnHappyCLI.mockReturnValue({
       unref: mockUnref,
     })
-    mocks.mockCheckIfDaemonRunningAndCleanupStaleState
-      .mockResolvedValueOnce(false)
-      .mockResolvedValueOnce(true)
 
     for (const key of SESSION_SCOPED_ENV_KEYS) {
       vi.stubEnv(key, `stale-${key}`)
@@ -77,8 +80,20 @@ describe('ensureDaemonRunning', () => {
       expect(spawnedEnv).not.toHaveProperty(key)
     }
     expect(mockUnref).toHaveBeenCalled()
-    expect(mocks.mockCheckIfDaemonRunningAndCleanupStaleState).toHaveBeenCalledTimes(2)
+    expect(mocks.mockCheckIfDaemonRunningAndCleanupStaleState).toHaveBeenCalledOnce()
     expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('Starting Happy background service...')
     expect(mocks.mockLoggerDebug).toHaveBeenCalledWith('Happy background service is ready')
+  })
+
+  it('stops a healthy daemon from another relay profile before spawning', async () => {
+    mocks.mockIsDaemonRunningForCurrentProfile
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+    mocks.mockCheckIfDaemonRunningAndCleanupStaleState.mockResolvedValueOnce(true)
+
+    await ensureDaemonRunning()
+
+    expect(mocks.mockStopDaemon).toHaveBeenCalledOnce()
+    expect(mocks.mockSpawnHappyCLI).toHaveBeenCalledOnce()
   })
 })

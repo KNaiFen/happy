@@ -6,7 +6,7 @@
  */
 
 import { logger } from "@/ui/logger";
-import { ApiSessionClient } from "@/api/apiSession";
+import type { ApiSessionClientContract } from "@/api/apiSession";
 import type { AgentState } from "@/api/types";
 import {
     BasePermissionHandler,
@@ -38,7 +38,7 @@ export class CodexPermissionHandler extends BasePermissionHandler {
         'change_title',
     ];
 
-    constructor(session: ApiSessionClient) {
+    constructor(session: ApiSessionClientContract) {
         super(session);
     }
 

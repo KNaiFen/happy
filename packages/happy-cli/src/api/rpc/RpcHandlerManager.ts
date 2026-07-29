@@ -130,6 +130,16 @@ export class RpcHandlerManager {
         this.logger('Cleared all RPC handlers');
     }
 
+    copyHandlersTo(target: RpcHandlerManager): void {
+        const prefix = `${this.scopePrefix}:`;
+        for (const [prefixedMethod, handler] of this.handlers) {
+            const method = prefixedMethod.startsWith(prefix)
+                ? prefixedMethod.slice(prefix.length)
+                : prefixedMethod;
+            target.registerHandler(method, handler);
+        }
+    }
+
     /**
      * Get the prefixed method name
      * @param method - The method name
