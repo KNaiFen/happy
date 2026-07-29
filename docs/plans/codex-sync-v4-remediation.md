@@ -5,7 +5,8 @@
 - 分支：`codex/sync-v4`
 - 基线提交：`8134959e5d1b63e03d615ab22fef7ec7a4f90fb5`
 - 开始日期：2026-07-28
-- 当前状态：实施中，`HAPPY_CODEX_SYNC_V4_ENABLED` 必须保持关闭
+- 当前状态：实现与云端构建验收完成；`HAPPY_CODEX_SYNC_V4_ENABLED`
+  保持关闭，等待协调部署、确认没有旧版 Codex turn 和物理设备验收
 - 权威架构：`docs/decisions/ADR-001-codex-sync-v4.md`
 
 本文件是本轮整改的执行基准。实现中发现新的事实、协议限制或测试失败时，
@@ -1224,3 +1225,12 @@ App/CLI local operation
   export、HTTP 平台配置、四个 workflow YAML 和 `git diff --check` 全部通过。
   最终 APK 的包名、版本、SDK、ABI、manifest、签名和 16 KiB 校验继续由
   App `1.11.11` 云端 release 执行。
+- 2026-07-29：提交 `c901e0be` 的 branch CI `30428400729` 与 main CI
+  `30432845119` 全绿，两个真实十分钟 turn 分别在 `11m15s` 和 `11m14s`
+  完成，required gate 均通过。Android `1.11.11` release
+  `30432844381` 成功：生成态 manifest、签名密钥、ARM64 release 构建、
+  最终 APK 的包名、版本 `1.11.11`、versionCode `11111`、target SDK 36、
+  ARM64-only、cleartext 显式策略、OTA 关闭、源提交、签名证书和 16 KiB
+  对齐检查全部通过。Artifact
+  `happy-app-1.11.11-android-arm64-v8a-no-ota`（ID `8716769835`）已上传；
+  代码与云端构建门禁完成，feature flag 继续等待协调部署和设备验收。
