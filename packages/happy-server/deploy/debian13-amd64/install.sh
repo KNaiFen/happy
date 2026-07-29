@@ -70,8 +70,12 @@ write_env_file() {
 wait_for_health() {
     attempt=1
     while [ "$attempt" -le 60 ]; do
-        if compose exec -T happy-relay \
-            curl --fail --silent --show-error http://127.0.0.1:3005/health >/dev/null 2>&1; then
+        container_id="$(compose ps --quiet happy-relay 2>/dev/null || true)"
+        health_status=""
+        if [ -n "$container_id" ]; then
+            health_status="$(docker inspect "$container_id" --format '{{.State.Health.Status}}' 2>/dev/null || true)"
+        fi
+        if [ "$health_status" = "healthy" ]; then
             return 0
         fi
         sleep 2

@@ -32,6 +32,10 @@ compose() {
         "$@"
 }
 
+container_node() {
+    compose exec -T happy-relay /nodejs/bin/node "$@"
+}
+
 cleanup() {
     if [[ -f "$bundle_root/.env" && -f "$bundle_root/compose.yaml" ]]; then
         compose down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -42,17 +46,23 @@ trap cleanup EXIT
 
 assert_capability() {
     expected="$1"
-    response="$(compose exec -T happy-relay \
-        curl --fail --silent --show-error http://127.0.0.1:3005/v4/capabilities)"
     # JavaScript is single-quoted so the shell cannot expand template literals.
     # shellcheck disable=SC2016
-    node -e '
-        const body = JSON.parse(process.argv[1]);
-        const expected = process.argv[2] === "true";
-        if (body?.codex?.enabled !== expected || body?.codex?.protocolVersion !== 4) {
-            throw new Error(`unexpected v4 capabilities: ${JSON.stringify(body)}`);
-        }
-    ' "$response" "$expected"
+    container_node -e '
+        const expected = process.argv[1] === "true";
+        fetch("http://127.0.0.1:3005/v4/capabilities")
+            .then(async response => {
+                if (!response.ok) throw new Error(`capability request failed: ${response.status}`);
+                const body = await response.json();
+                if (body?.codex?.enabled !== expected || body?.codex?.protocolVersion !== 4) {
+                    throw new Error(`unexpected v4 capabilities: ${JSON.stringify(body)}`);
+                }
+            })
+            .catch(error => {
+                console.error(error);
+                process.exit(1);
+            });
+    ' "$expected"
 }
 
 "$script_dir/verify-debian13-relay-bundle.sh" "$archive" "$expected_version"
@@ -67,12 +77,20 @@ container_id="$(compose ps --quiet happy-relay)"
 [[ "$(compose port happy-relay 3005)" == "127.0.0.1:3005" ]] \
     || die "default relay port must bind only to 127.0.0.1:3005"
 
-compose exec -T happy-relay curl --fail --silent --show-error \
-    http://127.0.0.1:3005/health >/dev/null
+container_node -e '
+    fetch("http://127.0.0.1:3005/health")
+        .then(response => {
+            if (!response.ok) process.exit(1);
+        })
+        .catch(() => process.exit(1));
+'
 assert_capability false
 
-compose exec -T happy-relay test -d /data/pglite
-compose exec -T happy-relay sh -c 'printf "%s\n" persisted > /data/ci-persistence-marker'
+container_node -e '
+    const fs = require("node:fs");
+    if (!fs.statSync("/data/pglite").isDirectory()) process.exit(1);
+    fs.writeFileSync("/data/ci-persistence-marker", "persisted\n");
+'
 
 volume_name="$(docker inspect "$container_id" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
 [[ "$volume_name" == "happy-relay_happy-data" ]] \
@@ -85,7 +103,10 @@ secret_checksum_after="$(sha256sum "$bundle_root/secrets/master-secret" | awk '{
     || die "idempotent install changed the master secret"
 
 "$bundle_root/relayctl.sh" restart
-compose exec -T happy-relay grep -Fxq persisted /data/ci-persistence-marker
+container_node -e '
+    const fs = require("node:fs");
+    if (fs.readFileSync("/data/ci-persistence-marker", "utf8") !== "persisted\n") process.exit(1);
+'
 assert_capability false
 
 "$bundle_root/relayctl.sh" enable-v4
@@ -96,10 +117,11 @@ assert_capability false
 container_id="$(compose ps --quiet happy-relay)"
 [[ "$(docker inspect "$container_id" --format '{{.HostConfig.ReadonlyRootfs}}')" == "true" ]] \
     || die "container root filesystem is not read-only"
-[[ "$(docker inspect "$container_id" --format '{{.Config.User}}')" == "node" ]] \
-    || die "container is not configured to run as the node user"
-[[ "$(compose exec -T happy-relay id -u)" != "0" ]] \
-    || die "relay process is running as root"
+[[ "$(docker inspect "$container_id" --format '{{.Config.User}}')" == "65532:65532" ]] \
+    || die "container is not configured to run as the distroless nonroot user"
+container_node -e '
+    if (typeof process.getuid !== "function" || process.getuid() !== 65532) process.exit(1);
+'
 docker inspect "$container_id" --format '{{json .HostConfig.CapDrop}}' | grep -q '"ALL"' \
     || die "container does not drop all Linux capabilities"
 docker inspect "$container_id" --format '{{json .HostConfig.SecurityOpt}}' | grep -q 'no-new-privileges:true' \
@@ -112,7 +134,23 @@ if docker inspect "$container_id" --format '{{range .Config.Env}}{{println .}}{{
     die "master secret leaked into the container environment"
 fi
 
-compose exec -T happy-relay test ! -e /opt/happy-server/webapp/index.html
-compose exec -T happy-relay grep -Fxq persisted /data/ci-persistence-marker
+container_node -e '
+    const fs = require("node:fs");
+    for (const forbidden of [
+        "/opt/happy-server/webapp/index.html",
+        "/bin/sh",
+        "/bin/bash",
+        "/busybox/sh",
+        "/usr/bin/apt",
+        "/usr/bin/apt-get",
+        "/usr/bin/perl",
+        "/usr/bin/npm",
+        "/usr/local/bin/npm",
+        "/usr/local/lib/node_modules/npm",
+    ]) {
+        if (fs.existsSync(forbidden)) process.exit(1);
+    }
+    if (fs.readFileSync("/data/ci-persistence-marker", "utf8") !== "persisted\n") process.exit(1);
+'
 
 echo "Verified install, idempotency, persistence, security, and v4 toggling for Happy relay $expected_version"

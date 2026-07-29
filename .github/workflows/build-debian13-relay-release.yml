@@ -78,12 +78,22 @@ jobs:
       - name: Lint deployment shell scripts
         run: |
           shellcheck \
-            packages/happy-server/deploy/debian13-amd64/entrypoint.sh \
             packages/happy-server/deploy/debian13-amd64/install.sh \
             packages/happy-server/deploy/debian13-amd64/relayctl.sh \
             scripts/ci/package-debian13-relay-bundle.sh \
             scripts/ci/verify-debian13-relay-bundle.sh \
             scripts/ci/test-debian13-relay-bundle.sh
+
+      - name: Validate distroless Node runtime contract
+        run: |
+          node --check packages/happy-server/deploy/debian13-amd64/entrypoint.mjs
+          node -e '
+            import("./packages/happy-server/dist/standalone.mjs").then(runtime => {
+              if (typeof runtime.runMigrations !== "function" || typeof runtime.serve !== "function") {
+                throw new Error("standalone runtime must export runMigrations and serve");
+              }
+            });
+          '
 
       - name: Validate Compose configuration
         run: |
@@ -137,14 +147,36 @@ jobs:
           test "$(docker image inspect "$IMAGE" --format '{{.Architecture}}')" = amd64
           test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')" = "$VERSION"
           test "$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
-          docker run --rm --entrypoint sh "$IMAGE" -ec '
-            . /etc/os-release
-            test "$ID" = debian
-            test "$VERSION_ID" = 13
-            test "$(id -u)" -ne 0
-            test -f /opt/happy-server/dist/standalone.mjs
-            test -d /opt/happy-server/prisma/migrations
-            test ! -e /opt/happy-server/webapp/index.html
+          test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = 65532:65532
+          docker run --rm --entrypoint /nodejs/bin/node "$IMAGE" -e '
+            const fs = require("node:fs");
+            const release = Object.fromEntries(
+              fs.readFileSync("/etc/os-release", "utf8")
+                .split("\n")
+                .filter(line => line.includes("="))
+                .map(line => {
+                  const separator = line.indexOf("=");
+                  return [line.slice(0, separator), line.slice(separator + 1).replace(/^"|"$/g, "")];
+                }),
+            );
+            if (release.ID !== "debian" || release.VERSION_ID !== "13") process.exit(1);
+            if (typeof process.getuid !== "function" || process.getuid() !== 65532) process.exit(1);
+            if (!fs.statSync("/opt/happy-server/dist/standalone.mjs").isFile()) process.exit(1);
+            if (!fs.statSync("/opt/happy-server/prisma/migrations").isDirectory()) process.exit(1);
+            for (const forbidden of [
+              "/opt/happy-server/webapp/index.html",
+              "/bin/sh",
+              "/bin/bash",
+              "/busybox/sh",
+              "/usr/bin/apt",
+              "/usr/bin/apt-get",
+              "/usr/bin/perl",
+              "/usr/bin/npm",
+              "/usr/local/bin/npm",
+              "/usr/local/lib/node_modules/npm",
+            ]) {
+              if (fs.existsSync(forbidden)) process.exit(1);
+            }
           '
 
       - name: Block Critical image vulnerabilities

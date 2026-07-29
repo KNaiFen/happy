@@ -108,7 +108,7 @@ export async function runMigrations(opts: { pgliteDir: string; migrationsDir?: s
     await pg.close();
 }
 
-async function serve() {
+export async function serve() {
     // Ensure DB_PROVIDER is set for db.ts
     process.env.DB_PROVIDER = process.env.DB_PROVIDER || "pglite";
     process.env.PGLITE_DIR = process.env.PGLITE_DIR || pgliteDir;

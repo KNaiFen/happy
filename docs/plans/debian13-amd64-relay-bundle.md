@@ -31,11 +31,16 @@
    管理脚本、配置示例、说明、SBOM 和 SHA-256 清单。运行时不要求访问 GHCR。
 9. 发行工作流只由 `packages/happy-server/package.json` 的稳定版本递增触发；
    修复失败发行必须再次推进 Server patch，不复用已运行版本。
-10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断；`1.1.16` 在 Docker builder
-    类型检查时发现缺少 App 跨包契约 schema。修复版本目标为 Server `1.1.17`。
-    CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包变化推进版本。
-11. runtime OS 依赖限制为 TLS 根证书和健康检查使用的 `curl`。Server 没有
-    调用 `ffmpeg`，纯 relay 镜像不得携带未使用的音视频与图形依赖树。
+10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断；`1.1.16` 缺少 App 跨包契约
+    schema；`1.1.17` 被 runtime Critical CVE 门禁阻断。修复版本目标为 Server
+    `1.1.18`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
+    变化推进版本。
+11. runtime 使用官方 `gcr.io/distroless/nodejs24-debian13:nonroot` amd64 镜像。
+    入口、健康检查和生命周期断言使用 Node，不携带 shell、npm、Perl、curl、
+    ffmpeg 或其他运行时包管理工具；builder 仍可使用完整工具链。
+12. Trivy 继续扫描 `os,library`、阻断全部 Critical 且保持
+    `ignore-unfixed: false`。不得通过忽略 Debian 无修复 CVE 完成发行；镜像必须
+    从运行时文件系统中移除不需要且触发漏洞的组件。
 
 ## 发行包契约
 
@@ -82,13 +87,16 @@ Compose project name 固定为 `happy-relay`，确保从新版本目录运行时
   `X.Y.Z`。
 - 使用仓库固定 pnpm `10.11.0` 安装 frozen lockfile。
 - 运行 Wire build、Server typecheck、Server unit tests 和 Server runtime build。
+- 直接导入构建后的 `dist/standalone.mjs`，确认 distroless 入口依赖的
+  `runMigrations` 与 `serve` 导出没有被 bundler 丢弃。
 - 使用 ShellCheck、Compose config 和包结构检查验证安装/管理脚本。
 
 ### 镜像门禁
 
 - 使用 Buildx 构建并加载单平台 `linux/amd64` 镜像。
 - 断言 OCI architecture 为 `amd64`，容器内 Debian `VERSION_ID=13`，运行
-  UID 非 0，并确认不存在 `webapp/index.html`。
+  UID 为 distroless nonroot 的 `65532`，并确认不存在 `webapp/index.html`、
+  shell、npm、Perl、APT。
 - Trivy 对可修复和不可修复的 Critical 漏洞均阻断发布，并生成 CycloneDX
   SBOM。
 - 镜像 OCI labels 必须包含 Server 版本、源提交和仓库 URL。
@@ -163,3 +171,10 @@ secret 和 named volume 必须保持原值。
 - 2026-07-29：失败镜像日志显示未使用的 `ffmpeg` 依赖树安装耗时约 98 秒；仓库
   检索确认 Server 不调用它。`1.1.17` 同步移除 `ffmpeg`，缩小镜像、攻击面和
   Trivy 扫描面，只保留 `ca-certificates` 与 `curl`。
+- 2026-07-29：分支 CI run `30445575275` 全绿，真实 Codex turn 持续
+  `10m57s`。main 发行 run `30446371278` 的镜像构建和 relay-only 身份检查通过，
+  随后 Trivy 阻断 5 个 Critical：Node runtime 自带 npm 的 `tar 7.5.15` 有
+  `7.5.19` 修复，Debian slim 的 `perl-base` 有 4 个当前无修复项，其中一个仅
+  影响 32 位。`1.1.17` 不得复用；`1.1.18` 改用官方 Node 24 Debian 13
+  distroless nonroot runtime，彻底移除 npm、Perl、shell 和多余 OS 工具，同时
+  保持 Critical 门禁不放宽。

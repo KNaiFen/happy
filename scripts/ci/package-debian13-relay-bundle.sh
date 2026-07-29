@@ -76,7 +76,7 @@ package_version="$(node -e 'const p=require(process.argv[1]); process.stdout.wri
 [[ "$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')" == "$version" ]] \
     || die "Docker image version label does not match $version"
 
-for source_file in Dockerfile entrypoint.sh compose.yaml env.example install.sh relayctl.sh README.md; do
+for source_file in Dockerfile entrypoint.mjs compose.yaml env.example install.sh relayctl.sh README.md; do
     [[ -f "$deploy_dir/$source_file" ]] || die "deployment source is missing: $source_file"
 done
 

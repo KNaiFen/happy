@@ -4,6 +4,10 @@
 数据库、数据库迁移和本地附件存储，不包含 Web App，也不依赖外部 PostgreSQL、
 Redis 或 S3。
 
+运行镜像基于 Debian 13 distroless，以固定的非 root UID 启动。镜像有意不包含
+shell、npm、Perl、curl 或包管理器；请使用随包提供的 `relayctl.sh` 管理和诊断，
+容器内 `docker exec ... sh` 不可用。
+
 ## 要求
 
 - Debian 13 x86_64（amd64）

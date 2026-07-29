@@ -58,11 +58,12 @@ RUN pnpm --filter @slopus/happy-wire build \
     && pnpm --filter happy-server-self-host generate \
     && pnpm --filter happy-server-self-host build \
     && pnpm --filter happy-server-self-host deploy --prod --legacy /opt/happy-server \
+    && mkdir -p /opt/happy-data \
     && test -f /opt/happy-server/dist/standalone.mjs \
     && test -d /opt/happy-server/prisma/migrations \
     && test ! -e /opt/happy-server/webapp/index.html
 
-FROM node:24-trixie-slim AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot AS runtime
 
 ARG HAPPY_SERVER_VERSION=dev
 ARG VCS_REF=unknown
@@ -75,12 +76,6 @@ LABEL org.opencontainers.image.title="Happy Relay Server" \
       org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.licenses="MIT"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data \
-    && chown node:node /data
-
 ENV NODE_ENV=production \
     DATA_DIR=/data \
     PGLITE_DIR=/data/pglite \
@@ -91,15 +86,16 @@ ENV NODE_ENV=production \
 
 WORKDIR /opt/happy-server
 
-COPY --from=builder --chown=node:node /opt/happy-server/ ./
-COPY --chmod=0755 packages/happy-server/deploy/debian13-amd64/entrypoint.sh /usr/local/bin/happy-relay-entrypoint
+COPY --from=builder --chown=65532:65532 /opt/happy-server/ ./
+COPY --from=builder --chown=65532:65532 /opt/happy-data/ /data/
+COPY --chown=65532:65532 packages/happy-server/deploy/debian13-amd64/entrypoint.mjs ./entrypoint.mjs
 
-USER node
+USER 65532:65532
 
 VOLUME ["/data"]
 EXPOSE 3005
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=12 \
-    CMD curl --fail --silent --show-error http://127.0.0.1:3005/health >/dev/null || exit 1
+    CMD ["/nodejs/bin/node", "-e", "fetch('http://127.0.0.1:3005/health').then(response => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));"]
 
-ENTRYPOINT ["happy-relay-entrypoint"]
+ENTRYPOINT ["/nodejs/bin/node", "/opt/happy-server/entrypoint.mjs"]
