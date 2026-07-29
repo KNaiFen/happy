@@ -44,6 +44,8 @@ assert_capability() {
     expected="$1"
     response="$(compose exec -T happy-relay \
         curl --fail --silent --show-error http://127.0.0.1:3005/v4/capabilities)"
+    # JavaScript is single-quoted so the shell cannot expand template literals.
+    # shellcheck disable=SC2016
     node -e '
         const body = JSON.parse(process.argv[1]);
         const expected = process.argv[2] === "true";

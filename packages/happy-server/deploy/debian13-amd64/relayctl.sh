@@ -4,7 +4,7 @@ set -eu
 
 umask 077
 
-script_dir="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+script_dir="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 compose_file="$script_dir/compose.yaml"
 env_file="$script_dir/.env"
 secret_file="$script_dir/secrets/master-secret"

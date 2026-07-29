@@ -72,6 +72,8 @@ fi
 image_archive="image/happy-relay-server-${version}-debian13-amd64.image.tar.gz"
 [[ -f "$bundle_root/$image_archive" ]] || die "versioned Docker image archive is missing"
 
+# JavaScript is single-quoted so the shell cannot expand template literals.
+# shellcheck disable=SC2016
 node -e '
     const fs = require("node:fs");
     const manifest = fs.readFileSync(process.argv[1], "utf8").trim().split("\n");
@@ -105,6 +107,8 @@ directory_count="$(find "$bundle_root" -type d | wc -l | tr -d ' ')"
 [[ -x "$bundle_root/install.sh" ]] || die "install.sh is not executable"
 [[ -x "$bundle_root/relayctl.sh" ]] || die "relayctl.sh is not executable"
 
+# JavaScript is single-quoted so the shell cannot expand template literals.
+# shellcheck disable=SC2016
 node -e '
     const fs = require("node:fs");
     for (const file of process.argv.slice(1)) {

@@ -31,7 +31,8 @@
    管理脚本、配置示例、说明、SBOM 和 SHA-256 清单。运行时不要求访问 GHCR。
 9. 发行工作流只由 `packages/happy-server/package.json` 的稳定版本递增触发；
    修复失败发行必须再次推进 Server patch，不复用已运行版本。
-10. 本轮 Server 目标版本为 `1.1.15`。CLI `1.4.5`、App `1.11.11`、Wire
+10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断，未进入镜像构建；修复版本目标为
+    Server `1.1.16`。CLI `1.4.5`、App `1.11.11`、Wire
     `0.1.3` 不因纯 Server 打包变化推进版本。
 
 ## 发行包契约
@@ -148,3 +149,7 @@ secret 和 named volume 必须保持原值。
 - 2026-07-29：本地 Server typecheck 与 `110/110` 测试通过；本机没有 Docker、
   ShellCheck、actionlint 或 Bun，镜像/runtime build 和真实生命周期按约束留给
   GitHub Actions。待分支 CI、main CI、发行工作流及下载后复验完成后关闭计划。
+- 2026-07-29：main 发行 run `30443462489` 在镜像构建前被 ShellCheck 阻断：
+  两处 SC1007 和三处有意单引号 JavaScript 的 SC2016。修复使用明确的空
+  `CDPATH` 与局部 SC2016 抑制；因 `1.1.15` 已运行发行 workflow，目标推进到
+  `1.1.16`，不得复用失败版本。
