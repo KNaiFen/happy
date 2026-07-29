@@ -13,6 +13,7 @@ import {
     PermissionResult,
     PendingRequest
 } from '@/utils/BasePermissionHandler';
+import { syncV4DiagnosticHash } from '@/api/syncV4Diagnostics';
 
 // Re-export types for backwards compatibility
 export type { PermissionResult, PendingRequest };
@@ -78,7 +79,10 @@ export class CodexPermissionHandler extends BasePermissionHandler {
         input: unknown
     ): Promise<PermissionResult> {
         if (this.shouldAutoApprove(toolName, toolCallId)) {
-            logger.debug(`${this.getLogPrefix()} Auto-approving tool ${toolName} (${toolCallId})`);
+            logger.debug(`${this.getLogPrefix()} Auto-approving tool`, {
+                toolHash: syncV4DiagnosticHash(toolName),
+                requestHash: syncV4DiagnosticHash(toolCallId),
+            });
 
             this.session.updateAgentState((currentState) => ({
                 ...currentState,
@@ -110,7 +114,10 @@ export class CodexPermissionHandler extends BasePermissionHandler {
             // Update agent state with pending request
             this.addPendingRequestToState(toolCallId, toolName, input);
 
-            logger.debug(`${this.getLogPrefix()} Permission request sent for tool: ${toolName} (${toolCallId})`);
+            logger.debug(`${this.getLogPrefix()} Permission request sent`, {
+                toolHash: syncV4DiagnosticHash(toolName),
+                requestHash: syncV4DiagnosticHash(toolCallId),
+            });
         });
     }
 }

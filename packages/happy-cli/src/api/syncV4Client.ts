@@ -18,6 +18,10 @@ import {
     SyncMutationV4Schema,
     SyncSnapshotRequiredV4Schema,
     SyncSnapshotResponseV4Schema,
+    classifySyncV4DiagnosticError,
+    recordSyncV4DiagnosticSafely,
+    requireSyncV4TraceEcho,
+    requireSyncV4TraceId,
     syncV4Utf8ByteLength,
     type CodexEntityV4,
     type CodexCommandEntityV4,
@@ -30,15 +34,19 @@ import {
     type SyncMutationOperationV4,
     type SyncMutationV4,
     type SyncSnapshotResponseV4,
+    type SyncV4DiagnosticInput,
+    type SyncV4DiagnosticSink,
+    type SyncV4DiagnosticTransportSecurity,
 } from "@slopus/happy-wire";
 import { configuration } from "@/configuration";
 import { logger } from "@/ui/logger";
 import { AsyncLock } from "@/utils/lock";
 import { InvalidateSync } from "@/utils/sync";
 import axios from "axios";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { SyncV4Crypto } from "./syncV4Crypto";
+import { createSyncV4TraceId, syncV4DiagnosticHash } from "./syncV4Diagnostics";
 import {
     SyncV4Journal,
     type SyncV4CodexNotification,
@@ -57,9 +65,23 @@ const BACKGROUND_OUTBOUND_BATCH_BUDGET = 16;
 const COMPACTION_CHECK_BATCH_INTERVAL = 16;
 
 export interface SyncV4Transport {
-    postMutations(sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4>;
-    getChanges(sessionId: string, afterSeq: number, limit: number): Promise<ReturnType<typeof SyncChangesResponseV4Schema.parse>>;
-    getSnapshot(sessionId: string, cursor: string | null, limit: number): Promise<SyncSnapshotResponseV4>;
+    postMutations(
+        sessionId: string,
+        mutations: SyncMutationV4[],
+        traceId?: string,
+    ): Promise<SyncMutationBatchResponseV4>;
+    getChanges(
+        sessionId: string,
+        afterSeq: number,
+        limit: number,
+        traceId?: string,
+    ): Promise<ReturnType<typeof SyncChangesResponseV4Schema.parse>>;
+    getSnapshot(
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        traceId?: string,
+    ): Promise<SyncSnapshotResponseV4>;
 }
 
 export class SyncV4SnapshotRequiredError extends Error {
@@ -71,6 +93,21 @@ export class SyncV4SnapshotRequiredError extends Error {
     }
 }
 
+class SyncV4ProtocolError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "SyncV4ProtocolError";
+    }
+}
+
+function diagnosticErrorKind(
+    error: unknown,
+    fallback: ReturnType<typeof classifySyncV4DiagnosticError>,
+): ReturnType<typeof classifySyncV4DiagnosticError> {
+    const classified = classifySyncV4DiagnosticError(error);
+    return classified === "unknown" ? fallback : classified;
+}
+
 export class AxiosSyncV4Transport implements SyncV4Transport {
     constructor(
         private readonly serverUrl: string,
@@ -78,13 +115,18 @@ export class AxiosSyncV4Transport implements SyncV4Transport {
         private readonly happyClient: string,
     ) {}
 
-    async postMutations(sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4> {
+    async postMutations(
+        sessionId: string,
+        mutations: SyncMutationV4[],
+        traceId?: string,
+    ): Promise<SyncMutationBatchResponseV4> {
         const body = SyncMutationBatchV4Schema.parse({ mutations });
         const response = await axios.post(
             `${this.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/mutations`,
             body,
-            { headers: this.headers(), timeout: 60_000 },
+            { headers: this.headers(traceId), timeout: 60_000 },
         );
+        validateAxiosTraceEcho(response, traceId);
         return SyncMutationBatchResponseV4Schema.parse(response.data);
     }
 
@@ -92,19 +134,22 @@ export class AxiosSyncV4Transport implements SyncV4Transport {
         sessionId: string,
         afterSeq: number,
         limit: number,
+        traceId?: string,
     ): Promise<ReturnType<typeof SyncChangesResponseV4Schema.parse>> {
         try {
             const response = await axios.get(
                 `${this.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/changes`,
                 {
                     params: { after_seq: afterSeq, limit },
-                    headers: this.headers(),
+                    headers: this.headers(traceId),
                     timeout: 60_000,
                 },
             );
+            validateAxiosTraceEcho(response, traceId);
             return SyncChangesResponseV4Schema.parse(response.data);
         } catch (error) {
             if (axios.isAxiosError(error) && error.response?.status === 410) {
+                validateAxiosTraceEcho(error.response, traceId);
                 const required = SyncSnapshotRequiredV4Schema.parse(error.response.data);
                 throw new SyncV4SnapshotRequiredError(required.minimumSeq, required.highWatermark);
             }
@@ -112,23 +157,30 @@ export class AxiosSyncV4Transport implements SyncV4Transport {
         }
     }
 
-    async getSnapshot(sessionId: string, cursor: string | null, limit: number): Promise<SyncSnapshotResponseV4> {
+    async getSnapshot(
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        traceId?: string,
+    ): Promise<SyncSnapshotResponseV4> {
         const response = await axios.get(
             `${this.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/snapshot`,
             {
                 params: { ...(cursor ? { cursor } : {}), limit },
-                headers: this.headers(),
+                headers: this.headers(traceId),
                 timeout: 60_000,
             },
         );
+        validateAxiosTraceEcho(response, traceId);
         return SyncSnapshotResponseV4Schema.parse(response.data);
     }
 
-    private headers(): Record<string, string> {
+    private headers(traceId?: string): Record<string, string> {
         return {
             Authorization: `Bearer ${this.token}`,
             "Content-Type": "application/json",
             "X-Happy-Client": this.happyClient,
+            ...(traceId ? { "X-Happy-Sync-Trace": requireSyncV4TraceId(traceId) } : {}),
         };
     }
 }
@@ -155,6 +207,9 @@ interface SyncV4ClientOptions {
     serverUrl?: string;
     journalRoot?: string;
     pollIntervalMs?: number;
+    diagnostics?: SyncV4DiagnosticSink;
+    generateTraceId?: () => string;
+    transportSecurity?: SyncV4DiagnosticTransportSecurity;
 }
 
 export class SyncV4Client {
@@ -165,8 +220,12 @@ export class SyncV4Client {
         });
         try {
             const crypto = await SyncV4Crypto.create({ sessionId: options.sessionId, sessionKey: options.sessionKey });
+            const diagnosticSessionId = (
+                await crypto.opaqueEntityId("codex.runtime", "__happy_sync_v4_diagnostic_session__")
+            ).slice(0, 16);
+            const serverUrl = options.serverUrl ?? configuration.serverUrl;
             const transport = options.transport ?? new AxiosSyncV4Transport(
-                options.serverUrl ?? configuration.serverUrl,
+                serverUrl,
                 requiredToken(options.token),
                 `cli-coding-session/${configuration.currentCliVersion}`,
             );
@@ -177,6 +236,10 @@ export class SyncV4Client {
                 transport,
                 options.onEntity,
                 options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+                options.diagnostics ?? null,
+                diagnosticSessionId,
+                options.generateTraceId ?? createSyncV4TraceId,
+                options.transportSecurity ?? syncV4TransportSecurity(serverUrl),
             );
         } catch (error) {
             await journal.close();
@@ -193,7 +256,6 @@ export class SyncV4Client {
     private started = false;
     private disposed = false;
     private lifecycleGeneration = 0;
-    private readonly diagnosticSessionId: string;
     private journalClosePromise: Promise<void> | null = null;
 
     private constructor(
@@ -203,8 +265,11 @@ export class SyncV4Client {
         private readonly transport: SyncV4Transport,
         private readonly onEntity: (event: SyncV4AppliedEntity) => Promise<void>,
         private readonly pollIntervalMs: number,
+        private readonly diagnostics: SyncV4DiagnosticSink | null,
+        private readonly diagnosticSessionId: string,
+        private readonly generateTraceId: () => string,
+        private readonly transportSecurity: SyncV4DiagnosticTransportSecurity,
     ) {
-        this.diagnosticSessionId = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
         this.sendSync = new InvalidateSync(() => this.flushOutboundForGeneration(
             this.lifecycleGeneration,
             BACKGROUND_OUTBOUND_BATCH_BUDGET,
@@ -220,11 +285,24 @@ export class SyncV4Client {
         return this.journal.snapshot().receiveCursor;
     }
 
+    get diagnosticSessionHash(): string {
+        return this.diagnosticSessionId;
+    }
+
     async start(): Promise<void> {
         if (this.started) return;
         if (this.disposed) throw new Error("Sync v4 client has been stopped");
         const generation = this.lifecycleGeneration;
         this.started = true;
+        this.recordDiagnostic({
+            level: "info",
+            event: "lifecycle",
+            phase: "started",
+            state: "starting",
+            generation,
+            cursor: this.receiveCursor,
+            featureEnabled: true,
+        });
         this.logJournalDiagnostics("start");
         try {
             await this.processPendingInbound(generation);
@@ -238,14 +316,43 @@ export class SyncV4Client {
                 this.started = false;
                 this.lifecycleGeneration += 1;
             }
+            this.recordDiagnostic({
+                level: "error",
+                event: "lifecycle",
+                phase: "failed",
+                state: "failed",
+                generation,
+                errorKind: classifySyncV4DiagnosticError(error),
+            });
             throw error;
         }
         this.pollTimer = setInterval(() => this.receiveSync.invalidate(), this.pollIntervalMs);
         this.pollTimer.unref();
+        this.recordDiagnostic({
+            level: "info",
+            event: "lifecycle",
+            phase: "completed",
+            state: "ready",
+            generation,
+            cursor: this.receiveCursor,
+        });
     }
 
     stop(): void {
         if (this.disposed) return;
+        const journalDiagnostics = this.journal.diagnostics();
+        this.logJournalDiagnostics("stop");
+        this.recordDiagnostic({
+            level: "info",
+            event: "lifecycle",
+            phase: "started",
+            state: "stopping",
+            generation: this.lifecycleGeneration,
+            cursor: this.receiveCursor,
+            pending: journalDiagnostics.pendingOutboundDepth
+                + journalDiagnostics.pendingInboundDepth,
+            featureEnabled: true,
+        });
         this.disposed = true;
         this.started = false;
         this.lifecycleGeneration += 1;
@@ -254,6 +361,17 @@ export class SyncV4Client {
         this.sendSync.stop();
         this.receiveSync.stop();
         this.journalClosePromise = this.journal.close();
+        this.recordDiagnostic({
+            level: "info",
+            event: "lifecycle",
+            phase: "completed",
+            state: "stopped",
+            generation: this.lifecycleGeneration,
+            cursor: this.receiveCursor,
+            pending: journalDiagnostics.pendingOutboundDepth
+                + journalDiagnostics.pendingInboundDepth,
+            featureEnabled: true,
+        });
     }
 
     async close(): Promise<void> {
@@ -310,6 +428,18 @@ export class SyncV4Client {
                 this.assertCurrentGeneration(generation);
             }
             await this.journal.appendOutbound(nextMutations);
+            this.recordDiagnostic({
+                level: "debug",
+                event: "outbox",
+                phase: "enqueued",
+                direction: "outbound",
+                count: nextMutations.length,
+                depth: this.journal.snapshot().pendingOutbound.length,
+                bytes: nextMutations.reduce(
+                    (total, mutation) => total + syncV4Utf8ByteLength(mutation.ciphertext),
+                    0,
+                ),
+            });
             return nextMutations;
         });
         if (this.started) this.sendSync.invalidate();
@@ -350,6 +480,17 @@ export class SyncV4Client {
             });
             this.assertCurrentGeneration(generation);
             await this.journal.appendCommandTransition(command.commandId, status, next, command);
+            this.recordDiagnostic({
+                level: status === "failed" || status === "resultUnknown" || status === "notReplayed"
+                    ? "warn"
+                    : "debug",
+                event: "request",
+                phase: "changed",
+                source: "command",
+                commandHash: syncV4DiagnosticHash(command.commandId),
+                state: status,
+                revision,
+            });
             return next;
         });
         if (this.started) this.sendSync.invalidate();
@@ -397,6 +538,15 @@ export class SyncV4Client {
                 next,
                 response,
             );
+            this.recordDiagnostic({
+                level: state === "outcomeUnknown" ? "warn" : "debug",
+                event: "request",
+                phase: "changed",
+                source: "notification",
+                requestHash: syncV4DiagnosticHash(canonicalRequest.requestId),
+                state,
+                revision,
+            });
             return next;
         });
         if (this.started) this.sendSync.invalidate();
@@ -421,6 +571,14 @@ export class SyncV4Client {
                 undefined,
                 response,
             );
+            this.recordDiagnostic({
+                level: "debug",
+                event: "request",
+                phase: "changed",
+                source: "notification",
+                requestHash: syncV4DiagnosticHash(request.requestId),
+                state,
+            });
         });
     }
 
@@ -448,15 +606,92 @@ export class SyncV4Client {
                 if (pending.length === 0) break;
                 if (batchBudget !== null && processedBatches >= batchBudget) break;
                 const batch = takeMutationBatch(pending);
-                const response = await this.transport.postMutations(this.sessionId, batch);
+                const traceId = this.nextTraceId();
+                const startedAt = Date.now();
+                this.recordDiagnostic({
+                    level: "debug",
+                    event: "transport",
+                    phase: "started",
+                    direction: "outbound",
+                    transportOperation: "mutations",
+                    traceId,
+                    count: batch.length,
+                    bytes: batch.reduce(
+                        (total, mutation) => total + syncV4Utf8ByteLength(mutation.ciphertext),
+                        0,
+                    ),
+                    depth: pending.length,
+                });
+                let response: SyncMutationBatchResponseV4;
+                try {
+                    response = await this.transport.postMutations(this.sessionId, batch, traceId);
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: "warn",
+                        event: "transport",
+                        phase: "failed",
+                        direction: "outbound",
+                        transportOperation: "mutations",
+                        traceId,
+                        count: batch.length,
+                        durationMs: elapsedMs(startedAt),
+                        errorKind: classifySyncV4DiagnosticError(error),
+                    });
+                    throw error;
+                }
                 if (!this.isCurrentGeneration(generation)) return;
-                validateAcknowledgements(batch, response.acknowledgements);
-                await this.journal.appendAcknowledgements(response.acknowledgements);
+                try {
+                    validateAcknowledgements(batch, response.acknowledgements);
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: "error",
+                        event: "ack",
+                        phase: "failed",
+                        direction: "inbound",
+                        transportOperation: "mutations",
+                        traceId,
+                        count: response.acknowledgements.length,
+                        durationMs: elapsedMs(startedAt),
+                        errorKind: "protocol",
+                    });
+                    throw error;
+                }
+                try {
+                    await this.journal.appendAcknowledgements(response.acknowledgements);
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: "error",
+                        event: "journal",
+                        phase: "failed",
+                        direction: "inbound",
+                        traceId,
+                        count: response.acknowledgements.length,
+                        errorKind: "storage",
+                    });
+                    throw error;
+                }
                 processedBatches += 1;
+                const accepted = response.acknowledgements.filter((ack) => ack.status === "accepted").length;
+                const duplicate = response.acknowledgements.filter((ack) => ack.status === "duplicate").length;
+                const superseded = response.acknowledgements.filter((ack) => ack.status === "superseded").length;
+                this.recordDiagnostic({
+                    level: "debug",
+                    event: "transport",
+                    phase: "completed",
+                    direction: "outbound",
+                    transportOperation: "mutations",
+                    traceId,
+                    count: response.acknowledgements.length,
+                    accepted,
+                    duplicate,
+                    superseded,
+                    durationMs: elapsedMs(startedAt),
+                    depth: this.journal.snapshot().pendingOutbound.length,
+                });
                 this.logJournalDiagnostics("ack", {
-                    accepted: response.acknowledgements.filter((ack) => ack.status === "accepted").length,
-                    duplicate: response.acknowledgements.filter((ack) => ack.status === "duplicate").length,
-                    superseded: response.acknowledgements.filter((ack) => ack.status === "superseded").length,
+                    accepted,
+                    duplicate,
+                    superseded,
                 });
                 if (processedBatches % COMPACTION_CHECK_BATCH_INTERVAL === 0) {
                     await this.journal.compactIfNeeded();
@@ -487,11 +722,39 @@ export class SyncV4Client {
                 const cursor = this.receiveCursor;
                 if (targetWatermark !== null && cursor >= targetWatermark) break;
                 let response: ReturnType<typeof SyncChangesResponseV4Schema.parse>;
+                const traceId = this.nextTraceId();
+                const startedAt = Date.now();
+                this.recordDiagnostic({
+                    level: "debug",
+                    event: "transport",
+                    phase: "started",
+                    direction: "inbound",
+                    transportOperation: "changes",
+                    traceId,
+                    cursor,
+                });
                 try {
-                    response = await this.transport.getChanges(this.sessionId, cursor, CHANGES_PAGE_SIZE);
+                    response = await this.transport.getChanges(
+                        this.sessionId,
+                        cursor,
+                        CHANGES_PAGE_SIZE,
+                        traceId,
+                    );
                 } catch (error) {
                     if (!this.isCurrentGeneration(generation)) return;
                     if (error instanceof SyncV4SnapshotRequiredError) {
+                        this.recordDiagnostic({
+                            level: "warn",
+                            event: "snapshot",
+                            phase: "required",
+                            direction: "inbound",
+                            transportOperation: "changes",
+                            traceId,
+                            cursor,
+                            highWatermark: error.highWatermark,
+                            seq: error.minimumSeq,
+                            durationMs: elapsedMs(startedAt),
+                        });
                         logger.debug("[Sync v4] Snapshot fallback", {
                             session: this.diagnosticSessionId,
                             minimumSeq: error.minimumSeq,
@@ -500,18 +763,74 @@ export class SyncV4Client {
                         await this.rebuildFromSnapshot(generation);
                         continue;
                     }
+                    this.recordDiagnostic({
+                        level: "warn",
+                        event: "transport",
+                        phase: "failed",
+                        direction: "inbound",
+                        transportOperation: "changes",
+                        traceId,
+                        cursor,
+                        durationMs: elapsedMs(startedAt),
+                        errorKind: classifySyncV4DiagnosticError(error),
+                    });
                     throw error;
                 }
                 if (!this.isCurrentGeneration(generation)) return;
-                if (response.highWatermark < cursor) {
-                    throw new Error("Sync v4 server watermark moved backwards");
+                const drainWatermark: number = targetWatermark ?? response.highWatermark;
+                let changesInDrain: typeof response.changes;
+                try {
+                    if (response.highWatermark < cursor) {
+                        throw new Error("Sync v4 server watermark moved backwards");
+                    }
+                    if (targetWatermark !== null && response.highWatermark < targetWatermark) {
+                        throw new Error("Sync v4 server watermark moved backwards during a drain");
+                    }
+                    if (response.changes.length === 0) {
+                        if (response.hasMore || cursor < drainWatermark) {
+                            throw new Error("Sync v4 changes response has a sequence gap");
+                        }
+                        changesInDrain = [];
+                    } else {
+                        assertContiguousChanges(response.changes, cursor);
+                        if (response.changes.at(-1)!.seq > response.highWatermark) {
+                            throw new Error("Sync v4 changes exceed the response watermark");
+                        }
+                        changesInDrain = response.changes.filter(
+                            (change) => change.seq <= drainWatermark,
+                        );
+                    }
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: "error",
+                        event: "changes",
+                        phase: "failed",
+                        direction: "inbound",
+                        transportOperation: "changes",
+                        traceId,
+                        cursor,
+                        highWatermark: response.highWatermark,
+                        count: response.changes.length,
+                        durationMs: elapsedMs(startedAt),
+                        errorKind: "protocol",
+                    });
+                    throw error;
                 }
-                if (targetWatermark !== null && response.highWatermark < targetWatermark) {
-                    throw new Error("Sync v4 server watermark moved backwards during a drain");
-                }
-                targetWatermark ??= response.highWatermark;
+                targetWatermark = drainWatermark;
                 latestObservedWatermark = Math.max(latestObservedWatermark, response.highWatermark);
-                const projectionLag = targetWatermark - cursor;
+                this.recordDiagnostic({
+                    level: "debug",
+                    event: "transport",
+                    phase: "completed",
+                    direction: "inbound",
+                    transportOperation: "changes",
+                    traceId,
+                    cursor,
+                    highWatermark: response.highWatermark,
+                    count: response.changes.length,
+                    durationMs: elapsedMs(startedAt),
+                });
+                const projectionLag = drainWatermark - cursor;
                 if (projectionLag > 0 || response.changes.length > 0) {
                     logger.debug("[Sync v4] Projection lag", {
                         session: this.diagnosticSessionId,
@@ -520,15 +839,26 @@ export class SyncV4Client {
                     });
                 }
                 if (response.changes.length === 0) {
-                    if (cursor < targetWatermark) {
-                        throw new Error("Sync v4 changes response has a sequence gap");
-                    }
                     break;
                 }
-                assertContiguousChanges(response.changes, cursor);
-                const changesInDrain = response.changes.filter((change) => change.seq <= targetWatermark!);
                 if (changesInDrain.length === 0) break;
-                await this.journal.appendInbound(changesInDrain);
+                try {
+                    await this.journal.appendInbound(changesInDrain);
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: "error",
+                        event: "journal",
+                        phase: "failed",
+                        direction: "inbound",
+                        transportOperation: "changes",
+                        traceId,
+                        cursor,
+                        highWatermark: response.highWatermark,
+                        count: changesInDrain.length,
+                        errorKind: diagnosticErrorKind(error, "storage"),
+                    });
+                    throw error;
+                }
                 if (!this.isCurrentGeneration(generation)) return;
                 await this.processPendingInbound(generation);
                 processedPages += 1;
@@ -537,7 +867,7 @@ export class SyncV4Client {
                     await this.journal.compactIfNeeded();
                     await yieldToEventLoop();
                 }
-                if (this.receiveCursor >= targetWatermark) break;
+                if (this.receiveCursor >= drainWatermark) break;
             }
             if (!this.isCurrentGeneration(generation)) return;
             await this.journal.compactIfNeeded();
@@ -584,6 +914,16 @@ export class SyncV4Client {
     ): Promise<void> {
         this.assertCurrentGeneration(this.lifecycleGeneration);
         await this.journal.setCommandStatus(commandId, status, command);
+        this.recordDiagnostic({
+            level: status === "failed" || status === "resultUnknown" || status === "notReplayed"
+                ? "warn"
+                : "debug",
+            event: "request",
+            phase: "changed",
+            source: "command",
+            commandHash: syncV4DiagnosticHash(commandId),
+            state: status,
+        });
     }
 
     getMigrationState(threadId: string): SyncV4MigrationJournalState | undefined {
@@ -595,6 +935,14 @@ export class SyncV4Client {
         this.assertCurrentGeneration(generation);
         await this.journal.setMigrationState(threadId, state);
         this.assertCurrentGeneration(generation);
+        this.recordDiagnostic({
+            level: state === "error" ? "error" : "info",
+            event: "migration",
+            phase: "changed",
+            source: "migration",
+            threadHash: syncV4DiagnosticHash(threadId),
+            state,
+        });
     }
 
     getPendingCodexNotifications(): readonly SyncV4PendingCodexNotification[] {
@@ -613,6 +961,14 @@ export class SyncV4Client {
         this.assertCurrentGeneration(generation);
         const pending = await this.journal.appendCodexOrphan(threadId, notification);
         this.assertCurrentGeneration(generation);
+        this.recordDiagnostic({
+            level: "warn",
+            event: "notification",
+            phase: "enqueued",
+            source: "notification",
+            threadHash: syncV4DiagnosticHash(threadId),
+            count: this.journal.snapshot().pendingCodexNotifications.length,
+        });
         return pending;
     }
 
@@ -621,6 +977,14 @@ export class SyncV4Client {
         this.assertCurrentGeneration(generation);
         await this.journal.completeCodexOrphan(notificationId);
         this.assertCurrentGeneration(generation);
+        this.recordDiagnostic({
+            level: "debug",
+            event: "notification",
+            phase: "replayed",
+            source: "recovery",
+            mutationHash: syncV4DiagnosticHash(notificationId),
+            count: this.journal.snapshot().pendingCodexNotifications.length,
+        });
     }
 
     async persistCodexThreadRoute(route: SyncV4CodexThreadRoute): Promise<void> {
@@ -633,80 +997,387 @@ export class SyncV4Client {
     private async processPendingInbound(generation: number): Promise<void> {
         if (!this.isCurrentGeneration(generation)) return;
         const snapshot = this.journal.snapshot();
+        const initialCursor = snapshot.receiveCursor;
+        let applied = 0;
         let expectedSeq = snapshot.receiveCursor + 1;
         for (const change of snapshot.pendingInbound) {
             if (!this.isCurrentGeneration(generation)) return;
             if (change.seq !== expectedSeq) {
-                throw new Error(`Sync v4 inbound journal has a gap before sequence ${change.seq}`);
+                this.recordDiagnostic({
+                    level: "error",
+                    event: "changes",
+                    phase: "failed",
+                    direction: "inbound",
+                    cursor: expectedSeq - 1,
+                    seq: change.seq,
+                    errorKind: "protocol",
+                });
+                throw new SyncV4ProtocolError("Sync v4 inbound journal has a sequence gap");
             }
             const currentRevision = this.journal.snapshot().entityRevisions.get(change.entityId) ?? 0;
             if (change.revision <= currentRevision) {
-                await this.journal.advanceReceiveCursor(change.seq);
+                try {
+                    await this.journal.advanceReceiveCursor(change.seq);
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: "error",
+                        event: "cursor",
+                        phase: "failed",
+                        direction: "inbound",
+                        seq: change.seq,
+                        revision: change.revision,
+                        errorKind: diagnosticErrorKind(error, "storage"),
+                    });
+                    throw error;
+                }
                 expectedSeq += 1;
                 continue;
             }
-            const entity = await this.crypto.decryptEntity(toAad(this.sessionId, change), change.ciphertext);
+            let entity: CodexEntityV4;
+            try {
+                entity = await this.crypto.decryptEntity(
+                    toAad(this.sessionId, change),
+                    change.ciphertext,
+                );
+            } catch (error) {
+                this.recordDiagnostic({
+                    level: "error",
+                    event: "changes",
+                    phase: "failed",
+                    direction: "inbound",
+                    seq: change.seq,
+                    revision: change.revision,
+                    errorKind: diagnosticErrorKind(error, "crypto"),
+                });
+                throw error;
+            }
             if (!this.isCurrentGeneration(generation)) return;
-            await this.onEntity({
-                entity,
-                source: "change",
-                op: change.op,
-                revision: change.revision,
-                seq: change.seq,
-            });
+            const projectionStartedAt = Date.now();
+            try {
+                await this.onEntity({
+                    entity,
+                    source: "change",
+                    op: change.op,
+                    revision: change.revision,
+                    seq: change.seq,
+                });
+            } catch (error) {
+                this.recordDiagnostic({
+                    level: "error",
+                    event: "projection",
+                    phase: "failed",
+                    source: "change",
+                    seq: change.seq,
+                    revision: change.revision,
+                    durationMs: elapsedMs(projectionStartedAt),
+                    errorKind: diagnosticErrorKind(error, "projection"),
+                });
+                throw error;
+            }
             if (!this.isCurrentGeneration(generation)) return;
-            await this.journal.completeInbound(change.entityId, change.revision, change.seq);
+            try {
+                await this.journal.completeInbound(change.entityId, change.revision, change.seq);
+            } catch (error) {
+                this.recordDiagnostic({
+                    level: "error",
+                    event: "cursor",
+                    phase: "failed",
+                    direction: "inbound",
+                    seq: change.seq,
+                    revision: change.revision,
+                    errorKind: diagnosticErrorKind(error, "storage"),
+                });
+                throw error;
+            }
+            applied += 1;
             expectedSeq += 1;
+        }
+        const cursor = this.receiveCursor;
+        if (cursor > initialCursor) {
+            this.recordDiagnostic({
+                level: "debug",
+                event: "cursor",
+                phase: "advanced",
+                direction: "inbound",
+                cursor,
+                count: applied,
+            });
         }
     }
 
     private async rebuildFromSnapshot(generation: number): Promise<void> {
         if (!this.isCurrentGeneration(generation)) return;
+        const snapshotStartedAt = Date.now();
+        this.recordDiagnostic({
+            level: "info",
+            event: "snapshot",
+            phase: "started",
+            direction: "inbound",
+            cursor: this.receiveCursor,
+        });
         let cursor: string | null = null;
         let highWatermark: number | null = null;
         const seenCursors = new Set<string>();
+        const snapshotEntityIds = new Set<string>();
+        const snapshotRevisions = new Map<string, number>();
         const appliedRevisions: Array<{ entityId: string; revision: number }> = [];
-        do {
-            const page = await this.transport.getSnapshot(this.sessionId, cursor, SNAPSHOT_PAGE_SIZE);
-            if (!this.isCurrentGeneration(generation)) return;
-            if (highWatermark === null) highWatermark = page.highWatermark;
-            if (page.highWatermark !== highWatermark) {
-                throw new Error("Sync v4 snapshot watermark changed during pagination");
-            }
-            for (const snapshotEntity of page.entities) {
-                const currentRevision = this.journal.snapshot().entityRevisions.get(snapshotEntity.entityId) ?? 0;
-                if (snapshotEntity.revision <= currentRevision) continue;
-                const entity = await this.crypto.decryptEntity(
-                    toAad(this.sessionId, snapshotEntity),
-                    snapshotEntity.ciphertext,
-                );
-                if (!this.isCurrentGeneration(generation)) return;
-                await this.onEntity({
-                    entity,
-                    source: "snapshot",
-                    op: snapshotEntity.op,
-                    revision: snapshotEntity.revision,
-                    seq: null,
+        let page = 0;
+        let failureKind: ReturnType<typeof classifySyncV4DiagnosticError> = "unknown";
+        try {
+            do {
+                const traceId = this.nextTraceId();
+                const pageStartedAt = Date.now();
+                this.recordDiagnostic({
+                    level: "debug",
+                    event: "transport",
+                    phase: "started",
+                    direction: "inbound",
+                    transportOperation: "snapshot",
+                    traceId,
+                    page,
                 });
+                let snapshotPage: SyncSnapshotResponseV4;
+                try {
+                    failureKind = "network";
+                    snapshotPage = await this.transport.getSnapshot(
+                        this.sessionId,
+                        cursor,
+                        SNAPSHOT_PAGE_SIZE,
+                        traceId,
+                    );
+                } catch (error) {
+                    failureKind = classifySyncV4DiagnosticError(error);
+                    this.recordDiagnostic({
+                        level: "error",
+                        event: "transport",
+                        phase: "failed",
+                        direction: "inbound",
+                        transportOperation: "snapshot",
+                        traceId,
+                        page,
+                        durationMs: elapsedMs(pageStartedAt),
+                        errorKind: failureKind,
+                    });
+                    throw error;
+                }
                 if (!this.isCurrentGeneration(generation)) return;
-                appliedRevisions.push({ entityId: snapshotEntity.entityId, revision: snapshotEntity.revision });
+                failureKind = "protocol";
+                try {
+                    if (highWatermark === null) highWatermark = snapshotPage.highWatermark;
+                    if (snapshotPage.highWatermark !== highWatermark) {
+                        throw new SyncV4ProtocolError(
+                            "Sync v4 snapshot watermark changed during pagination",
+                        );
+                    }
+                    for (const snapshotEntity of snapshotPage.entities) {
+                        if (snapshotEntityIds.has(snapshotEntity.entityId)) {
+                            throw new SyncV4ProtocolError(
+                                "Sync v4 snapshot repeated an entity across pages",
+                            );
+                        }
+                        if (snapshotEntity.updatedSeq > snapshotPage.highWatermark) {
+                            throw new SyncV4ProtocolError(
+                                "Sync v4 snapshot entity exceeds its high watermark",
+                            );
+                        }
+                        snapshotEntityIds.add(snapshotEntity.entityId);
+                    }
+                    if (snapshotPage.nextCursor && seenCursors.has(snapshotPage.nextCursor)) {
+                        throw new SyncV4ProtocolError("Sync v4 snapshot pagination stalled");
+                    }
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: "error",
+                        event: "snapshot",
+                        phase: "failed",
+                        direction: "inbound",
+                        transportOperation: "snapshot",
+                        traceId,
+                        page,
+                        highWatermark: snapshotPage.highWatermark,
+                        count: snapshotPage.entities.length,
+                        durationMs: elapsedMs(pageStartedAt),
+                        errorKind: "protocol",
+                    });
+                    throw error;
+                }
+                this.recordDiagnostic({
+                    level: "debug",
+                    event: "transport",
+                    phase: "completed",
+                    direction: "inbound",
+                    transportOperation: "snapshot",
+                    traceId,
+                    page,
+                    highWatermark: snapshotPage.highWatermark,
+                    count: snapshotPage.entities.length,
+                    durationMs: elapsedMs(pageStartedAt),
+                });
+                for (const snapshotEntity of snapshotPage.entities) {
+                    const currentRevision = Math.max(
+                        this.journal.snapshot().entityRevisions.get(snapshotEntity.entityId) ?? 0,
+                        snapshotRevisions.get(snapshotEntity.entityId) ?? 0,
+                    );
+                    if (snapshotEntity.revision <= currentRevision) continue;
+                    let entity: CodexEntityV4;
+                    try {
+                        failureKind = "crypto";
+                        entity = await this.crypto.decryptEntity(
+                            toAad(this.sessionId, snapshotEntity),
+                            snapshotEntity.ciphertext,
+                        );
+                    } catch (error) {
+                        this.recordDiagnostic({
+                            level: "error",
+                            event: "snapshot",
+                            phase: "failed",
+                            direction: "inbound",
+                            transportOperation: "snapshot",
+                            traceId,
+                            page,
+                            revision: snapshotEntity.revision,
+                            errorKind: diagnosticErrorKind(error, "crypto"),
+                        });
+                        throw error;
+                    }
+                    if (!this.isCurrentGeneration(generation)) return;
+                    const projectionStartedAt = Date.now();
+                    try {
+                        failureKind = "unknown";
+                        await this.onEntity({
+                            entity,
+                            source: "snapshot",
+                            op: snapshotEntity.op,
+                            revision: snapshotEntity.revision,
+                            seq: null,
+                        });
+                    } catch (error) {
+                        this.recordDiagnostic({
+                            level: "error",
+                            event: "projection",
+                            phase: "failed",
+                            source: "snapshot",
+                            revision: snapshotEntity.revision,
+                            durationMs: elapsedMs(projectionStartedAt),
+                            errorKind: diagnosticErrorKind(error, "projection"),
+                        });
+                        throw error;
+                    }
+                    if (!this.isCurrentGeneration(generation)) return;
+                    snapshotRevisions.set(snapshotEntity.entityId, snapshotEntity.revision);
+                    appliedRevisions.push({
+                        entityId: snapshotEntity.entityId,
+                        revision: snapshotEntity.revision,
+                    });
+                }
+                cursor = snapshotPage.nextCursor;
+                if (cursor) seenCursors.add(cursor);
+                page += 1;
+            } while (cursor);
+            if (!this.isCurrentGeneration(generation)) return;
+            try {
+                failureKind = "storage";
+                await this.journal.completeSnapshot(appliedRevisions, highWatermark ?? 0);
+            } catch (error) {
+                this.recordDiagnostic({
+                    level: "error",
+                    event: "cursor",
+                    phase: "failed",
+                    direction: "inbound",
+                    highWatermark: highWatermark ?? 0,
+                    count: appliedRevisions.length,
+                    errorKind: diagnosticErrorKind(error, "storage"),
+                });
+                throw error;
             }
-            cursor = page.nextCursor;
-            if (cursor && seenCursors.has(cursor)) throw new Error("Sync v4 snapshot pagination stalled");
-            if (cursor) seenCursors.add(cursor);
-        } while (cursor);
-        if (!this.isCurrentGeneration(generation)) return;
-        await this.journal.completeSnapshot(appliedRevisions, highWatermark ?? 0);
-        this.logJournalDiagnostics("snapshot");
+            this.recordDiagnostic({
+                level: "info",
+                event: "snapshot",
+                phase: "completed",
+                direction: "inbound",
+                cursor: highWatermark ?? 0,
+                highWatermark: highWatermark ?? 0,
+                count: appliedRevisions.length,
+                page,
+                durationMs: elapsedMs(snapshotStartedAt),
+            });
+            this.logJournalDiagnostics("snapshot");
+        } catch (error) {
+            this.recordDiagnostic({
+                level: "error",
+                event: "snapshot",
+                phase: "failed",
+                direction: "inbound",
+                count: appliedRevisions.length,
+                page,
+                durationMs: elapsedMs(snapshotStartedAt),
+                errorKind: diagnosticErrorKind(error, failureKind),
+            });
+            throw error;
+        }
     }
 
-    private logJournalDiagnostics(event: "start" | "ack" | "projection" | "snapshot", extra = {}): void {
+    private logJournalDiagnostics(event: "start" | "ack" | "projection" | "snapshot" | "stop", extra = {}): void {
+        const journal = this.journal.diagnostics();
+        this.recordDiagnostic({
+            level: "debug",
+            event: "journal",
+            phase: event === "start"
+                ? "restored"
+                : event === "stop"
+                    ? "completed"
+                : event === "ack"
+                    ? "acknowledged"
+                    : event === "snapshot"
+                        ? "completed"
+                        : "applied",
+            direction: "outbound",
+            depth: journal.pendingOutboundDepth,
+            ...(journal.pendingOutboundOldestAgeMs === null
+                ? {}
+                : { ageMs: Math.trunc(journal.pendingOutboundOldestAgeMs) }),
+        });
+        this.recordDiagnostic({
+            level: "debug",
+            event: "journal",
+            phase: event === "start"
+                ? "restored"
+                : event === "stop"
+                    ? "completed"
+                : event === "snapshot"
+                    ? "completed"
+                    : "applied",
+            direction: "inbound",
+            depth: journal.pendingInboundDepth,
+            ...(journal.pendingInboundOldestAgeMs === null
+                ? {}
+                : { ageMs: Math.trunc(journal.pendingInboundOldestAgeMs) }),
+            cursor: this.receiveCursor,
+        });
         logger.debug("[Sync v4] Journal", {
             session: this.diagnosticSessionId,
             event,
-            ...this.journal.diagnostics(),
+            ...journal,
             ...extra,
         });
+    }
+
+    private recordDiagnostic(
+        input: Omit<SyncV4DiagnosticInput, "component" | "sessionHash">,
+    ): void {
+        recordSyncV4DiagnosticSafely(this.diagnostics, {
+            component: "cli.sync",
+            sessionHash: this.diagnosticSessionId,
+            softwareVersion: configuration.currentCliVersion,
+            protocolVersion: 4,
+            featureEnabled: true,
+            transportSecurity: this.transportSecurity,
+            ...input,
+        });
+    }
+
+    private nextTraceId(): string {
+        return requireSyncV4TraceId(this.generateTraceId());
     }
 
     private isCurrentGeneration(generation: number): boolean {
@@ -725,8 +1396,46 @@ function requiredToken(token: string | undefined): string {
     return token;
 }
 
+function syncV4TransportSecurity(serverUrl: string): SyncV4DiagnosticTransportSecurity {
+    try {
+        return new URL(serverUrl).protocol === "http:" ? "insecureHttp" : "https";
+    } catch {
+        return "https";
+    }
+}
+
+function validateAxiosTraceEcho(
+    response: { headers?: unknown },
+    traceId?: string,
+): void {
+    requireSyncV4TraceEcho(traceId, axiosTraceHeader(response.headers));
+}
+
+function axiosTraceHeader(headers: unknown): string | undefined {
+    try {
+        if (!headers || typeof headers !== "object") return undefined;
+        const get = (headers as { get?: unknown }).get;
+        if (typeof get === "function") {
+            const value = get.call(headers, "X-Happy-Sync-Trace");
+            return typeof value === "string" ? value : undefined;
+        }
+        const record = headers as Record<string, unknown>;
+        const value = record["x-happy-sync-trace"] ?? record["X-Happy-Sync-Trace"];
+        if (typeof value === "string") return value;
+        return Array.isArray(value) && value.length === 1 && typeof value[0] === "string"
+            ? value[0]
+            : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 function yieldToEventLoop(): Promise<void> {
     return new Promise((resolve) => setImmediate(resolve));
+}
+
+function elapsedMs(startedAt: number): number {
+    return Math.max(0, Math.trunc(Date.now() - startedAt));
 }
 
 function takeMutationBatch(pending: SyncMutationV4[]): SyncMutationV4[] {

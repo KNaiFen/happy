@@ -1,4 +1,18 @@
+import {
+    classifySyncV4DiagnosticError,
+    recordSyncV4DiagnosticSafely,
+    type SyncV4DiagnosticInput,
+    type SyncV4DiagnosticSink,
+    type SyncV4DiagnosticTransportSecurity,
+} from '@slopus/happy-wire';
+import {
+    appSyncV4DiagnosticStatsAreDegraded,
+    readAppSyncV4DiagnosticStatsSafely,
+    type AppSyncV4DiagnosticStatsProvider,
+} from './syncV4Diagnostics';
+
 export interface CodexV4RegistryClient {
+    readonly diagnosticSessionId?: string;
     start(): Promise<void>;
     stop(): void;
     invalidate(highWatermark?: number): void;
@@ -44,8 +58,12 @@ interface CodexV4ClientRegistryOptions<TClient extends CodexV4RegistryClient, TE
     onEntities?: (sessionId: string, events: readonly TEvent[]) => Promise<void>;
     onSnapshotReset: (sessionId: string) => Promise<void>;
     onSnapshotReplace?: (sessionId: string, events: readonly TEvent[]) => Promise<void>;
-    onStartError?: (sessionId: string) => void;
+    onStartError?: (sessionId: string, error: unknown) => void;
     onSyncState?: (sessionId: string, state: CodexV4RegistrySyncState) => void;
+    diagnostics?: SyncV4DiagnosticSink;
+    diagnosticStats?: AppSyncV4DiagnosticStatsProvider;
+    softwareVersion?: string;
+    transportSecurity?: SyncV4DiagnosticTransportSecurity;
     retryBaseMs?: number;
     retryMaxMs?: number;
     random?: () => number;
@@ -105,6 +123,19 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
     }
 
     stop(sessionId: string): void {
+        const diagnosticStats = readAppSyncV4DiagnosticStatsSafely(this.options.diagnosticStats);
+        const diagnosticsDegraded = appSyncV4DiagnosticStatsAreDegraded(diagnosticStats);
+        this.recordDiagnostic(sessionId, {
+            level: diagnosticsDegraded ? 'warn' : 'info',
+            event: 'lifecycle',
+            phase: diagnosticsDegraded ? 'failed' : 'completed',
+            state: diagnosticsDegraded ? 'degraded' : 'stopped',
+            count: diagnosticStats?.count,
+            dropped: diagnosticStats?.droppedRecords,
+            invalid: diagnosticStats?.invalidRecords,
+            writeFailures: diagnosticStats?.writeFailures,
+            listenerFailures: diagnosticStats?.listenerFailures,
+        });
         this.desired.delete(sessionId);
         this.retryAttempts.delete(sessionId);
         const retryTimer = this.retryTimers.get(sessionId);
@@ -156,6 +187,14 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             attempt,
             nextRetryAt: null,
             lastErrorAt: null,
+        });
+        this.recordDiagnostic(session.sessionId, {
+            level: 'info',
+            event: 'lifecycle',
+            phase: 'started',
+            state: retrying ? 'retrying' : 'starting',
+            attempt,
+            generation,
         });
         let record!: StartingClient<TClient>;
         const isCurrent = () => (
@@ -225,13 +264,30 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                     nextRetryAt: null,
                     lastErrorAt: null,
                 });
-            } catch {
+                this.recordDiagnostic(session.sessionId, {
+                    level: 'info',
+                    event: 'lifecycle',
+                    phase: 'completed',
+                    state: 'ready',
+                    attempt: 0,
+                    generation,
+                });
+            } catch (error) {
                 if (record.client && !record.stopped) {
                     record.client.stop();
                     record.stopped = true;
                 }
                 if (isCurrent()) {
-                    this.options.onStartError?.(session.sessionId);
+                    this.recordDiagnostic(session.sessionId, {
+                        level: 'warn',
+                        event: 'lifecycle',
+                        phase: 'failed',
+                        state: 'unknown',
+                        errorKind: classifySyncV4DiagnosticError(error),
+                        attempt,
+                        generation,
+                    });
+                    this.options.onStartError?.(session.sessionId, error);
                     this.scheduleRetry(session.sessionId);
                 }
             } finally {
@@ -256,6 +312,14 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             attempt,
             nextRetryAt,
             lastErrorAt: Date.now(),
+        });
+        this.recordDiagnostic(sessionId, {
+            level: 'warn',
+            event: 'retry',
+            phase: 'scheduled',
+            state: 'unknown',
+            attempt,
+            durationMs: delay,
         });
         const timer = setTimeout(() => {
             if (this.retryTimers.get(sessionId) !== timer) return;
@@ -284,5 +348,21 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
 
     private emitSyncState(sessionId: string, state: CodexV4RegistrySyncState): void {
         this.options.onSyncState?.(sessionId, state);
+    }
+
+    private recordDiagnostic(
+        sessionId: string,
+        input: Omit<SyncV4DiagnosticInput, 'component' | 'protocolVersion' | 'sessionHash' | 'softwareVersion'>,
+    ): void {
+        const client = this.clients.get(sessionId) ?? this.starts.get(sessionId)?.client;
+        recordSyncV4DiagnosticSafely(this.options.diagnostics, {
+            component: 'app.registry',
+            protocolVersion: 4,
+            softwareVersion: this.options.softwareVersion,
+            sessionHash: client?.diagnosticSessionId,
+            featureEnabled: true,
+            transportSecurity: this.options.transportSecurity ?? 'https',
+            ...input,
+        });
     }
 }

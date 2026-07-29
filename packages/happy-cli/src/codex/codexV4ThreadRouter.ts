@@ -2,7 +2,12 @@
 
 import {
     CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+    classifySyncV4DiagnosticError,
+    recordSyncV4DiagnosticSafely,
     type CodexRelationEntityV4,
+    type SyncV4DiagnosticInput,
+    type SyncV4DiagnosticSink,
+    type SyncV4DiagnosticTransportSecurity,
 } from '@slopus/happy-wire';
 import type { SyncV4Client } from '@/api/syncV4Client';
 import type {
@@ -35,6 +40,7 @@ import type {
     ThreadStatus,
     Turn,
 } from './protocol';
+import { redactCodexProtocolMethod } from './codexProtocolMethod';
 
 export interface CodexV4SessionBinding {
     sessionId: string;
@@ -58,6 +64,11 @@ interface ThreadRouterOptions {
     now?: () => number;
     onError?: (error: unknown) => void;
     routeRegistrationWaitMs?: number;
+    diagnostics?: SyncV4DiagnosticSink;
+    diagnosticSessionHash?: string;
+    softwareVersion?: string;
+    codexVersion?: string;
+    transportSecurity?: SyncV4DiagnosticTransportSecurity;
 }
 
 interface RelationLineage {
@@ -78,6 +89,10 @@ const ORPHAN_RETRY_BASE_MS = 250;
 const ORPHAN_RETRY_MAX_MS = 30_000;
 const DEFAULT_ROUTE_REGISTRATION_WAIT_MS = 5_000;
 
+function diagnosticThreadHash(threadId: string): string {
+    return createHash('sha256').update(threadId).digest('hex').slice(0, 16);
+}
+
 class CodexRouteAwaitingRegistrationError extends Error {
     constructor(readonly threadId: string) {
         super('Codex thread is awaiting authoritative Happy route registration');
@@ -91,6 +106,7 @@ export class CodexV4ThreadRouter {
     private readonly lineagesByChild = new Map<string, RelationLineage>();
     private readonly routesByThread = new Map<string, SyncV4CodexThreadRoute>();
     private readonly relationsByChild = new Map<string, CodexRelationEntityV4>();
+    private readonly recoverableChildrenByParent = new Map<string, Set<string>>();
     private readonly activeTurnByThread = new Map<string, string>();
     private readonly pipelinesByThread = new Map<string, Promise<void>>();
     private readonly hydratedThreads = new Set<string>();
@@ -100,6 +116,7 @@ export class CodexV4ThreadRouter {
     private readonly routeRegistrationWaiters = new Map<string, Set<RouteRegistrationWaiter>>();
     private readonly routeLock = new AsyncLock();
     private closed = false;
+    private closePromise: Promise<void> | null = null;
 
     constructor(private readonly options: ThreadRouterOptions) {
         for (const route of options.rootBinding.syncClient.getCodexThreadRoutes().values()) {
@@ -302,28 +319,63 @@ export class CodexV4ThreadRouter {
         }
     }
 
-    async close(): Promise<void> {
-        if (this.closed) return;
+    close(): Promise<void> {
+        if (!this.closePromise) {
+            this.closePromise = this.closeOnce();
+        }
+        return this.closePromise;
+    }
+
+    private async closeOnce(): Promise<void> {
         this.closed = true;
         for (const timer of this.orphanRetryTimers.values()) clearTimeout(timer);
         this.orphanRetryTimers.clear();
         this.rejectRouteRegistrationWaiters(
             new Error('Codex v4 thread router closed while waiting for route registration'),
         );
-        let flushError: unknown = null;
+        let firstError: unknown = null;
         try {
             await this.flush();
         } catch (error) {
-            flushError = error;
-        } finally {
-            await Promise.allSettled(this.bindingPromisesByThread.values());
-            const bindings = new Set(this.bindingsByThread.values());
-            bindings.delete(this.options.rootBinding);
-            await Promise.allSettled([...bindings].map((binding) => binding.close()));
-            this.bindingsByThread.clear();
-            this.activeTurnByThread.clear();
+            firstError = error;
         }
-        if (flushError) throw flushError;
+
+        await Promise.allSettled(this.bindingPromisesByThread.values());
+        const bindingsByIdentity = new Map<CodexV4SessionBinding, string>();
+        for (const [threadId, binding] of this.bindingsByThread) {
+            if (binding !== this.options.rootBinding && !bindingsByIdentity.has(binding)) {
+                bindingsByIdentity.set(binding, threadId);
+            }
+        }
+        const bindings = [...bindingsByIdentity].map(([binding, threadId]) => ({
+            binding,
+            threadId,
+        }));
+        const closeResults = await Promise.allSettled(
+            bindings.map(({ binding }) => binding.close()),
+        );
+        for (let index = 0; index < closeResults.length; index += 1) {
+            const result = closeResults[index];
+            if (result.status === 'fulfilled') continue;
+            if (firstError === null) firstError = result.reason;
+            this.recordDiagnostic({
+                level: 'warn',
+                event: 'relation',
+                phase: 'failed',
+                state: 'degraded',
+                childThreadHash: diagnosticThreadHash(bindings[index].threadId),
+                errorKind: classifySyncV4DiagnosticError(result.reason),
+                count: bindings.length,
+            });
+            try {
+                this.options.onError?.(result.reason);
+            } catch {
+                // Error reporting must not prevent the remaining shutdown cleanup.
+            }
+        }
+        this.bindingsByThread.clear();
+        this.activeTurnByThread.clear();
+        if (firstError !== null) throw firstError;
     }
 
     private async routeNotification(
@@ -339,7 +391,7 @@ export class CodexV4ThreadRouter {
         if (!binding) {
             logger.debug('[Codex v4] Orphan notification recovery', {
                 thread: createHash('sha256').update(threadId).digest('hex').slice(0, 16),
-                method: notification.method,
+                method: redactCodexProtocolMethod(notification.method),
                 recovery: snapshot ? 'notificationSnapshot' : 'threadRead',
             });
         }
@@ -707,6 +759,85 @@ export class CodexV4ThreadRouter {
             }
             this.relationsByChild.set(threadId, next);
         });
+        await this.releaseTerminalBindings(threadId);
+    }
+
+    private async releaseTerminalBindings(threadId: string): Promise<void> {
+        const bindings = await this.routeLock.inLock(() => {
+            const releasable: Array<{
+                threadId: string;
+                binding: CodexV4SessionBinding;
+            }> = [];
+            let candidateId: string | null = threadId;
+            while (candidateId) {
+                const route = this.routesByThread.get(candidateId);
+                if (
+                    !route
+                    || route.kind === 'root'
+                    || route.kind === 'userFork'
+                    || !route.status
+                    || isRecoverableRelationStatus(route.status)
+                    || this.threadsWithPendingOrphans.has(candidateId)
+                    || (this.recoverableChildrenByParent.get(candidateId)?.size ?? 0) > 0
+                ) {
+                    break;
+                }
+                const binding = this.bindingsByThread.get(candidateId);
+                if (binding && binding !== this.options.rootBinding) {
+                    this.bindingsByThread.delete(candidateId);
+                    this.hydratedThreads.delete(candidateId);
+                    releasable.push({ threadId: candidateId, binding });
+                }
+                candidateId = requiredRouteParentThreadId(route);
+            }
+            return releasable;
+        });
+        if (bindings.length === 0) return;
+
+        for (const entry of bindings) {
+            this.recordDiagnostic({
+                level: 'info',
+                event: 'relation',
+                phase: 'started',
+                state: 'stopping',
+                childThreadHash: diagnosticThreadHash(entry.threadId),
+                count: this.bindingsByThread.size,
+            });
+        }
+        const results = await Promise.allSettled(bindings.map(({ binding }) => binding.close()));
+        for (let index = 0; index < results.length; index += 1) {
+            const result = results[index];
+            this.recordDiagnostic({
+                level: result.status === 'fulfilled' ? 'info' : 'warn',
+                event: 'relation',
+                phase: result.status === 'fulfilled' ? 'completed' : 'failed',
+                state: result.status === 'fulfilled' ? 'stopped' : 'degraded',
+                childThreadHash: diagnosticThreadHash(bindings[index].threadId),
+                count: this.bindingsByThread.size,
+                ...(result.status === 'rejected'
+                    ? { errorKind: classifySyncV4DiagnosticError(result.reason) }
+                    : {}),
+            });
+        }
+        const failed = results.find(
+            (result): result is PromiseRejectedResult => result.status === 'rejected',
+        );
+        if (failed) throw failed.reason;
+    }
+
+    private recordDiagnostic(
+        input: Omit<SyncV4DiagnosticInput, 'component' | 'sessionHash'>,
+    ): void {
+        recordSyncV4DiagnosticSafely(this.options.diagnostics, {
+            component: 'cli.gateway',
+            sessionHash: this.options.diagnosticSessionHash,
+            softwareVersion: this.options.softwareVersion,
+            codexVersion: this.options.codexVersion,
+            protocolVersion: 4,
+            featureEnabled: true,
+            transportSecurity: this.options.transportSecurity,
+            ...input,
+        });
     }
 
     private async depthForParent(parentThreadId: string): Promise<number> {
@@ -751,6 +882,7 @@ export class CodexV4ThreadRouter {
         ) {
             this.threadsWithPendingOrphans.delete(threadId);
             this.clearOrphanRetry(threadId);
+            await this.releaseTerminalBindings(threadId);
         }
     }
 
@@ -853,6 +985,15 @@ export class CodexV4ThreadRouter {
     }
 
     private restoreRoute(route: SyncV4CodexThreadRoute): void {
+        const previous = this.routesByThread.get(route.threadId);
+        if (
+            previous
+            && previous.kind !== 'root'
+            && previous.kind !== 'userFork'
+            && previous.parentThreadId
+        ) {
+            this.removeRecoverableChild(previous.parentThreadId, previous.threadId);
+        }
         this.routesByThread.set(route.threadId, route);
         if (isRootOwnedRoute(route)) {
             this.bindingsByThread.set(route.threadId, this.options.rootBinding);
@@ -869,11 +1010,24 @@ export class CodexV4ThreadRouter {
             delegationItemId: route.delegationItemId,
             depth: route.depth,
         });
+        if (!route.status || isRecoverableRelationStatus(route.status)) {
+            const parentThreadId = requiredRouteParentThreadId(route);
+            const children = this.recoverableChildrenByParent.get(parentThreadId) ?? new Set();
+            children.add(route.threadId);
+            this.recoverableChildrenByParent.set(parentThreadId, children);
+        }
         if (route.activeTurnId) {
             this.activeTurnByThread.set(route.threadId, route.activeTurnId);
         } else {
             this.activeTurnByThread.delete(route.threadId);
         }
+    }
+
+    private removeRecoverableChild(parentThreadId: string, childThreadId: string): void {
+        const children = this.recoverableChildrenByParent.get(parentThreadId);
+        if (!children) return;
+        children.delete(childThreadId);
+        if (children.size === 0) this.recoverableChildrenByParent.delete(parentThreadId);
     }
 
     private now(): number {

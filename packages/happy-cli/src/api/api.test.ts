@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ApiClient } from './api';
 import axios from 'axios';
 import { connectionState } from '@/utils/serverConnectionErrors';
+import type { SyncV4DiagnosticInput } from '@slopus/happy-wire';
+import { logger } from '@/ui/logger';
 
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
 const { mockGet, mockPost, mockIsAxiosError } = vi.hoisted(() => ({
@@ -93,6 +95,7 @@ describe('Api server error handling', () => {
 
     describe('isCodexSyncV4Enabled', () => {
         it('uses v4 only when the server advertises the coordinated cutover', async () => {
+            const diagnostics: SyncV4DiagnosticInput[] = [];
             mockGet.mockResolvedValueOnce({
                 data: {
                     codex: {
@@ -103,21 +106,53 @@ describe('Api server error handling', () => {
                         minimumCodexCliVersion: '0.145.0',
                     },
                 },
+                headers: { 'x-happy-sync-trace': '0123456789abcdef0123456789abcdef' },
             });
 
-            await expect(api.isCodexSyncV4Enabled('0.145.0')).resolves.toBe(true);
+            const traceId = '0123456789abcdef0123456789abcdef';
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                traceId,
+                { record: (input) => diagnostics.push(input) },
+            )).resolves.toBe(true);
             expect(mockGet).toHaveBeenCalledWith(
                 expect.stringMatching(/\/v4\/capabilities$/),
                 expect.objectContaining({
                     timeout: 10_000,
                     headers: expect.objectContaining({
                         'X-Happy-Client': expect.stringMatching(/^cli-coding-session\//),
+                        'X-Happy-Sync-Trace': traceId,
                     }),
                 }),
             );
+            expect(diagnostics).toEqual([
+                expect.objectContaining({
+                    event: 'transport',
+                    phase: 'started',
+                    traceId,
+                }),
+                expect.objectContaining({
+                    event: 'transport',
+                    phase: 'completed',
+                    traceId,
+                    state: 'ready',
+                    featureEnabled: true,
+                    transportSecurity: 'https',
+                }),
+            ]);
+        });
+
+        it('rejects an invalid capability trace ID before transport', async () => {
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                'prompt-reasoning-tool-output-secret',
+            )).rejects.toThrow('128-bit lowercase hex');
+            expect(mockGet).not.toHaveBeenCalled();
         });
 
         it('retains v3 only when the server explicitly disables v4 or lacks the endpoint', async () => {
+            const diagnostics: SyncV4DiagnosticInput[] = [];
+            const sink = { record: (input: SyncV4DiagnosticInput) => diagnostics.push(input) };
             mockGet.mockResolvedValueOnce({
                 data: {
                     codex: {
@@ -128,19 +163,123 @@ describe('Api server error handling', () => {
                         minimumCodexCliVersion: '9.0.0',
                     },
                 },
+                headers: { 'x-happy-sync-trace': '00000000000000000000000000000001' },
             }).mockRejectedValueOnce({ response: { status: 404 } });
 
-            await expect(api.isCodexSyncV4Enabled('0.145.0')).resolves.toBe(false);
-            await expect(api.isCodexSyncV4Enabled('0.145.0')).resolves.toBe(false);
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                '00000000000000000000000000000001',
+                sink,
+            )).resolves.toBe(false);
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                '00000000000000000000000000000002',
+                sink,
+            )).resolves.toBe(false);
+            expect(diagnostics.filter((record) => record.phase === 'completed')).toEqual([
+                expect.objectContaining({
+                    traceId: '00000000000000000000000000000001',
+                    state: 'stopped',
+                    httpStatus: 200,
+                    featureEnabled: false,
+                }),
+                expect.objectContaining({
+                    traceId: '00000000000000000000000000000002',
+                    state: 'stopped',
+                    httpStatus: 404,
+                    featureEnabled: false,
+                }),
+            ]);
         });
 
         it('blocks Codex startup when capabilities cannot be verified', async () => {
+            const diagnostics: SyncV4DiagnosticInput[] = [];
+            const sink = { record: (input: SyncV4DiagnosticInput) => diagnostics.push(input) };
             mockGet
                 .mockRejectedValueOnce({ code: 'ECONNREFUSED' })
-                .mockResolvedValueOnce({ data: { codex: { enabled: 'yes' } } });
+                .mockResolvedValueOnce({
+                    data: { codex: { enabled: 'yes' } },
+                    headers: { 'x-happy-sync-trace': '00000000000000000000000000000004' },
+                });
 
-            await expect(api.isCodexSyncV4Enabled('0.145.0')).rejects.toThrow('unsafe v3 fallback');
-            await expect(api.isCodexSyncV4Enabled('0.145.0')).rejects.toThrow('invalid Codex Sync v4 capability');
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                '00000000000000000000000000000003',
+                sink,
+            )).rejects.toThrow('unsafe v3 fallback');
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                '00000000000000000000000000000004',
+                sink,
+            )).rejects.toThrow('invalid Codex Sync v4 capability');
+            expect(diagnostics.filter((record) => record.phase === 'failed')).toEqual([
+                expect.objectContaining({
+                    traceId: '00000000000000000000000000000003',
+                    errorKind: 'network',
+                }),
+                expect.objectContaining({
+                    traceId: '00000000000000000000000000000004',
+                    errorKind: 'validation',
+                }),
+            ]);
+        });
+
+        it('does not let hostile Axios response getters escape the capability boundary', async () => {
+            const diagnostics: SyncV4DiagnosticInput[] = [];
+            const secret = 'prompt-reasoning-tool-output-getter-secret';
+            const hostileError = Object.defineProperty({}, 'response', {
+                get: () => {
+                    throw new Error(secret);
+                },
+            });
+            mockGet.mockRejectedValueOnce(hostileError);
+
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                '00000000000000000000000000000005',
+                { record: (input) => diagnostics.push(input) },
+            )).rejects.toThrow('unsafe v3 fallback');
+
+            expect(JSON.stringify(diagnostics)).not.toContain(secret);
+            expect(diagnostics.at(-1)).toMatchObject({
+                phase: 'failed',
+                errorKind: 'unknown',
+            });
+        });
+
+        it('rejects a missing or mismatched capability trace echo', async () => {
+            const diagnostics: SyncV4DiagnosticInput[] = [];
+            const capability = {
+                codex: {
+                    enabled: true,
+                    protocolVersion: 4,
+                    minimumHappyCliVersion: '1.4.2',
+                    minimumHappyAppVersion: '1.11.4',
+                    minimumCodexCliVersion: '0.145.0',
+                },
+            };
+            mockGet
+                .mockResolvedValueOnce({ data: capability, headers: {} })
+                .mockResolvedValueOnce({
+                    data: capability,
+                    headers: { 'x-happy-sync-trace': 'f'.repeat(32) },
+                });
+
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                'a'.repeat(32),
+                { record: (input) => diagnostics.push(input) },
+            )).rejects.toThrow('could not be correlated');
+            await expect(api.isCodexSyncV4Enabled(
+                '0.145.0',
+                'b'.repeat(32),
+                { record: (input) => diagnostics.push(input) },
+            )).rejects.toThrow('could not be correlated');
+
+            expect(diagnostics.filter((record) => record.phase === 'failed')).toEqual([
+                expect.objectContaining({ traceId: 'a'.repeat(32), errorKind: 'protocol' }),
+                expect.objectContaining({ traceId: 'b'.repeat(32), errorKind: 'protocol' }),
+            ]);
         });
 
         it('enforces the Happy CLI and Codex CLI versions advertised by the server', async () => {
@@ -160,6 +299,48 @@ describe('Api server error handling', () => {
     });
 
     describe('getOrCreateSession', () => {
+        it('does not log raw session identity, tag, or transport errors', async () => {
+            const sessionId = 'provider-session-id-secret';
+            const tag = 'provider-session-tag-secret';
+            mockPost.mockResolvedValueOnce({
+                data: {
+                    session: {
+                        id: sessionId,
+                        seq: 0,
+                        metadata: testMetadata,
+                        metadataVersion: 0,
+                        agentState: null,
+                        agentStateVersion: 0,
+                    },
+                },
+            });
+            await api.getOrCreateSession({
+                tag,
+                metadata: testMetadata,
+                state: null,
+            });
+
+            const transportSecret = 'prompt-reasoning-tool-output-transport-secret';
+            const authorizationSecret = 'Bearer authorization-secret';
+            mockPost.mockRejectedValueOnce(Object.assign(new Error(transportSecret), {
+                code: 'UNAUTHORIZED',
+                config: { headers: { Authorization: authorizationSecret } },
+            }));
+            await expect(api.getOrCreateSession({
+                tag,
+                metadata: testMetadata,
+                state: null,
+            })).rejects.toThrow(transportSecret);
+
+            const logs = JSON.stringify(vi.mocked(logger.debug).mock.calls);
+            expect(logs).not.toContain(sessionId);
+            expect(logs).not.toContain(tag);
+            expect(logs).not.toContain(transportSecret);
+            expect(logs).not.toContain(authorizationSecret);
+            expect(logs).toContain('sessionHash');
+            expect(logs).toContain('errorKind');
+        });
+
         it('uses a caller-provided independent data key for a recoverable child session', async () => {
             const childKey = new Uint8Array(32).fill(7);
             mockPost.mockResolvedValue({
@@ -423,6 +604,29 @@ describe('Api server error handling', () => {
             );
 
             consoleSpy.mockRestore();
+        });
+    });
+
+    describe('vendor token logging', () => {
+        it('does not log response or parsed token field names', async () => {
+            const responseFieldSecret = 'response-field-prompt-secret';
+            const tokenFieldSecret = 'token-field-reasoning-secret';
+            mockGet.mockResolvedValueOnce({
+                status: 200,
+                data: {
+                    token: JSON.stringify({ [tokenFieldSecret]: 'tool-output-secret' }),
+                    [responseFieldSecret]: true,
+                },
+            });
+
+            await expect(api.getVendorToken('openai')).resolves.toEqual({
+                [tokenFieldSecret]: 'tool-output-secret',
+            });
+
+            const logs = JSON.stringify(vi.mocked(logger.debug).mock.calls);
+            expect(logs).not.toContain(responseFieldSecret);
+            expect(logs).not.toContain(tokenFieldSecret);
+            expect(logs).not.toContain('tool-output-secret');
         });
     });
 });

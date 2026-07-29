@@ -7,9 +7,20 @@ import { ItemList } from '@/components/ItemList';
 import { Item } from '@/components/Item';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
+import {
+    MAX_APP_SYNC_V4_DIAGNOSTIC_RECORDS,
+} from '@/sync/syncV4Diagnostics';
+import { appSyncV4Diagnostics } from '@/sync/syncV4Diagnostics.mmkv';
 
-export default function LogsScreen() {
+type LogView = 'console' | 'syncV4';
+
+function LogsScreen() {
+    const [view, setView] = React.useState<LogView>('console');
     const [logs, setLogs] = React.useState<string[]>([]);
+    const [syncV4Records, setSyncV4Records] = React.useState<ReturnType<
+        typeof appSyncV4Diagnostics.records
+    >>([]);
+    const [syncV4Stats, setSyncV4Stats] = React.useState(() => appSyncV4Diagnostics.stats());
     const flatListRef = React.useRef<FlatList>(null);
 
     // Subscribe to log changes
@@ -32,35 +43,79 @@ export default function LogsScreen() {
         return unsubscribe;
     }, []);
 
+    React.useEffect(() => {
+        if (view !== 'syncV4') return;
+        let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+        const refresh = () => {
+            setSyncV4Records(appSyncV4Diagnostics.records());
+            setSyncV4Stats(appSyncV4Diagnostics.stats());
+        };
+        refresh();
+        const unsubscribe = appSyncV4Diagnostics.onChange(() => {
+            if (refreshTimer) return;
+            refreshTimer = setTimeout(() => {
+                refreshTimer = null;
+                refresh();
+            }, 250);
+        });
+        return () => {
+            unsubscribe();
+            if (refreshTimer) clearTimeout(refreshTimer);
+        };
+    }, [view]);
+
+    const visibleEntries = React.useMemo(
+        () => view === 'console'
+            ? logs
+            : syncV4Records.map((record) => JSON.stringify(record)),
+        [logs, syncV4Records, view],
+    );
+    const hasActionableEntries = view === 'console'
+        ? visibleEntries.length > 0
+        : syncV4Stats.count > 0
+            || syncV4Stats.droppedRecords > 0
+            || syncV4Stats.invalidRecords > 0
+            || syncV4Stats.writeFailures > 0
+            || syncV4Stats.listenerFailures > 0;
+
     // Auto-scroll to bottom when new logs arrive
     React.useEffect(() => {
-        if (logs.length > 0) {
-            setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: false });
-            }, 100);
-        }
-    }, [logs.length]);
+        if (visibleEntries.length === 0) return;
+        const timer = setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: false });
+        }, 100);
+        return () => clearTimeout(timer);
+    }, [visibleEntries.length, view]);
 
     const handleClear = async () => {
         const confirmed = await Modal.confirm(
-            'Clear Logs',
-            'Are you sure you want to clear all logs?',
+            view === 'console' ? 'Clear Console Logs' : 'Clear Sync v4 Diagnostics',
+            `Clear all ${view === 'console' ? 'console logs' : 'Sync v4 diagnostic records'}?`,
             { confirmText: 'Clear', destructive: true }
         );
         if (confirmed) {
-            log.clear();
+            if (view === 'console') {
+                log.clear();
+            } else {
+                appSyncV4Diagnostics.clear();
+            }
         }
     };
 
     const handleCopyAll = async () => {
-        if (logs.length === 0) {
+        if (!hasActionableEntries) {
             Modal.alert('No Logs', 'There are no logs to copy');
             return;
         }
 
-        const allLogs = logs.join('\n');
+        const allLogs = view === 'syncV4'
+            ? appSyncV4Diagnostics.exportJsonl()
+            : visibleEntries.join('\n');
         await Clipboard.setStringAsync(allLogs);
-        Modal.alert('Copied', `${logs.length} log entries copied to clipboard`);
+        Modal.alert(
+            'Copied',
+            `${view === 'syncV4' ? syncV4Records.length + 1 : visibleEntries.length} entries copied to clipboard`,
+        );
     };
 
     const handleAddTestLog = () => {
@@ -90,27 +145,66 @@ export default function LogsScreen() {
         <View style={{ flex: 1, backgroundColor: '#F5F5F5' }}>
             {/* Header with actions */}
             <ItemList>
+                <View style={{
+                    flexDirection: 'row',
+                    marginHorizontal: 16,
+                    marginTop: 12,
+                    padding: 3,
+                    borderRadius: 6,
+                    backgroundColor: '#E5E5EA',
+                }}>
+                    {([
+                        ['console', `Console (${logs.length})`],
+                        ['syncV4', `Sync v4 (${syncV4Stats.count})`],
+                    ] as const).map(([value, label]) => (
+                        <Pressable
+                            key={value}
+                            accessibilityRole="tab"
+                            accessibilityState={{ selected: view === value }}
+                            onPress={() => setView(value)}
+                            style={{
+                                flex: 1,
+                                minHeight: 36,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                borderRadius: 4,
+                                backgroundColor: view === value ? '#FFFFFF' : 'transparent',
+                            }}
+                        >
+                            <Text style={{
+                                fontSize: 14,
+                                fontWeight: '600',
+                                color: view === value ? '#111111' : '#6D6D72',
+                            }}>
+                                {label}
+                            </Text>
+                        </Pressable>
+                    ))}
+                </View>
                 <ItemGroup
-                    title={`Logs (${logs.length})`}
-                    footer={`Stored locally and capped at ${MAX_APP_LOG_ENTRIES.toLocaleString()} entries. Oldest logs are dropped first.`}
+                    title={view === 'console' ? 'Console Logs' : 'Sync v4 Diagnostics'}
+                    footer={view === 'console'
+                        ? `Stored locally and capped at ${MAX_APP_LOG_ENTRIES.toLocaleString()} entries.`
+                        : `Persistent ring: ${syncV4Records.length}/${MAX_APP_SYNC_V4_DIAGNOSTIC_RECORDS}; dropped ${syncV4Stats.droppedRecords}; invalid ${syncV4Stats.invalidRecords}; write failures ${syncV4Stats.writeFailures}; listener failures ${syncV4Stats.listenerFailures}.`}
                 >
+                    {view === 'console' && (
+                        <Item
+                            title="Add Test Log"
+                            icon={<Ionicons name="add-circle-outline" size={24} color="#34C759" />}
+                            onPress={handleAddTestLog}
+                        />
+                    )}
                     <Item 
-                        title="Add Test Log"
-                        subtitle="Add a test log entry with timestamp"
-                        icon={<Ionicons name="add-circle-outline" size={24} color="#34C759" />}
-                        onPress={handleAddTestLog}
-                    />
-                    <Item 
-                        title="Copy All Logs"
+                        title={view === 'console' ? 'Copy Console Logs' : 'Copy Sync v4 Diagnostics'}
                         icon={<Ionicons name="copy-outline" size={24} color="#007AFF" />}
                         onPress={handleCopyAll}
-                        disabled={logs.length === 0}
+                        disabled={!hasActionableEntries}
                     />
                     <Item 
-                        title="Clear All Logs"
+                        title={view === 'console' ? 'Clear Console Logs' : 'Clear Sync v4 Diagnostics'}
                         icon={<Ionicons name="trash-outline" size={24} color="#FF3B30" />}
                         onPress={handleClear}
-                        disabled={logs.length === 0}
+                        disabled={!hasActionableEntries}
                         destructive={true}
                     />
                 </ItemGroup>
@@ -118,7 +212,7 @@ export default function LogsScreen() {
 
             {/* Logs display */}
             <View style={{ flex: 1, backgroundColor: '#FFFFFF', margin: 16, borderRadius: 8 }}>
-                {logs.length === 0 ? (
+                {visibleEntries.length === 0 ? (
                     <View style={{
                         flex: 1,
                         justifyContent: 'center',
@@ -132,7 +226,7 @@ export default function LogsScreen() {
                             marginTop: 16,
                             textAlign: 'center'
                         }}>
-                            No logs yet
+                            No {view === 'console' ? 'console logs' : 'Sync v4 diagnostics'} yet
                         </Text>
                         <Text style={{
                             fontSize: 14,
@@ -140,13 +234,15 @@ export default function LogsScreen() {
                             marginTop: 8,
                             textAlign: 'center'
                         }}>
-                            Logs will appear here as they are generated
+                            {view === 'console'
+                                ? 'Logs will appear here as they are generated'
+                                : 'Diagnostic records will appear when a Codex v4 session syncs'}
                         </Text>
                     </View>
                 ) : (
                     <FlatList
                         ref={flatListRef}
-                        data={logs}
+                        data={visibleEntries}
                         renderItem={renderLogItem}
                         keyExtractor={(item, index) => index.toString()}
                         style={{ flex: 1 }}
@@ -158,3 +254,5 @@ export default function LogsScreen() {
         </View>
     );
 }
+
+export default React.memo(LogsScreen);

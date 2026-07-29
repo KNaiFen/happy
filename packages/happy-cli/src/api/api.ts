@@ -19,9 +19,28 @@ import { Credentials } from '@/persistence';
 import { connectionState, isNetworkError } from '@/utils/serverConnectionErrors';
 import { deriveKey } from '@/utils/deriveKey';
 import {
+  classifySyncV4DiagnosticError,
   isSyncV4VersionAtLeast,
+  recordSyncV4DiagnosticSafely,
+  requireSyncV4TraceEcho,
+  requireSyncV4TraceId,
   SyncV4CapabilitiesSchema,
+  type SyncV4DiagnosticInput,
+  type SyncV4DiagnosticSink,
 } from '@slopus/happy-wire';
+import { syncV4DiagnosticHash } from './syncV4Diagnostics';
+
+function safeAxiosStatus(error: unknown): number | undefined {
+  try {
+    if (!axios.isAxiosError(error)) return undefined;
+    const status = error.response?.status;
+    return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+      ? status
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export class CodexSyncV4CapabilityError extends Error {
   constructor(message: string) {
@@ -44,44 +63,151 @@ export class ApiClient {
     this.pushClient = new PushNotificationClient(credential.token, configuration.serverUrl)
   }
 
-  async isCodexSyncV4Enabled(codexCliVersion: string): Promise<boolean> {
+  async isCodexSyncV4Enabled(
+    codexCliVersion: string,
+    traceId?: string,
+    diagnostics?: SyncV4DiagnosticSink,
+  ): Promise<boolean> {
+    if (traceId !== undefined) requireSyncV4TraceId(traceId);
+    const startedAt = Date.now();
+    const recordCapability = (
+      input: Omit<
+        SyncV4DiagnosticInput,
+        'codexVersion' | 'component' | 'event' | 'protocolVersion'
+        | 'softwareVersion' | 'traceId' | 'transportOperation' | 'level'
+      > & { level?: SyncV4DiagnosticInput['level'] },
+    ) => {
+      const { level = 'debug', ...details } = input;
+      recordSyncV4DiagnosticSafely(diagnostics, {
+        level,
+        component: 'cli.sync',
+        event: 'transport',
+        traceId,
+        transportOperation: 'capabilities',
+        softwareVersion: configuration.currentCliVersion,
+        codexVersion: codexCliVersion,
+        protocolVersion: 4,
+        transportSecurity: syncV4TransportSecurity(),
+        ...details,
+      });
+    };
+    recordCapability({
+      phase: 'started',
+      direction: 'inbound',
+    });
     let response;
     try {
       response = await axios.get(`${configuration.serverUrl}/v4/capabilities`, {
         headers: {
           'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`,
+          ...(traceId ? { 'X-Happy-Sync-Trace': traceId } : {}),
         },
         timeout: 10_000,
       });
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 404) {
+      const httpStatus = safeAxiosStatus(error);
+      if (httpStatus === 404) {
+        recordCapability({
+          phase: 'completed',
+          direction: 'inbound',
+          state: 'stopped',
+          featureEnabled: false,
+          httpStatus: 404,
+          durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+        });
         logger.debug('[API] Sync v4 capability endpoint absent; using retained Codex v3 rollback adapter');
         return false;
       }
+      recordCapability({
+        level: 'warn',
+        phase: 'failed',
+        direction: 'inbound',
+        errorKind: classifySyncV4DiagnosticError(error),
+        ...(httpStatus === undefined ? {} : { httpStatus }),
+        durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+      });
       throw new CodexSyncV4CapabilityError(
         'Cannot verify Codex Sync v4 compatibility because the Happy Server is unavailable. Codex was not started to avoid an unsafe v3 fallback.',
       );
     }
 
+    try {
+      requireSyncV4TraceEcho(traceId, safeAxiosTraceHeader(response));
+    } catch {
+      recordCapability({
+        level: 'warn',
+        phase: 'failed',
+        direction: 'inbound',
+        httpStatus: response.status ?? 200,
+        errorKind: 'protocol',
+        durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+      });
+      throw new CodexSyncV4CapabilityError(
+        'Happy Server did not return the expected Sync v4 trace header. Codex was not started because the relay response could not be correlated.',
+      );
+    }
+
     const parsed = SyncV4CapabilitiesSchema.safeParse(response.data);
     if (!parsed.success) {
+      recordCapability({
+        level: 'warn',
+        phase: 'failed',
+        direction: 'inbound',
+        httpStatus: response.status ?? 200,
+        errorKind: 'validation',
+        durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+      });
       throw new CodexSyncV4CapabilityError(
         'Happy Server returned an invalid Codex Sync v4 capability response. Update the Server before starting Codex.',
       );
     }
 
     const capability = parsed.data.codex;
-    if (!capability.enabled) return false;
+    if (!capability.enabled) {
+      recordCapability({
+        phase: 'completed',
+        direction: 'inbound',
+        state: 'stopped',
+        featureEnabled: false,
+        httpStatus: response.status ?? 200,
+        durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+      });
+      return false;
+    }
     if (!isSyncV4VersionAtLeast(configuration.currentCliVersion, capability.minimumHappyCliVersion)) {
+      recordCapability({
+        level: 'warn',
+        phase: 'failed',
+        direction: 'inbound',
+        httpStatus: response.status ?? 200,
+        errorKind: 'protocol',
+        durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+      });
       throw new CodexSyncV4CapabilityError(
         `Happy CLI ${capability.minimumHappyCliVersion} or newer is required for Codex Sync v4; found ${configuration.currentCliVersion}.`,
       );
     }
     if (!isSyncV4VersionAtLeast(codexCliVersion, capability.minimumCodexCliVersion)) {
+      recordCapability({
+        level: 'warn',
+        phase: 'failed',
+        direction: 'inbound',
+        httpStatus: response.status ?? 200,
+        errorKind: 'protocol',
+        durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+      });
       throw new CodexSyncV4CapabilityError(
         `Codex CLI ${capability.minimumCodexCliVersion} or newer is required by Happy Server; found ${codexCliVersion}.`,
       );
     }
+    recordCapability({
+      phase: 'completed',
+      direction: 'inbound',
+      state: 'ready',
+      featureEnabled: true,
+      httpStatus: response.status ?? 200,
+      durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
+    });
     return true;
   }
 
@@ -150,7 +276,10 @@ export class ApiClient {
         }
       )
 
-      logger.debug(`Session created/loaded: ${response.data.session.id} (tag: ${opts.tag})`)
+      logger.debug('[API] Session created/loaded', {
+        sessionHash: syncV4DiagnosticHash(response.data.session.id),
+        tagHash: syncV4DiagnosticHash(opts.tag),
+      })
       let raw = response.data.session;
       let session: Session = {
         id: raw.id,
@@ -164,7 +293,10 @@ export class ApiClient {
       }
       return session;
     } catch (error) {
-      logger.debug('[API] [ERROR] Failed to get or create session:', error);
+      logger.debug('[API] Failed to get or create session', {
+        errorKind: classifySyncV4DiagnosticError(error),
+        httpStatus: safeAxiosStatus(error),
+      });
 
       // Check if it's a connection error
       if (error && typeof error === 'object' && 'code' in error) {
@@ -273,7 +405,9 @@ export class ApiClient {
 
 
       const raw = response.data.machine;
-      logger.debug(`[API] Machine ${opts.machineId} registered/updated with server`);
+      logger.debug('[API] Machine registered/updated with server', {
+        machineHash: syncV4DiagnosticHash(opts.machineId),
+      });
 
       // Return decrypted machine like we do for sessions
       const machine: Machine = {
@@ -389,7 +523,11 @@ export class ApiClient {
 
       logger.debug(`[API] Vendor token for ${vendor} registered successfully`);
     } catch (error) {
-      logger.debug(`[API] [ERROR] Failed to register vendor token:`, error);
+      logger.debug('[API] Failed to register vendor token', {
+        vendor,
+        errorKind: classifySyncV4DiagnosticError(error),
+        httpStatus: safeAxiosStatus(error),
+      });
       throw new Error(`Failed to register vendor token: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -421,10 +559,9 @@ export class ApiClient {
         throw new Error(`Server returned status ${response.status}`);
       }
 
-      // Log raw response for debugging
-      logger.debug(`[API] Raw vendor token response:`, {
+      logger.debug('[API] Vendor token response received', {
+        vendor,
         status: response.status,
-        dataKeys: Object.keys(response.data || {}),
         hasToken: 'token' in (response.data || {}),
         tokenType: typeof response.data?.token,
       });
@@ -436,7 +573,10 @@ export class ApiClient {
           try {
             tokenData = JSON.parse(response.data.token);
           } catch (parseError) {
-            logger.debug(`[API] Failed to parse token as JSON, using as string:`, parseError);
+            logger.debug('[API] Failed to parse vendor token as JSON; using string value', {
+              vendor,
+              errorKind: classifySyncV4DiagnosticError(parseError),
+            });
             tokenData = response.data.token;
           }
         } else if (response.data.token !== null) {
@@ -463,9 +603,10 @@ export class ApiClient {
         return null;
       }
       
-      logger.debug(`[API] Vendor token for ${vendor} retrieved successfully`, {
+      logger.debug('[API] Vendor token retrieved successfully', {
+        vendor,
         tokenDataType: typeof tokenData,
-        tokenDataKeys: tokenData && typeof tokenData === 'object' ? Object.keys(tokenData) : 'not an object',
+        tokenDataIsArray: Array.isArray(tokenData),
       });
       return tokenData;
     } catch (error: any) {
@@ -473,7 +614,11 @@ export class ApiClient {
         logger.debug(`[API] No vendor token found for ${vendor}`);
         return null;
       }
-      logger.debug(`[API] [ERROR] Failed to get vendor token:`, error);
+      logger.debug('[API] Failed to get vendor token', {
+        vendor,
+        errorKind: classifySyncV4DiagnosticError(error),
+        httpStatus: safeAxiosStatus(error),
+      });
       return null;
     }
   }
@@ -504,8 +649,37 @@ export class ApiClient {
       );
       return response.status >= 200 && response.status < 300;
     } catch (error) {
-      logger.debug('[API] deactivateSession failed:', error);
+      logger.debug('[API] deactivateSession failed', {
+        errorKind: classifySyncV4DiagnosticError(error),
+        httpStatus: safeAxiosStatus(error),
+      });
       return false;
     }
+  }
+}
+
+function safeAxiosTraceHeader(response: unknown): string | undefined {
+  try {
+    if (!response || typeof response !== 'object') return undefined;
+    const headers = (response as { headers?: unknown }).headers;
+    if (!headers || typeof headers !== 'object') return undefined;
+    const get = (headers as { get?: unknown }).get;
+    if (typeof get === 'function') {
+      const value = get.call(headers, 'X-Happy-Sync-Trace');
+      return typeof value === 'string' ? value : undefined;
+    }
+    const record = headers as Record<string, unknown>;
+    const value = record['x-happy-sync-trace'] ?? record['X-Happy-Sync-Trace'];
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function syncV4TransportSecurity(): 'https' | 'insecureHttp' {
+  try {
+    return new URL(configuration.serverUrl).protocol === 'http:' ? 'insecureHttp' : 'https';
+  } catch {
+    return 'https';
   }
 }

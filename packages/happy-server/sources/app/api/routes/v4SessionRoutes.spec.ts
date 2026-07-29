@@ -49,6 +49,10 @@ const {
     dbMock,
     emitEphemeralMock,
     mutationMetricMock,
+    operationMetricMock,
+    operationDurationMetricMock,
+    pageSizeMetricMock,
+    prunedRecordsMetricMock,
     projectionLagMetricMock,
     snapshotFallbackMetricMock,
     resetState,
@@ -219,6 +223,10 @@ const {
         dbMock,
         emitEphemeralMock: vi.fn(),
         mutationMetricMock: vi.fn(),
+        operationMetricMock: vi.fn(),
+        operationDurationMetricMock: vi.fn(),
+        pageSizeMetricMock: vi.fn(),
+        prunedRecordsMetricMock: vi.fn(),
         projectionLagMetricMock: vi.fn(),
         snapshotFallbackMetricMock: vi.fn(),
         resetState,
@@ -234,6 +242,10 @@ vi.mock("@/app/monitoring/metrics2", () => ({
     getMetricsLabelsFromRequest: () => ({ client: "test/1.0.0", client_type: "test" }),
     getSyncV4MetricsLabelsFromRequest: () => ({ client_type: "test" }),
     syncV4MutationResultsCounter: { inc: mutationMetricMock },
+    syncV4OperationsCounter: { inc: operationMetricMock },
+    syncV4OperationDurationHistogram: { observe: operationDurationMetricMock },
+    syncV4PageSizeHistogram: { observe: pageSizeMetricMock },
+    syncV4PrunedRecordsCounter: { inc: prunedRecordsMetricMock },
     syncV4ProjectionLagHistogram: { observe: projectionLagMetricMock },
     syncV4SnapshotFallbackCounter: { inc: snapshotFallbackMetricMock },
 }));
@@ -241,6 +253,7 @@ vi.mock("@/app/monitoring/metrics2", () => ({
 import {
     getSyncV4ClientCompatibility,
     isCodexSyncV4Enabled,
+    syncV4ErrorStatus,
     v4CapabilitiesRoutes,
     v4SessionRoutes,
 } from "./v4SessionRoutes";
@@ -261,6 +274,9 @@ async function createApp(defaultHappyClient: string | null = "cli-coding-session
     app.setSerializerCompiler(serializerCompiler);
     const typed = app.withTypeProvider<ZodTypeProvider>() as unknown as Fastify;
     typed.decorate("authenticate", async (request: any, reply: any) => {
+        if (request.headers["x-auth-error"] === "frozen") {
+            throw Object.freeze(new Error("prompt-reasoning-tool-output-secret"));
+        }
         const userId = request.headers["x-user-id"];
         if (typeof userId !== "string") return reply.code(401).send({ error: "Unauthorized" });
         request.userId = userId;
@@ -315,6 +331,11 @@ describe("v4SessionRoutes", () => {
             clientType: "happy-app",
             minimumVersion: "1.11.4",
         });
+        expect(operationMetricMock).toHaveBeenCalledWith({
+            operation: "changes",
+            outcome: "invalid",
+            client_type: "test",
+        });
     });
 
     it("rejects an unauthenticated oversized mutation body before parsing it", async () => {
@@ -328,6 +349,46 @@ describe("v4SessionRoutes", () => {
 
         expect(response.statusCode).toBe(401);
         expect(response.json()).toEqual({ error: "Unauthorized" });
+        expect(operationMetricMock).toHaveBeenCalledWith({
+            operation: "mutations",
+            outcome: "invalid",
+            client_type: "test",
+        });
+    });
+
+    it("classifies a frozen pre-handler error without mutating it or double-counting", async () => {
+        app = await createApp();
+        const response = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0",
+            headers: { "x-auth-error": "frozen" },
+        });
+
+        expect(response.statusCode).toBe(500);
+        expect(operationMetricMock).toHaveBeenCalledTimes(1);
+        expect(operationMetricMock).toHaveBeenCalledWith({
+            operation: "changes",
+            outcome: "error",
+            client_type: "test",
+        });
+    });
+
+    it("fails open when statusCode is exposed through a hostile getter or proxy", () => {
+        const throwingGetter = Object.defineProperty(new Error("private-error"), "statusCode", {
+            get: () => {
+                throw new Error("prompt-reasoning-tool-output-secret");
+            },
+        });
+        const throwingProxy = new Proxy({}, {
+            get: () => {
+                throw new Error("prompt-reasoning-tool-output-secret");
+            },
+        });
+
+        expect(() => syncV4ErrorStatus(throwingGetter, 418)).not.toThrow();
+        expect(() => syncV4ErrorStatus(throwingProxy, 200)).not.toThrow();
+        expect(syncV4ErrorStatus(throwingGetter, 418)).toBe(418);
+        expect(syncV4ErrorStatus(throwingProxy, 200)).toBe(500);
     });
 
     let app: Fastify;
@@ -336,6 +397,10 @@ describe("v4SessionRoutes", () => {
         resetState();
         emitEphemeralMock.mockClear();
         mutationMetricMock.mockClear();
+        operationMetricMock.mockClear();
+        operationDurationMetricMock.mockClear();
+        pageSizeMetricMock.mockClear();
+        prunedRecordsMetricMock.mockClear();
         projectionLagMetricMock.mockClear();
         snapshotFallbackMetricMock.mockClear();
         dbMock.sessionMutationV4.updateMany.mockClear();
@@ -363,8 +428,14 @@ describe("v4SessionRoutes", () => {
         });
 
         vi.stubEnv("HAPPY_CODEX_SYNC_V4_ENABLED", "true");
-        const enabled = await app.inject({ method: "GET", url: "/v4/capabilities" });
+        const traceId = "00000000000000000000000000000001";
+        const enabled = await app.inject({
+            method: "GET",
+            url: "/v4/capabilities",
+            headers: { "x-happy-sync-trace": traceId },
+        });
         expect(enabled.json().codex.enabled).toBe(true);
+        expect(enabled.headers["x-happy-sync-trace"]).toBe(traceId);
     });
 
     it("stores encrypted mutations and returns acknowledgements without a receive cursor", async () => {
@@ -389,6 +460,16 @@ describe("v4SessionRoutes", () => {
             result: "accepted",
             client_type: "test",
         });
+        expect(operationMetricMock).toHaveBeenCalledWith({
+            operation: "mutations",
+            outcome: "success",
+            client_type: "test",
+        });
+        expect(pageSizeMetricMock).toHaveBeenCalledWith(
+            { operation: "mutations", client_type: "test" },
+            1,
+        );
+        expect(response.headers["x-happy-sync-trace"]).toMatch(/^[0-9a-f]{32}$/);
     });
 
     it("deduplicates mutation ids without allocating another sequence", async () => {
@@ -454,6 +535,101 @@ describe("v4SessionRoutes", () => {
             contentHash: retainedContentHash,
             prunedAt: expect.any(Date),
         });
+        expect(prunedRecordsMetricMock).toHaveBeenCalledWith(
+            { client_type: "test" },
+            1,
+        );
+    });
+
+    it("keeps committed ACKs when invalidation and prune maintenance fail", async () => {
+        seedSession("session-1", "user-1");
+        app = await createApp();
+        await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [mutation] },
+        });
+        state.mutations[0].createdAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+        state.sessions[0].syncV4Seq = 100_351;
+        emitEphemeralMock.mockImplementationOnce(() => {
+            throw Object.assign(new Error("secret-invalidation-payload"), { code: "ECONNRESET" });
+        });
+        dbMock.sessionMutationV4.updateMany.mockRejectedValueOnce(
+            Object.assign(new Error("secret-prune-payload"), { code: "EIO" }),
+        );
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: {
+                mutations: [
+                    { ...mutation, mutationId: "mutation-2", entityId: "opaque-entity-2" },
+                    { ...mutation, mutationId: "mutation-3", entityId: "opaque-entity-3" },
+                ],
+            },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().acknowledgements).toHaveLength(2);
+        expect(state.sessions[0].syncV4Seq).toBe(100_353);
+        expect(operationMetricMock).toHaveBeenCalledWith({
+            operation: "invalidation",
+            outcome: "error",
+            client_type: "test",
+        });
+        expect(operationMetricMock).toHaveBeenCalledWith({
+            operation: "prune",
+            outcome: "error",
+            client_type: "test",
+        });
+    });
+
+    it("returns committed ACKs without waiting for slow journal maintenance", async () => {
+        seedSession("session-1", "user-1");
+        app = await createApp();
+        await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [mutation] },
+        });
+        state.mutations[0].createdAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+        state.sessions[0].syncV4Seq = 100_351;
+        let finishPrune!: (value: { count: number }) => void;
+        dbMock.sessionMutationV4.updateMany.mockImplementationOnce(
+            () => new Promise<{ count: number }>((resolve) => {
+                finishPrune = resolve;
+            }),
+        );
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: {
+                mutations: [
+                    { ...mutation, mutationId: "mutation-2", entityId: "entity-2" },
+                    { ...mutation, mutationId: "mutation-3", entityId: "entity-3" },
+                ],
+            },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().acknowledgements).toHaveLength(2);
+        expect(operationMetricMock).not.toHaveBeenCalledWith(expect.objectContaining({
+            operation: "prune",
+        }));
+
+        finishPrune({ count: 0 });
+        await vi.waitFor(() => {
+            expect(operationMetricMock).toHaveBeenCalledWith({
+                operation: "prune",
+                outcome: "success",
+                client_type: "test",
+            });
+        });
     });
 
     it("deduplicates a pruned mutation receipt and rejects changed content", async () => {
@@ -495,6 +671,12 @@ describe("v4SessionRoutes", () => {
         });
         expect(duplicateBatch.statusCode).toBe(400);
         expect(state.mutations).toHaveLength(0);
+        expect(operationMetricMock).toHaveBeenCalledTimes(1);
+        expect(operationMetricMock).toHaveBeenCalledWith({
+            operation: "mutations",
+            outcome: "invalid",
+            client_type: "test",
+        });
 
         await app.inject({
             method: "POST",

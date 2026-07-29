@@ -6,3 +6,4 @@ export * from './voice';
 export * from './rigMetadata';
 export * from './syncV4';
 export * from './syncV4Entities';
+export * from './syncV4Diagnostics';

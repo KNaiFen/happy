@@ -11,6 +11,7 @@ import {
     readCodexCliVersion,
 } from './codexCliVersion';
 import type { Model } from './protocol';
+import { classifySyncV4DiagnosticError } from '@slopus/happy-wire';
 
 export function normalizeCodexModels(models: Model[]): CodexModelCapability[] {
     return models
@@ -39,7 +40,9 @@ export async function loadCodexModelCapabilities(
         const models = normalizeCodexModels(await client.listModels({ timeoutMs }));
         return models.length > 0 ? models : null;
     } catch (error) {
-        logger.debug('[Codex] Model capability discovery failed; continuing without catalog', error);
+        logger.debug('[Codex] Model capability discovery failed; continuing without catalog', {
+            errorKind: classifySyncV4DiagnosticError(error),
+        });
         return null;
     }
 }
@@ -72,12 +75,16 @@ export async function discoverCodexAgentCapabilities(
             models,
         };
     } catch (error) {
-        logger.debug('[Codex] App-server capability discovery failed; continuing without catalog', error);
+        logger.debug('[Codex] App-server capability discovery failed; continuing without catalog', {
+            errorKind: classifySyncV4DiagnosticError(error),
+        });
         return null;
     } finally {
         if (timer) clearTimeout(timer);
         await client.disconnect().catch((error) => {
-            logger.debug('[Codex] Failed to close capability discovery app-server', error);
+            logger.debug('[Codex] Failed to close capability discovery app-server', {
+                errorKind: classifySyncV4DiagnosticError(error),
+            });
         });
     }
 }

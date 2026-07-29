@@ -1,7 +1,7 @@
 import { render } from "ink";
 import React from "react";
 import { z } from 'zod';
-import { createEnvelope } from '@slopus/happy-wire';
+import { classifySyncV4DiagnosticError, createEnvelope } from '@slopus/happy-wire';
 import { ApiClient } from '@/api/api';
 import {
     CodexAppServerClient,
@@ -20,7 +20,7 @@ import packageJson from '../../package.json';
 import { MessageQueue2, type QueueItem } from '@/utils/MessageQueue2';
 import { AsyncLock } from '@/utils/lock';
 import { projectPath } from '@/projectPath';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createSessionMetadata } from '@/utils/createSessionMetadata';
 import { startHappyServer } from '@/claude/utils/startHappyServer';
 import { MessageBuffer } from "@/ui/ink/messageBuffer";
@@ -82,6 +82,20 @@ import {
 } from './codexV4CommandRouting';
 import { deriveCodexV4ChildSessionIdentity } from './codexV4ChildIdentity';
 import { CodexProtocolTraceRecorder } from './codexProtocolTrace';
+import {
+    CliSyncV4DiagnosticLog,
+    cliSyncV4DiagnosticStatsAreDegraded,
+    createSyncV4TraceId,
+    deriveCodexProtocolTracePath,
+    deriveSyncV4DiagnosticPath,
+    syncV4DiagnosticHash,
+} from '@/api/syncV4Diagnostics';
+import {
+    closeCodexV4BindingResources,
+    runCodexShutdownSteps,
+    type CodexShutdownStage,
+} from './codexShutdown';
+import { CodexLegacyOutput } from './codexLegacyOutput';
 
 /**
  * Extracts a human-readable error from a codex task_complete/turn_aborted event.
@@ -96,6 +110,25 @@ function describeCodexFailure(msg: any): string | null {
         return err.message;
     }
     return 'Unknown error';
+}
+
+function diagnosticErrorName(error: unknown): ReturnType<typeof classifySyncV4DiagnosticError> {
+    return classifySyncV4DiagnosticError(error);
+}
+
+function diagnosticTransportSecurity(serverUrl: string): 'https' | 'insecureHttp' {
+    try {
+        return new URL(serverUrl).protocol === 'http:' ? 'insecureHttp' : 'https';
+    } catch {
+        return 'https';
+    }
+}
+
+function hasOwn(value: unknown, key: PropertyKey): boolean {
+    return value !== null
+        && value !== undefined
+        && (typeof value === 'object' || typeof value === 'function')
+        && Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function hasCodexSubagentReference(message: Record<string, unknown>): boolean {
@@ -161,7 +194,190 @@ export async function runCodex(opts: {
     connectionState.setBackend('Codex');
 
     const api = await ApiClient.create(opts.credentials);
-    const codexSyncV4Enabled = await api.isCodexSyncV4Enabled(formatCodexCliVersion(codexCliVersion));
+    let syncV4Diagnostics: CliSyncV4DiagnosticLog | null = null;
+    const syncV4DiagnosticPath = deriveSyncV4DiagnosticPath(logger.getLogPath());
+    const syncV4TransportSecurity = diagnosticTransportSecurity(configuration.serverUrl);
+    try {
+        syncV4Diagnostics = await CliSyncV4DiagnosticLog.open(syncV4DiagnosticPath);
+        syncV4Diagnostics.record({
+            level: 'info',
+            component: 'cli.gateway',
+            event: 'lifecycle',
+            phase: 'started',
+            state: 'starting',
+            softwareVersion: packageJson.version,
+            codexVersion: formatCodexCliVersion(codexCliVersion),
+            protocolVersion: 4,
+            transportSecurity: syncV4TransportSecurity,
+        });
+        logger.debug('[Codex v4] Structured diagnostics enabled', {
+            diagnosticFile: basename(syncV4DiagnosticPath),
+        });
+    } catch (error) {
+        logger.warn('[Codex v4] Failed to open structured diagnostics', {
+            errorKind: diagnosticErrorName(error),
+        });
+    }
+    const flushCapabilityDiagnostics = async (): Promise<void> => {
+        const diagnostics = syncV4Diagnostics;
+        if (!diagnostics) return;
+        try {
+            await diagnostics.flush();
+        } catch (error) {
+            logger.warn('[Codex v4] Failed to flush capability diagnostics', {
+                errorKind: diagnosticErrorName(error),
+            });
+        }
+    };
+    const closeCapabilityDiagnostics = async (): Promise<void> => {
+        const diagnostics = syncV4Diagnostics;
+        if (!diagnostics) return;
+        try {
+            await diagnostics.close();
+        } catch (error) {
+            logger.warn('[Codex v4] Failed to close capability diagnostics', {
+                errorKind: diagnosticErrorName(error),
+            });
+        } finally {
+            logger.debug('[Codex v4] Capability diagnostic summary', {
+                diagnosticFile: basename(syncV4DiagnosticPath),
+                ...diagnostics.stats(),
+            });
+            syncV4Diagnostics = null;
+        }
+    };
+    const recordShutdownFailure = (stage: CodexShutdownStage, error: unknown): void => {
+        const common = {
+            level: 'warn' as const,
+            phase: 'failed' as const,
+            state: 'degraded' as const,
+            reason: 'shutdown' as const,
+            errorKind: diagnosticErrorName(error),
+        };
+        switch (stage) {
+            case 'reconnection':
+                syncV4Diagnostics?.record({
+                    ...common,
+                    component: 'cli.sync',
+                    event: 'connection',
+                });
+                break;
+            case 'v4Runtime':
+                syncV4Diagnostics?.record({
+                    ...common,
+                    component: 'cli.gateway',
+                    event: 'relation',
+                });
+                break;
+            case 'sessionDeath':
+            case 'sessionFlush':
+            case 'sessionClose':
+                syncV4Diagnostics?.record({
+                    ...common,
+                    component: 'cli.sync',
+                    event: 'connection',
+                });
+                break;
+            case 'providerDisconnect':
+                syncV4Diagnostics?.record({
+                    ...common,
+                    component: 'cli.protocol',
+                    event: 'connection',
+                });
+                break;
+            case 'protocolTrace':
+                syncV4Diagnostics?.record({
+                    ...common,
+                    component: 'cli.protocol',
+                    event: 'protocolTrace',
+                });
+                break;
+            case 'mcpServer':
+                syncV4Diagnostics?.record({
+                    ...common,
+                    component: 'cli.gateway',
+                    event: 'rpc',
+                    rpcFamily: 'mcp',
+                });
+                break;
+            default:
+                syncV4Diagnostics?.record({
+                    ...common,
+                    component: 'cli.gateway',
+                    event: 'lifecycle',
+                });
+                break;
+        }
+        logger.warn('[Codex v4] Shutdown cleanup failed', {
+            stage,
+            errorKind: diagnosticErrorName(error),
+        });
+    };
+    const capabilityTraceId = createSyncV4TraceId();
+    let codexSyncV4Enabled: boolean;
+    try {
+        codexSyncV4Enabled = await api.isCodexSyncV4Enabled(
+            formatCodexCliVersion(codexCliVersion),
+            capabilityTraceId,
+            syncV4Diagnostics ?? undefined,
+        );
+    } catch (error) {
+        await flushCapabilityDiagnostics();
+        const stats = syncV4Diagnostics?.stats();
+        syncV4Diagnostics?.record({
+            level: 'error',
+            component: 'cli.gateway',
+            event: 'lifecycle',
+            phase: 'failed',
+            state: 'failed',
+            errorKind: classifySyncV4DiagnosticError(error),
+            softwareVersion: packageJson.version,
+            codexVersion: formatCodexCliVersion(codexCliVersion),
+            protocolVersion: 4,
+            transportSecurity: syncV4TransportSecurity,
+            dropped: stats?.droppedRecords,
+            invalid: stats?.invalidRecords,
+            writeFailures: stats?.writeFailures,
+            bytes: stats?.pendingBytes,
+        });
+        await closeCapabilityDiagnostics();
+        throw error;
+    }
+    if (!codexSyncV4Enabled) {
+        await flushCapabilityDiagnostics();
+        const stats = syncV4Diagnostics?.stats();
+        const diagnosticsDegraded = cliSyncV4DiagnosticStatsAreDegraded(stats);
+        syncV4Diagnostics?.record({
+            level: diagnosticsDegraded ? 'warn' : 'info',
+            component: 'cli.gateway',
+            event: 'lifecycle',
+            phase: diagnosticsDegraded ? 'failed' : 'completed',
+            state: diagnosticsDegraded ? 'degraded' : 'stopped',
+            softwareVersion: packageJson.version,
+            codexVersion: formatCodexCliVersion(codexCliVersion),
+            protocolVersion: 4,
+            featureEnabled: false,
+            transportSecurity: syncV4TransportSecurity,
+            dropped: stats?.droppedRecords,
+            invalid: stats?.invalidRecords,
+            writeFailures: stats?.writeFailures,
+            bytes: stats?.pendingBytes,
+        });
+        await closeCapabilityDiagnostics();
+    } else {
+        syncV4Diagnostics?.record({
+            level: 'info',
+            component: 'cli.gateway',
+            event: 'lifecycle',
+            phase: 'completed',
+            state: 'ready',
+            softwareVersion: packageJson.version,
+            codexVersion: formatCodexCliVersion(codexCliVersion),
+            protocolVersion: 4,
+            featureEnabled: true,
+            transportSecurity: syncV4TransportSecurity,
+        });
+    }
 
     // Log startup options
     logger.debug(`[codex] Starting with options: startedBy=${opts.startedBy || 'terminal'}`);
@@ -174,13 +390,17 @@ export async function runCodex(opts: {
     let machineId = settings?.machineId;
     const sandboxConfig = opts.noSandbox ? undefined : settings?.sandboxConfig;
     const client = new CodexAppServerClient(sandboxConfig, codexCliVersion);
+    client.setDiagnosticSink(syncV4Diagnostics);
+    client.setDiagnosticContext({
+        transportSecurity: syncV4TransportSecurity,
+    });
     let protocolTraceRecorder: CodexProtocolTraceRecorder | null = null;
     const supportsQueueSteering = client.supportsTurnSteering();
     if (!machineId) {
         console.error(`[START] No machine ID found in settings, which is unexpected since authAndSetupMachineIfNeeded should have created it. Please report this issue on https://github.com/slopus/happy-cli/issues`);
         process.exit(1);
     }
-    logger.debug(`Using machineId: ${machineId}`);
+    logger.debug(`Using machineIdHash: ${syncV4DiagnosticHash(machineId)}`);
     await api.getOrCreateMachine({
         machineId,
         metadata: initialMachineMetadata
@@ -228,7 +448,7 @@ export async function runCodex(opts: {
 
     let response: ApiSession | null;
     if (reconnectSessionId && reconnectKeyBase64 && reconnectVariant) {
-        logger.debug(`[START] Reconnecting to existing session ${reconnectSessionId}`);
+        logger.debug(`[START] Reconnecting to existing session ${syncV4DiagnosticHash(reconnectSessionId)}`);
         response = {
             id: reconnectSessionId,
             seq: parseInt(reconnectSeq || '0', 10),
@@ -267,11 +487,18 @@ export async function runCodex(opts: {
         codexV4Runtime.router = null;
         codexV4Runtime.rootBinding = null;
         boundCodexV4SessionId = null;
+        let firstError: unknown = null;
         try {
             await router?.close();
-        } finally {
-            await rootBinding?.close();
+        } catch (error) {
+            firstError = error;
         }
+        try {
+            await rootBinding?.close();
+        } catch (error) {
+            if (firstError === null) firstError = error;
+        }
+        if (firstError !== null) throw firstError;
     };
     const { session: initialSession, reconnectionHandle } = setupOfflineReconnection({
         api,
@@ -285,7 +512,7 @@ export async function runCodex(opts: {
                     await bindCodexV4Session(newSession);
                 } catch (error) {
                     logger.warn('[Codex v4] Failed to bind reconnected session', {
-                        errorName: error instanceof Error ? error.name : typeof error,
+                        errorKind: diagnosticErrorName(error),
                     });
                     throw error;
                 }
@@ -301,6 +528,13 @@ export async function runCodex(opts: {
         }
     });
     session = initialSession;
+    const legacyOutput = new CodexLegacyOutput(
+        () => session,
+        () => codexV4CanonicalActive,
+    );
+    const sendLegacyCodexSessionEvent = (
+        event: Parameters<ApiSessionClient['sendSessionEvent']>[0],
+    ): void => legacyOutput.sendSessionEvent(event);
 
     // On reconnect, un-archive the session and skip replaying old messages.
     if (reconnectSessionId) {
@@ -316,7 +550,7 @@ export async function runCodex(opts: {
     // Always report to daemon if it exists (skip if offline)
     if (response) {
         try {
-            logger.debug(`[START] Reporting session ${response.id} to daemon`);
+            logger.debug(`[START] Reporting session ${syncV4DiagnosticHash(response.id)} to daemon`);
             const result = await notifyDaemonSessionStarted(response.id, metadata, {
                 encryptionKey: encodeBase64(response.encryptionKey),
                 encryptionVariant: response.encryptionVariant,
@@ -325,12 +559,16 @@ export async function runCodex(opts: {
                 agentStateVersion: response.agentStateVersion,
             });
             if (result.error) {
-                logger.debug(`[START] Failed to report to daemon (may not be running):`, result.error);
+                logger.debug('[START] Failed to report to daemon (may not be running)', {
+                    errorKind: diagnosticErrorName(result.error),
+                });
             } else {
-                logger.debug(`[START] Reported session ${response.id} to daemon`);
+                logger.debug(`[START] Reported session ${syncV4DiagnosticHash(response.id)} to daemon`);
             }
         } catch (error) {
-            logger.debug('[START] Failed to report to daemon (may not be running):', error);
+            logger.debug('[START] Failed to report to daemon (may not be running)', {
+                errorKind: diagnosticErrorName(error),
+            });
         }
     }
 
@@ -409,6 +647,7 @@ export async function runCodex(opts: {
 
     const handleUserMessage = createSerialAsyncHandler<UserMessage>(async (message) => {
         const attachmentsForThisMessage = await session.drainAttachmentsForUserMessage();
+        const messageMeta = message.meta;
 
         // Resolve permission mode (validate against Codex-native modes)
         let messagePermissionMode = currentPermissionMode;
@@ -418,48 +657,62 @@ export async function runCodex(opts: {
                 messagePermissionMode = incoming;
                 currentPermissionMode = messagePermissionMode;
                 currentPermissionModeExplicitlySet = true;
-                logger.debug(`[Codex] Permission mode updated from user message to: ${currentPermissionMode}`);
+                logger.debug('[Codex] Permission mode updated from user message', {
+                    permissionModeHash: syncV4DiagnosticHash(`permission:${currentPermissionMode}`),
+                });
             } else {
-                logger.debug(`[Codex] Ignoring invalid permission mode from user message: ${String(message.meta.permissionMode)}`);
+                logger.debug('[Codex] Ignoring invalid permission mode from user message');
             }
         } else {
-            logger.debug(`[Codex] User message received with no permission mode override, using current: ${currentPermissionMode ?? 'default (effective)'}`);
+            logger.debug('[Codex] User message received with no permission mode override', {
+                hasCurrentPermissionMode: currentPermissionMode !== undefined,
+            });
         }
 
         // Resolve model; explicit null resets to the model used to launch this thread.
         let messageModel = currentModel;
-        if (message.meta?.hasOwnProperty('model')) {
-            messageModel = message.meta.model || launchModel;
+        if (hasOwn(messageMeta, 'model')) {
+            messageModel = (messageMeta as { model?: string | null }).model || launchModel;
             currentModel = messageModel;
-            logger.debug(`[Codex] Model updated from user message: ${messageModel}`);
+            logger.debug('[Codex] Model updated from user message', {
+                modelHash: messageModel ? syncV4DiagnosticHash(`model:${messageModel}`) : undefined,
+            });
         } else {
-            logger.debug(`[Codex] User message received with no model override, using current: ${currentModel || 'default'}`);
+            logger.debug('[Codex] User message received with no model override', {
+                modelHash: currentModel ? syncV4DiagnosticHash(`model:${currentModel}`) : undefined,
+            });
         }
 
         // Resolve effort — passed straight to sendTurnAndWait. Validate the
         // incoming value against ReasoningEffort so a stale/garbage entry on
         // the wire doesn't poison the per-turn options.
         let messageEffort = currentEffort;
-        if (message.meta?.hasOwnProperty('effort')) {
-            const incoming = (message.meta as Record<string, unknown>).effort;
+        if (hasOwn(messageMeta, 'effort')) {
+            const incoming = (messageMeta as Record<string, unknown>).effort;
             if (incoming === null || incoming === undefined) {
                 messageEffort = undefined;
                 currentEffort = undefined;
-                logger.debug(`[Codex] Effort reset to default`);
+                logger.debug('[Codex] Effort reset to default');
             } else if (typeof incoming === 'string') {
                 messageEffort = incoming;
                 currentEffort = messageEffort;
-                logger.debug(`[Codex] Effort updated from user message: ${messageEffort}`);
+                logger.debug('[Codex] Effort updated from user message', {
+                    effortHash: syncV4DiagnosticHash(`effort:${messageEffort}`),
+                });
             } else {
-                logger.debug(`[Codex] Ignoring invalid effort from user message: ${String(incoming)}`);
+                logger.debug('[Codex] Ignoring invalid effort from user message', {
+                    valueType: incoming === null ? 'null' : typeof incoming,
+                });
             }
         } else {
-            logger.debug(`[Codex] User message received with no effort override, using current: ${currentEffort ?? 'default'}`);
+            logger.debug('[Codex] User message received with no effort override', {
+                effortHash: currentEffort ? syncV4DiagnosticHash(`effort:${currentEffort}`) : undefined,
+            });
         }
 
         let messageAppendSystemPrompt = currentAppendSystemPrompt;
-        if (message.meta?.hasOwnProperty('appendSystemPrompt')) {
-            messageAppendSystemPrompt = message.meta.appendSystemPrompt || undefined;
+        if (hasOwn(messageMeta, 'appendSystemPrompt')) {
+            messageAppendSystemPrompt = (messageMeta as { appendSystemPrompt?: string | null }).appendSystemPrompt || undefined;
             currentAppendSystemPrompt = messageAppendSystemPrompt;
             logger.debug(`[Codex] Append system prompt updated from user message: ${messageAppendSystemPrompt ? 'set' : 'reset to none'}`);
         } else {
@@ -509,7 +762,7 @@ export async function runCodex(opts: {
         }
     }, (error) => {
         logger.warn('[Codex] Failed to handle user message', {
-            errorName: error instanceof Error ? error.name : typeof error,
+            errorKind: diagnosticErrorName(error),
         });
     });
     session.onUserMessage(handleUserMessage);
@@ -529,7 +782,7 @@ export async function runCodex(opts: {
     }, 2000);
 
     const sendReady = () => {
-        session.sendSessionEvent({ type: 'ready' });
+        sendLegacyCodexSessionEvent({ type: 'ready' });
         try {
             api.push().sendSessionNotification({
                 kind: 'done',
@@ -541,7 +794,9 @@ export async function runCodex(opts: {
                 }
             });
         } catch (pushError) {
-            logger.debug('[Codex] Failed to send ready push', pushError);
+            logger.debug('[Codex] Failed to send ready push', {
+                errorKind: diagnosticErrorName(pushError),
+            });
         }
     };
 
@@ -610,7 +865,7 @@ export async function runCodex(opts: {
                             : abortResult.aborted
                                 ? 'Codex backend was restarted after the interrupt timeout and confirmed that the active task was interrupted.'
                                 : 'Codex backend was restarted after the interrupt timeout and the task reached a terminal state during reconciliation.';
-                        session.sendSessionEvent({
+                        sendLegacyCodexSessionEvent({
                             type: 'message',
                             message,
                         });
@@ -622,7 +877,7 @@ export async function runCodex(opts: {
                 }
                 logger.debug('[Codex] Abort completed - session remains active');
             } catch (error) {
-                logger.debug('[Codex] Error during abort:', error);
+                logger.debug('[Codex] Error during abort', { errorKind: diagnosticErrorName(error) });
             } finally {
                 resetCurrentModeDefaults();
                 // Wake up message queue wait if idle
@@ -642,45 +897,26 @@ export async function runCodex(opts: {
      * Kill terminates the entire process.
      */
     const handleKillSession = async () => {
-        logger.debug('[Codex] Kill session requested - terminating process');
+        logger.debug('[Codex] Kill session requested - scheduling orderly shutdown');
         await handleAbort();
-        logger.debug('[Codex] Abort completed, proceeding with termination');
-
+        logger.debug('[Codex] Abort completed, proceeding with orderly shutdown');
         try {
-            await closeCodexV4Runtime();
-
-            // Update lifecycle state to archived before closing
-            if (session) {
-                session.updateMetadata((currentMetadata) => ({
-                    ...currentMetadata,
-                    lifecycleState: 'archived',
-                    lifecycleStateSince: Date.now(),
-                    archivedBy: 'cli',
-                    archiveReason: 'User terminated'
-                }));
-                
-                // Send session death message
-                session.sendSessionDeath();
-                await session.flush();
-                await session.close();
-            }
-
-            // Force close Codex transport (best-effort) so we don't leave stray processes
-            try {
-                await client.disconnect();
-            } catch (e) {
-                logger.debug('[Codex] Error disconnecting Codex during termination', e);
-            }
-
-            // Stop Happy MCP server
-            happyServer.stop();
-
-            logger.debug('[Codex] Session termination complete, exiting');
-            process.exit(0);
+            session.updateMetadata((currentMetadata) => ({
+                ...currentMetadata,
+                lifecycleState: 'archived',
+                lifecycleStateSince: Date.now(),
+                archivedBy: 'cli',
+                archiveReason: 'User terminated',
+            }));
         } catch (error) {
-            logger.debug('[Codex] Error during session termination:', error);
-            process.exit(1);
+            logger.warn('[Codex] Failed to mark killed session as archived', {
+                errorKind: diagnosticErrorName(error),
+            });
+        } finally {
+            shouldExit = true;
+            abortController.abort();
         }
+        logger.debug('[Codex] Session shutdown scheduled');
     };
 
     // Register abort handler
@@ -731,18 +967,14 @@ export async function runCodex(opts: {
     // call in claudeRemoteLauncher for the full rationale.
     permissionHandler.reset('Previous CLI process exited before responding');
     reasoningProcessor = new ReasoningProcessor((message) => {
-        if (codexV4CanonicalActive) return;
-        const envelopes = mapCodexProcessorMessageToSessionEnvelopes(message, { currentTurnId });
-        for (const envelope of envelopes) {
-            session.sendSessionProtocolMessage(envelope);
-        }
+        legacyOutput.projectEnvelopes(() => ({
+            envelopes: mapCodexProcessorMessageToSessionEnvelopes(message, { currentTurnId }),
+        }));
     });
     const diffProcessor = new DiffProcessor((message) => {
-        if (codexV4CanonicalActive) return;
-        const envelopes = mapCodexProcessorMessageToSessionEnvelopes(message, { currentTurnId });
-        for (const envelope of envelopes) {
-            session.sendSessionProtocolMessage(envelope);
-        }
+        legacyOutput.projectEnvelopes(() => ({
+            envelopes: mapCodexProcessorMessageToSessionEnvelopes(message, { currentTurnId }),
+        }));
     });
     const sendTrackedUserMessageToSession = async (item: QueueItem<EnhancedMode>) => {
         if (!item.id || codexV4CanonicalActive) return;
@@ -754,17 +986,17 @@ export async function runCodex(opts: {
                     id: `${item.id}:file:${index}`,
                     time: emittedAt + index,
                 });
-                session.sendSessionProtocolMessage(envelope);
+                legacyOutput.sendSessionProtocolMessage(envelope);
             } catch (error) {
                 logger.warn('[Codex] Failed to publish queued image in session history', {
-                    queueId: item.id,
-                    errorName: error instanceof Error ? error.name : typeof error,
+                    queueHash: syncV4DiagnosticHash(`queue:${item.id}`),
+                    errorKind: diagnosticErrorName(error),
                 });
             }
         }
 
         if (item.message.trim().length > 0) {
-            session.sendSessionProtocolMessage(createEnvelope('user', {
+            legacyOutput.sendSessionProtocolMessage(createEnvelope('user', {
                 t: 'text',
                 text: item.message,
             }, {
@@ -876,7 +1108,9 @@ export async function runCodex(opts: {
             messageBuffer.addMessage('Goal updated', 'status');
             return true;
         } catch (error) {
-            logger.debug('[Codex] Goal command API failed; falling back to normal turn:', error);
+            logger.debug('[Codex] Goal command API failed; falling back to normal turn', {
+                errorKind: diagnosticErrorName(error),
+            });
             return false;
         }
     };
@@ -925,7 +1159,13 @@ export async function runCodex(opts: {
 
         if (shouldAutoApproveCodexApproval(activePermissionMode, client.sandboxEnabled)
             || (latestPermissionMode !== undefined && shouldAutoApproveCodexApproval(latestPermissionMode, client.sandboxEnabled))) {
-            logger.debug(`[Codex] Auto-approving ${params.type} approval in ${activePermissionMode} mode (latest: ${latestPermissionMode ?? 'n/a'})`);
+            logger.debug('[Codex] Auto-approving permission request', {
+                approvalType: params.type,
+                activeModeHash: syncV4DiagnosticHash(`permission:${activePermissionMode}`),
+                latestModeHash: latestPermissionMode
+                    ? syncV4DiagnosticHash(`permission:${latestPermissionMode}`)
+                    : undefined,
+            });
             return 'approved';
         }
 
@@ -934,14 +1174,20 @@ export async function runCodex(opts: {
             logger.debug('[Codex] Permission result:', result.decision);
             return result.decision;
         } catch (error) {
-            logger.debug('[Codex] Error handling permission:', error);
+            logger.debug('[Codex] Error handling permission', {
+                errorKind: diagnosticErrorName(error),
+            });
             return 'denied';
         }
     });
 
     // Event handler: same EventMsg types as the legacy MCP server — no changes needed
     client.setEventHandler((msg) => {
-        logger.debug(`[Codex] Event type: ${typeof msg.type === 'string' ? msg.type : 'unknown'}`);
+        logger.debug('[Codex] Event received', {
+            eventTypeHash: typeof msg.type === 'string'
+                ? syncV4DiagnosticHash(`event:${msg.type}`)
+                : undefined,
+        });
         const isSubagentScopedEvent = hasCodexSubagentReference(msg as Record<string, unknown>);
 
         // Add messages to the ink UI buffer based on message type
@@ -968,7 +1214,7 @@ export async function runCodex(opts: {
             const failure = describeCodexFailure(msg);
             if (failure) {
                 messageBuffer.addMessage(`Task failed: ${failure}`, 'status');
-                session.sendSessionEvent({ type: 'message', message: `Codex error: ${failure}` });
+                sendLegacyCodexSessionEvent({ type: 'message', message: `Codex error: ${failure}` });
             } else {
                 messageBuffer.addMessage('Task completed', 'status');
             }
@@ -976,7 +1222,7 @@ export async function runCodex(opts: {
             const failure = describeCodexFailure(msg);
             if (failure) {
                 messageBuffer.addMessage(`Turn aborted: ${failure}`, 'status');
-                session.sendSessionEvent({ type: 'message', message: `Codex error: ${failure}` });
+                sendLegacyCodexSessionEvent({ type: 'message', message: `Codex error: ${failure}` });
             } else {
                 messageBuffer.addMessage('Turn aborted', 'status');
             }
@@ -1042,18 +1288,20 @@ export async function runCodex(opts: {
             || msg.type === 'agent_reasoning'
             || msg.type === 'agent_reasoning_section_break';
         const isForwardableSubagentReasoning = isSubagentScopedEvent && msg.type === 'agent_reasoning';
-        if (!codexV4CanonicalActive
-            && msg.type !== 'turn_diff'
+        if (msg.type !== 'turn_diff'
             && (!isReasoningEvent || isForwardableSubagentReasoning)) {
-            const mapped = mapCodexMcpMessageToSessionEnvelopes(msg, {
-                currentTurnId,
-                startedSubagents: codexStartedSubagents,
-                activeSubagents: codexActiveSubagents,
-                providerSubagentToSessionSubagent: codexProviderSubagentToSessionSubagent,
-                subagentTitles: codexSubagentTitles,
-                collabReceiverThreadIdsByCall: codexCollabReceiverThreadIdsByCall,
-                collabToolByCall: codexCollabToolByCall,
-            });
+            const mapped = legacyOutput.projectEnvelopes(() => (
+                mapCodexMcpMessageToSessionEnvelopes(msg, {
+                    currentTurnId,
+                    startedSubagents: codexStartedSubagents,
+                    activeSubagents: codexActiveSubagents,
+                    providerSubagentToSessionSubagent: codexProviderSubagentToSessionSubagent,
+                    subagentTitles: codexSubagentTitles,
+                    collabReceiverThreadIdsByCall: codexCollabReceiverThreadIdsByCall,
+                    collabToolByCall: codexCollabToolByCall,
+                })
+            ));
+            if (!mapped) return;
             currentTurnId = mapped.currentTurnId;
             codexStartedSubagents = mapped.startedSubagents;
             codexActiveSubagents = mapped.activeSubagents;
@@ -1061,9 +1309,6 @@ export async function runCodex(opts: {
             codexSubagentTitles = mapped.subagentTitles;
             codexCollabReceiverThreadIdsByCall = mapped.collabReceiverThreadIdsByCall;
             codexCollabToolByCall = mapped.collabToolByCall;
-            for (const envelope of mapped.envelopes) {
-                session.sendSessionProtocolMessage(envelope);
-            }
         }
     });
 
@@ -1098,9 +1343,11 @@ export async function runCodex(opts: {
             mapper = new CodexSyncV4Mapper(sync, {
                 codexCliVersion: formatCodexCliVersion(codexCliVersion),
                 initialSyncState: bindingOptions.initialSyncState,
+                diagnostics: syncV4Diagnostics ?? undefined,
+                diagnosticSessionHash: sync.diagnosticSessionHash,
                 onError: (error) => {
                     logger.warn('[Codex v4] Entity projection failed', {
-                        errorName: error instanceof Error ? error.name : typeof error,
+                        errorKind: diagnosticErrorName(error),
                     });
                 },
             });
@@ -1220,12 +1467,12 @@ export async function runCodex(opts: {
                 },
                 onError: (error) => {
                     logger.warn('[Codex v4] Command reconciliation failed', {
-                        errorName: error instanceof Error ? error.name : typeof error,
+                        errorKind: diagnosticErrorName(error),
                     });
                 },
             });
             return (event) => commandProcessor!.handle(event);
-        });
+        }, syncV4Diagnostics ?? undefined);
         if (!mapper || !commandProcessor || !requestBroker) {
             throw new Error('Codex Sync v4 binding was not initialized');
         }
@@ -1255,15 +1502,15 @@ export async function runCodex(opts: {
             close: async () => {
                 if (closed) return;
                 closed = true;
-                commandProcessor!.close();
-                try {
-                    await requestBroker!.failPending('brokerClosed');
-                    await mapper!.close();
-                    await syncClient.flushOutboundOnce();
-                } finally {
-                    await syncClient.close();
-                    if (bindingOptions.closeSession) await bindingOptions.target.close();
-                }
+                await closeCodexV4BindingResources({
+                    commandProcessor: commandProcessor!,
+                    requestBroker: requestBroker!,
+                    mapper: mapper!,
+                    syncClient,
+                    ...(bindingOptions.closeSession
+                        ? { session: bindingOptions.target }
+                        : {}),
+                });
             },
         };
         return binding;
@@ -1289,6 +1536,10 @@ export async function runCodex(opts: {
             readOnly: false,
             closeSession: false,
             ...(rootThreadId ? { ownedThreadId: rootThreadId } : {}),
+        });
+        client.setDiagnosticContext({
+            sessionHash: rootBinding.syncClient.diagnosticSessionHash,
+            transportSecurity: syncV4TransportSecurity,
         });
         const rootMigrationState = rootThreadId
             ? rootBinding.syncClient.getMigrationState(rootThreadId)
@@ -1354,9 +1605,14 @@ export async function runCodex(opts: {
             },
             onError: (error) => {
                 logger.warn('[Codex v4] Thread routing failed', {
-                    errorName: error instanceof Error ? error.name : typeof error,
+                    errorKind: diagnosticErrorName(error),
                 });
             },
+            diagnostics: syncV4Diagnostics ?? undefined,
+            diagnosticSessionHash: rootBinding.syncClient.diagnosticSessionHash,
+            softwareVersion: packageJson.version,
+            codexVersion: formatCodexCliVersion(codexCliVersion),
+            transportSecurity: syncV4TransportSecurity,
         });
 
         codexV4Runtime.rootBinding = rootBinding;
@@ -1396,15 +1652,33 @@ export async function runCodex(opts: {
         }
     };
 
-    const protocolTracePath = process.env.HAPPY_CODEX_TRACE_PATH;
+    const protocolTracePath = process.env.HAPPY_CODEX_TRACE_PATH
+        || (codexSyncV4Enabled ? deriveCodexProtocolTracePath(logger.getLogPath()) : undefined);
     if (protocolTracePath) {
         try {
             protocolTraceRecorder = await CodexProtocolTraceRecorder.open(protocolTracePath);
             client.setProtocolTraceSink(protocolTraceRecorder);
-            logger.info('[Codex] Redacted protocol trace enabled');
+            syncV4Diagnostics?.record({
+                level: 'info',
+                component: 'cli.protocol',
+                event: 'protocolTrace',
+                phase: 'started',
+                state: 'active',
+            });
+            if (process.env.HAPPY_CODEX_TRACE_PATH) {
+                logger.info('[Codex] Redacted protocol trace enabled');
+            }
         } catch (error) {
+            syncV4Diagnostics?.record({
+                level: 'warn',
+                component: 'cli.protocol',
+                event: 'protocolTrace',
+                phase: 'failed',
+                state: 'failed',
+                errorKind: 'storage',
+            });
             logger.warn('[Codex] Failed to open redacted protocol trace', {
-                errorName: error instanceof Error ? error.name : typeof error,
+                errorKind: diagnosticErrorName(error),
             });
         }
     }
@@ -1511,11 +1785,13 @@ export async function runCodex(opts: {
                         ),
                     });
                     for (const envelope of envelopes) {
-                        session.sendSessionProtocolMessage(envelope);
+                        legacyOutput.sendSessionProtocolMessage(envelope);
                     }
-                    logger.debug(`[CODEX FORK BACKFILL] Replayed ${envelopes.length} historical envelopes from thread ${forkCodexThreadId}`);
+                    logger.debug(`[CODEX FORK BACKFILL] Replayed ${envelopes.length} historical envelopes from thread ${syncV4DiagnosticHash(forkCodexThreadId)}`);
                 } catch (error) {
-                    logger.debug(`[CODEX FORK BACKFILL] Failed to read thread ${forkCodexThreadId}:`, error);
+                    logger.debug(`[CODEX FORK BACKFILL] Failed to read thread ${syncV4DiagnosticHash(forkCodexThreadId)}:`, {
+                        errorKind: diagnosticErrorName(error),
+                    });
                 }
             }
             session.updateMetadata((currentMetadata) => ({
@@ -1582,7 +1858,7 @@ export async function runCodex(opts: {
                 thinking = false;
                 session.keepAlive(thinking, 'remote');
                 messageBuffer.addMessage('Context was reset', 'status');
-                session.sendSessionEvent({ type: 'message', message: 'Context was reset' });
+                sendLegacyCodexSessionEvent({ type: 'message', message: 'Context was reset' });
                 session.updateMetadata((currentMetadata) => {
                     const nextMetadata = { ...currentMetadata };
                     delete nextMetadata.codexThreadId;
@@ -1645,11 +1921,17 @@ export async function runCodex(opts: {
                     effort: effortResolution.effort,
                 };
                 if (!effortResolution.accepted) {
-                    logger.warn(
-                        `[Codex] Rejected unsupported effort '${message.mode.effort ?? 'default'}' `
-                        + `for model '${message.mode.model ?? 'default'}'; `
-                        + `using '${effortResolution.effort ?? 'provider default'}'`,
-                    );
+                    logger.warn('[Codex] Rejected unsupported effort for selected model', {
+                        requestedEffortHash: message.mode.effort
+                            ? syncV4DiagnosticHash(`effort:${message.mode.effort}`)
+                            : undefined,
+                        modelHash: message.mode.model
+                            ? syncV4DiagnosticHash(`model:${message.mode.model}`)
+                            : undefined,
+                        fallbackEffortHash: effortResolution.effort
+                            ? syncV4DiagnosticHash(`effort:${effortResolution.effort}`)
+                            : undefined,
+                    });
                     currentEffort = effortResolution.effort;
                 }
 
@@ -1667,7 +1949,7 @@ export async function runCodex(opts: {
                 }
                 const hasUserText = message.message.trim().length > 0;
                 if ((message.attachments?.length ?? 0) > 0 && imageInputs.inputItems.length === 0 && !hasUserText) {
-                    session.sendSessionEvent({
+                    sendLegacyCodexSessionEvent({
                         type: 'message',
                         message: 'No supported images were available to send to Codex.',
                     });
@@ -1700,9 +1982,11 @@ export async function runCodex(opts: {
                 }
             } catch (error) {
                 // Only actual errors reach here (process crash, connection failure, etc.)
-                logger.warn('Error in codex session:', error);
+                logger.warn('Error in codex session', {
+                    errorKind: diagnosticErrorName(error),
+                });
                 messageBuffer.addMessage('Process exited unexpectedly', 'status');
-                session.sendSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
+                sendLegacyCodexSessionEvent({ type: 'message', message: 'Process exited unexpectedly' });
             } finally {
                 // Reset permission handler, reasoning processor, and diff processor
                 permissionHandler.reset();
@@ -1726,70 +2010,168 @@ export async function runCodex(opts: {
         logger.debug('[codex]: Final cleanup start');
         logActiveHandles('cleanup-start');
 
-        // Cancel offline reconnection if still running
-        if (reconnectionHandle) {
-            logger.debug('[codex]: Cancelling offline reconnection');
-            reconnectionHandle.cancel();
-        }
-
-        try {
-            await closeCodexV4Runtime();
-        } catch (error) {
-            logger.warn('[Codex v4] Failed to flush during shutdown', {
-                errorName: error instanceof Error ? error.name : typeof error,
-            });
-        }
-
-        try {
-            logger.debug('[codex]: sendSessionDeath');
-            session.sendSessionDeath();
-            logger.debug('[codex]: flush begin');
-            await session.flush();
-            logger.debug('[codex]: flush done');
-            logger.debug('[codex]: session.close begin');
-            await session.close();
-            logger.debug('[codex]: session.close done');
-        } catch (e) {
-            logger.debug('[codex]: Error while closing session', e);
-        }
-        logger.debug('[codex]: client.disconnect begin');
-        try {
-            await client.disconnect();
-            logger.debug('[codex]: client.disconnect done');
-        } finally {
-            client.setProtocolTraceSink(null);
-            try {
-                await protocolTraceRecorder?.close();
-            } catch (error) {
-                logger.warn('[Codex] Failed to close redacted protocol trace', {
-                    errorName: error instanceof Error ? error.name : typeof error,
-                });
-            }
-        }
-        // Stop Happy MCP server
-        logger.debug('[codex]: happyServer.stop');
-        happyServer.stop();
-
-        // Clean up ink UI
-        if (process.stdin.isTTY) {
-            logger.debug('[codex]: setRawMode(false)');
-            try { process.stdin.setRawMode(false); } catch { }
-        }
-        // Stop reading from stdin so the process can exit
-        if (hasTTY) {
-            logger.debug('[codex]: stdin.pause()');
-            try { process.stdin.pause(); } catch { }
-        }
-        // Clear periodic keep-alive to avoid keeping event loop alive
-        logger.debug('[codex]: clearInterval(keepAlive)');
-        clearInterval(keepAliveInterval);
-        if (inkInstance) {
-            logger.debug('[codex]: inkInstance.unmount()');
-            inkInstance.unmount();
-        }
-        messageBuffer.clear();
+        const closingProtocolTrace = protocolTraceRecorder;
+        const shutdownFailureCount = await runCodexShutdownSteps([
+            {
+                stage: 'reconnection',
+                run: () => {
+                    logger.debug('[codex]: Cancelling offline reconnection');
+                    reconnectionHandle?.cancel();
+                },
+            },
+            {
+                stage: 'v4Runtime',
+                run: () => closeCodexV4Runtime(),
+            },
+            {
+                stage: 'sessionDeath',
+                run: () => {
+                    logger.debug('[codex]: sendSessionDeath');
+                    session.sendSessionDeath();
+                },
+            },
+            {
+                stage: 'sessionFlush',
+                run: async () => {
+                    logger.debug('[codex]: flush begin');
+                    await session.flush();
+                    logger.debug('[codex]: flush done');
+                },
+            },
+            {
+                stage: 'sessionClose',
+                run: async () => {
+                    logger.debug('[codex]: session.close begin');
+                    await session.close();
+                    logger.debug('[codex]: session.close done');
+                },
+            },
+            {
+                stage: 'providerDisconnect',
+                run: async () => {
+                    logger.debug('[codex]: client.disconnect begin');
+                    try {
+                        await client.disconnect();
+                        logger.debug('[codex]: client.disconnect done');
+                    } finally {
+                        client.setDiagnosticSink(null);
+                        client.setProtocolTraceSink(null);
+                    }
+                },
+            },
+            {
+                stage: 'protocolTrace',
+                run: async () => {
+                    try {
+                        await closingProtocolTrace?.close();
+                        if (closingProtocolTrace) {
+                            const stats = closingProtocolTrace.stats();
+                            const hasFailures = stats.invalidRecords > 0 || stats.writeFailures > 0;
+                            syncV4Diagnostics?.record({
+                                level: hasFailures ? 'warn' : 'info',
+                                component: 'cli.protocol',
+                                event: 'protocolTrace',
+                                phase: hasFailures ? 'failed' : 'completed',
+                                state: hasFailures ? 'degraded' : 'stopped',
+                                count: stats.memoryEntries,
+                                pending: stats.pendingRequests,
+                                dropped: stats.droppedRecords,
+                                ...(stats.writeFailures > 0
+                                    ? { errorKind: 'storage' as const }
+                                    : stats.invalidRecords > 0
+                                        ? { errorKind: 'protocol' as const }
+                                        : {}),
+                            });
+                        }
+                    } finally {
+                        if (closingProtocolTrace) {
+                            logger.debug('[Codex] Redacted protocol trace summary', {
+                                ...closingProtocolTrace.stats(),
+                            });
+                        }
+                    }
+                },
+            },
+            {
+                stage: 'mcpServer',
+                run: () => {
+                    logger.debug('[codex]: happyServer.stop');
+                    happyServer.stop();
+                },
+            },
+            {
+                stage: 'terminal',
+                run: () => {
+                    if (process.stdin.isTTY) {
+                        logger.debug('[codex]: setRawMode(false)');
+                        process.stdin.setRawMode(false);
+                    }
+                },
+            },
+            {
+                stage: 'terminal',
+                run: () => {
+                    if (hasTTY) {
+                        logger.debug('[codex]: stdin.pause()');
+                        process.stdin.pause();
+                    }
+                },
+            },
+            {
+                stage: 'keepAlive',
+                run: () => {
+                    logger.debug('[codex]: clearInterval(keepAlive)');
+                    clearInterval(keepAliveInterval);
+                },
+            },
+            {
+                stage: 'ink',
+                run: () => {
+                    if (inkInstance) {
+                        logger.debug('[codex]: inkInstance.unmount()');
+                        inkInstance.unmount();
+                    }
+                },
+            },
+            {
+                stage: 'messageBuffer',
+                run: () => messageBuffer.clear(),
+            },
+        ], recordShutdownFailure);
 
         logActiveHandles('cleanup-end');
-        logger.debug('[codex]: Final cleanup completed');
+        logger.debug('[codex]: Final cleanup completed', { shutdownFailureCount });
+        await runCodexShutdownSteps([
+            {
+                stage: 'diagnosticTerminal',
+                run: async () => {
+                    await flushCapabilityDiagnostics();
+                    const diagnosticStats = syncV4Diagnostics?.stats();
+                    const diagnosticsDegraded = cliSyncV4DiagnosticStatsAreDegraded(diagnosticStats);
+                    const terminalDegraded = shutdownFailureCount > 0 || diagnosticsDegraded;
+                    syncV4Diagnostics?.record({
+                        level: terminalDegraded ? 'warn' : 'info',
+                        component: 'cli.gateway',
+                        event: 'lifecycle',
+                        phase: terminalDegraded ? 'failed' : 'completed',
+                        state: terminalDegraded ? 'degraded' : 'stopped',
+                        softwareVersion: packageJson.version,
+                        codexVersion: formatCodexCliVersion(codexCliVersion),
+                        protocolVersion: 4,
+                        featureEnabled: codexSyncV4Enabled,
+                        transportSecurity: syncV4TransportSecurity,
+                        count: shutdownFailureCount,
+                        dropped: diagnosticStats?.droppedRecords,
+                        invalid: diagnosticStats?.invalidRecords,
+                        writeFailures: diagnosticStats?.writeFailures,
+                        bytes: diagnosticStats?.pendingBytes,
+                    });
+                },
+            },
+            {
+                stage: 'diagnosticClose',
+                run: () => closeCapabilityDiagnostics(),
+            },
+        ], recordShutdownFailure);
     }
 }

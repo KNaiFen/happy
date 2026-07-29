@@ -6,10 +6,10 @@ import {
     type CodexEntityV4,
     type SyncV4Aad,
 } from '@slopus/happy-wire';
-import { decodeBase64, encodeBase64 } from '@/encryption/base64';
-import { deriveKey } from '@/encryption/deriveKey';
-import { hmac_sha512 } from '@/encryption/hmac_sha512';
-import sodium from '@/encryption/libsodium.lib';
+import { decodeBase64, encodeBase64 } from '../encryption/base64';
+import { deriveKey } from '../encryption/deriveKey';
+import { hmac_sha512 } from '../encryption/hmac_sha512';
+import sodium from '../encryption/libsodium.lib';
 
 const SYNC_V4_CIPHERTEXT_VERSION = 1;
 const SYNC_V4_NONCE_BYTES = 12;

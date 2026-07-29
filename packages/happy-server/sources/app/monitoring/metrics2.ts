@@ -8,9 +8,6 @@ import { Socket } from 'socket.io';
 // Global default labels — applied to ALL metrics at scrape time
 register.setDefaultLabels({ app: 'happy-server' });
 
-// Expected client_type values (trust whatever the client sends):
-// cli-coding-session, cli-daemon, cli-control-plane, ios, android, web, desktop
-
 interface ClientLabels {
     client: string;
     client_type: string;
@@ -20,8 +17,11 @@ interface SyncV4ClientLabels {
     client_type: string;
 }
 
-const syncV4ClientTypes = new Set([
+const knownClientTypes = new Set([
+    'cli',
     'cli-coding-session',
+    'cli-daemon',
+    'cli-control-plane',
     'ios',
     'android',
     'web',
@@ -30,10 +30,14 @@ const syncV4ClientTypes = new Set([
     'windows',
 ]);
 
-function parseClientLabels(raw: string | undefined | null): ClientLabels {
-    if (!raw) return { client: 'unknown', client_type: 'unknown' };
-    const type = raw.split('/')[0].toLowerCase();
-    return { client: raw, client_type: type };
+function parseClientLabels(raw: unknown): ClientLabels {
+    if (typeof raw !== 'string') return { client: 'unknown', client_type: 'unknown' };
+    const separator = raw.indexOf('/');
+    const type = (separator === -1 ? raw : raw.slice(0, separator)).toLowerCase();
+    const boundedType = knownClientTypes.has(type) ? type : 'unknown';
+    // Both labels intentionally use a fixed enum. A client-controlled version
+    // string would otherwise create unbounded Prometheus series.
+    return { client: boundedType, client_type: boundedType };
 }
 
 /**
@@ -41,7 +45,7 @@ function parseClientLabels(raw: string | undefined | null): ClientLabels {
  * Spread into any metric .inc() / .observe() call.
  */
 export function getMetricsLabelsFromSocket(socket: Socket): ClientLabels {
-    return parseClientLabels(socket.data.happyClient as string);
+    return parseClientLabels(socket.data.happyClient);
 }
 
 /**
@@ -49,15 +53,13 @@ export function getMetricsLabelsFromSocket(socket: Socket): ClientLabels {
  * Spread into any metric .inc() / .observe() call.
  */
 export function getMetricsLabelsFromRequest(request: { headers: Record<string, string | string[] | undefined> }): ClientLabels {
-    return parseClientLabels(request.headers['x-happy-client'] as string);
+    return parseClientLabels(request.headers['x-happy-client']);
 }
 
 export function getSyncV4MetricsLabelsFromRequest(
     request: { headers: Record<string, string | string[] | undefined> },
 ): SyncV4ClientLabels {
-    const raw = request.headers['x-happy-client'];
-    const clientType = typeof raw === 'string' ? raw.split('/')[0].toLowerCase() : 'unknown';
-    return { client_type: syncV4ClientTypes.has(clientType) ? clientType : 'unknown' };
+    return { client_type: parseClientLabels(request.headers['x-happy-client']).client_type };
 }
 
 // Application metrics
@@ -135,6 +137,36 @@ export const syncV4SnapshotFallbackCounter = new Counter({
     name: 'sync_v4_snapshot_fallback_total',
     help: 'Total Codex Sync v4 snapshot fallbacks caused by journal recovery conditions',
     labelNames: ['reason', 'client_type'] as const,
+    registers: [register]
+});
+
+export const syncV4OperationsCounter = new Counter({
+    name: 'sync_v4_operations_total',
+    help: 'Total Codex Sync v4 operations by bounded operation and outcome',
+    labelNames: ['operation', 'outcome', 'client_type'] as const,
+    registers: [register]
+});
+
+export const syncV4OperationDurationHistogram = new Histogram({
+    name: 'sync_v4_operation_duration_seconds',
+    help: 'Codex Sync v4 operation duration by bounded operation and outcome',
+    labelNames: ['operation', 'outcome', 'client_type'] as const,
+    buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60],
+    registers: [register]
+});
+
+export const syncV4PageSizeHistogram = new Histogram({
+    name: 'sync_v4_page_size',
+    help: 'Codex Sync v4 mutation, changes, and snapshot page sizes',
+    labelNames: ['operation', 'client_type'] as const,
+    buckets: [0, 1, 5, 10, 25, 50, 75, 100],
+    registers: [register]
+});
+
+export const syncV4PrunedRecordsCounter = new Counter({
+    name: 'sync_v4_pruned_records_total',
+    help: 'Total Codex Sync v4 journal records pruned',
+    labelNames: ['client_type'] as const,
     registers: [register]
 });
 

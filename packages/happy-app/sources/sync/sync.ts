@@ -70,6 +70,7 @@ import { isRigMetadataV1, rigCanUseAttachments, usesControlledSessionUi } from '
 import { AppSyncV4Client, type AppSyncV4AppliedEntity } from './syncV4Client';
 import { syncV4Persistence } from './syncV4Persistence.mmkv';
 import { HttpAppSyncV4Transport } from './syncV4Transport';
+import { appSyncV4Diagnostics } from './syncV4Diagnostics.mmkv';
 import {
     CodexV4ClientRegistry,
     isCodexV4SyncActive,
@@ -172,6 +173,10 @@ class Sync {
     private lastRecalculationTime = 0;
 
     constructor() {
+        const appVersion = Constants.expoConfig?.version || '0.0.0';
+        const syncV4TransportSecurity = new URL(getServerUrl()).protocol === 'http:'
+            ? 'insecureHttp' as const
+            : 'https' as const;
         this.codexV4Clients = new CodexV4ClientRegistry({
             createClient: ({
                 sessionId,
@@ -183,9 +188,12 @@ class Sync {
             }) => AppSyncV4Client.create({
                 sessionId,
                 sessionKey,
-                appVersion: Constants.expoConfig?.version || '0.0.0',
+                appVersion,
                 persistence: syncV4Persistence,
                 transport: new HttpAppSyncV4Transport(),
+                diagnostics: appSyncV4Diagnostics,
+                diagnosticStats: () => appSyncV4Diagnostics.stats(),
+                transportSecurity: syncV4TransportSecurity,
                 onEntity,
                 onEntities,
                 onSnapshotReset,
@@ -209,6 +217,10 @@ class Sync {
             onSyncState: (sessionId, state) => {
                 storage.getState().applyCodexV4SyncState(sessionId, state);
             },
+            diagnostics: appSyncV4Diagnostics,
+            diagnosticStats: () => appSyncV4Diagnostics.stats(),
+            softwareVersion: appVersion,
+            transportSecurity: syncV4TransportSecurity,
             onStartError: () => {
                 log.log('Codex Sync v4 client start failed; retry scheduled');
             },

@@ -1,7 +1,9 @@
 # Codex app-server protocol
 
-`generated/` is the unmodified stable TypeScript schema emitted by
-`codex-cli 0.145.0`. Experimental methods and fields are deliberately excluded.
+`generated/` contains the unmodified stable TypeScript schema emitted by
+`codex-cli 0.145.0`, plus `GENERATOR.json` and the derived
+`STABLE_METHODS.json` runtime allowlist. Experimental methods and fields are
+deliberately excluded.
 
 Regenerate it with:
 

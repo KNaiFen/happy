@@ -13,7 +13,15 @@ import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { registerCommonHandlers } from '../modules/common/registerCommonHandlers';
 import { calculateCost } from '@/utils/pricing';
 import { shouldReconnect } from '@/utils/lidState';
-import { createEnvelope, type CreateEnvelopeOptions, type SessionEnvelope, type SessionTurnEndStatus } from '@slopus/happy-wire';
+import {
+    classifySyncV4DiagnosticError,
+    createEnvelope,
+    SyncInvalidationV4Schema,
+    type CreateEnvelopeOptions,
+    type SessionEnvelope,
+    type SessionTurnEndStatus,
+    type SyncV4DiagnosticSink,
+} from '@slopus/happy-wire';
 import {
     closeClaudeTurnWithStatus,
     mapClaudeLogMessageToSessionEnvelopes,
@@ -22,6 +30,131 @@ import {
 import { InvalidateSync } from '@/utils/sync';
 import axios from 'axios';
 import { SyncV4Client, type SyncV4AppliedEntity } from './syncV4Client';
+import { syncV4DiagnosticHash } from './syncV4Diagnostics';
+
+function socketUpdateDiagnostics(data: unknown): {
+    updateType: 'new-message' | 'update-session' | 'update-machine' | 'unknown';
+    updateSeq?: number;
+    messageSeq?: number;
+    metadataVersion?: number;
+    agentStateVersion?: number;
+} {
+    try {
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            return { updateType: 'unknown' };
+        }
+        const update = data as Record<string, unknown>;
+        const body = update.body && typeof update.body === 'object' && !Array.isArray(update.body)
+            ? update.body as Record<string, unknown>
+            : {};
+        const rawType = body.t;
+        const updateType = rawType === 'new-message'
+            || rawType === 'update-session'
+            || rawType === 'update-machine'
+            ? rawType
+            : 'unknown';
+        const message = body.message && typeof body.message === 'object' && !Array.isArray(body.message)
+            ? body.message as Record<string, unknown>
+            : {};
+        const updateSeq = update.seq;
+        const messageSeq = message.seq;
+        const metadataVersion = readVersion(body.metadata);
+        const agentStateVersion = readVersion(body.agentState);
+        return {
+            updateType,
+            ...(Number.isSafeInteger(updateSeq) && (updateSeq as number) >= 0
+                ? { updateSeq: updateSeq as number }
+                : {}),
+            ...(Number.isSafeInteger(messageSeq) && (messageSeq as number) >= 0
+                ? { messageSeq: messageSeq as number }
+                : {}),
+            ...(metadataVersion !== undefined
+                ? { metadataVersion }
+                : {}),
+            ...(agentStateVersion !== undefined
+                ? { agentStateVersion }
+                : {}),
+        };
+    } catch {
+        return { updateType: 'unknown' };
+    }
+}
+
+function readVersion(value: unknown): number | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    try {
+        const version = (value as Record<string, unknown>).version;
+        return Number.isSafeInteger(version) && (version as number) >= 0
+            ? version as number
+            : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function parseSyncV4Invalidation(value: unknown): {
+    sessionId: string;
+    highWatermark: number;
+} | null {
+    try {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        const event = value as Record<string, unknown>;
+        if (event.type !== 'sync-v4-invalidate') return null;
+        const parsed = SyncInvalidationV4Schema.safeParse({
+            sessionId: event.sessionId,
+            highWatermark: event.highWatermark,
+        });
+        return parsed.success ? parsed.data : null;
+    } catch {
+        return null;
+    }
+}
+
+function agentStateDiagnostics(state: unknown): {
+    hasState: boolean;
+    pendingRequests?: number;
+    completedRequests?: number;
+    controlledByUser?: boolean;
+} {
+    try {
+        if (!state || typeof state !== 'object' || Array.isArray(state)) {
+            return { hasState: false };
+        }
+        const record = state as Record<string, unknown>;
+        const controlledByUser = record.controlledByUser;
+        const pendingRequests = boundedRecordSize(record.requests);
+        const completedRequests = boundedRecordSize(record.completedRequests);
+        return {
+            hasState: true,
+            ...(typeof controlledByUser === 'boolean'
+                ? { controlledByUser }
+                : {}),
+            ...(pendingRequests !== undefined
+                ? { pendingRequests }
+                : {}),
+            ...(completedRequests !== undefined
+                ? { completedRequests }
+                : {}),
+        };
+    } catch {
+        return { hasState: true };
+    }
+}
+
+function boundedRecordSize(value: unknown, limit = 10_000): number | undefined {
+    try {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+        let count = 0;
+        for (const key in value as Record<string, unknown>) {
+            if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+            count += 1;
+            if (count >= limit) return limit;
+        }
+        return count;
+    } catch {
+        return undefined;
+    }
+}
 
 /**
  * ACP (Agent Communication Protocol) message data types.
@@ -253,7 +386,9 @@ export class ApiSessionClient extends EventEmitter {
             scopePrefix: this.sessionId,
             encryptionKey: this.encryptionKey,
             encryptionVariant: this.encryptionVariant,
-            logger: (msg, data) => logger.debug(msg, data)
+            logger: (_message, data) => logger.debug('[RPC] Session handler event', {
+                hasData: data !== undefined,
+            })
         });
         registerCommonHandlers(this.rpcHandlerManager, this.metadata.path);
 
@@ -302,7 +437,9 @@ export class ApiSessionClient extends EventEmitter {
         })
 
         this.socket.on('connect_error', (error) => {
-            logger.debug('[API] Socket connection error:', error);
+            logger.debug('[API] Socket connection error', {
+                errorKind: classifySyncV4DiagnosticError(error),
+            });
             this.rpcHandlerManager.onSocketDisconnect();
             this.startSmartReconnect();
         })
@@ -310,7 +447,7 @@ export class ApiSessionClient extends EventEmitter {
         // Server events
         this.socket.on('update', (data: Update) => {
             try {
-                logger.debugLargeJson('[SOCKET] [UPDATE] Received update:', data);
+                logger.debug('[SOCKET] Update received', socketUpdateDiagnostics(data));
 
                 if (!data.body) {
                     logger.debug('[SOCKET] [UPDATE] [ERROR] No body in update!');
@@ -324,14 +461,7 @@ export class ApiSessionClient extends EventEmitter {
                         return;
                     }
                     const body = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.message.content.c));
-                    logger.debug('[SOCKET] [UPDATE] Decrypted message', {
-                        role: typeof (body as { role?: unknown })?.role === 'string'
-                            ? (body as { role: string }).role
-                            : 'unknown',
-                        contentType: typeof (body as { content?: { type?: unknown } })?.content?.type === 'string'
-                            ? (body as { content: { type: string } }).content.type
-                            : 'unknown',
-                    });
+                    logger.debug('[SOCKET] [UPDATE] Message decrypted');
                     this.routeIncomingMessage(body);
                     this.lastSeq = messageSeq;
                 } else if (data.body.t === 'update-session') {
@@ -362,19 +492,24 @@ export class ApiSessionClient extends EventEmitter {
                     this.emit('message', data.body);
                 }
             } catch (error) {
-                logger.debug('[SOCKET] [UPDATE] [ERROR] Error handling update', { error });
+                logger.debug('[SOCKET] [UPDATE] [ERROR] Error handling update', {
+                    errorKind: classifySyncV4DiagnosticError(error),
+                });
             }
         });
 
         this.socket.on('ephemeral', (data) => {
-            if (data.type === 'sync-v4-invalidate' && data.sessionId === this.sessionId) {
-                this.syncV4Client?.invalidate(data.highWatermark);
+            const invalidation = parseSyncV4Invalidation(data);
+            if (invalidation?.sessionId === this.sessionId) {
+                this.syncV4Client?.invalidate(invalidation.highWatermark);
             }
         });
 
         // DEATH
         this.socket.on('error', (error) => {
-            logger.debug('[API] Socket error:', error);
+            logger.debug('[API] Socket error', {
+                errorKind: classifySyncV4DiagnosticError(error),
+            });
         });
 
         //
@@ -404,6 +539,7 @@ export class ApiSessionClient extends EventEmitter {
 
     async enableSyncV4(
         createEntityHandler: (client: SyncV4Client) => (event: SyncV4AppliedEntity) => Promise<void>,
+        diagnostics?: SyncV4DiagnosticSink,
     ): Promise<SyncV4Client> {
         if (this.closed) throw new Error('API session has been closed');
         if (this.syncV4Client) return this.syncV4Client;
@@ -422,6 +558,7 @@ export class ApiSessionClient extends EventEmitter {
                     sessionId: this.sessionId,
                     sessionKey: this.encryptionKey,
                     token: this.token,
+                    diagnostics,
                     onEntity: async (event) => {
                         assertCurrent();
                         if (!onEntity) throw new Error('Sync v4 entity handler was not initialized');
@@ -686,9 +823,8 @@ export class ApiSessionClient extends EventEmitter {
                     this.routeIncomingMessage(body);
                 } catch (error) {
                     logger.debug('[API] Failed to decrypt fetched message', {
-                        sessionId: this.sessionId,
                         seq: message.seq,
-                        error
+                        errorKind: classifySyncV4DiagnosticError(error),
                     });
                 }
             }
@@ -697,7 +833,7 @@ export class ApiSessionClient extends EventEmitter {
             const hasMore = !!response.data.hasMore;
             if (hasMore && maxSeq === afterSeq) {
                 logger.debug('[API] fetchMessages pagination stalled, stopping to avoid infinite loop', {
-                    sessionId: this.sessionId,
+                    sessionHash: syncV4DiagnosticHash(this.sessionId),
                     afterSeq
                 });
                 break;
@@ -762,7 +898,9 @@ export class ApiSessionClient extends EventEmitter {
             try {
                 this.sendUsageData(body.message.usage, body.message.model);
             } catch (error) {
-                logger.debug('[SOCKET] Failed to send usage data:', error);
+                logger.debug('[SOCKET] Failed to send usage data', {
+                    errorKind: classifySyncV4DiagnosticError(error),
+                });
             }
         }
 
@@ -809,9 +947,8 @@ export class ApiSessionClient extends EventEmitter {
                 this.enqueueSessionProtocolEnvelope(envelope, false);
             } catch (error) {
                 logger.debug('[API] Failed to upload local Claude transcript image attachment', {
-                    sessionId: this.sessionId,
-                    name: attachment.name,
-                    error,
+                    byteLength: attachment.data.length,
+                    errorKind: classifySyncV4DiagnosticError(error),
                 });
             }
         }
@@ -964,7 +1101,11 @@ export class ApiSessionClient extends EventEmitter {
                 output: costs.output
             }
         }
-        logger.debugLargeJson('[SOCKET] Sending usage data:', usageReport)
+        logger.debug('[SOCKET] Sending usage data', {
+            totalTokens,
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+        });
         this.socket.emit('usage-report', usageReport);
     }
 
@@ -1013,7 +1154,10 @@ export class ApiSessionClient extends EventEmitter {
      * @param handler - Handler function that returns the updated agent state
      */
     updateAgentState(handler: (metadata: AgentState) => AgentState) {
-        logger.debugLargeJson('Updating agent state', this.agentState);
+        logger.debug('Updating agent state', {
+            version: this.agentStateVersion,
+            ...agentStateDiagnostics(this.agentState),
+        });
         this.agentStateLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.agentState || {});
@@ -1021,7 +1165,10 @@ export class ApiSessionClient extends EventEmitter {
                 if (answer.result === 'success') {
                     this.agentState = answer.agentState ? decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(answer.agentState)) : null;
                     this.agentStateVersion = answer.version;
-                    logger.debug('Agent state updated', this.agentState);
+                    logger.debug('Agent state updated', {
+                        version: this.agentStateVersion,
+                        ...agentStateDiagnostics(this.agentState),
+                    });
                 } else if (answer.result === 'version-mismatch') {
                     if (answer.version > this.agentStateVersion) {
                         this.agentStateVersion = answer.version;

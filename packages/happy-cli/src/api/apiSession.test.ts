@@ -209,6 +209,34 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(mockSocket.connect).toHaveBeenCalledTimes(1);
     });
 
+    it('ignores malformed Sync v4 invalidations and forwards only a valid watermark', () => {
+        const client = new ApiSessionClient('fake-token', session);
+        const syncV4 = { invalidate: vi.fn() };
+        (client as any).syncV4Client = syncV4;
+        const hostile = new Proxy({}, {
+            get() {
+                throw new Error('hostile invalidation getter');
+            },
+        });
+
+        expect(() => emitSocketEvent('ephemeral', null)).not.toThrow();
+        expect(() => emitSocketEvent('ephemeral', hostile)).not.toThrow();
+        expect(() => emitSocketEvent('ephemeral', {
+            type: 'sync-v4-invalidate',
+            sessionId: session.id,
+            highWatermark: '42',
+        })).not.toThrow();
+        expect(syncV4.invalidate).not.toHaveBeenCalled();
+
+        emitSocketEvent('ephemeral', {
+            type: 'sync-v4-invalidate',
+            sessionId: session.id,
+            highWatermark: 42,
+        });
+        expect(syncV4.invalidate).toHaveBeenCalledOnce();
+        expect(syncV4.invalidate).toHaveBeenCalledWith(42);
+    });
+
     it('installs the Sync v4 entity handler before the client starts', async () => {
         const order: string[] = [];
         const syncV4 = {
@@ -1119,6 +1147,67 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(debugOutput).not.toContain(sensitiveName);
         expect(debugOutput).not.toContain(sensitiveRef);
         expect(debugOutput).not.toContain('socket-secret');
+    });
+
+    it('logs only bounded socket metadata and error classifications', async () => {
+        const client = new ApiSessionClient('fake-token', session);
+        const ciphertext = 'ciphertext-prompt-reasoning-tool-secret';
+        emitSocketEvent('update', {
+            id: 'provider-secret-update-id',
+            seq: 1,
+            createdAt: Date.now(),
+            body: {
+                t: 'new-message',
+                sid: 'test-session-id',
+                message: {
+                    id: 'provider-secret-message-id',
+                    seq: 1,
+                    localId: null,
+                    content: { t: 'encrypted', c: ciphertext },
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                },
+            },
+        });
+        emitSocketEvent('error', {
+            secret: 'authorization-bearer-secret',
+            get response() {
+                throw new Error('hostile-error-getter-secret');
+            },
+        });
+        (client as any).agentState = {
+            requests: {
+                approval: {
+                    tool: 'tool-secret',
+                    arguments: { prompt: 'agent-state-prompt-secret' },
+                    createdAt: 1,
+                },
+            },
+        };
+        client.updateAgentState((state) => state);
+        client.sendUsageData({
+            input_tokens: 1,
+            output_tokens: 2,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        }, 'model-name-secret');
+
+        const debugOutput = JSON.stringify([
+            ...vi.mocked(logger.debug).mock.calls,
+            ...vi.mocked(logger.debugLargeJson).mock.calls,
+        ]);
+        expect(debugOutput).toContain('"updateType":"new-message"');
+        expect(debugOutput).toContain('"updateSeq":1');
+        expect(debugOutput).toContain('"messageSeq":1');
+        expect(debugOutput).not.toContain(ciphertext);
+        expect(debugOutput).not.toContain('provider-secret');
+        expect(debugOutput).not.toContain('authorization-bearer-secret');
+        expect(debugOutput).not.toContain('hostile-error-getter-secret');
+        expect(debugOutput).not.toContain('agent-state-prompt-secret');
+        expect(debugOutput).not.toContain('tool-secret');
+        expect(debugOutput).not.toContain('model-name-secret');
+        expect(logger.debugLargeJson).not.toHaveBeenCalled();
+        await client.close();
     });
 
     it('applies consecutive new-message updates directly (fast path)', () => {

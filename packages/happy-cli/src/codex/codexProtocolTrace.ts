@@ -1,14 +1,31 @@
 /** Payload-free JSON-RPC trace recording and deterministic timing replay. */
 
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, type FileHandle } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readdir, readFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
+import {
+    SYNC_V4_DIAGNOSTIC_FILE_BYTES,
+    SYNC_V4_DIAGNOSTIC_FILE_SEGMENTS,
+    syncV4DiagnosticHash,
+} from '@/api/syncV4Diagnostics';
+import {
+    BoundedJsonlWriter,
+    type BoundedJsonlWriterStats,
+} from '@/utils/boundedJsonlWriter';
+import {
+    isRedactedCodexProtocolMethod,
+    redactCodexProtocolMethod,
+} from './codexProtocolMethod';
 
 const TRACE_VERSION = 1;
 const MAX_TRACE_DEPTH = 10;
 const MAX_TRACE_NODES = 1_024;
 const MAX_TRACE_IDS = 128;
+const DEFAULT_MAX_MEMORY_ENTRIES = 4_096;
+const DEFAULT_MAX_PENDING_REQUESTS = 4_096;
+const MAX_TRACE_RECORD_BYTES = 64 * 1024;
+const MAX_TRACE_METHOD_BYTES = 128;
 
 export type CodexProtocolTraceDirection = 'outbound' | 'inbound';
 export type CodexProtocolTraceKind = 'request' | 'response' | 'notification' | 'unknown';
@@ -45,9 +62,19 @@ export interface CodexProtocolTraceSink {
     record(direction: CodexProtocolTraceDirection, message: unknown): void;
 }
 
+export interface CodexProtocolTraceStats extends BoundedJsonlWriterStats {
+    memoryEntries: number;
+    pendingRequests: number;
+    invalidRecords: number;
+}
+
 interface RecorderOptions {
     now?: () => number;
     hashSecret?: Uint8Array;
+    maxMemoryEntries?: number;
+    maxPendingRequests?: number;
+    maxFileBytes?: number;
+    maxFileSegments?: number;
 }
 
 interface ReplayOptions {
@@ -82,11 +109,15 @@ const traceEntrySchema: z.ZodType<CodexProtocolTraceEntry> = z.object({
     offsetMs: z.number().int().nonnegative(),
     direction: z.enum(['outbound', 'inbound']),
     kind: z.enum(['request', 'response', 'notification', 'unknown']),
-    method: z.string().min(1).max(512).nullable(),
+    method: z.string()
+        .min(1)
+        .max(MAX_TRACE_METHOD_BYTES)
+        .refine(isRedactedCodexProtocolMethod)
+        .nullable(),
     rpcIdHash: z.string().regex(/^[0-9a-f]{24}$/).nullable(),
     ids: z.array(z.object({
         kind: z.enum(['thread', 'turn', 'item', 'request', 'clientMessage', 'session', 'entity', 'mutation', 'other']),
-        hash: z.string().regex(/^[0-9a-f]{24}$/),
+        hash: z.string().regex(/^(?:[0-9a-f]{16}|[0-9a-f]{24})$/),
     }).strict()).max(MAX_TRACE_IDS),
     shape: traceShapeSchema,
 }).strict();
@@ -97,67 +128,97 @@ const traceEntrySchema: z.ZodType<CodexProtocolTraceEntry> = z.object({
  */
 export class CodexProtocolTraceRecorder implements CodexProtocolTraceSink {
     static async open(path: string, options: RecorderOptions = {}): Promise<CodexProtocolTraceRecorder> {
-        await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-        const handle = await open(path, 'a', 0o600);
-        await handle.chmod(0o600);
-        return new CodexProtocolTraceRecorder(options, handle);
+        const writer = await BoundedJsonlWriter.open(path, {
+            maxFileBytes: options.maxFileBytes ?? SYNC_V4_DIAGNOSTIC_FILE_BYTES,
+            maxSegments: options.maxFileSegments ?? SYNC_V4_DIAGNOSTIC_FILE_SEGMENTS,
+            maxRecordBytes: MAX_TRACE_RECORD_BYTES,
+        });
+        return new CodexProtocolTraceRecorder(options, writer);
     }
 
     private readonly now: () => number;
     private readonly hashSecret: Uint8Array;
+    private readonly maxMemoryEntries: number;
+    private readonly maxPendingRequests: number;
     private readonly startedAt: number;
     private readonly requestMethods = new Map<string, { method: string; rpcIdHash: string }>();
     private readonly entries: CodexProtocolTraceEntry[] = [];
-    private pipeline: Promise<void> = Promise.resolve();
-    private failure: unknown = null;
+    private nextEntryIndex = 0;
     private sequence = 0;
+    private invalidRecords = 0;
     private closed = false;
 
     constructor(
         options: RecorderOptions = {},
-        private readonly handle: FileHandle | null = null,
+        private readonly writer: BoundedJsonlWriter | null = null,
     ) {
         this.now = options.now ?? Date.now;
         this.hashSecret = options.hashSecret ?? randomBytes(32);
+        this.maxMemoryEntries = boundedCount(options.maxMemoryEntries, DEFAULT_MAX_MEMORY_ENTRIES);
+        this.maxPendingRequests = boundedCount(options.maxPendingRequests, DEFAULT_MAX_PENDING_REQUESTS);
         this.startedAt = this.now();
     }
 
     record(direction: CodexProtocolTraceDirection, message: unknown): void {
         if (this.closed) return;
-        const entry = this.createEntry(direction, message);
-        this.entries.push(entry);
-        if (!this.handle) return;
-        const line = `${JSON.stringify(entry)}\n`;
-        this.pipeline = this.pipeline.then(async () => {
-            await this.handle!.writeFile(line, { encoding: 'utf8' });
-        }).catch((error) => {
-            this.failure ??= error;
-        });
+        let entry: CodexProtocolTraceEntry;
+        try {
+            entry = this.createEntry(direction, message);
+        } catch {
+            this.invalidRecords += 1;
+            return;
+        }
+        if (this.maxMemoryEntries > 0) {
+            if (this.entries.length < this.maxMemoryEntries) {
+                this.entries.push(entry);
+            } else {
+                this.entries[this.nextEntryIndex] = entry;
+                this.nextEntryIndex = (this.nextEntryIndex + 1) % this.maxMemoryEntries;
+            }
+        }
+        this.writer?.appendJson(entry);
+    }
+
+    stats(): CodexProtocolTraceStats {
+        return {
+            ...(this.writer?.stats() ?? {
+                currentFileBytes: 0,
+                pendingBytes: 0,
+                droppedRecords: 0,
+                writeFailures: 0,
+            }),
+            memoryEntries: this.entries.length,
+            pendingRequests: this.requestMethods.size,
+            invalidRecords: this.invalidRecords,
+        };
     }
 
     snapshot(): CodexProtocolTraceEntry[] {
-        return this.entries.map((entry) => structuredClone(entry));
+        const ordered = this.entries.length < this.maxMemoryEntries || this.nextEntryIndex === 0
+            ? this.entries
+            : [
+                ...this.entries.slice(this.nextEntryIndex),
+                ...this.entries.slice(0, this.nextEntryIndex),
+            ];
+        return ordered.map((entry) => structuredClone(entry));
     }
 
     async flush(): Promise<void> {
-        await this.pipeline;
-        if (this.failure) throw this.failure;
-        await this.handle?.sync();
+        await this.writer?.flush();
     }
 
     async close(): Promise<void> {
         if (this.closed) return;
         this.closed = true;
-        try {
-            await this.flush();
-        } finally {
-            await this.handle?.close();
-        }
+        await this.writer?.close();
     }
 
     private createEntry(direction: CodexProtocolTraceDirection, message: unknown): CodexProtocolTraceEntry {
         const value = record(message);
-        const method = typeof value.method === 'string' && value.method.length > 0 ? value.method : null;
+        const rawMethod = typeof value.method === 'string' && value.method.length > 0 ? value.method : null;
+        const method = rawMethod === null
+            ? null
+            : redactCodexProtocolMethod(rawMethod);
         const rpcId = typeof value.id === 'string' || typeof value.id === 'number' ? String(value.id) : null;
         const hasResponse = Object.prototype.hasOwnProperty.call(value, 'result')
             || Object.prototype.hasOwnProperty.call(value, 'error');
@@ -168,21 +229,23 @@ export class CodexProtocolTraceRecorder implements CodexProtocolTraceSink {
         let rpcIdHash: string | null = null;
         if (rpcId !== null && kind === 'request') {
             rpcIdHash = this.hash(`rpc:${direction}`, rpcId);
-            this.requestMethods.set(`${direction}:${rpcId}`, { method: method!, rpcIdHash });
+            this.requestMethods.set(`${direction}:${rpcIdHash}`, { method: method!, rpcIdHash });
+            while (this.requestMethods.size > this.maxPendingRequests) {
+                const oldest = this.requestMethods.keys().next().value;
+                if (typeof oldest !== 'string') break;
+                this.requestMethods.delete(oldest);
+            }
         } else if (rpcId !== null && kind === 'response') {
             const origin = direction === 'outbound' ? 'inbound' : 'outbound';
-            const pending = this.requestMethods.get(`${origin}:${rpcId}`);
+            const responseRpcIdHash = this.hash(`rpc:${origin}`, rpcId);
+            const correlationKey = `${origin}:${responseRpcIdHash}`;
+            const pending = this.requestMethods.get(correlationKey);
             responseMethod = pending?.method ?? null;
-            rpcIdHash = pending?.rpcIdHash ?? this.hash(`rpc:${origin}`, rpcId);
-            this.requestMethods.delete(`${origin}:${rpcId}`);
+            rpcIdHash = pending?.rpcIdHash ?? responseRpcIdHash;
+            this.requestMethods.delete(correlationKey);
         }
 
-        const payload = Object.fromEntries(
-            Object.entries(value).filter(([key, entry]) => key !== 'jsonrpc'
-                && key !== 'id'
-                && key !== 'method'
-                && entry !== undefined),
-        );
+        const payload = protocolPayload(value);
         return {
             version: TRACE_VERSION,
             sequence: this.sequence++,
@@ -191,7 +254,7 @@ export class CodexProtocolTraceRecorder implements CodexProtocolTraceSink {
             kind,
             method: responseMethod,
             rpcIdHash,
-            ids: collectIds(payload, (kindName, id) => this.hash(`id:${kindName}`, id)),
+            ids: collectIds(payload, (_kindName, id) => syncV4DiagnosticHash(id)),
             shape: traceShape(payload),
         };
     }
@@ -235,21 +298,40 @@ export class CodexProtocolTraceReplayer {
 }
 
 export async function readCodexProtocolTrace(path: string): Promise<CodexProtocolTraceEntry[]> {
-    const content = await readFile(path, 'utf8');
-    const lines = content.split('\n');
     const entries: CodexProtocolTraceEntry[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index];
-        if (!line.trim()) continue;
-        try {
-            entries.push(traceEntrySchema.parse(JSON.parse(line)));
-        } catch (error) {
-            const isTruncatedTail = index === lines.length - 1 && !content.endsWith('\n');
-            if (isTruncatedTail) break;
-            throw new Error(`Invalid Codex protocol trace at line ${index + 1}`, { cause: error });
+    for (const tracePath of await traceSegmentPaths(path)) {
+        const content = await readFile(tracePath, 'utf8');
+        const lines = content.split('\n');
+        for (let index = 0; index < lines.length; index += 1) {
+            const line = lines[index];
+            if (!line.trim()) continue;
+            try {
+                entries.push(traceEntrySchema.parse(JSON.parse(line)));
+            } catch (error) {
+                const isTruncatedTail = index === lines.length - 1 && !content.endsWith('\n');
+                if (isTruncatedTail) break;
+                throw new Error(`Invalid Codex protocol trace at ${basename(tracePath)}:${index + 1}`, { cause: error });
+            }
         }
     }
     return entries.sort((left, right) => left.sequence - right.sequence);
+}
+
+async function traceSegmentPaths(path: string): Promise<string[]> {
+    const directory = dirname(path);
+    const filename = basename(path);
+    const entries = await readdir(directory).catch((error: unknown) => {
+        if (errorCode(error) === 'ENOENT') return [];
+        throw error;
+    });
+    return entries
+        .flatMap((entry) => {
+            if (entry === filename) return [{ path: join(directory, entry), segment: 0 }];
+            const match = new RegExp(`^${escapeRegExp(filename)}\\.(\\d+)$`).exec(entry);
+            return match ? [{ path: join(directory, entry), segment: Number(match[1]) }] : [];
+        })
+        .sort((left, right) => right.segment - left.segment)
+        .map((entry) => entry.path);
 }
 
 function traceShape(value: unknown): CodexProtocolTraceShape {
@@ -268,30 +350,60 @@ function buildTraceShape(
     if (typeof value === 'number') return { type: 'number' };
     if (typeof value === 'boolean') return { type: 'boolean' };
     if (Array.isArray(value)) {
+        const shapes: CodexProtocolTraceShape[] = [];
+        let index = 0;
+        while (index < value.length && budget.remaining > 0) {
+            shapes.push(buildTraceShape(value[index], depth + 1, budget));
+            index += 1;
+        }
         return {
             type: 'array',
             length: value.length,
-            members: groupShapes(value.map((entry) => buildTraceShape(entry, depth + 1, budget))),
+            members: groupShapes(shapes, value.length - index),
         };
     }
     if (typeof value === 'object') {
-        const values = Object.values(value).filter((entry) => entry !== undefined);
+        const shapes: CodexProtocolTraceShape[] = [];
+        let fieldCount = 0;
+        let truncatedCount = 0;
+        for (const key in value) {
+            if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+            if (budget.remaining <= 0 || fieldCount >= MAX_TRACE_NODES) {
+                fieldCount += 1;
+                truncatedCount = 1;
+                break;
+            }
+            const entry = (value as Record<string, unknown>)[key];
+            if (entry === undefined) continue;
+            fieldCount += 1;
+            shapes.push(buildTraceShape(entry, depth + 1, budget));
+        }
         return {
             type: 'object',
-            fieldCount: values.length,
-            members: groupShapes(values.map((entry) => buildTraceShape(entry, depth + 1, budget))),
+            fieldCount,
+            members: groupShapes(shapes, truncatedCount),
         };
     }
     return { type: 'truncated' };
 }
 
-function groupShapes(shapes: CodexProtocolTraceShape[]): CodexProtocolTraceShapeMember[] {
+function groupShapes(
+    shapes: CodexProtocolTraceShape[],
+    truncatedCount = 0,
+): CodexProtocolTraceShapeMember[] {
     const groups = new Map<string, CodexProtocolTraceShapeMember>();
     for (const shape of shapes) {
         const key = JSON.stringify(shape);
         const existing = groups.get(key);
         if (existing) existing.count += 1;
         else groups.set(key, { count: 1, shape });
+    }
+    if (truncatedCount > 0) {
+        const shape = { type: 'truncated' as const };
+        const key = JSON.stringify(shape);
+        const existing = groups.get(key);
+        if (existing) existing.count += truncatedCount;
+        else groups.set(key, { count: truncatedCount, shape });
     }
     return [...groups.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
@@ -303,8 +415,15 @@ function collectIds(
     hash: (kind: CodexProtocolTraceId['kind'], id: string) => string,
 ): CodexProtocolTraceId[] {
     const ids = new Map<string, CodexProtocolTraceId>();
-    const visit = (current: unknown, key: string | null, parent: Record<string, unknown> | null): void => {
-        if (ids.size >= MAX_TRACE_IDS) return;
+    const budget = { remaining: MAX_TRACE_NODES };
+    const visit = (
+        current: unknown,
+        key: string | null,
+        parent: Record<string, unknown> | null,
+        depth: number,
+    ): void => {
+        budget.remaining -= 1;
+        if (budget.remaining < 0 || depth >= MAX_TRACE_DEPTH || ids.size >= MAX_TRACE_IDS) return;
         const kind = key ? idKind(key, parent) : null;
         if (kind && (typeof current === 'string' || typeof current === 'number')) {
             const digest = hash(kind, String(current));
@@ -321,21 +440,29 @@ function collectIds(
             return;
         }
         if (Array.isArray(current)) {
-            for (const entry of current) visit(entry, null, null);
+            for (const entry of current) {
+                if (budget.remaining <= 0 || ids.size >= MAX_TRACE_IDS) break;
+                visit(entry, null, null, depth + 1);
+            }
             return;
         }
         if (current && typeof current === 'object') {
             const currentRecord = current as Record<string, unknown>;
-            for (const [childKey, child] of Object.entries(currentRecord)) visit(child, childKey, currentRecord);
+            for (const childKey in currentRecord) {
+                if (budget.remaining <= 0 || ids.size >= MAX_TRACE_IDS) break;
+                if (!Object.prototype.hasOwnProperty.call(currentRecord, childKey)) continue;
+                visit(currentRecord[childKey], childKey, currentRecord, depth + 1);
+            }
         }
     };
-    visit(value, null, null);
+    visit(value, null, null, 0);
     return [...ids.values()].sort((left, right) => (
         left.kind.localeCompare(right.kind) || left.hash.localeCompare(right.hash)
     ));
 }
 
 function idKind(key: string, parent: Record<string, unknown> | null): CodexProtocolTraceId['kind'] | null {
+    if (key.length > 128) return null;
     const normalized = key.replace(/[_-]/g, '').toLowerCase();
     if (!normalized.endsWith('id') && !normalized.endsWith('ids')) return null;
     if (normalized === 'id' && parent) {
@@ -360,6 +487,14 @@ function record(value: unknown): Record<string, unknown> {
         : {};
 }
 
+function protocolPayload(value: Record<string, unknown>): Record<string, unknown> {
+    const payload: Record<string, unknown> = {};
+    for (const key of ['params', 'result', 'error'] as const) {
+        if (value[key] !== undefined) payload[key] = value[key];
+    }
+    return payload;
+}
+
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
         const onAbort = () => {
@@ -378,4 +513,22 @@ function abortError(): Error {
     const error = new Error('Codex protocol trace replay aborted');
     error.name = 'AbortError';
     return error;
+}
+
+function boundedCount(value: number | undefined, fallback: number): number {
+    const resolved = value ?? fallback;
+    if (!Number.isSafeInteger(resolved) || resolved < 0) {
+        throw new Error('Codex protocol trace bounds must be nonnegative integers');
+    }
+    return resolved;
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function errorCode(error: unknown): string | null {
+    if (!error || typeof error !== 'object') return null;
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' ? code : null;
 }

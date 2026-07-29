@@ -6,10 +6,20 @@ import type {
     SyncMutationOperationV4,
     SyncMutationV4,
 } from '@slopus/happy-wire';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SyncV4Client, SyncV4PublishEntity } from '@/api/syncV4Client';
+import { logger } from '@/ui/logger';
 import type { ServerNotification, Thread, ThreadItem, Turn } from './protocol';
 import { CodexSyncV4Mapper } from './codexSyncV4Mapper';
+import { CodexV4RequestBroker } from './codexV4RequestBroker';
+
+vi.mock('@/ui/logger', () => ({
+    logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+    },
+}));
 
 class RecordingPublisher implements Pick<
     SyncV4Client,
@@ -151,6 +161,102 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('CodexSyncV4Mapper', () => {
+    it('converges file-change requests and items across either arrival order without cross-thread patch reuse', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            initialSyncState: 'ready',
+        });
+        const broker = new CodexV4RequestBroker({ mapper, now: () => 1_700_000_010 });
+        const pendingResponses: Promise<unknown>[] = [];
+        const request = (threadId: string, turnId: string, requestId: string) => {
+            const pending = broker.handle({
+                requestId,
+                method: 'item/fileChange/requestApproval',
+                params: {
+                    threadId,
+                    turnId,
+                    itemId: 'patch-shared',
+                    reason: null,
+                    grantRoot: null,
+                },
+            });
+            pendingResponses.push(pending);
+            void pending.catch(() => undefined);
+        };
+        const fileChange = (
+            threadId: string,
+            turnId: string,
+            path: string,
+            diff: string,
+        ): ServerNotification => ({
+            method: 'item/completed',
+            params: {
+                threadId,
+                turnId,
+                completedAtMs: 1_700_000_020,
+                item: {
+                    type: 'fileChange',
+                    id: 'patch-shared',
+                    status: 'completed',
+                    changes: [{
+                        path,
+                        kind: { type: 'update', move_path: null },
+                        diff,
+                    }],
+                },
+            },
+        });
+
+        // Thread A receives the provider request before the official item.
+        request('thread-a', 'turn-a', 'request-a');
+        await sleep(0);
+        mapper.handleNotification(fileChange('thread-a', 'turn-a', 'A.md', '@@ A @@'));
+
+        // Thread B receives the completed item before its provider request.
+        mapper.handleNotification(fileChange('thread-b', 'turn-b', 'B.md', '@@ B @@'));
+        await mapper.flush();
+        request('thread-b', 'turn-b', 'request-b');
+        await sleep(0);
+        await mapper.flush();
+
+        const requests = publisher.latest('codex.request');
+        expect(requests).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                providerId: 'thread-a\0request\0request-a',
+                threadId: 'thread-a',
+                turnId: 'turn-a',
+                itemId: 'patch-shared',
+                requestType: 'fileChangeApproval',
+            }),
+            expect.objectContaining({
+                providerId: 'thread-b\0request\0request-b',
+                threadId: 'thread-b',
+                turnId: 'turn-b',
+                itemId: 'patch-shared',
+                requestType: 'fileChangeApproval',
+            }),
+        ]));
+        const items = publisher.latest('codex.item')
+            .filter((entry) => entry.itemId === 'patch-shared');
+        expect(items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ threadId: 'thread-a', turnId: 'turn-a' }),
+            expect.objectContaining({ threadId: 'thread-b', turnId: 'turn-b' }),
+        ]));
+        const patches = publisher.latest('codex.part')
+            .filter((part) => part.itemId === 'patch-shared' && part.kind === 'patch');
+        expect(JSON.parse(patches.find((part) => part.threadId === 'thread-a')!.content))
+            .toEqual([expect.objectContaining({ path: 'A.md', diff: '@@ A @@' })]);
+        expect(JSON.parse(patches.find((part) => part.threadId === 'thread-b')!.content))
+            .toEqual([expect.objectContaining({ path: 'B.md', diff: '@@ B @@' })]);
+
+        await broker.failPending('brokerClosed');
+        await Promise.all(pendingResponses.map(async (pending) => {
+            await expect(pending).rejects.toThrow('brokerClosed');
+        }));
+        await mapper.close();
+    });
+
     it('refreshes an authoritative resumed thread state without replaying historical turns', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, {
@@ -857,34 +963,70 @@ describe('CodexSyncV4Mapper', () => {
     });
 
     it('emits a controlled diagnostic for an unknown runtime stable variant', async () => {
+        vi.mocked(logger.debug).mockClear();
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, {
             codexCliVersion: '0.145.0',
             diagnosticId: () => 'unknown-variant',
         });
         mapper.importThread(thread('thread-unknown'));
+        const secretVariant = 'futureItem-do-not-project';
         mapper.handleNotification({
             method: 'item/completed',
             params: {
                 threadId: 'thread-unknown',
                 turnId: 'turn-unknown',
                 completedAtMs: 1,
-                item: { type: 'futureItem', id: 'future', sensitive: 'do-not-project' } as unknown as ThreadItem,
+                item: { type: secretVariant, id: 'future', sensitive: 'do-not-project' } as unknown as ThreadItem,
             },
         } as ServerNotification);
         await mapper.flush();
 
         expect(publisher.latest('codex.item').some((item) => item.itemId === 'future')).toBe(false);
-        expect(publisher.latest('codex.item').find((item) => item.itemType === 'warning')).toMatchObject({
+        const warning = publisher.latest('codex.item').find((item) => item.itemType === 'warning');
+        expect(warning).toMatchObject({
             itemId: '__warning_unknown-variant__',
             arguments: {
                 category: 'unknownStableVariant',
                 union: 'ThreadItem',
-                variant: 'futureItem',
+                variantHash: expect.stringMatching(/^[0-9a-f]{16}$/),
             },
         });
-        expect(JSON.stringify(publisher.published)).not.toContain('do-not-project');
-        expect(mapper.diagnostics().unknownStableVariants).toEqual({ 'ThreadItem:futureItem': 1 });
+        const serialized = JSON.stringify({
+            published: publisher.published,
+            diagnostics: mapper.diagnostics(),
+            logs: vi.mocked(logger.debug).mock.calls,
+        });
+        expect(serialized).not.toContain(secretVariant);
+        expect(serialized).not.toContain('do-not-project');
+        expect(Object.entries(mapper.diagnostics().unknownStableVariants)).toEqual([
+            [expect.stringMatching(/^ThreadItem:[0-9a-f]{16}$/), 1],
+        ]);
+        await mapper.close();
+    });
+
+    it('bounds unknown method diagnostics and never logs the raw method', async () => {
+        vi.mocked(logger.debug).mockClear();
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+        });
+        for (let index = 0; index < 1_025; index += 1) {
+            mapper.handleNotification({
+                method: `private/method-${index}-prompt-secret`,
+                params: { prompt: 'prompt-secret' },
+            } as never);
+        }
+        await mapper.flush();
+
+        expect(Object.keys(mapper.diagnostics().unknownNotificationMethods)).toHaveLength(1_024);
+        const serialized = JSON.stringify({
+            diagnostics: mapper.diagnostics(),
+            logs: vi.mocked(logger.debug).mock.calls,
+        });
+        expect(serialized).not.toContain('private/method');
+        expect(serialized).not.toContain('prompt-secret');
+        expect(serialized).toMatch(/unknown:[0-9a-f]{24}/);
         await mapper.close();
     });
 

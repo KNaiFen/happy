@@ -24,6 +24,7 @@ class Deferred<T> {
 }
 
 class TestClient implements CodexV4RegistryClient {
+    readonly diagnosticSessionId = 'opaque_session_123';
     readonly started = new Deferred<void>();
     stopCount = 0;
     invalidations: Array<number | undefined> = [];
@@ -243,6 +244,87 @@ describe('CodexV4ClientRegistry', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('records bounded retry diagnostics without retaining startup error text', async () => {
+        vi.useFakeTimers();
+        try {
+            const secret = 'prompt-reasoning-tool-output-secret';
+            const records: unknown[] = [];
+            const client = new TestClient();
+            const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+                createClient: async () => client,
+                isEligible: () => true,
+                onEntity: async () => undefined,
+                onSnapshotReset: async () => undefined,
+                diagnostics: { record: (input) => records.push(input) },
+                softwareVersion: '1.11.10',
+                retryBaseMs: 100,
+                random: () => 0.5,
+            });
+
+            registry.reconcile([session]);
+            await Promise.resolve();
+            client.started.reject(Object.assign(new Error(secret), { code: 'ECONNRESET' }));
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(records).toContainEqual(expect.objectContaining({
+                component: 'app.registry',
+                event: 'lifecycle',
+                phase: 'failed',
+                sessionHash: client.diagnosticSessionId,
+                errorKind: 'network',
+            }));
+            expect(records).toContainEqual(expect.objectContaining({
+                component: 'app.registry',
+                event: 'retry',
+                phase: 'scheduled',
+                durationMs: 100,
+            }));
+            expect(JSON.stringify(records)).not.toContain(secret);
+            registry.reconcile([]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('writes a degraded terminal summary from persistent sink counters', async () => {
+        const records: unknown[] = [];
+        const client = new TestClient();
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async () => client,
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+            diagnostics: { record: (input) => records.push(input) },
+            diagnosticStats: () => ({
+                count: 2_000,
+                droppedRecords: 4,
+                invalidRecords: 3,
+                writeFailures: 2,
+                listenerFailures: 1,
+            }),
+        });
+
+        registry.reconcile([session]);
+        await Promise.resolve();
+        client.started.resolve();
+        await client.started.promise;
+        await Promise.resolve();
+        registry.reconcile([]);
+
+        expect(records).toContainEqual(expect.objectContaining({
+            component: 'app.registry',
+            event: 'lifecycle',
+            phase: 'failed',
+            state: 'degraded',
+            count: 2_000,
+            dropped: 4,
+            invalid: 3,
+            writeFailures: 2,
+            listenerFailures: 1,
+        }));
     });
 
     it('wakes a failed startup on foreground invalidation and cancels retry after removal', async () => {

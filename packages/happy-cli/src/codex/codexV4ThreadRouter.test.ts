@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CodexRelationEntityV4 } from '@slopus/happy-wire';
+import type {
+    CodexRelationEntityV4,
+    SyncV4DiagnosticInput,
+} from '@slopus/happy-wire';
 import type {
     SyncV4CodexNotification,
     SyncV4CodexThreadRoute,
@@ -364,6 +367,11 @@ describe('CodexV4ThreadRouter', () => {
             childThreadId: 'thread-child',
             status: 'completed',
         });
+        expect(root.codexThreadRoutes.get('thread-child')).toMatchObject({
+            status: 'completed',
+            activeTurnId: null,
+        });
+        expect(child.close).toHaveBeenCalledOnce();
     });
 
     it('does not let an older completed turn finish a child relation with a newer active turn', async () => {
@@ -600,6 +608,173 @@ describe('CodexV4ThreadRouter', () => {
         router.handleNotification(completedTurn('thread-child', 'turn-child'));
         await router.flush();
         expect(root.mapper.relations.at(-1)).toMatchObject({ childThreadId: 'thread-child', status: 'completed' });
+    });
+
+    it('keeps a terminal parent binding until its active nested child completes', async () => {
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        const nested = binding('happy-nested');
+        const bindings = new Map([
+            ['thread-child', child.value],
+            ['thread-nested', nested.value],
+        ]);
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async (threadId) => thread(
+                threadId,
+                threadId === 'thread-child' ? 'thread-root' : 'thread-child',
+                { type: 'active', activeFlags: [] },
+            ),
+            createChildBinding: async (route) => bindings.get(route.thread.id)!,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+            diagnosticSessionHash: 'opaque_session_123',
+            softwareVersion: '1.4.5',
+            codexVersion: '0.145.0',
+            transportSecurity: 'insecureHttp',
+        });
+        await router.registerRootThread('thread-root');
+
+        const started = (threadId: string, turnId: string): ServerNotification => ({
+            method: 'turn/started',
+            params: {
+                threadId,
+                turn: {
+                    id: turnId,
+                    items: [],
+                    itemsView: 'full',
+                    status: 'inProgress',
+                    error: null,
+                    startedAt: 1,
+                    completedAt: null,
+                    durationMs: null,
+                },
+            },
+        });
+        const completed = (threadId: string, turnId: string): ServerNotification => ({
+            method: 'turn/completed',
+            params: {
+                threadId,
+                turn: {
+                    id: turnId,
+                    items: [],
+                    itemsView: 'full',
+                    status: 'completed',
+                    error: null,
+                    startedAt: 1,
+                    completedAt: 2,
+                    durationMs: 1,
+                },
+            },
+        });
+
+        router.handleNotification(started('thread-child', 'turn-child'));
+        router.handleNotification(started('thread-nested', 'turn-nested'));
+        await router.flush();
+
+        router.handleNotification(completed('thread-child', 'turn-child'));
+        await router.flush();
+        expect(child.close).not.toHaveBeenCalled();
+        expect(nested.close).not.toHaveBeenCalled();
+
+        router.handleNotification(completed('thread-nested', 'turn-nested'));
+        await router.flush();
+        expect(nested.close).toHaveBeenCalledOnce();
+        expect(child.close).toHaveBeenCalledOnce();
+        expect(root.codexThreadRoutes.get('thread-child')).toMatchObject({ status: 'completed' });
+        expect(root.codexThreadRoutes.get('thread-nested')).toMatchObject({ status: 'completed' });
+        expect(diagnostics.filter((record) => (
+            record.event === 'relation' && record.phase === 'completed'
+        ))).toEqual([
+            expect.objectContaining({
+                state: 'stopped',
+                childThreadHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+                sessionHash: 'opaque_session_123',
+                softwareVersion: '1.4.5',
+                codexVersion: '0.145.0',
+                transportSecurity: 'insecureHttp',
+            }),
+            expect.objectContaining({
+                state: 'stopped',
+                childThreadHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+            }),
+        ]);
+    });
+
+    it('records a payload-free degraded lifecycle when terminal child cleanup fails', async () => {
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const onError = vi.fn();
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        child.close.mockRejectedValueOnce(new Error('prompt-reasoning-tool-output-secret'));
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-child', 'thread-root'),
+            createChildBinding: async () => child.value,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+            diagnosticSessionHash: 'opaque_session_123',
+            onError,
+        });
+        await router.registerRootThread('thread-root');
+
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: thread('thread-child', 'thread-root') },
+        });
+        await router.flush();
+
+        expect(child.close).toHaveBeenCalledOnce();
+        expect(onError).toHaveBeenCalledOnce();
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            component: 'cli.gateway',
+            event: 'relation',
+            phase: 'failed',
+            state: 'degraded',
+            errorKind: 'unknown',
+            childThreadHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+        }));
+        expect(JSON.stringify(diagnostics)).not.toContain('prompt-reasoning-tool-output-secret');
+    });
+
+    it('reopens a terminal child only long enough to project a late notification', async () => {
+        const root = binding('happy-root');
+        const firstChild = binding('happy-child-first');
+        const lateChild = binding('happy-child-late', 'ready');
+        const createChildBinding = vi.fn()
+            .mockResolvedValueOnce(firstChild.value)
+            .mockResolvedValueOnce(lateChild.value);
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-child', 'thread-root'),
+            createChildBinding,
+        });
+        await router.registerRootThread('thread-root');
+
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: thread('thread-child', 'thread-root') },
+        });
+        await router.flush();
+        expect(firstChild.close).toHaveBeenCalledOnce();
+
+        const late = {
+            method: 'thread/name/updated',
+            params: {
+                threadId: 'thread-child',
+                threadName: 'late metadata',
+            },
+        } as ServerNotification;
+        router.handleNotification(late);
+        await router.flush();
+
+        expect(createChildBinding).toHaveBeenCalledTimes(2);
+        expect(lateChild.mapper.notifications).toEqual([late]);
+        expect(lateChild.close).toHaveBeenCalledOnce();
+        expect(root.codexThreadRoutes.get('thread-child')).toMatchObject({
+            kind: 'providerChild',
+            parentThreadId: 'thread-root',
+            status: 'completed',
+        });
     });
 
     it('refreshes a previously migrated child without replaying its historical items', async () => {
@@ -1453,13 +1628,21 @@ describe('CodexV4ThreadRouter', () => {
         const child = binding('happy-child');
         const router = new CodexV4ThreadRouter({
             rootBinding: root.value,
-            readThread: async () => thread('thread-child', 'thread-root'),
+            readThread: async () => thread('thread-child', 'thread-root', {
+                type: 'active',
+                activeFlags: [],
+            }),
             createChildBinding: async () => child.value,
         });
         await router.registerRootThread('thread-root');
         router.handleNotification({
             method: 'thread/started',
-            params: { thread: thread('thread-child', 'thread-root') },
+            params: {
+                thread: thread('thread-child', 'thread-root', {
+                    type: 'active',
+                    activeFlags: [],
+                }),
+            },
         });
         await router.flush();
         child.mapper.flushFailure = new Error('child flush failed');
@@ -1467,6 +1650,48 @@ describe('CodexV4ThreadRouter', () => {
         await expect(router.close()).rejects.toThrow('child flush failed');
 
         expect(child.close).toHaveBeenCalledOnce();
+    });
+
+    it('reports child close failures while still completing router cleanup', async () => {
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const onError = vi.fn();
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        child.close.mockRejectedValueOnce(new Error('child close prompt secret'));
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-child', 'thread-root', {
+                type: 'active',
+                activeFlags: [],
+            }),
+            createChildBinding: async () => child.value,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+            onError,
+        });
+        await router.registerRootThread('thread-root');
+        router.handleNotification({
+            method: 'thread/started',
+            params: {
+                thread: thread('thread-child', 'thread-root', {
+                    type: 'active',
+                    activeFlags: [],
+                }),
+            },
+        });
+        await router.flush();
+
+        await expect(router.close()).rejects.toThrow('child close prompt secret');
+
+        expect(child.close).toHaveBeenCalledOnce();
+        expect(onError).toHaveBeenCalledOnce();
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            component: 'cli.gateway',
+            event: 'relation',
+            phase: 'failed',
+            state: 'degraded',
+            childThreadHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+        }));
+        expect(JSON.stringify(diagnostics)).not.toContain('child close prompt secret');
     });
 
     it('does not guess an unknown parentless thread as root and drains it after explicit ownership', async () => {

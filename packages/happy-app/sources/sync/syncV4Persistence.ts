@@ -56,6 +56,13 @@ export class SyncV4OutboxCorruptionError extends Error {
     }
 }
 
+export class SyncV4RevisionConflictError extends Error {
+    constructor() {
+        super('Sync v4 change has conflicting ciphertext for the same revision');
+        this.name = 'SyncV4RevisionConflictError';
+    }
+}
+
 export class SyncV4Persistence {
     constructor(
         private readonly storage: SyncV4KeyValueStorage,
@@ -191,7 +198,7 @@ export class SyncV4Persistence {
                 continue;
             }
             if (!isExactReplay(current, change)) {
-                throw new Error(`Sync v4 change has conflicting ciphertext for the same revision: ${change.entityId}`);
+                throw new SyncV4RevisionConflictError();
             }
             classified.push({ kind: 'exactReplay', change });
         }

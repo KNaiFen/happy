@@ -9,28 +9,38 @@ export interface EnableErrorHandlersOptions {
 export function enableErrorHandlers(app: Fastify, options: EnableErrorHandlersOptions = {}) {
     // Global error handler
     app.setErrorHandler(async (error: FastifyError, request, reply) => {
+        const isSyncV4Request = typeof request.syncV4TraceId === 'string';
         const method = request.method;
         const url = request.url;
         const userAgent = request.headers['user-agent'] || 'unknown';
         const ip = request.ip || 'unknown';
 
         // Log the error with comprehensive context
-        log({
-            module: 'fastify-error',
-            level: 'error',
-            method,
-            url,
-            userAgent,
-            ip,
-            statusCode: error.statusCode || 500,
-            errorCode: error.code,
-            stack: error.stack
-        }, `Unhandled error: ${error.message}`);
+        if (!isSyncV4Request) {
+            log({
+                module: 'fastify-error',
+                level: 'error',
+                method,
+                url,
+                userAgent,
+                ip,
+                statusCode: error.statusCode || 500,
+                errorCode: error.code,
+                stack: error.stack
+            }, `Unhandled error: ${error.message}`);
+        }
 
         // Return appropriate error response
-        const statusCode = error.statusCode || 500;
+        const statusCode = isSyncV4Request
+            ? safeSyncV4StatusCode(error, reply.statusCode)
+            : error.statusCode || 500;
 
-        if (statusCode >= 500) {
+        if (isSyncV4Request) {
+            return reply.code(statusCode).send({
+                error: statusCode >= 500 ? 'Internal Server Error' : 'Invalid Sync v4 request',
+                statusCode
+            });
+        } else if (statusCode >= 500) {
             // Internal server errors - don't expose details
             return reply.code(statusCode).send({
                 error: 'Internal Server Error',
@@ -51,13 +61,19 @@ export function enableErrorHandlers(app: Fastify, options: EnableErrorHandlersOp
     // its own (e.g. SPA fallback for self-hosted webapp).
     if (!options.skipNotFoundHandler) {
         app.setNotFoundHandler((request, reply) => {
-            log({ module: '404-handler' }, `404 - Method: ${request.method}, Path: ${request.url}, Headers: ${JSON.stringify(request.headers)}`);
+            log({
+                module: '404-handler',
+                method: request.method,
+                pathLength: request.url.length,
+                hasQuery: request.url.includes('?'),
+            }, 'Route not found');
             reply.code(404).send({ error: 'Not found', path: request.url, method: request.method });
         });
     }
 
     // Error hook for additional logging
     app.addHook('onError', async (request, reply, error) => {
+        if (typeof request.syncV4TraceId === 'string') return;
         const method = request.method;
         const url = request.url;
         const duration = (Date.now() - (request.startTime || Date.now())) / 1000;
@@ -82,15 +98,31 @@ export function enableErrorHandlers(app: Fastify, options: EnableErrorHandlersOp
             try {
                 return originalSend(payload);
             } catch (error: any) {
-                log({
-                    module: 'fastify-serialization-error',
-                    level: 'error',
-                    method: request.method,
-                    url: request.url,
-                    stack: error.stack
-                }, `Response serialization error: ${error.message}`);
+                if (typeof request.syncV4TraceId !== 'string') {
+                    log({
+                        module: 'fastify-serialization-error',
+                        level: 'error',
+                        method: request.method,
+                        url: request.url,
+                        stack: error.stack
+                    }, `Response serialization error: ${error.message}`);
+                }
                 throw error;
             }
         };
     });
+}
+
+function safeSyncV4StatusCode(error: unknown, replyStatus: number): number {
+    try {
+        const statusCode = error && (typeof error === 'object' || typeof error === 'function')
+            ? (error as { statusCode?: unknown }).statusCode
+            : undefined;
+        if (typeof statusCode === 'number' && statusCode >= 400 && statusCode <= 599) {
+            return statusCode;
+        }
+    } catch {
+        // Fall through to the already-sanitized reply status or a fixed 500.
+    }
+    return replyStatus >= 400 && replyStatus <= 599 ? replyStatus : 500;
 }

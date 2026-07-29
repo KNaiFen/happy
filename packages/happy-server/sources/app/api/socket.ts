@@ -127,7 +127,10 @@ export function startSocket(app: Fastify) {
         const machineId = socket.data.machineId as string | undefined;
         const labels = getMetricsLabelsFromSocket(socket);
 
-        log({ module: 'websocket' }, `Token verified: ${userId}, clientType: ${clientType || 'user-scoped'}, client: ${labels.client}, sessionId: ${sessionId || 'none'}, machineId: ${machineId || 'none'}, socketId: ${socket.id}`);
+        log(
+            { module: 'websocket' },
+            `Token verified: clientType=${clientType || 'user-scoped'}, client=${labels.client}, hasSession=${Boolean(sessionId)}, hasMachine=${Boolean(machineId)}`,
+        );
 
         // Store connection based on type
         const metadata = { clientType: clientType || 'user-scoped', sessionId, machineId };

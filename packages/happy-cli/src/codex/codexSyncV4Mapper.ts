@@ -7,6 +7,7 @@
 import {
     CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
     MAX_CODEX_SYNC_V4_PART_BYTES,
+    recordSyncV4DiagnosticSafely,
     type CodexEntityV4,
     type CodexItemEntityV4,
     type CodexPartEntityV4,
@@ -17,6 +18,8 @@ import {
     type CodexThreadEntityV4,
     type CodexThreadStatusV4,
     type CodexTurnEntityV4,
+    type SyncV4DiagnosticInput,
+    type SyncV4DiagnosticSink,
 } from '@slopus/happy-wire';
 import type { SyncV4Client } from '@/api/syncV4Client';
 import type { SyncV4ProviderRequestJournalState } from '@/api/syncV4Journal';
@@ -30,6 +33,7 @@ import type {
     Turn,
     UserInput,
 } from './protocol';
+import { redactCodexProtocolMethod } from './codexProtocolMethod';
 
 type SyncPublisher = Pick<
     SyncV4Client,
@@ -51,6 +55,8 @@ interface MapperOptions {
     diagnosticId?: () => string;
     now?: () => number;
     onError?: (error: unknown) => void;
+    diagnostics?: SyncV4DiagnosticSink;
+    diagnosticSessionHash?: string;
 }
 
 interface StreamChunk {
@@ -82,7 +88,7 @@ interface DiagnosticContent {
     willRetry?: boolean | null;
     category?: 'unknownStableVariant';
     union?: 'ThreadItem' | 'UserInput';
-    variant?: string;
+    variantHash?: string;
 }
 
 interface BufferedNotification {
@@ -103,6 +109,7 @@ export interface CodexSyncV4MapperDiagnostics {
 
 const DEFAULT_FLUSH_INTERVAL_MS = 200;
 const DEFAULT_FINALIZED_STREAM_MARKER_LIMIT = 50_000;
+const MAX_UNKNOWN_DIAGNOSTIC_KEYS = 1_024;
 const MAX_INLINE_ITEM_ARGUMENT_BYTES = 32 * 1024;
 const TEXT_ENCODER = new TextEncoder();
 
@@ -197,6 +204,13 @@ export class CodexSyncV4Mapper {
             this.connection = connection;
             this.connectionStatusUnknown = statusUnknown;
             this.connectionError = connectionError;
+            this.recordDiagnostic({
+                level: connection === 'error' ? 'error' : 'info',
+                event: 'connection',
+                phase: 'changed',
+                state: connection,
+                pending: updates.length,
+            });
         });
     }
 
@@ -211,6 +225,13 @@ export class CodexSyncV4Mapper {
                 for (const runtime of updates) this.runtimes.set(runtime.threadId, runtime);
             }
             this.syncState = syncState;
+            this.recordDiagnostic({
+                level: syncState === 'error' ? 'error' : 'info',
+                event: 'migration',
+                phase: 'changed',
+                state: syncState,
+                pending: updates.length,
+            });
         });
     }
 
@@ -283,6 +304,16 @@ export class CodexSyncV4Mapper {
             await this.publisher.publishEntity(relation);
             this.relations.set(relation.childThreadId, relation);
             await this.publishRuntimeRelationCount(relation.parentThreadId);
+            this.recordDiagnostic({
+                level: relation.status === 'failed' ? 'warn' : 'info',
+                event: 'relation',
+                phase: 'changed',
+                state: relation.status,
+                threadHash: diagnosticHash(relation.parentThreadId),
+                childThreadHash: diagnosticHash(relation.childThreadId),
+                turnHash: relation.parentTurnId ? diagnosticHash(relation.parentTurnId) : undefined,
+                depth: relation.depth,
+            });
         });
     }
 
@@ -323,6 +354,18 @@ export class CodexSyncV4Mapper {
             activeStreamCount: this.streams.size,
             finalizedStreamCount: this.finalizedStreams.size,
         };
+    }
+
+    private recordDiagnostic(
+        input: Omit<SyncV4DiagnosticInput, 'component' | 'sessionHash'>,
+    ): void {
+        recordSyncV4DiagnosticSafely(this.options.diagnostics, {
+            component: 'cli.gateway',
+            ...(this.options.diagnosticSessionHash
+                ? { sessionHash: this.options.diagnosticSessionHash }
+                : {}),
+            ...input,
+        });
     }
 
     private enqueue(task: () => Promise<void>): Promise<void> {
@@ -440,6 +483,16 @@ export class CodexSyncV4Mapper {
             case 'item/reasoning/textDelta':
                 this.rawReasoningDeltaCount += 1;
                 this.rawReasoningUtf8Bytes += utf8ByteLength(notification.params.delta);
+                if (isPowerOfTwo(this.rawReasoningDeltaCount)) {
+                    this.recordDiagnostic({
+                        level: 'debug',
+                        event: 'stream',
+                        phase: 'received',
+                        source: 'notification',
+                        count: this.rawReasoningDeltaCount,
+                        bytes: this.rawReasoningUtf8Bytes,
+                    });
+                }
                 return;
             case 'item/commandExecution/outputDelta':
                 await this.applyDelta(notification.params, 'commandExecution', 'commandOutput', 0, notification.params.delta);
@@ -558,10 +611,25 @@ export class CodexSyncV4Mapper {
                 return;
             default:
                 const method = (notification as { method: string }).method;
-                const count = (this.unknownNotificationMethods.get(method) ?? 0) + 1;
-                this.unknownNotificationMethods.set(method, count);
+                const methodLabel = redactCodexProtocolMethod(method);
+                const count = incrementBoundedCounter(
+                    this.unknownNotificationMethods,
+                    methodLabel,
+                    MAX_UNKNOWN_DIAGNOSTIC_KEYS,
+                );
                 if (count === 1 || (count & (count - 1)) === 0) {
-                    logger.debug('[Codex v4] Unknown notification method', { method, count });
+                    this.recordDiagnostic({
+                        level: 'warn',
+                        event: 'notification',
+                        phase: 'unknown',
+                        source: 'notification',
+                        reason: 'unknownMethod',
+                        count,
+                    });
+                    logger.debug('[Codex v4] Unknown notification method', {
+                        method: methodLabel,
+                        count,
+                    });
                 }
         }
     }
@@ -820,6 +888,16 @@ export class CodexSyncV4Mapper {
         };
         await this.publisher.publishEntity(entity);
         this.turns.set(key, entity);
+        if (!previous || previous.status !== entity.status) {
+            this.recordDiagnostic({
+                level: entity.status === 'failed' ? 'warn' : 'info',
+                event: 'turn',
+                phase: 'changed',
+                state: entity.status,
+                threadHash: diagnosticHash(threadId),
+                turnHash: diagnosticHash(turn.id),
+            });
+        }
         if (status === 'inProgress') this.activeTurnByThread.set(threadId, turn.id);
         else if (this.activeTurnByThread.get(threadId) === turn.id) this.activeTurnByThread.delete(threadId);
 
@@ -1174,17 +1252,35 @@ export class CodexSyncV4Mapper {
         variant: string,
         diagnosticSeed: string | null,
     ): Promise<void> {
-        const key = `${union}:${variant}`;
-        const count = (this.unknownStableVariants.get(key) ?? 0) + 1;
-        this.unknownStableVariants.set(key, count);
+        const variantHash = diagnosticHash(variant);
+        const key = `${union}:${variantHash}`;
+        const count = incrementBoundedCounter(
+            this.unknownStableVariants,
+            key,
+            MAX_UNKNOWN_DIAGNOSTIC_KEYS,
+        );
         if (count === 1 || (count & (count - 1)) === 0) {
-            logger.debug('[Codex v4] Unknown stable variant', { union, variant, count });
+            this.recordDiagnostic({
+                level: 'warn',
+                event: 'notification',
+                phase: 'unknown',
+                source: 'notification',
+                reason: 'unknownVariant',
+                threadHash: diagnosticHash(threadId),
+                turnHash: turnId ? diagnosticHash(turnId) : undefined,
+                count,
+            });
+            logger.debug('[Codex v4] Unknown stable variant', {
+                union,
+                variantHash,
+                count,
+            });
         }
         await this.applyDiagnostic(threadId, turnId, 'warning', {
             message: `Unsupported Codex ${union} variant`,
             category: 'unknownStableVariant',
             union,
-            variant,
+            variantHash,
         }, diagnosticSeed ? `${diagnosticSeed}\0${union}\0${variant}` : null);
     }
 
@@ -1230,10 +1326,18 @@ export class CodexSyncV4Mapper {
         if (previous && sameThreadStatus(previous, status)) return;
         const count = (this.threadStatusTransitions.get(status.type) ?? 0) + 1;
         this.threadStatusTransitions.set(status.type, count);
+        this.recordDiagnostic({
+            level: status.type === 'systemError' ? 'error' : 'info',
+            event: 'thread',
+            phase: 'changed',
+            state: status.type,
+            threadHash: diagnosticHash(threadId),
+            count,
+        });
         logger.debug('[Codex v4] Thread status', {
-            thread: createHash('sha256').update(threadId).digest('hex').slice(0, 16),
+            thread: diagnosticHash(threadId),
             status: status.type,
-            activeFlags: status.type === 'active' ? status.activeFlags : [],
+            activeFlagCount: status.type === 'active' ? status.activeFlags.length : 0,
             count,
         });
     }
@@ -1501,6 +1605,20 @@ export class CodexSyncV4Mapper {
                 publication.chunk.publishedContent = publication.content;
                 publication.chunk.publishedFinal = publication.final;
             }
+            this.recordDiagnostic({
+                level: 'debug',
+                event: 'stream',
+                phase: stream.finalized ? 'completed' : 'applied',
+                state: stream.finalized ? 'completed' : 'inProgress',
+                threadHash: diagnosticHash(stream.threadId),
+                turnHash: diagnosticHash(stream.turnId),
+                itemHash: diagnosticHash(stream.itemId),
+                count: publications.length,
+                bytes: publications.reduce(
+                    (total, publication) => total + utf8ByteLength(publication.content),
+                    0,
+                ),
+            });
         }
         if (stream.finalized) {
             this.finalizedStreams.delete(stream.key);
@@ -1861,7 +1979,9 @@ function asBoundedJsonValue(value: unknown): JsonValue {
 }
 
 function assertNever(value: never): never {
-    throw new Error(`Unhandled Codex stable-v2 variant: ${runtimeVariant(value)}`);
+    const error = new Error('Unhandled Codex stable-v2 variant');
+    error.name = 'CodexStableVariantError';
+    throw error;
 }
 
 function asJsonValue(value: unknown): JsonValue {
@@ -1901,6 +2021,30 @@ function newChunk(createdAt: number): StreamChunk {
 
 function utf8ByteLength(value: string): number {
     return TEXT_ENCODER.encode(value).byteLength;
+}
+
+function diagnosticHash(value: string): string {
+    return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+function incrementBoundedCounter(
+    counters: Map<string, number>,
+    key: string,
+    limit: number,
+): number {
+    const count = (counters.get(key) ?? 0) + 1;
+    if (counters.has(key)) counters.delete(key);
+    counters.set(key, count);
+    while (counters.size > limit) {
+        const oldest = counters.keys().next().value;
+        if (oldest === undefined) break;
+        counters.delete(oldest);
+    }
+    return count;
+}
+
+function isPowerOfTwo(value: number): boolean {
+    return value > 0 && (value & (value - 1)) === 0;
 }
 
 function toEpochMs(value: unknown, fallback: number): number {

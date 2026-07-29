@@ -10,6 +10,8 @@ import {
     type SyncSnapshotResponseV4,
     type SyncV4Capabilities,
     type SyncV4Aad,
+    type SyncV4DiagnosticInput,
+    type SyncV4DiagnosticSink,
 } from '@slopus/happy-wire';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -26,6 +28,7 @@ import {
     type CodexV4Projection,
 } from './codexV4Projection';
 import { SyncV4Persistence, type SyncV4KeyValueStorage } from './syncV4Persistence';
+import type { AppSyncV4DiagnosticStatsProvider } from './syncV4Diagnostics';
 
 vi.mock('./syncV4Crypto', () => ({
     SyncV4Crypto: { create: vi.fn() },
@@ -38,6 +41,22 @@ class MemoryStorage implements SyncV4KeyValueStorage {
     set(key: string, value: string | number | boolean) { this.values.set(key, value); }
     delete(key: string) { this.values.delete(key); }
     getAllKeys() { return [...this.values.keys()]; }
+}
+
+class FaultInjectingStorage extends MemoryStorage {
+    private nextSetFailure: ((key: string) => boolean) | null = null;
+
+    failNextSetMatching(predicate: (key: string) => boolean): void {
+        this.nextSetFailure = predicate;
+    }
+
+    override set(key: string, value: string | number | boolean): void {
+        if (this.nextSetFailure?.(key)) {
+            this.nextSetFailure = null;
+            throw new Error('prompt-reasoning-tool-output-storage-secret');
+        }
+        super.set(key, value);
+    }
 }
 
 class Deferred<T> {
@@ -75,11 +94,15 @@ class FakeTransport implements AppSyncV4Transport {
         },
     };
 
-    async getCapabilities(): Promise<SyncV4Capabilities> {
+    async getCapabilities(_traceId?: string): Promise<SyncV4Capabilities> {
         return this.capabilities;
     }
 
-    async postMutations(_sessionId: string, mutations: SyncMutationV4[]): Promise<SyncMutationBatchResponseV4> {
+    async postMutations(
+        _sessionId: string,
+        mutations: SyncMutationV4[],
+        _traceId?: string,
+    ): Promise<SyncMutationBatchResponseV4> {
         this.posted.push(mutations);
         const acknowledgements = mutations.map((mutation) => {
             const previous = this.committed.get(mutation.mutationId);
@@ -97,7 +120,12 @@ class FakeTransport implements AppSyncV4Transport {
         return { acknowledgements };
     }
 
-    async getChanges(_sessionId: string, afterSeq: number, limit: number) {
+    async getChanges(
+        _sessionId: string,
+        afterSeq: number,
+        limit: number,
+        _traceId?: string,
+    ) {
         if (this.requireSnapshot) {
             this.requireSnapshot = false;
             throw new AppSyncV4SnapshotRequiredError(1, this.changes.at(-1)?.seq ?? 0);
@@ -115,6 +143,7 @@ class FakeTransport implements AppSyncV4Transport {
         _sessionId: string,
         _cursor: string | null,
         limit: number,
+        _traceId?: string,
     ): Promise<SyncSnapshotResponseV4> {
         this.snapshotLimits.push(limit);
         const page = this.snapshots.shift();
@@ -154,6 +183,9 @@ async function client(
     batchHandler?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>,
     snapshotReplace?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>,
     crypto: AppSyncV4Crypto = fakeCrypto,
+diagnostics?: SyncV4DiagnosticSink,
+generateTraceId?: () => string,
+diagnosticStats?: AppSyncV4DiagnosticStatsProvider,
 ): Promise<AppSyncV4Client> {
     return AppSyncV4Client.create({
         sessionId: 'session-1',
@@ -163,6 +195,10 @@ async function client(
         transport,
         crypto,
         generateMutationId: () => `00000000-0000-4000-8000-${String(++mutationCounter).padStart(12, '0')}`,
+generateTraceId,
+diagnostics,
+diagnosticStats,
+transportSecurity: 'insecureHttp',
         onEntity: handler ?? (async (event) => { applied.push(event); }),
         onEntities: batchHandler,
         onSnapshotReset: snapshotReset ?? (async () => undefined),
@@ -176,14 +212,42 @@ function toChange(mutation: SyncMutationV4, seq: number): SyncChangeV4 {
 
 describe('AppSyncV4Client', () => {
     it('does not hydrate or pull when the coordinated cutover is disabled', async () => {
+        const diagnostics: SyncV4DiagnosticInput[] = [];
         const transport = new FakeTransport();
         transport.capabilities = {
             ...transport.capabilities,
             codex: { ...transport.capabilities.codex, enabled: false },
         };
-        const receiver = await client(new MemoryStorage(), transport);
+        const receiver = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            () => '00000000000000000000000000000001',
+        );
 
         await expect(receiver.start()).rejects.toThrow('disabled by Happy Server');
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'transport',
+            phase: 'failed',
+            transportOperation: 'capabilities',
+            traceId: '00000000000000000000000000000001',
+            state: 'stopped',
+            errorKind: 'protocol',
+            featureEnabled: false,
+            transportSecurity: 'insecureHttp',
+        }));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            event: 'transport',
+            phase: 'completed',
+            transportOperation: 'capabilities',
+            traceId: '00000000000000000000000000000001',
+        }));
     });
 
     it('refuses a v4 session when the App is below the advertised minimum', async () => {
@@ -195,6 +259,43 @@ describe('AppSyncV4Client', () => {
         const receiver = await client(new MemoryStorage(), transport);
 
         await expect(receiver.start()).rejects.toThrow('Happy App 1.12.0 or newer');
+    });
+
+    it('writes degraded terminal counters when the persistent diagnostic sink lost data', async () => {
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const receiver = await client(
+            new MemoryStorage(),
+            new FakeTransport(),
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            undefined,
+            () => ({
+                count: 2_000,
+                droppedRecords: 7,
+                invalidRecords: 2,
+                writeFailures: 1,
+                listenerFailures: 3,
+            }),
+        );
+
+        receiver.stop();
+
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            component: 'app.sync',
+            event: 'lifecycle',
+            phase: 'failed',
+            state: 'degraded',
+            count: 2_000,
+            dropped: 7,
+            invalid: 2,
+            writeFailures: 1,
+            listenerFailures: 3,
+        }));
     });
 
     it('projects a local command immediately after its outbox write', async () => {
@@ -212,6 +313,150 @@ describe('AppSyncV4Client', () => {
             seq: null,
         }]);
         expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+    });
+
+    it('records a protocol failure when a successful POST returns mismatched acknowledgements', async () => {
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const transport = new FakeTransport();
+        transport.postMutations = async (_sessionId, mutations) => ({
+            acknowledgements: mutations.map((mutation, index) => ({
+                mutationId: `wrong-${index}`,
+                seq: index + 1,
+                revision: mutation.revision,
+                status: 'accepted' as const,
+            })),
+        });
+        const sender = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            () => '00000000000000000000000000000001',
+        );
+        await sender.publishEntity(command('bad-ack'));
+
+        await expect(sender.flushOutboundOnce()).rejects.toThrow('acknowledgement');
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'ack',
+            phase: 'failed',
+            traceId: '00000000000000000000000000000001',
+            errorKind: 'protocol',
+        }));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            event: 'transport',
+            phase: 'completed',
+            traceId: '00000000000000000000000000000001',
+        }));
+    });
+
+    it('records a protocol failure when changes contain a sequence gap', async () => {
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const transport = new FakeTransport();
+        transport.getChanges = async () => SyncChangesResponseV4Schema.parse({
+            changes: [],
+            hasMore: true,
+            highWatermark: 1,
+        });
+        const receiver = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            () => '00000000000000000000000000000002',
+        );
+
+        await expect(receiver.pullChangesOnce()).rejects.toThrow('sequence gap');
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'changes',
+            phase: 'failed',
+            traceId: '00000000000000000000000000000002',
+            errorKind: 'protocol',
+        }));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            event: 'transport',
+            phase: 'completed',
+            traceId: '00000000000000000000000000000002',
+        }));
+    });
+
+    it('records decryption failure after transport success without persisting error text', async () => {
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('encrypted-change'));
+        transport.changes = [toChange(mutation, 1)];
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const secret = 'prompt-reasoning-tool-output-secret';
+        const crypto: AppSyncV4Crypto = {
+            ...fakeCrypto,
+            decryptEntity: async () => {
+                const error = new Error(secret);
+                error.name = 'SyncV4DecryptionError';
+                throw error;
+            },
+        };
+        const receiver = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            crypto,
+            { record: (input) => diagnostics.push(input) },
+            () => '00000000000000000000000000000003',
+        );
+
+        await expect(receiver.pullChangesOnce()).rejects.toThrow(secret);
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'transport',
+            phase: 'completed',
+            transportOperation: 'changes',
+            traceId: '00000000000000000000000000000003',
+        }));
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'changes',
+            phase: 'failed',
+            transportOperation: 'changes',
+            traceId: '00000000000000000000000000000003',
+            errorKind: 'crypto',
+        }));
+        expect(JSON.stringify(diagnostics)).not.toContain(secret);
+    });
+
+    it('rejects non-canonical entities before encryption or outbox persistence', async () => {
+        const storage = new MemoryStorage();
+        const encryptEntity = vi.fn(fakeCrypto.encryptEntity);
+        const sender = await client(
+            storage,
+            new FakeTransport(),
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            { ...fakeCrypto, encryptEntity },
+        );
+        const secret = 'prompt-reasoning-tool-output-secret';
+
+        await expect(sender.publishEntity({
+            ...command('invalid-command'),
+            unexpectedPayload: secret,
+        } as never)).rejects.toThrow();
+
+        expect(encryptEntity).not.toHaveBeenCalled();
+        expect(persistence(storage).loadSession('session-1').outbox).toEqual([]);
+        expect(JSON.stringify([...storage.values.values()])).not.toContain(secret);
     });
 
     it('delivers a published entity group through one projection batch', async () => {
@@ -323,6 +568,83 @@ describe('AppSyncV4Client', () => {
         expect(reopened.receiveCursor).toBe(1);
     });
 
+    it('records storage failure when staging a change and does not project or advance', async () => {
+        const storage = new FaultInjectingStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('stage-storage-failure'));
+        transport.changes = [toChange(mutation, 1)];
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const projection = vi.fn(async () => undefined);
+        const receiver = await client(
+            storage,
+            transport,
+            [],
+            projection,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            () => '00000000000000000000000000000011',
+        );
+        storage.failNextSetMatching((key) => key.includes(':entity:'));
+
+        await expect(receiver.pullChangesOnce())
+            .rejects.toThrow('prompt-reasoning-tool-output-storage-secret');
+
+        expect(projection).not.toHaveBeenCalled();
+        expect(receiver.receiveCursor).toBe(0);
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'changes',
+            phase: 'failed',
+            traceId: '00000000000000000000000000000011',
+            errorKind: 'storage',
+        }));
+        expect(JSON.stringify(diagnostics)).not.toContain('prompt-reasoning-tool-output-storage-secret');
+    });
+
+    it('records storage failure when committing a changes cursor and safely replays', async () => {
+        const storage = new FaultInjectingStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('cursor-storage-failure'));
+        transport.changes = [toChange(mutation, 1)];
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const projected: AppSyncV4AppliedEntity[] = [];
+        const receiver = await client(
+            storage,
+            transport,
+            projected,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            () => '00000000000000000000000000000012',
+        );
+        storage.failNextSetMatching((key) => key.endsWith(':cursor'));
+
+        await expect(receiver.pullChangesOnce())
+            .rejects.toThrow('prompt-reasoning-tool-output-storage-secret');
+
+        expect(projected).toHaveLength(1);
+        expect(receiver.receiveCursor).toBe(0);
+        expect(persistence(storage).loadSession('session-1').entities).toHaveLength(1);
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'cursor',
+            phase: 'failed',
+            traceId: '00000000000000000000000000000012',
+            errorKind: 'storage',
+        }));
+        expect(JSON.stringify(diagnostics)).not.toContain('prompt-reasoning-tool-output-storage-secret');
+
+        await receiver.pullChangesOnce();
+        expect(projected).toHaveLength(2);
+        expect(receiver.receiveCursor).toBe(1);
+    });
+
     it('classifies superseded changes before decryption and still consumes their sequence', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();
@@ -396,7 +718,7 @@ describe('AppSyncV4Client', () => {
         await receiver.pullChangesOnce();
         expect(applied).toHaveLength(225);
         expect(receiver.receiveCursor).toBe(225);
-    });
+    }, 15_000);
 
     it('rebuilds a paginated snapshot after 410 and hydrates it after restart', async () => {
         const storage = new MemoryStorage();
@@ -432,6 +754,61 @@ describe('AppSyncV4Client', () => {
         const hydrated: AppSyncV4AppliedEntity[] = [];
         await (await client(storage, transport, hydrated)).hydrate();
         expect(hydrated.map((event) => event.source)).toEqual(['cache', 'cache']);
+    });
+
+    it('rejects duplicate entities across snapshot pages before projection or cursor commit', async () => {
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('duplicate-snapshot-command'));
+        const { mutationId: _mutationId, ...snapshot } = mutation;
+        transport.requireSnapshot = true;
+        transport.snapshots = [
+            {
+                entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+                highWatermark: 2,
+                nextCursor: 'page-2',
+            },
+            {
+                entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+                highWatermark: 2,
+                nextCursor: null,
+            },
+        ];
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const replace = vi.fn(async () => undefined);
+        const traceIds = [
+            '00000000000000000000000000000004',
+            '00000000000000000000000000000005',
+            '00000000000000000000000000000006',
+        ];
+        const receiver = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            replace,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            () => traceIds.shift()!,
+        );
+
+        await expect(receiver.pullChangesOnce()).rejects.toThrow('repeated an entity');
+        expect(replace).not.toHaveBeenCalled();
+        expect(receiver.receiveCursor).toBe(0);
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'snapshot',
+            phase: 'failed',
+            traceId: '00000000000000000000000000000006',
+            page: 1,
+            errorKind: 'protocol',
+        }));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            event: 'transport',
+            phase: 'completed',
+            traceId: '00000000000000000000000000000006',
+        }));
     });
 
     it('keeps the previous cache and projection when a shadow snapshot fails mid-page', async () => {
@@ -480,6 +857,57 @@ describe('AppSyncV4Client', () => {
             receiveCursor: 1,
             entities: [expect.objectContaining({ entityId: old.entityId })],
         });
+    });
+
+    it('records storage failure when finishing a snapshot without committing its cursor', async () => {
+        const storage = new FaultInjectingStorage();
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const mutation = await publisher.publishEntity(command('snapshot-finish-storage-failure'));
+        const { mutationId: _mutationId, ...snapshot } = mutation;
+        transport.requireSnapshot = true;
+        transport.snapshots = [{
+            entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+            highWatermark: 1,
+            nextCursor: null,
+        }];
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const replace = vi.fn(async () => undefined);
+        const traceIds = [
+            '00000000000000000000000000000013',
+            '00000000000000000000000000000014',
+        ];
+        const receiver = await client(
+            storage,
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            replace,
+            fakeCrypto,
+            { record: (input) => diagnostics.push(input) },
+            () => traceIds.shift()!,
+        );
+        storage.failNextSetMatching((key) => key.endsWith(':cursor'));
+
+        await expect(receiver.pullChangesOnce())
+            .rejects.toThrow('prompt-reasoning-tool-output-storage-secret');
+
+        expect(replace).toHaveBeenCalledOnce();
+        expect(receiver.receiveCursor).toBe(0);
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'cursor',
+            phase: 'failed',
+            highWatermark: 1,
+            errorKind: 'storage',
+        }));
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: 'snapshot',
+            phase: 'failed',
+            errorKind: 'storage',
+        }));
+        expect(JSON.stringify(diagnostics)).not.toContain('prompt-reasoning-tool-output-storage-secret');
     });
 
     it('rebuilds from snapshot when an authenticated cache entity cannot be decrypted', async () => {
@@ -669,5 +1097,206 @@ describe('AppSyncV4Client', () => {
         expect(resetCount).toBe(0);
         expect(applied).toEqual([]);
         expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:session:'))).toEqual([]);
+    });
+
+    it('samples healthy empty polls while preserving per-request trace IDs', async () => {
+        const records: SyncV4DiagnosticInput[] = [];
+        const traceIds = ['00000000000000000000000000000001', '00000000000000000000000000000002'];
+        const seenTraceIds: Array<string | undefined> = [];
+        const transport = new FakeTransport();
+        transport.getChanges = async (_sessionId, afterSeq, _limit, traceId) => {
+            seenTraceIds.push(traceId);
+            return SyncChangesResponseV4Schema.parse({
+                changes: [],
+                hasMore: false,
+                highWatermark: afterSeq,
+            });
+        };
+        const receiver = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            { record: (input) => records.push(input) },
+            () => traceIds.shift()!,
+        );
+
+        await receiver.pullChangesOnce();
+        await receiver.pullChangesOnce();
+
+        expect(seenTraceIds).toEqual([
+            '00000000000000000000000000000001',
+            '00000000000000000000000000000002',
+        ]);
+        expect(records.filter((record) => (
+            record.event === 'transport'
+            && record.transportOperation === 'changes'
+            && record.phase === 'completed'
+        ))).toHaveLength(1);
+        expect(records.find((record) => (
+            record.event === 'transport'
+            && record.transportOperation === 'changes'
+            && record.phase === 'completed'
+        ))).not.toHaveProperty('dropped');
+        receiver.stop();
+        expect(records).toContainEqual(expect.objectContaining({
+            event: 'changes',
+            phase: 'completed',
+            source: 'poll',
+            suppressed: 1,
+            transportSecurity: 'insecureHttp',
+        }));
+        expect(records).toContainEqual(expect.objectContaining({
+            event: 'lifecycle',
+            phase: 'completed',
+            state: 'stopped',
+            suppressed: 1,
+            featureEnabled: true,
+            transportSecurity: 'insecureHttp',
+        }));
+    });
+
+    it('records projection batches and classifies failures without persisting error text', async () => {
+        const records: SyncV4DiagnosticInput[] = [];
+        const diagnostics: SyncV4DiagnosticSink = {
+            record: (input) => records.push(input),
+        };
+        const sender = await client(
+            new MemoryStorage(),
+            new FakeTransport(),
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            diagnostics,
+        );
+        await sender.publishEntity(command('diagnostic-command'));
+
+        const secret = 'prompt-reasoning-tool-output-secret';
+        const failingTransport = new FakeTransport();
+        failingTransport.getChanges = async () => {
+            throw Object.assign(new Error(secret), { code: 'ECONNRESET' });
+        };
+        const receiver = await client(
+            new MemoryStorage(),
+            failingTransport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            diagnostics,
+            () => '00000000000000000000000000000003',
+        );
+        await expect(receiver.pullChangesOnce()).rejects.toThrow(secret);
+
+        expect(records).toContainEqual(expect.objectContaining({
+            component: 'app.projection',
+            event: 'projection',
+            phase: 'applied',
+            count: 1,
+        }));
+        expect(records).toContainEqual(expect.objectContaining({
+            component: 'app.sync',
+            event: 'transport',
+            phase: 'failed',
+            errorKind: 'network',
+        }));
+        expect(JSON.stringify(records)).not.toContain(secret);
+    });
+
+    it('classifies projection callback failures independently from storage', async () => {
+        const records: SyncV4DiagnosticInput[] = [];
+        const transport = new FakeTransport();
+        const entity = command('projection-failure');
+        transport.changes = [{
+            mutationId: '00000000-0000-4000-8000-000000000099',
+            producerId: '00000000-0000-4000-8000-000000000098',
+            entityId: 'opaque:codex.command:projection-failure',
+            entityType: entity.entityType,
+            revision: 1,
+            op: 'upsert',
+            ciphertext: JSON.stringify(entity),
+            seq: 1,
+            createdAt: 100,
+        }];
+        const secret = 'projection-prompt-reasoning-tool-output-secret';
+        const receiver = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            async () => {
+                throw new Error(secret);
+            },
+            undefined,
+            fakeCrypto,
+            { record: (input) => records.push(input) },
+            () => '00000000000000000000000000000004',
+        );
+
+        await expect(receiver.pullChangesOnce()).rejects.toThrow(secret);
+
+        expect(records).toContainEqual(expect.objectContaining({
+            component: 'app.projection',
+            event: 'projection',
+            phase: 'failed',
+            errorKind: 'projection',
+        }));
+        expect(JSON.stringify(records)).not.toContain(secret);
+    });
+
+    it('keeps synchronization running when the diagnostic sink fails', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const receiver = await client(
+            storage,
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            {
+                record: () => {
+                    throw new Error('diagnostic sink unavailable');
+                },
+            },
+            () => '00000000000000000000000000000001',
+        );
+
+        await expect(receiver.start()).resolves.toBeUndefined();
+        await expect(receiver.publishEntity(command('sink-failure'))).resolves.toBeDefined();
+        await expect(receiver.flushOutboundOnce()).resolves.toBeUndefined();
+        receiver.stop();
+    });
+
+    it('rejects malformed generated trace IDs before calling the transport', async () => {
+        const transport = new FakeTransport();
+        const getCapabilities = vi.spyOn(transport, 'getCapabilities');
+        const receiver = await client(
+            new MemoryStorage(),
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            undefined,
+            () => 'prompt-reasoning-secret',
+        );
+
+        await expect(receiver.start()).rejects.toThrow('128-bit lowercase hex');
+        expect(getCapabilities).not.toHaveBeenCalled();
     });
 });

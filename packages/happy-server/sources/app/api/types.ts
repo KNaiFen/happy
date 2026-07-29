@@ -54,6 +54,9 @@ declare module 'fastify' {
     interface FastifyRequest {
         userId: string;
         startTime?: number;
+        syncV4TraceId?: string;
+        syncV4RouteOutcomeObserved?: boolean;
+        syncV4LifecycleTracked?: boolean;
     }
     interface FastifyInstance {
         authenticate: any;

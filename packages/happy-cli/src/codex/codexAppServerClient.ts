@@ -17,6 +17,14 @@ import type { ChildProcess } from 'node:child_process';
 import { spawn as crossSpawn } from 'cross-spawn';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import { logger } from '@/ui/logger';
+import {
+    classifySyncV4DiagnosticError,
+    recordSyncV4DiagnosticSafely,
+    type SyncV4DiagnosticInput,
+    type SyncV4DiagnosticSink,
+    type SyncV4DiagnosticTransportSecurity,
+} from '@slopus/happy-wire';
+import { syncV4DiagnosticHash } from '@/api/syncV4Diagnostics';
 import type {
     ReviewDecision,
     EventMsg,
@@ -32,6 +40,7 @@ import {
 } from './codexCliVersion';
 import { CodexThreadRegistry, type CodexTurnCompletion } from './codexThreadRegistry';
 import type { CodexProtocolTraceDirection, CodexProtocolTraceSink } from './codexProtocolTrace';
+import { redactCodexProtocolMethod } from './codexProtocolMethod';
 import type {
     ApprovalPolicy,
     ClientNotification,
@@ -109,6 +118,8 @@ type PendingRequest = {
     onResult?: (result: unknown) => void;
     method: string;
     epoch: number;
+    startedAt: number;
+    requestHash: string;
 };
 
 type PendingCompaction = {
@@ -120,6 +131,10 @@ type PendingCompaction = {
 };
 
 type LegacyPatchChanges = Record<string, Record<string, unknown>>;
+type LegacyFileChangeMetadata = {
+    turnId: string | null;
+    changes: LegacyPatchChanges;
+};
 
 type ThreadDefaults = {
     model?: string;
@@ -128,6 +143,15 @@ type ThreadDefaults = {
     sandbox?: SandboxMode;
     mcpServers?: Record<string, unknown>;
 };
+
+const MAX_COMPLETED_TURN_MARKERS = 50_000;
+const MAX_ACTIVE_SERVER_REQUEST_IDS = 4_096;
+const MAX_SETTLED_SERVER_REQUEST_GAPS = 4_096;
+const MAX_RAW_FILE_CHANGE_ITEMS = 4_096;
+const MAX_RAW_SUBAGENT_ACTIVITY_ITEMS = 4_096;
+const MAX_RAW_SUBAGENT_SIGNATURES_PER_ITEM = 16;
+const MAX_CODEX_RPC_METHOD_CHARS = 256;
+const TERMINAL_TURN_STATUSES = new Set(['completed', 'interrupted', 'failed']);
 
 export class CodexRpcOutcomeUnknownError extends Error {
     constructor(
@@ -191,7 +215,14 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function errorKind(error: unknown): string {
-    return error instanceof Error ? error.name : typeof error;
+    return classifySyncV4DiagnosticError(error);
+}
+
+function providerDiagnosticErrorKind(
+    error: unknown,
+): ReturnType<typeof classifySyncV4DiagnosticError> {
+    const classified = classifySyncV4DiagnosticError(error);
+    return classified === 'unknown' ? 'provider' : classified;
 }
 
 function isStableServerRequestMethod(method: string): method is CodexServerRequest['method'] {
@@ -216,6 +247,37 @@ function isPaginatedThreadReadError(error: unknown): boolean {
 // permission card to its tool call by exact id equality.
 function formatScopedItemKey(threadId: string | null, itemId: string): string {
     return threadId ? `${threadId}:${itemId}` : itemId;
+}
+
+function addBoundedSetEntry<T>(set: Set<T>, value: T, limit: number): boolean {
+    if (set.has(value)) return false;
+    set.add(value);
+    while (set.size > limit) {
+        const oldest = set.values().next().value;
+        if (oldest === undefined) break;
+        set.delete(oldest);
+    }
+    return true;
+}
+
+function setBoundedMapEntry<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
+    if (map.has(key)) map.delete(key);
+    map.set(key, value);
+    while (map.size > limit) {
+        const oldest = map.keys().next().value;
+        if (oldest === undefined) break;
+        map.delete(oldest);
+    }
+}
+
+function boundedOwnFieldCount(value: Record<string, unknown>, limit = 4_096): number {
+    let count = 0;
+    for (const key in value) {
+        if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+        count += 1;
+        if (count >= limit) return limit;
+    }
+    return count;
 }
 
 function isGoalActionsAvailable(version: CodexCliVersion | null): boolean {
@@ -365,16 +427,18 @@ export class CodexAppServerClient {
     private recoveryPromise: Promise<Set<string>> | null = null;
     private readonly recoveredThreadEpochs = new Map<string, number>();
     private notificationProtocol: 'unknown' | 'legacy' | 'raw' = 'unknown';
-    private completedTurnIds = new Set<string>();
-    private rawFileChangesByItemId = new Map<string, LegacyPatchChanges>();
-    private rawSubagentActivitySignaturesByItemId = new Map<string, Set<string>>();
+    private readonly completedTurnIds = new Set<string>();
+    private readonly rawFileChangesByItemId = new Map<string, LegacyFileChangeMetadata>();
+    private readonly rawSubagentActivitySignaturesByItemId = new Map<string, Set<string>>();
     // Approval callIds currently awaiting an answer. One codex item can raise
     // several approval callbacks (approvalId exists to disambiguate them);
     // the bare scoped key is kept for the first so the app's permission ↔
     // tool-call join works, and only a concurrent second approval for the
     // same item gets a disambiguating suffix.
     private pendingApprovalCallIds = new Set<string>();
-    private readonly seenServerRequestIds = new Set<number>();
+    private readonly activeServerRequestIds = new Set<number>();
+    private readonly settledServerRequestIds = new Set<number>();
+    private retiredServerRequestId = -1;
 
     // Handlers set by the consumer (runCodex.ts)
     private eventHandler: ((msg: EventMsg) => void) | null = null;
@@ -383,6 +447,9 @@ export class CodexAppServerClient {
     private serverRequestHandler: CodexServerRequestHandler | null = null;
     private connectionHandler: CodexConnectionHandler | null = null;
     private protocolTraceSink: CodexProtocolTraceSink | null = null;
+    private diagnosticSink: SyncV4DiagnosticSink | null = null;
+    private diagnosticSessionHash: string | undefined;
+    private diagnosticTransportSecurity: SyncV4DiagnosticTransportSecurity | undefined;
     private connectionEvent: CodexConnectionEvent = {
         connection: 'disconnected',
         statusUnknown: true,
@@ -442,9 +509,38 @@ export class CodexAppServerClient {
         this.protocolTraceSink = sink;
     }
 
+    setDiagnosticSink(sink: SyncV4DiagnosticSink | null): void {
+        this.diagnosticSink = sink;
+    }
+
+    setDiagnosticContext(context: {
+        sessionHash?: string;
+        transportSecurity?: SyncV4DiagnosticTransportSecurity;
+    }): void {
+        this.diagnosticSessionHash = context.sessionHash;
+        this.diagnosticTransportSecurity = context.transportSecurity;
+    }
+
     private updateConnection(event: CodexConnectionEvent): void {
         this.connectionEvent = event;
         this.connectionHandler?.(event);
+    }
+
+    private recordDiagnostic(
+        input: Omit<SyncV4DiagnosticInput, 'component'>,
+    ): void {
+        recordSyncV4DiagnosticSafely(this.diagnosticSink, {
+            component: 'cli.gateway',
+            sessionHash: this.diagnosticSessionHash,
+            softwareVersion: packageJson.version,
+            codexVersion: this.codexCliVersion
+                ? `${this.codexCliVersion.major}.${this.codexCliVersion.minor}.${this.codexCliVersion.patch}`
+                : undefined,
+            protocolVersion: 4,
+            featureEnabled: true,
+            transportSecurity: this.diagnosticTransportSecurity,
+            ...input,
+        });
     }
 
     private emitStableNotification(method: string, params: unknown): void {
@@ -613,6 +709,32 @@ export class CodexAppServerClient {
         return typeof status === 'string' && status.length > 0 ? status : null;
     }
 
+    private validateTerminalTurnNotification(
+        params: any,
+        sourceEpoch: number,
+    ): boolean {
+        const threadId = stringOrNull(params?.threadId);
+        const turnId = stringOrNull(params?.turn?.id);
+        const status = stringOrNull(params?.turn?.status);
+        if (threadId && turnId && status && TERMINAL_TURN_STATUSES.has(status)) {
+            return true;
+        }
+
+        this.recordDiagnostic({
+            level: 'warn',
+            event: 'notification',
+            phase: 'dropped',
+            source: 'notification',
+            state: 'failed',
+            ...(threadId ? { threadHash: syncV4DiagnosticHash(threadId) } : {}),
+            ...(turnId ? { turnHash: syncV4DiagnosticHash(turnId) } : {}),
+            epoch: sourceEpoch,
+            reason: 'validation',
+            errorKind: 'protocol',
+        });
+        return false;
+    }
+
     private shouldHandleRawNotification(method: string): boolean {
         const isRawNotification = method === 'thread/started'
             || method === 'thread/goal/updated'
@@ -646,11 +768,12 @@ export class CodexAppServerClient {
     ): void {
         const aborted = status === 'cancelled' || status === 'canceled' || status === 'aborted' || status === 'interrupted';
         const completionKey = turnId ? formatScopedItemKey(threadId, turnId) : null;
-        if (completionKey && this.completedTurnIds.has(completionKey)) {
+        if (completionKey && !addBoundedSetEntry(
+            this.completedTurnIds,
+            completionKey,
+            MAX_COMPLETED_TURN_MARKERS,
+        )) {
             return;
-        }
-        if (completionKey) {
-            this.completedTurnIds.add(completionKey);
         }
 
         if (aborted) {
@@ -672,16 +795,35 @@ export class CodexAppServerClient {
     }
 
     private trackRawFileChangeMetadata(method: string, params: any): void {
+        if (method === 'turn/completed') {
+            const threadId = stringOrNull(params?.threadId);
+            const turnId = stringOrNull(params?.turn?.id);
+            if (!threadId || !turnId) return;
+            const itemPrefix = `${threadId}:`;
+            for (const [itemKey, metadata] of this.rawFileChangesByItemId) {
+                if (itemKey.startsWith(itemPrefix) && metadata.turnId === turnId) {
+                    this.rawFileChangesByItemId.delete(itemKey);
+                }
+            }
+            return;
+        }
+
         const item = params?.item;
         const threadId = stringOrNull(params?.threadId);
         if (item?.type !== 'fileChange' || typeof item.id !== 'string' || !threadId) return;
 
         const itemKey = formatScopedItemKey(threadId, item.id);
         const changes = normalizeRawFileChangeList(item.changes);
-        if (changes) this.rawFileChangesByItemId.set(itemKey, changes);
-        if (method === 'item/completed'
-            && (item.status === 'completed' || item.status === 'failed' || item.status === 'declined')) {
-            this.rawFileChangesByItemId.delete(itemKey);
+        if (changes) {
+            setBoundedMapEntry(
+                this.rawFileChangesByItemId,
+                itemKey,
+                {
+                    turnId: stringOrNull(params?.turnId),
+                    changes,
+                },
+                MAX_RAW_FILE_CHANGE_ITEMS,
+            );
         }
     }
 
@@ -882,16 +1024,26 @@ export class CodexAppServerClient {
                     String(item.agentThreadId ?? ''),
                     String(item.agentPath ?? ''),
                 ].join('\0');
+                const signatureHash = syncV4DiagnosticHash(`subagent-activity:${signature}`);
                 const seenSignatures = itemKey
                     ? this.rawSubagentActivitySignaturesByItemId.get(itemKey)
                     : undefined;
-                if (seenSignatures?.has(signature)) {
+                if (seenSignatures?.has(signatureHash)) {
                     return true;
                 }
                 if (itemKey) {
                     const signatures = seenSignatures ?? new Set<string>();
-                    signatures.add(signature);
-                    this.rawSubagentActivitySignaturesByItemId.set(itemKey, signatures);
+                    addBoundedSetEntry(
+                        signatures,
+                        signatureHash,
+                        MAX_RAW_SUBAGENT_SIGNATURES_PER_ITEM,
+                    );
+                    setBoundedMapEntry(
+                        this.rawSubagentActivitySignaturesByItemId,
+                        itemKey,
+                        signatures,
+                        MAX_RAW_SUBAGENT_ACTIVITY_ITEMS,
+                    );
                 }
                 this.eventHandler?.({
                     type: 'subagent_activity',
@@ -974,8 +1126,18 @@ export class CodexAppServerClient {
         );
 
         const epoch = ++this.processEpoch;
-        this.seenServerRequestIds.clear();
+        this.resetServerRequestTracking();
         this.intentionalTransportClose = false;
+        this.recordDiagnostic({
+            level: 'info',
+            event: 'connection',
+            phase: 'started',
+            state: 'connecting',
+            epoch,
+            codexVersion: this.codexCliVersion
+                ? `${this.codexCliVersion.major}.${this.codexCliVersion.minor}.${this.codexCliVersion.patch}`
+                : undefined,
+        });
         // Use cross-spawn so npm-installed wrappers (codex.cmd / codex.ps1) resolve on Windows.
         // Native child_process.spawn fails with ENOENT for .cmd shims (issues #980, #1016).
         const proc = crossSpawn(command, args, {
@@ -988,6 +1150,14 @@ export class CodexAppServerClient {
         proc.on('error', (err) => {
             logger.debug(`[CodexAppServer] Process error (${errorKind(err)})`);
             if (this.process === proc && this.processEpoch === epoch) {
+                this.recordDiagnostic({
+                    level: 'error',
+                    event: 'connection',
+                    phase: 'failed',
+                    state: 'failed',
+                    epoch,
+                    errorKind: providerDiagnosticErrorKind(err),
+                });
                 this.updateConnection({ connection: 'error', statusUnknown: true, error: errorKind(err) });
             }
         });
@@ -1001,12 +1171,33 @@ export class CodexAppServerClient {
             }
             this.connected = false;
             this.process = null;
+            this.recordDiagnostic({
+                level: code === 0 ? 'info' : 'warn',
+                event: 'connection',
+                phase: 'exited',
+                state: 'disconnected',
+                epoch,
+                count: this.pending.size,
+                reason: 'processExit',
+            });
             this.updateConnection({ connection: 'disconnected', statusUnknown: true, error: null });
             this.readline?.close();
             this.readline = null;
             // Reject all pending requests
             for (const [id, req] of this.pending) {
                 if (req.epoch !== epoch) continue;
+                this.recordDiagnostic({
+                    level: 'warn',
+                    event: 'rpc',
+                    phase: 'failed',
+                    state: 'outcomeUnknown',
+                    rpcFamily: codexRpcFamily(req.method),
+                    requestHash: req.requestHash,
+                    epoch: req.epoch,
+                    durationMs: elapsedDiagnosticMs(req.startedAt),
+                    reason: 'processExit',
+                    errorKind: 'provider',
+                });
                 req.reject(new CodexRpcOutcomeUnknownError(
                     req.method,
                     `Codex process exited (code=${code}) while waiting for ${req.method}; outcome is unknown`,
@@ -1059,8 +1250,23 @@ export class CodexAppServerClient {
                 statusUnknown: this.threadId !== null,
                 error: null,
             });
+            this.recordDiagnostic({
+                level: 'info',
+                event: 'connection',
+                phase: 'completed',
+                state: 'connected',
+                epoch,
+            });
             logger.debug('[CodexAppServer] Connected and initialized');
         } catch (error) {
+            this.recordDiagnostic({
+                level: 'error',
+                event: 'connection',
+                phase: 'failed',
+                state: 'failed',
+                epoch,
+                errorKind: providerDiagnosticErrorKind(error),
+            });
             this.updateConnection({ connection: 'error', statusUnknown: true, error: errorKind(error) });
             throw error;
         }
@@ -1080,6 +1286,14 @@ export class CodexAppServerClient {
         const pid = proc?.pid;
         const epoch = this.processEpoch;
         logger.debug(`[CodexAppServer] Disconnecting; pid=${pid ?? 'none'}`);
+        this.recordDiagnostic({
+            level: 'info',
+            event: 'connection',
+            phase: 'started',
+            state: 'stopping',
+            epoch,
+            reason: 'shutdown',
+        });
 
         this.intentionalTransportClose = true;
         this.readline?.close();
@@ -1115,6 +1329,18 @@ export class CodexAppServerClient {
         // Fail in-flight requests from this process generation.
         for (const [id, req] of this.pending) {
             if (req.epoch !== epoch) continue;
+            this.recordDiagnostic({
+                level: 'warn',
+                event: 'rpc',
+                phase: 'failed',
+                state: 'outcomeUnknown',
+                rpcFamily: codexRpcFamily(req.method),
+                requestHash: req.requestHash,
+                epoch: req.epoch,
+                durationMs: elapsedDiagnosticMs(req.startedAt),
+                reason: 'shutdown',
+                errorKind: 'cancelled',
+            });
             req.reject(new CodexRpcOutcomeUnknownError(
                 req.method,
                 `Codex process disconnected while waiting for ${req.method}; outcome is unknown`,
@@ -1130,6 +1356,14 @@ export class CodexAppServerClient {
         this.sandboxEnabled = false;
 
         logger.debug('[CodexAppServer] Disconnected');
+        this.recordDiagnostic({
+            level: 'info',
+            event: 'connection',
+            phase: 'completed',
+            state: 'disconnected',
+            epoch,
+            reason: 'shutdown',
+        });
         this.intentionalTransportClose = false;
     }
 
@@ -1993,13 +2227,45 @@ export class CodexAppServerClient {
         const timeout = timeoutMs ?? CodexAppServerClient.REQUEST_TIMEOUT_MS;
         return new Promise((resolve, reject) => {
             if (!this.process?.stdin?.writable) {
+                this.recordDiagnostic({
+                    level: 'warn',
+                    event: 'rpc',
+                    phase: 'failed',
+                    state: 'failed',
+                    rpcFamily: codexRpcFamily(method),
+                    epoch: this.processEpoch,
+                    errorKind: 'provider',
+                });
                 reject(new Error(`Cannot send ${method}: stdin not writable`));
                 return;
             }
             const id = this.nextId++;
+            const startedAt = Date.now();
+            const requestHash = syncV4DiagnosticHash(`${this.processEpoch}:${id}`);
+            this.recordDiagnostic({
+                level: 'debug',
+                event: 'rpc',
+                phase: 'started',
+                state: 'pending',
+                rpcFamily: codexRpcFamily(method),
+                requestHash,
+                epoch: this.processEpoch,
+            });
 
             const timer = setTimeout(() => {
                 this.pending.delete(id);
+                this.recordDiagnostic({
+                    level: 'warn',
+                    event: 'rpc',
+                    phase: 'failed',
+                    state: 'outcomeUnknown',
+                    rpcFamily: codexRpcFamily(method),
+                    requestHash,
+                    epoch: this.processEpoch,
+                    durationMs: elapsedDiagnosticMs(startedAt),
+                    reason: 'timeout',
+                    errorKind: 'timeout',
+                });
                 reject(new CodexRpcOutcomeUnknownError(
                     method,
                     `${method} timed out after ${timeout}ms; outcome is unknown`,
@@ -2012,11 +2278,15 @@ export class CodexAppServerClient {
                 onResult,
                 method,
                 epoch: this.processEpoch,
+                startedAt,
+                requestHash,
             });
 
             const msg = { id, method, params } as StableClientRequestFor<M>;
             const line = JSON.stringify(msg) + '\n';
-            logger.debug(`[CodexAppServer] → ${method} (id=${id})`);
+            logger.debug(`[CodexAppServer] -> ${redactCodexProtocolMethod(method)}`, {
+                requestHash,
+            });
             this.recordProtocolTrace('outbound', msg);
             this.process.stdin.write(line);
         });
@@ -2026,7 +2296,7 @@ export class CodexAppServerClient {
         if (!this.process?.stdin?.writable) return;
         this.recordProtocolTrace('outbound', msg);
         this.process.stdin.write(JSON.stringify(msg) + '\n');
-        logger.debug(`[CodexAppServer] → ${msg.method} (notification)`);
+        logger.debug(`[CodexAppServer] -> ${redactCodexProtocolMethod(msg.method)} (notification)`);
     }
 
     private async respond(
@@ -2060,7 +2330,11 @@ export class CodexAppServerClient {
                 settled = true;
                 stdin.off('error', onError);
                 stdin.off('close', onClose);
-                if (written) logger.debug(`[CodexAppServer] → response (id=${msg.id})`);
+                if (written) {
+                    logger.debug('[CodexAppServer] → response', {
+                        requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${msg.id}`),
+                    });
+                }
                 resolve(written);
             };
             const onError = () => finish(false);
@@ -2089,17 +2363,61 @@ export class CodexAppServerClient {
             return;
         }
         this.recordProtocolTrace('inbound', msg);
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+            const messageKind = msg === null
+                ? 'null'
+                : Array.isArray(msg) ? 'array' : typeof msg;
+            logger.debug('[CodexAppServer] Unhandled message shape', {
+                messageKind,
+                fieldCount: 0,
+            });
+            this.recordDiagnostic({
+                level: 'warn',
+                event: 'notification',
+                phase: 'dropped',
+                source: 'notification',
+                state: 'failed',
+                epoch: sourceEpoch,
+                errorKind: 'protocol',
+            });
+            return;
+        }
 
         // Response to our request
         if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
+            if (!Number.isSafeInteger(msg.id) || msg.id < 0) {
+                this.recordDiagnostic({
+                    level: 'warn',
+                    event: 'rpc',
+                    phase: 'dropped',
+                    direction: 'inbound',
+                    state: 'failed',
+                    epoch: sourceEpoch,
+                    errorKind: 'protocol',
+                });
+                return;
+            }
             const pending = this.pending.get(msg.id);
             if (pending) {
                 if (pending.epoch !== sourceEpoch) {
-                    logger.debug(`[CodexAppServer] Ignoring response from stale epoch for id=${msg.id}`);
+                    logger.debug('[CodexAppServer] Ignoring response from stale epoch', {
+                        requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${msg.id}`),
+                    });
                     return;
                 }
                 this.pending.delete(msg.id);
                 if (msg.error) {
+                    this.recordDiagnostic({
+                        level: 'warn',
+                        event: 'rpc',
+                        phase: 'failed',
+                        state: 'failed',
+                        rpcFamily: codexRpcFamily(pending.method),
+                        requestHash: pending.requestHash,
+                        epoch: pending.epoch,
+                        durationMs: elapsedDiagnosticMs(pending.startedAt),
+                        errorKind: 'provider',
+                    });
                     const code = typeof msg.error.code === 'number' || typeof msg.error.code === 'string'
                         ? msg.error.code
                         : 'unknown';
@@ -2112,9 +2430,30 @@ export class CodexAppServerClient {
                     try {
                         pending.onResult?.(msg.result);
                     } catch (error) {
+                        this.recordDiagnostic({
+                            level: 'error',
+                            event: 'rpc',
+                            phase: 'failed',
+                            state: 'failed',
+                            rpcFamily: codexRpcFamily(pending.method),
+                            requestHash: pending.requestHash,
+                            epoch: pending.epoch,
+                            durationMs: elapsedDiagnosticMs(pending.startedAt),
+                            errorKind: 'protocol',
+                        });
                         pending.reject(error instanceof Error ? error : new Error(String(error)));
                         return;
                     }
+                    this.recordDiagnostic({
+                        level: 'debug',
+                        event: 'rpc',
+                        phase: 'completed',
+                        state: 'succeeded',
+                        rpcFamily: codexRpcFamily(pending.method),
+                        requestHash: pending.requestHash,
+                        epoch: pending.epoch,
+                        durationMs: elapsedDiagnosticMs(pending.startedAt),
+                    });
                     pending.resolve(msg.result);
                 }
             }
@@ -2122,28 +2461,112 @@ export class CodexAppServerClient {
         }
 
         // Server → client request (approvals)
-        if (msg.id != null && msg.method) {
-            if (this.seenServerRequestIds.has(msg.id)) {
-                logger.debug(`[CodexAppServer] Ignoring duplicate server request id=${msg.id}`);
+        if (msg.id != null) {
+            if (!Number.isSafeInteger(msg.id) || msg.id < 0) {
+                this.recordDiagnostic({
+                    level: 'error',
+                    event: 'request',
+                    phase: 'dropped',
+                    source: 'notification',
+                    state: 'failed',
+                    epoch: sourceEpoch,
+                    errorKind: 'protocol',
+                });
                 return;
             }
-            this.seenServerRequestIds.add(msg.id);
-            this.handleServerRequest(msg.id, msg.method, msg.params, sourceEpoch).catch((err) => {
-                logger.debug(`[CodexAppServer] Error handling server request (${errorKind(err)})`);
-            });
+            const requestId = msg.id as number;
+            if (this.isDuplicateServerRequestId(requestId)) {
+                logger.debug('[CodexAppServer] Ignoring duplicate server request', {
+                    requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${requestId}`),
+                });
+                this.recordDiagnostic({
+                    level: 'warn',
+                    event: 'request',
+                    phase: 'replayed',
+                    source: 'notification',
+                    state: 'pending',
+                    requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${requestId}`),
+                    epoch: sourceEpoch,
+                });
+                return;
+            }
+            if (this.activeServerRequestIds.size >= MAX_ACTIVE_SERVER_REQUEST_IDS) {
+                this.recordDiagnostic({
+                    level: 'error',
+                    event: 'request',
+                    phase: 'dropped',
+                    source: 'notification',
+                    state: 'failed',
+                    requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${requestId}`),
+                    epoch: sourceEpoch,
+                    count: this.activeServerRequestIds.size,
+                    errorKind: 'protocol',
+                });
+                this.activeServerRequestIds.add(requestId);
+                void this.respondError(
+                    requestId,
+                    -32000,
+                    'Too many pending server requests',
+                    sourceEpoch,
+                ).finally(() => this.settleServerRequestId(requestId, sourceEpoch));
+                return;
+            }
+            this.activeServerRequestIds.add(requestId);
+            if (!isValidCodexRpcMethod(msg.method)) {
+                this.recordDiagnostic({
+                    level: 'error',
+                    event: 'request',
+                    phase: 'dropped',
+                    source: 'notification',
+                    state: 'failed',
+                    requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${requestId}`),
+                    epoch: sourceEpoch,
+                    errorKind: 'protocol',
+                });
+                void this.respondError(
+                    requestId,
+                    -32600,
+                    'Invalid request',
+                    sourceEpoch,
+                ).finally(() => this.settleServerRequestId(requestId, sourceEpoch));
+                return;
+            }
+            void this.handleServerRequest(requestId, msg.method, msg.params, sourceEpoch)
+                .catch((err) => {
+                    logger.debug(`[CodexAppServer] Error handling server request (${errorKind(err)})`);
+                })
+                .finally(() => this.settleServerRequestId(requestId, sourceEpoch));
             return;
         }
 
         // Notification (no id)
-        if (msg.method) {
+        if (msg.method !== undefined) {
+            if (!isValidCodexRpcMethod(msg.method)) {
+                this.recordDiagnostic({
+                    level: 'warn',
+                    event: 'notification',
+                    phase: 'dropped',
+                    source: 'notification',
+                    state: 'failed',
+                    epoch: sourceEpoch,
+                    errorKind: 'protocol',
+                });
+                return;
+            }
             this.handleNotification(msg.method, msg.params, sourceEpoch);
             return;
         }
 
-        const keys = msg && typeof msg === 'object' && !Array.isArray(msg)
-            ? Object.keys(msg).sort().join(',')
-            : typeof msg;
-        logger.debug(`[CodexAppServer] Unhandled message shape; keys=${keys}`);
+        const messageKind = msg === null
+            ? 'null'
+            : Array.isArray(msg) ? 'array' : typeof msg;
+        const fieldCount = msg && typeof msg === 'object' && !Array.isArray(msg)
+            ? boundedOwnFieldCount(msg)
+            : 0;
+        logger.debug('[CodexAppServer] Unhandled message shape', {
+            messageKind,
+            fieldCount,
+        });
     }
 
     private recordProtocolTrace(direction: CodexProtocolTraceDirection, message: unknown): void {
@@ -2154,14 +2577,75 @@ export class CodexAppServerClient {
         }
     }
 
+    private isDuplicateServerRequestId(requestId: number): boolean {
+        return requestId <= this.retiredServerRequestId
+            || this.activeServerRequestIds.has(requestId)
+            || this.settledServerRequestIds.has(requestId);
+    }
+
+    private settleServerRequestId(requestId: number, sourceEpoch: number): void {
+        if (sourceEpoch !== this.processEpoch) return;
+        this.activeServerRequestIds.delete(requestId);
+        if (requestId <= this.retiredServerRequestId) return;
+        this.settledServerRequestIds.add(requestId);
+        this.compactSettledServerRequestIds();
+    }
+
+    private compactSettledServerRequestIds(): void {
+        while (this.settledServerRequestIds.delete(this.retiredServerRequestId + 1)) {
+            this.retiredServerRequestId += 1;
+        }
+        if (this.settledServerRequestIds.size <= MAX_SETTLED_SERVER_REQUEST_GAPS) return;
+
+        const ordered = [...this.settledServerRequestIds].sort((left, right) => left - right);
+        const floor = ordered[ordered.length - MAX_SETTLED_SERVER_REQUEST_GAPS];
+        if (floor === undefined) return;
+        this.retiredServerRequestId = Math.max(this.retiredServerRequestId, floor);
+        for (const settled of this.settledServerRequestIds) {
+            if (settled <= this.retiredServerRequestId) {
+                this.settledServerRequestIds.delete(settled);
+            }
+        }
+        while (this.settledServerRequestIds.delete(this.retiredServerRequestId + 1)) {
+            this.retiredServerRequestId += 1;
+        }
+    }
+
+    private resetServerRequestTracking(): void {
+        this.activeServerRequestIds.clear();
+        this.settledServerRequestIds.clear();
+        this.retiredServerRequestId = -1;
+    }
+
     private handleUnexpectedTransportClose(proc: ChildProcess, epoch: number): void {
         if (this.process !== proc || this.processEpoch !== epoch) return;
         this.connected = false;
         this.process = null;
         this.readline = null;
+        this.recordDiagnostic({
+            level: 'warn',
+            event: 'connection',
+            phase: 'failed',
+            state: 'disconnected',
+            epoch,
+            reason: 'processExit',
+            errorKind: 'provider',
+        });
         this.updateConnection({ connection: 'disconnected', statusUnknown: true, error: null });
         for (const [id, request] of this.pending) {
             if (request.epoch !== epoch) continue;
+            this.recordDiagnostic({
+                level: 'warn',
+                event: 'rpc',
+                phase: 'failed',
+                state: 'outcomeUnknown',
+                rpcFamily: codexRpcFamily(request.method),
+                requestHash: request.requestHash,
+                epoch: request.epoch,
+                durationMs: elapsedDiagnosticMs(request.startedAt),
+                reason: 'processExit',
+                errorKind: 'provider',
+            });
             request.reject(new CodexRpcOutcomeUnknownError(
                 request.method,
                 `Codex transport closed while waiting for ${request.method}; outcome is unknown`,
@@ -2366,7 +2850,7 @@ export class CodexAppServerClient {
                     threadId,
                     turnId,
                     fileChanges: params.fileChanges ?? (typeof itemId === 'string'
-                        ? this.rawFileChangesByItemId.get(itemKey) ?? this.rawFileChangesByItemId.get(itemId)
+                        ? this.rawFileChangesByItemId.get(itemKey)?.changes
                         : undefined),
                     reason: params.reason,
                 });
@@ -2378,7 +2862,19 @@ export class CodexAppServerClient {
         }
 
         // Unknown server request — respond so server doesn't hang
-        logger.debug(`[CodexAppServer] Unknown server request: ${method}`);
+        logger.debug('[CodexAppServer] Unknown server request', {
+            method: redactCodexProtocolMethod(method),
+        });
+        this.recordDiagnostic({
+            level: 'warn',
+            event: 'request',
+            phase: 'failed',
+            state: 'failed',
+            requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${id}`),
+            epoch: sourceEpoch,
+            reason: 'unknownMethod',
+            errorKind: 'protocol',
+        });
         await this.respondError(id, -32601, 'Method not found', sourceEpoch);
     }
 
@@ -2426,6 +2922,13 @@ export class CodexAppServerClient {
             return;
         }
 
+        if (
+            method === 'turn/completed'
+            && !this.validateTerminalTurnNotification(params, sourceEpoch)
+        ) {
+            return;
+        }
+
         const statusCompletionTurnId = this.trackStableNotification(method, params);
 
         // thread/started is emitted by registerThreadSnapshot after the registry
@@ -2440,14 +2943,16 @@ export class CodexAppServerClient {
         this.trackPendingCompaction(method, params, sourceEpoch);
 
         if (this.handleRawNotification(method, params, statusCompletionTurnId)) {
-            logger.debug(`[CodexAppServer] Raw notification: ${method}`);
+            logger.debug('[CodexAppServer] Raw notification', {
+                method: redactCodexProtocolMethod(method),
+            });
             return;
         }
 
         // v2 lifecycle notifications
         if (method === 'thread/started' || method === 'turn/started' ||
             method === 'turn/completed' || method === 'thread/status/changed') {
-            logger.debug(`[CodexAppServer] Lifecycle notification: ${method}`);
+            logger.debug(`[CodexAppServer] Lifecycle notification: ${redactCodexProtocolMethod(method)}`);
             return;
         }
 
@@ -2456,6 +2961,34 @@ export class CodexAppServerClient {
             return;
         }
 
-        logger.debug(`[CodexAppServer] Notification: ${method}`);
+        logger.debug('[CodexAppServer] Notification', {
+            method: redactCodexProtocolMethod(method),
+        });
     }
+}
+
+function codexRpcFamily(method: string): SyncV4DiagnosticInput['rpcFamily'] {
+    if (method === 'initialize' || method === 'initialized') return 'initialize';
+    if (method.includes('compact')) return 'compact';
+    if (method.startsWith('review/')) return 'review';
+    if (method.startsWith('thread/')) return 'thread';
+    if (method.startsWith('turn/')) return 'turn';
+    if (method.startsWith('item/')) return 'item';
+    if (method.startsWith('mcp')) return 'mcp';
+    if (method.startsWith('skills/')) return 'skills';
+    if (method.startsWith('model/')) return 'model';
+    if (method.includes('goal')) return 'goal';
+    if (method.includes('collab') || method.includes('agent')) return 'collaboration';
+    if (method.includes('request') || method.includes('approval')) return 'request';
+    return 'unknown';
+}
+
+function elapsedDiagnosticMs(startedAt: number): number {
+    return Math.max(0, Math.trunc(Date.now() - startedAt));
+}
+
+function isValidCodexRpcMethod(method: unknown): method is string {
+    return typeof method === 'string'
+        && method.length > 0
+        && method.length <= MAX_CODEX_RPC_METHOD_CHARS;
 }

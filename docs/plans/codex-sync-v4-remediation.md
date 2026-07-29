@@ -30,6 +30,13 @@
    全部通过后才能启用。
 9. 安全依赖更新不得顺带改变 Codium/Claude 的依赖解析版本；Claude
    adapter 与 Sync v3 的运行路径保持在本轮范围之外。
+10. Sync v4 诊断默认开启，但只允许写入 Wire 定义的字段白名单。任何
+    prompt、raw reasoning、工具参数、工具输出、ciphertext、token、密钥、
+    文件内容、外部错误对象和真实 provider ID 都不得进入诊断记录。
+11. 重构初期的诊断必须能在不读取业务明文的前提下复原故障边界。每个进程
+    至少留下版本、协议、v4 开关、传输安全模式和连接 epoch 的启动指纹；
+    每个终态留下稳定事件分类及 dropped、suppressed、invalid、write
+    failure、pending 等有界计数。不得使用自由文本错误消息代替这些字段。
 
 ## Prisma migration 授权与门禁
 
@@ -112,6 +119,14 @@ R2 实施约束：
       outcome-unknown 状态可跨进程恢复。
 - [x] stable-v2 UserInput 和 ThreadItem 使用 exhaustive mapper；未知 stable
       variant 产生受控诊断而不是空 item。
+- [x] `turn/completed` 只有在 payload 同时包含可验证的 thread、turn 和
+      terminal status 时才能结算 completion；缺字段、类型错误或未知状态的
+      terminal notification 必须丢弃并写 payload-free protocol diagnostic，
+      不得产生 legacy `task_complete` 或清除 thinking/keepAlive。
+- [x] file-change approval request 与对应 item 可任意乱序到达。request
+      早于 item、晚于 item 及晚于 item/completed 时，canonical request/item
+      必须最终收敛到同一 thread 的 patch；临时 legacy metadata 不得误复用
+      其他 thread、turn 或 item 的 patch。
 - [x] warning/error ID 跨重启不碰撞，错误码保持结构化。
 - [x] finalized stream 释放大内容，snapshot 批量投影避免重复发布。
 - [x] command 与 payload 同时声明 thread target 时必须一致，ownership 校验
@@ -140,6 +155,11 @@ R2 实施约束：
 - [x] provider RPC 成功且 route 已提交、commandResult 未提交的崩溃边界，
       必须通过 route 中的 coordinated commandId 恢复成功；没有该 receipt
       时继续 outcome-unknown/notReplayed，绝不猜测或重放非幂等 RPC。
+- [x] terminal child 必须关闭不再需要的 Sync client/socket、mapper 和
+      runtime listener；持久 route、relation 与 lineage 继续保留用于历史
+      导航、迟到 notification 和进程恢复。资源释放必须幂等，迟到通知需要
+      时可按持久 route 有界重建 binding，不能让历史 child 数量等比例占用
+      长连接资源。
 - [x] app-server 在 thread/review RPC 响应后同一 stdout chunk 内立即发送
       provider request 时，Router 必须等待并发 route 登记后再绑定；等待
       仍未形成权威 route 才返回协议错误，不得把真实 root/review 请求误拒绝。
@@ -564,7 +584,7 @@ R5 transport 与 URL 边界：
       snapshot 完全一致。
 - [x] 性能：10,000 entity + 5 Hz delta，健康本地链路 p95 < 750 ms。
 - [x] 长 turn：虚拟时钟 2 小时不假结束。
-- [ ] 长 turn：真实 wall-clock 超过 10 分钟，仅在权威完成通知后结束。
+- [x] 长 turn：真实 wall-clock 超过 10 分钟，仅在权威完成通知后结束。
 - [x] 生命周期乱序：迟到的 `thread/started` 元数据不得用旧 `idle` 状态
       结束已经由 `turn/started` 登记的 active turn；真实子进程场景必须
       覆盖该顺序，CLI completion registry 与 Sync v4 canonical runtime
@@ -616,11 +636,176 @@ R6 场景与性能口径：
   重排、cursor 提交前崩溃、丢失全部 invalidation 和 snapshot fallback；
   不再增加功能重复但规模更小的第二套实现。
 
+### R7 可观测性与诊断
+
+- [x] Wire 定义严格的 `SyncV4DiagnosticRecord` schema 与错误分类器。事件
+      只包含枚举状态、计数、时延、seq/revision/cursor/watermark、随机
+      trace ID 和散列/opaque ID；schema 必须拒绝额外字段和自由文本 payload。
+- [x] Wire 诊断 schema 提供启动指纹和终态汇总所需的固定字段：v4 是否启用、
+      `https/insecureHttp` 传输安全模式，以及 suppressed、invalid 和 write
+      failure 计数。CLI、App、Server 不得记录 relay URL、hostname、IP、
+      Authorization 或任意环境变量值来补充这些信息。
+- [x] CLI 与 App 的每次 v4 HTTP 操作生成独立 128-bit trace ID，通过
+      `X-Happy-Sync-Trace` 发送；Server 回显并写入同一事件。CORS 只额外
+      放行、暴露该固定 header，不接受客户端提供的任意日志对象。
+- [x] CLI 默认在 `~/.happy/logs` 写入权限为 `0600` 的结构化 Sync v4
+      JSONL。单文件、分段数和保留期均有硬上限；多 session/process 文件
+      互不争用；写入失败只计数并在 flush/close 暴露，不递归记录原始错误。
+- [x] CLI 诊断 JSONL 的异步待写队列同样必须有字节硬上限；磁盘变慢时
+      保留最新记录、淘汰最旧待写记录并累计 `droppedRecords`，不得让长 turn
+      因诊断积压产生无界内存。关闭时普通脱敏日志必须输出最终计数摘要。
+- [x] Codex JSON-RPC shape trace 在 v4 会话默认开启，只记录方向、时序、
+      方法、payload shape 和散列 ID。内存 pending/request 与 snapshot
+      均有界，磁盘使用同一轮转/保留策略；raw payload 永不保留。
+- [x] 协议 trace 只保留 stable-v2 已知 method；未知 method 写固定前缀加
+      HMAC 摘要。RPC request/response 关联键使用固定长度摘要，不得把原始、
+      超长或恶意 method/RPC ID 作为内存 Map key 或落盘字段。
+- [x] 协议 trace 的 thread/turn/item/request 等 provider ID 使用与 CLI
+      结构化诊断相同的固定长度散列，使两类日志可直接关联；RPC ID 和未知
+      method 仍使用进程随机 HMAC，避免把外部自由文本变成稳定字典。
+- [x] App 使用独立 MMKV 环形存储持久化最近的 Sync v4 诊断。逻辑容量 N
+      使用 N+1 个物理槽，先写未占用物理槽、再以单一 head 作为提交点，
+      满环时 head 写失败也不得覆盖旧的已提交窗口；损坏槽位可跳过。开发
+      日志页可查看、复制和清除，普通 console 日志不得混入该持久诊断。
+- [x] App 复制诊断时输出可直接保存的按时间排序 JSONL，并包含最近一次启动
+      指纹与本地 sink 计数；清除操作只删除 Sync v4 诊断。CLI 日志文件名、
+      当前段和终态统计必须能从普通脱敏日志定位，方便把三端相同 trace ID
+      交给维护者检索，不新增上传明文或自动上报能力。
+- [x] Server 为 mutation、changes、snapshot、invalidation、journal prune
+      写结构化事件，并增加 operation/outcome/duration/page-size/pruned
+      指标。标签只能来自固定枚举和有界 client type，不得使用 session、
+      trace、entity 或 provider ID 作为 Prometheus 标签。
+- [x] journal prune 是 mutation commit 之后的 best-effort 维护步骤。清理
+      失败必须记录受控错误分类和指标，但不得把已经提交成功的 mutation
+      POST 改写成 500；客户端仍应收到原 ACK，后续清理周期再重试。
+- [x] CLI 记录 durable outbox/inbound depth 与 age、ACK 分类、cursor、
+      snapshot fallback、command/request 恢复和 journal poison/compact；
+      Gateway 记录连接 epoch、RPC lifecycle/outcome unknown、thread/turn
+      状态、orphan replay、relation/child、migration 和 stream flush。
+- [x] CLI Gateway、App registry/client 和 Server capabilities 在各自第一次
+      v4 操作前写启动指纹；退出、禁用、协商失败和正常关闭都写终态汇总。
+      汇总至少覆盖诊断 sink 的 dropped/suppressed/invalid/write failure、
+      protocol pending 与当前 outbox/inbound depth。诊断 sink 自身失败时，
+      相同计数必须由既有普通脱敏日志输出，不能递归写回失败 sink。
+- [x] App 记录 hydrate、outbox/ACK、changes/cursor、snapshot generation、
+      registry retry/sync health 和 projection batch；断连时保留最后状态，
+      诊断本身不得把 execution 改为 idle。
+- [x] App 与 CLI 的所有 v4 HTTP 请求都必须携带独立 trace ID，包括 CLI
+      在建立 session 前的 `/v4/capabilities` 协商。App 产生的 command
+      entity 必须在加密和写入 outbox 前通过 Wire canonical schema，避免
+      无效密文进入持久链路后卡住对端 cursor。
+- [x] 高频健康路径必须采样，不能让诊断反过来淹没有效故障。每次 App v4
+      HTTP 请求仍生成并发送 trace ID，Server 仍逐次记录；App 对无 change
+      的成功轮询最多每 30 秒持久化一次并附带被抑制计数。含数据的响应、
+      失败、snapshot、重试和状态边界立即落盘。
+- [x] 单元测试对每个诊断 sink 注入包含 secret、prompt、reasoning 和工具
+      payload 的恶意错误/对象，断言 schema 或 API 拒绝且序列化输出不含原文。
+      轮转、保留、截断尾记录、MMKV 崩溃边界和损坏恢复必须覆盖。
+- [x] 普通 CLI 文件日志同样遵守诊断隐私边界。未知 notification/request、
+      stable union/variant、对象 key、permission mode、model 和 reasoning
+      effort 只能记录固定分类或散列；不得以模板字符串或 logger metadata
+      旁路泄露外部自由文本。
+- [x] `ApiSession` 的共享 Socket.IO 路径不得把完整 update、ciphertext、
+      原始 Error 或可能携带 Authorization/config 的 transport error 写入普通
+      日志。只允许记录固定 update 分类、seq/版本等数字元数据和受控错误分类；
+      该约束不能改变 Claude v3 的收发行为。
+- [x] CLI 的 duplicate/completion/legacy projection 辅助 Set/Map 均有硬上限，
+      并在 authoritative terminal item/turn 后尽早释放；单个长期连接不能
+      依靠断连或 session clear 才回收。
+      provider 在 terminal item 后仍可能迟到重复的旧 `started`，因此
+      subagent activity 不能直接删除去重 marker；只保留每 item 最多 16 个
+      固定长度 signature hash，整表最多 4,096 项，不保留 agent path/thread
+      等原始 signature 字符串。
+- [x] provider request 去重不得通过统一 LRU 淘汰仍在等待 App 响应的 request
+      ID。活动 request 必须保留到写 response、失败或 transport epoch 结束；
+      终态 marker 可以有界淘汰，但淘汰只能影响诊断去重，不能重新创建审批、
+      重复写同一 JSON-RPC response 或改变 durable request broker 的对账。
+- [x] capability、changes 和 snapshot 必须区分 HTTP/schema 成功与端到端
+      应用成功。compatibility、连续性、解密、stage/apply、projection、
+      snapshot generation 和 cursor commit 的每个失败边界分别记录
+      `protocol`、`crypto`、`storage` 或 projection 诊断；不能只留下一个
+      transport completed 后再由外层记录含糊的 `unknown`。
+- [x] JSONL 内容 append 成功后必须立即推进字节账本；之后 chmod 等维护失败
+      可以由 flush/close 暴露，但不得让后续轮转使用陈旧文件大小。测试必须
+      注入“append 成功、chmod 失败”边界并验证容量仍有界。
+- [x] 真实 Codex -> CLI -> HTTP relay -> App 场景必须断言 trace ID 横跨
+      三端，并覆盖断连、丢 invalidation、snapshot fallback、重启恢复、
+      审批和 provider child。验收同时检查日志有界、事件顺序和 payload-free。
+- [x] 故障场景断言不能只检查“出现 error”。每个注入点必须能仅凭
+      `event/phase/errorKind/traceId` 和数值状态定位到 transport、协议校验、
+      crypto、storage、projection 或 provider RPC 中的唯一失败层；启动指纹
+      与终态汇总必须让重启前后的连接 epoch 可区分。
+- [x] `suppressed` 只表示健康高频事件被采样，`dropped` 只表示诊断 sink
+      因容量或背压真正丢失记录；两者不得复用字段或合并计数。projection
+      失败使用独立 `projection` error kind，不能伪装成 storage failure。
+- [x] 真实 HTTP 场景的 App 端优先使用生产 `AppSyncV4Client`、生产 transport
+      与 coordinator；若 Node 运行时依赖使完整实例不可用，场景适配层必须
+      复用同一生产 transport/coordinator，并以等价性测试证明请求、snapshot
+      提交、cursor、projection 和 diagnostics 边界没有另写一套状态机。
+- [x] 诊断实现必须 fail-open：错误分类器不得因恶意 getter/Proxy 抛错，
+      CLI/App/Gateway/Mapper/Registry 的 sink 抛错不得改变业务控制流，
+      App listener 抛错不得阻断其他 listener 或把已提交记录误计为写失败。
+- [x] Server 的错误分类器必须对 `statusCode`、`code`、`name` 等属性执行
+      防御性读取；Proxy 或 hostile getter 抛错时返回固定 `unknown` 分类，
+      `onError`/`onResponse` 仍各自最多记录一次 terminal outcome。
+- [x] App 诊断环只允许在实例恢复时扫描 MMKV 槽位；常态追加、计数和 stats
+      必须为 O(1)。开发日志页对高频变更做有界合并刷新并清理滚动 timer，
+      打开诊断页不能把 5 Hz 流放大为反复全环解析和整页重渲染。
+- [x] Server 必须覆盖 handler 前的认证、版本门禁、params/query/body schema
+      与 bodyLimit 失败；每个请求的主 operation 只记录一次 terminal outcome
+      和一次指标，不能因 onError/onResponse 与 handler catch 重复计数。
+- [x] trace ID 在 client coordinator 与实际 HTTP transport 两层校验。App
+      使用 `crypto.getRandomValues` 生成完整 16 字节随机 ID；CLI capability
+      协商无论成功、禁用或失败都留下本地 payload-free 记录并安全 flush。
+- [x] `BoundedJsonlWriter` 在 `maxSegments=1` 时轮转也必须截断旧 active
+      文件；协议 trace 暴露 dropped/write failure 统计，场景只在 close
+      完成后读取最终统计并断言健康链路零丢诊断。
+- [x] shutdown cleanup 采用 best-effort 分段收敛。provider disconnect、
+      Router/child close、session close、协议 trace close 任一失败都必须
+      记录受控分类并继续关闭其余资源；结构化诊断 close 与普通日志终态摘要
+      不得因更早的 cleanup rejection 被跳过。
+- [x] HTTP 场景的 shadow snapshot 必须与生产 App 使用相同提交顺序：
+      完整投影替换先于 active generation/cursor 切换；测试实现不得掩盖
+      “cursor 已前进但 UI 仍是旧 generation”的崩溃窗口。
+
+R7 诊断事件的最小关联关系：
+
+```txt
+App/CLI local operation
+│
+├─ sessionHash       同一加密 session 的本地 opaque 关联
+├─ thread/turn/...   只使用散列 ID
+└─ traceId           每个 HTTP 请求随机生成
+                     │
+                     └─ Server request/result/invalidation
+```
+
+保留和资源上限：
+
+- CLI 结构化诊断与协议 shape trace 单段最多 8 MiB，每个文件最多 4 段，
+  启动时清理超过 7 天且当前未更新的旧诊断文件；
+- CLI 协议 trace 内存 snapshot 最多 4,096 条，pending RPC 映射最多
+  4,096 条；
+- CLI unknown method/variant 聚合和 legacy duplicate/completion 辅助状态
+  使用显式 LRU/FIFO 上限；淘汰只影响诊断去重或 legacy UI 去重，不得改变
+  stable-v2 canonical entity、request 对账或权威 turn 状态；
+- App 持久环最多 2,000 条，每条必须先通过 Wire schema，单条序列化上限
+  2 KiB；
+- Server 不持久化客户端诊断 payload，仅写自己的白名单事件；生产日志保留
+  继续由部署平台控制。
+
+跨版本写入隔离门禁：
+
+- Codex session 在 canonical v4 ready 后不得再调用 v3
+  `sendSessionEvent`/`sendSessionProtocolMessage` 写消息或状态；
+- presence、push notification 和 Claude v3 路径保持原行为；
+- 测试必须从 `runCodex` 实际事件链触发，而不是只断言局部 guard 返回值。
+
 ## 发布顺序
 
 1. 修复代码并保持 v4 Server flag 关闭。
 2. 推进受影响包 patch 版本；本轮最低目标：
-   CLI `1.4.4`、App `1.11.9`、Server `1.1.13`、Wire `0.1.2`。App
+   CLI `1.4.5`、App `1.11.10`、Server `1.1.14`、Wire `0.1.3`。App
    `1.11.5` 已进入首轮云端 CI；后续 Tauri 格式、lockfile 闭包与可诊断
    lock drift 门禁及权威 feature-resolution lock 修复按仓库规则各自使用
    新 patch。
@@ -637,6 +822,10 @@ R6 场景与性能口径：
 - 任一 CLI/App/Server 重启后队列、cursor、runtime 和 pending request 可恢复。
 - 主 thread、多个 child、fork 和 review 的状态与消息流互不覆盖。
 - `/compact`、review、skills、MCP、审批和 reasoning summary 可实时显示并恢复。
+- CLI/App/Server 可用 trace ID、session opaque hash 和状态事件复原一次
+  Sync v4 故障链；日志跨重启保留且在声明上限内轮转。
+- 诊断隐私测试证明 prompt、raw reasoning、工具参数/输出、ciphertext、
+  token、密钥、文件内容、外部错误对象和真实 provider ID 不会落盘。
 - 10k/100k、长 turn、崩溃和平台 HTTP 测试均纳入可重复命令及 CI。
 - 云端所有必需检查和版本触发编译全部成功。
 
@@ -664,6 +853,28 @@ R6 场景与性能口径：
   root/user fork、provider child、detached review 和 sibling communication
   使用显式 route classification，禁止根据无 parent 的未知 thread 猜 root，
   并增加 exhaustive stable-v2 projection、结构化诊断及有界 stream marker。
+- 2026-07-29：R7 差异审查发现协议 trace 仍保存未知 method 原文并以原始
+  RPC ID 作为 Map key，普通 CLI 日志仍有动态 method/object key/model/
+  effort 输出，部分 legacy 去重集合只在断连时清空，且 JSONL 在 append
+  成功、chmod 失败时字节账本滞后。新增已知 method 白名单、未知值 HMAC、
+  固定长度关联键、普通日志同等脱敏、辅助状态硬上限及写后故障测试门禁。
+- 2026-07-29：R7 定向测试确认 terminal subagent activity 后仍会迟到旧
+  `started`；终态直接删除 marker 会重复投影。改为有界 signature hash
+  去重，保留乱序语义但不保留 agent path/thread 原文。
+- 2026-07-29：R7 业务场景与静态复核发现磁盘轮转有界但待写 Promise 链
+  无界、协议 trace 的 provider ID 无法与结构化诊断直接关联、CLI 首次
+  capabilities 请求没有客户端 trace，且 App 出站 entity 缺少 CLI 已有的
+  canonical schema 门禁。以上四项加入提交前阻断条件。
+- 2026-07-29：R7 最终性能与失败路径复核发现 App 诊断环每次追加都会扫描
+  并解析全部 MMKV 槽位，开发日志页还会按每条事件重建整环；Server 的认证、
+  版本和 schema 等 handler 前失败没有结构化结果；诊断 sink/listener 与
+  恶意错误 getter 仍可能反向打断业务；单段 JSONL 轮转和场景 snapshot
+  提交顺序也存在边界缺口。以上项目加入发布阻断条件并要求回归测试。
+- 2026-07-29：R7 普通日志与长连接状态复核发现共享 `ApiSession` 仍记录完整
+  socket update/原始 transport Error，且 provider request 统一 LRU 会淘汰
+  尚未结算的审批 ID；App/CLI 在 HTTP 成功后的解密、持久化、投影和 cursor
+  失败也缺少精确阶段诊断。新增共享日志脱敏、活动 request 不淘汰及端到端
+  分阶段诊断门禁。
 - 2026-07-28：R3 第四切片提交前审查发现恢复顺序、启动期 command 执行、
   user fork 动态 ownership、无 thread `turn.start` route、post-RPC 协调结果、
   relation 首次发布竞态和 reasoning 对象展开仍有丢失或泄露窗口；以上项目
@@ -887,3 +1098,111 @@ R6 场景与性能口径：
   required gate。最终云端结果：push CI `30385923082` 全绿、PR CI
   `30385927478` 全绿、CLI Smoke `30385927463` 的 Linux/Windows 和
   Node 20/24 全绿；单次 registry 停滞未连续复现，不修改十分钟门禁。
+- 2026-07-29：重构初期故障诊断被提升为发布阻断项。现有 CLI 任意对象日志
+  与 Codex trace 无界、App 日志重启丢失、Server 缺少跨端关联，不能满足
+  后续排错要求；新增 R7 字段白名单、默认有界持久诊断、HTTP trace ID、
+  Gateway/状态机事件、Server 指标和跨端故障日志断言。R7 完成并通过云端
+  required gate 前继续保持 `HAPPY_CODEX_SYNC_V4_ENABLED` 关闭。
+- 2026-07-29：R7 首轮包级失败测试确认 Wire schema 本身通过，但暴露五项
+  发布阻断：CLI capability 诊断在请求完成后才打开，禁用/失败路径无本地
+  trace；Server `onError` 会尝试修改原始 Error，且前置失败的单次计数尚未
+  完成类型验证；CLI/App 在 HTTP 成功后、协议 ACK/游标/分页校验前存在
+  “transport success”误报窗口；协议 trace 与 CLI 诊断在 close 前读取统计；
+  HTTP 场景仍先提交 snapshot generation/cursor、后替换 projection。
+  修复顺序锁定为先补 fail-open 生命周期和终态统计，再修协议成功边界与
+  snapshot 顺序，最后通过包级测试和真实链路统一验收。
+- 2026-07-29：App 诊断环 wraparound 故障注入证明“记录槽位先于
+  head/count”在逻辑容量已满时仍会先覆盖旧窗口。R7 持久化协议修正为
+  N+1 物理槽与单一 head 提交点；开发日志页只在 Sync v4 页签激活时扫描
+  和订阅，避免 console 页签把高频流放大为全环解析。
+- 2026-07-29：提交前复核发现畸形 `turn/completed` 仍可产生 legacy
+  `task_complete` 并错误清除长 turn 状态；Server 错误分类器直接读取
+  `statusCode`，hostile getter 可让诊断路径自身抛错。两项升级为发布阻断，
+  要求 payload-free 回归测试和 fail-open hostile object 测试。
+- 2026-07-29：链路覆盖复核发现 canonical v4 ready 后停止 v3 写入主要依赖
+  `runCodex` 局部 guard，HTTP 业务场景 App 端仍使用自定义 client；同时
+  terminal child binding 只在 Router close 时释放，file-change approval
+  的 request/item 乱序尚无收敛证明。新增实际事件链隔离、生产 App client
+  等价性、child 资源生命周期及审批乱序门禁。
+- 2026-07-29：R7 续审发现 App 将健康采样抑制误记为 `dropped`，projection
+  callback 失败被归类为 storage，且 `runCodex` 的 provider disconnect
+  rejection 会跳过后续 trace/诊断关闭。三项升级为发布阻断：拆分
+  suppressed/dropped、增加 projection error kind，并把 shutdown 改为
+  分段 best-effort 收敛后再输出最终统计。
+- 2026-07-29：R7 提交前复核确认 App 诊断环在 head 元数据损坏时仍会从
+  物理槽推断最新 sequence，这会把崩溃边界上尚未提交的槽误认为已提交；
+  head 必须继续作为唯一提交点，损坏时宁可丢弃诊断窗口也不能提升槽位。
+  同轮复核还发现 CLI snapshot/change 投影失败有两处仍回退为 `unknown`、
+  Server 缺少进程级启动指纹和关闭汇总、协议 shape trace 在超大对象上仍会
+  扫描全部字段，以及远程消息读取自带 `hasOwnProperty` 会被恶意字段覆盖。
+  以上项目纳入 R7 发布阻断并要求失败边界回归测试。
+- 2026-07-29：App 诊断环损坏槽回归进一步确认，已提交窗口长度只能由
+  单调 head 与容量推导，不能由仍可解析的物理槽数量反推；否则窗口中间
+  一个损坏槽会错误截掉它之前仍有效的记录。恢复后按逻辑窗口过滤并跳过
+  损坏槽，崩溃产生但未被 head 提交的槽仍必须排除。
+- 2026-07-29：完整 App 并行测试中，225 条丢 invalidation 分页用例受同进程
+  大文件加密负载影响从单独运行约 1 秒抖动到 7.5 秒，超过 Vitest 默认
+  5 秒；生产断言与分页规模保持不变，只为该规模用例设置 15 秒有界预算，
+  防止 CI 资源争用产生假失败。
+- 2026-07-29：v3/v4 写入隔离复核确认现有测试仍只覆盖输出 guard 与源码
+  正则，没有动态经过 `runCodex` 使用的 provider mapper 边界。整改为由
+  `CodexLegacyOutput` 原子执行“判断 canonical 状态 -> 映射 -> 写 envelope”，
+  reasoning、diff 和 provider event 三条实际链路统一调用，并用真实 mapper
+  事件证明 v4 激活后不再映射或写入 v3。
+- 2026-07-29：Server hostile error 复核发现 route 分类器虽已 fail-open，
+  全局错误处理器仍会直接读取同一对象的 `statusCode`，恶意 getter 可在
+  生成脱敏响应时再次抛出。Sync v4 全局错误响应必须防御性读取状态码，
+  getter 失败固定回退 500，并通过真实 Fastify 请求验证不泄露错误原文。
+- 2026-07-29：R7 最终差异审查确认 App change 在 projection 失败后的
+  `exactReplay` 会再次投影，先落实体、后推进 cursor 的恢复边界成立；同时
+  发现 CLI 默认 HTTP transport 虽由 Wire schema 拒绝
+  `updatedSeq > highWatermark`，coordinator 却未像 App 一样对自定义
+  transport 做二次防御。该一致性校验与绕过 transport parser 的回归测试
+  列为提交前阻断项。
+- 2026-07-29：App 诊断环的常态追加和 stats 已为 O(1)，但日志页读取仍以
+  `getAllKeys()` 扫描整个独立 MMKV。整改为仅按 head/count 推导的已提交
+  sequence 窗口直接读取 N 个确定槽位，并在构造边界硬限制计划声明的
+  2,000 条最大容量；`getAllKeys()` 只保留给实例恢复与显式清理，避免诊断
+  页刷新成本受无关或遗留 key 数量影响。
+- 2026-07-29：共享 Socket.IO 路径复核发现 CLI `ephemeral` listener 直接
+  读取未校验对象；`null`、hostile getter 或畸形 watermark 可让仅用于提示的
+  invalidation 抛出并干扰进程。改为 Wire strict schema 的 fail-open
+  `safeParse`，坏提示只被忽略，polling 继续承担正确性恢复，并增加不抛异常、
+  不推进 Sync client 的回归测试。
+- 2026-07-29：Server 传输安全指纹只读取 Fastify 的本地
+  `request.protocol`，在反向代理终止 TLS 的生产部署中会把外部 HTTPS 错标为
+  `insecureHttp`。改为优先从 canonical `PUBLIC_URL` 只派生固定安全枚举，
+  不记录 URL/host/IP；配置缺失或无效时才回退到请求协议，并覆盖该代理场景。
+- 2026-07-29：App 诊断页在“零合法记录但 sink 已累计 invalid/write/listener
+  failure”时禁用复制与清除，恰好让最需要的终态摘要不可取得；成功清除也未
+  重置内存计数。操作可用性改为同时考虑记录和失败计数，复制仍只输出严格
+  JSONL + 固定摘要，成功清除重置本地 sink 统计且不触碰普通 console 日志。
+- 2026-07-29：CLI 终止诊断复核发现 capability 失败、功能关闭和正常退出
+  都在刷新异步诊断队列前读取统计，且正常退出只以 cleanup failure 判断
+  `degraded`；诊断 sink 自身的 dropped、invalid 或 write failure 因而可能
+  被结构化终态误报为正常停止。三条路径改为先 best-effort flush、再读取
+  统计并统一判定退化；终态记录自身若写入失败，close 后的普通脱敏摘要继续
+  提供最终计数兜底。
+- 2026-07-29：binding 关闭链复核发现 `requestBroker.failPending` 或
+  `mapper.close` 抛错会跳过后续 mapper flush / outbound flush；最后的
+  Sync client 虽会关闭，尚未进入 durable journal 的尾部聚合 part 仍可能
+  丢失。root 与 child binding 统一改为逐项 best-effort 执行 command
+  processor、broker、mapper、outbound、Sync client 和 side session 关闭，
+  全部尝试后再抛首个错误，并用每个边界失败仍执行其余步骤的测试阻断回归。
+- 2026-07-29：App 终态字段复核发现 client/registry 已汇总 cursor、outbox
+  depth 与 suppressed，但 MMKV sink 的 dropped、invalid、write failure 和
+  listener failure 只在手工导出时出现，终止事件可能把已退化的诊断存储写成正常
+  stopped。生产 wiring 增加只读 stats provider，client 与 registry 终态均
+  写固定计数字段并据此标记 degraded；stats provider 自身失败只省略计数，
+  不得抛入同步控制流。
+- 2026-07-29：R7 本地发布门禁完成。Wire `65/65`、Server `110/110`
+  （含 100,000 mutation chaos）、App `83/83` 文件及 `949/949`、Agent
+  `227/227`、CLI 合计 `1073/1073` 单测通过；五包 typecheck、Wire/CLI/
+  Agent bundle、production Web export 与 frozen lockfile 均通过。真实
+  Codex -> CLI -> HTTP relay -> App 场景覆盖 WebSocket、丢 invalidation
+  后 polling、重启、410 snapshot fallback、审批、child、跨端 trace 与
+  payload-free 诊断，10k entity + 20 个 5 Hz delta 的 p95 为 `242.2 ms`。
+  本机全局 `pnpm 11.9.0` 与仓库锁定版本不兼容，最终 frozen install 使用
+  隔离缓存下的 `pnpm 10.11.0` 验证且未改写 lockfile。Server Bun runtime、
+  Tauri fmt/check/test 和真实十分钟 turn 继续由本次 GitHub required jobs
+  复验；历史 job `90372107716` 已证明十分钟权威完成门禁通过。

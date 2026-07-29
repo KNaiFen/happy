@@ -8,12 +8,17 @@ import { eventRouter } from "@/app/events/eventRouter";
 import {
     getSyncV4MetricsLabelsFromRequest,
     syncV4MutationResultsCounter,
+    syncV4OperationDurationHistogram,
+    syncV4OperationsCounter,
+    syncV4PageSizeHistogram,
+    syncV4PrunedRecordsCounter,
     syncV4ProjectionLagHistogram,
     syncV4SnapshotFallbackCounter,
 } from "@/app/monitoring/metrics2";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import {
+    classifySyncV4DiagnosticError,
     isSyncV4VersionAtLeast,
     MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH,
     MAX_SYNC_V4_CHANGES_PER_PAGE,
@@ -27,6 +32,13 @@ import {
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { type Fastify } from "../types";
+import {
+    attachSyncV4Trace,
+    completeServerSyncV4Request,
+    logServerSyncV4Diagnostic,
+    registerServerSyncV4Lifecycle,
+    serverSyncV4DiagnosticHash,
+} from "./syncV4Diagnostics";
 
 const JOURNAL_MINIMUM_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
@@ -36,6 +48,22 @@ const SYNC_V4_MUTATION_BODY_LIMIT = MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH + 1024 *
 const MINIMUM_HAPPY_CLI_VERSION = "1.4.2";
 const MINIMUM_HAPPY_APP_VERSION = "1.11.4";
 const MINIMUM_CODEX_CLI_VERSION = "0.145.0";
+
+type SyncV4MetricOperation =
+    | "capabilities"
+    | "mutations"
+    | "changes"
+    | "snapshot"
+    | "invalidation"
+    | "prune";
+
+type SyncV4MetricOutcome =
+    | "success"
+    | "not_found"
+    | "invalid"
+    | "conflict"
+    | "snapshot_required"
+    | "error";
 
 type SyncV4ClientCompatibility =
     | { compatible: true }
@@ -78,15 +106,34 @@ export function isCodexSyncV4Enabled(
 }
 
 export function v4CapabilitiesRoutes(app: Fastify): void {
-    app.get("/v4/capabilities", async (_request, reply) => reply.send({
-        codex: {
-            enabled: isCodexSyncV4Enabled(),
-            protocolVersion: 4,
-            minimumHappyCliVersion: MINIMUM_HAPPY_CLI_VERSION,
-            minimumHappyAppVersion: MINIMUM_HAPPY_APP_VERSION,
-            minimumCodexCliVersion: MINIMUM_CODEX_CLI_VERSION,
-        },
-    }));
+    registerServerSyncV4Lifecycle(app, isCodexSyncV4Enabled());
+    app.get("/v4/capabilities", {
+        onRequest: [attachSyncV4Trace],
+        onError: [syncV4RouteErrorHandler("capabilities")],
+        onResponse: [syncV4RouteResponseHandler("capabilities")],
+    }, async (request, reply) => {
+        const startedAt = Date.now();
+        const enabled = isCodexSyncV4Enabled();
+        logServerSyncV4Diagnostic(request, {
+            level: "debug",
+            event: "transport",
+            phase: "served",
+            transportOperation: "capabilities",
+            httpStatus: 200,
+            durationMs: elapsedMs(startedAt),
+            featureEnabled: enabled,
+        });
+        observeSyncV4Operation(request, "capabilities", "success", startedAt);
+        return reply.send({
+            codex: {
+                enabled,
+                protocolVersion: 4,
+                minimumHappyCliVersion: MINIMUM_HAPPY_CLI_VERSION,
+                minimumHappyAppVersion: MINIMUM_HAPPY_APP_VERSION,
+                minimumCodexCliVersion: MINIMUM_CODEX_CLI_VERSION,
+            },
+        });
+    });
 }
 
 const changesQuerySchema = z.object({
@@ -175,13 +222,13 @@ async function pruneMutationJournal(
     sessionId: string,
     previousHighWatermark: number,
     highWatermark: number,
-): Promise<void> {
+): Promise<{ attempted: boolean; pruned: number }> {
     const previousCleanupBucket = Math.floor(previousHighWatermark / JOURNAL_CLEANUP_INTERVAL);
     const currentCleanupBucket = Math.floor(highWatermark / JOURNAL_CLEANUP_INTERVAL);
-    if (currentCleanupBucket <= previousCleanupBucket) return;
+    if (currentCleanupBucket <= previousCleanupBucket) return { attempted: false, pruned: 0 };
     const maximumPrunableSeq = highWatermark - JOURNAL_MINIMUM_RECENT_RECORDS;
-    if (maximumPrunableSeq <= 0) return;
-    await db.sessionMutationV4.updateMany({
+    if (maximumPrunableSeq <= 0) return { attempted: false, pruned: 0 };
+    const result = await db.sessionMutationV4.updateMany({
         where: {
             sessionId,
             seq: { lte: maximumPrunableSeq },
@@ -193,18 +240,81 @@ async function pruneMutationJournal(
             prunedAt: new Date(),
         },
     });
+    return { attempted: true, pruned: result.count };
+}
+
+function scheduleMutationJournalPrune(
+    request: FastifyRequest,
+    sessionId: string,
+    sessionHash: string,
+    previousHighWatermark: number,
+    highWatermark: number,
+): void {
+    const pruneStartedAt = Date.now();
+    void pruneMutationJournal(
+        sessionId,
+        previousHighWatermark,
+        highWatermark,
+    ).then((prune) => {
+        if (!prune.attempted) return;
+        logServerSyncV4Diagnostic(request, {
+            level: "info",
+            event: "prune",
+            phase: "compacted",
+            sessionHash,
+            highWatermark,
+            count: prune.pruned,
+            durationMs: elapsedMs(pruneStartedAt),
+        });
+        observeSyncV4Operation(request, "prune", "success", pruneStartedAt);
+        if (prune.pruned > 0) {
+            syncV4PrunedRecordsCounter.inc(
+                getSyncV4MetricsLabelsFromRequest(request),
+                prune.pruned,
+            );
+        }
+    }).catch((error) => {
+        logServerSyncV4Diagnostic(request, {
+            level: "warn",
+            event: "prune",
+            phase: "failed",
+            sessionHash,
+            highWatermark,
+            durationMs: elapsedMs(pruneStartedAt),
+            errorKind: classifySyncV4DiagnosticError(error),
+        });
+        observeSyncV4Operation(request, "prune", "error", pruneStartedAt);
+    });
 }
 
 export function v4SessionRoutes(app: Fastify): void {
     app.post("/v4/sessions/:sessionId/mutations", {
         bodyLimit: SYNC_V4_MUTATION_BODY_LIMIT,
-        onRequest: [app.authenticate, requireCompatibleSyncV4Client],
+        onRequest: [attachSyncV4Trace, app.authenticate, requireCompatibleSyncV4Client],
+        onError: [syncV4RouteErrorHandler("mutations")],
+        onResponse: [syncV4RouteResponseHandler("mutations")],
         schema: {
             params: sessionParamsSchema,
             body: SyncMutationBatchV4Schema,
         },
     }, async (request, reply) => {
         const { sessionId } = request.params;
+        const sessionHash = serverSyncV4DiagnosticHash(sessionId);
+        const startedAt = Date.now();
+        const requestMutationCount = request.body.mutations.length;
+        logServerSyncV4Diagnostic(request, {
+            level: "debug",
+            event: "transport",
+            phase: "received",
+            transportOperation: "mutations",
+            direction: "inbound",
+            sessionHash,
+            count: requestMutationCount,
+            bytes: request.body.mutations.reduce(
+                (total, mutation) => total + syncV4Utf8ByteLength(mutation.ciphertext),
+                0,
+            ),
+        });
 
         try {
             const result = await inTx(async (tx) => {
@@ -323,24 +433,112 @@ export function v4SessionRoutes(app: Fastify): void {
                     hasNewMutations: newClassifications.length > 0,
                 };
             });
-            if (!result) return reply.code(404).send({ error: "Session not found" });
+            if (!result) {
+                logServerSyncV4Diagnostic(request, {
+                    level: "warn",
+                    event: "transport",
+                    phase: "failed",
+                    transportOperation: "mutations",
+                    sessionHash,
+                    httpStatus: 404,
+                    errorKind: "notFound",
+                    count: requestMutationCount,
+                    durationMs: elapsedMs(startedAt),
+                });
+                observeSyncV4Operation(
+                    request,
+                    "mutations",
+                    "not_found",
+                    startedAt,
+                    requestMutationCount,
+                );
+                return reply.code(404).send({ error: "Session not found" });
+            }
 
             if (result.hasNewMutations) {
-                eventRouter.emitEphemeral({
-                    userId: request.userId,
-                    payload: { type: "sync-v4-invalidate", sessionId, highWatermark: result.highWatermark },
-                    recipientFilter: { type: "all-interested-in-session", sessionId },
-                });
-                await pruneMutationJournal(
+                const invalidationStartedAt = Date.now();
+                try {
+                    eventRouter.emitEphemeral({
+                        userId: request.userId,
+                        payload: { type: "sync-v4-invalidate", sessionId, highWatermark: result.highWatermark },
+                        recipientFilter: { type: "all-interested-in-session", sessionId },
+                    });
+                    logServerSyncV4Diagnostic(request, {
+                        level: "debug",
+                        event: "invalidation",
+                        phase: "served",
+                        transportOperation: "invalidation",
+                        direction: "outbound",
+                        sessionHash,
+                        highWatermark: result.highWatermark,
+                        durationMs: elapsedMs(invalidationStartedAt),
+                    });
+                    observeSyncV4Operation(
+                        request,
+                        "invalidation",
+                        "success",
+                        invalidationStartedAt,
+                    );
+                } catch (error) {
+                    logServerSyncV4Diagnostic(request, {
+                        level: "warn",
+                        event: "invalidation",
+                        phase: "failed",
+                        transportOperation: "invalidation",
+                        direction: "outbound",
+                        sessionHash,
+                        highWatermark: result.highWatermark,
+                        durationMs: elapsedMs(invalidationStartedAt),
+                        errorKind: classifySyncV4DiagnosticError(error),
+                    });
+                    observeSyncV4Operation(
+                        request,
+                        "invalidation",
+                        "error",
+                        invalidationStartedAt,
+                    );
+                }
+
+                scheduleMutationJournalPrune(
+                    request,
                     sessionId,
+                    sessionHash,
                     result.previousHighWatermark,
                     result.highWatermark,
                 );
             }
             const metricLabels = getSyncV4MetricsLabelsFromRequest(request);
+            let accepted = 0;
+            let duplicate = 0;
+            let superseded = 0;
             for (const acknowledgement of result.acknowledgements) {
                 syncV4MutationResultsCounter.inc({ result: acknowledgement.status, ...metricLabels });
+                if (acknowledgement.status === "accepted") accepted += 1;
+                if (acknowledgement.status === "duplicate") duplicate += 1;
+                if (acknowledgement.status === "superseded") superseded += 1;
             }
+            logServerSyncV4Diagnostic(request, {
+                level: "debug",
+                event: "ack",
+                phase: "acknowledged",
+                transportOperation: "mutations",
+                direction: "outbound",
+                sessionHash,
+                httpStatus: 200,
+                highWatermark: result.highWatermark,
+                count: result.acknowledgements.length,
+                accepted,
+                duplicate,
+                superseded,
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(
+                request,
+                "mutations",
+                "success",
+                startedAt,
+                requestMutationCount,
+            );
             return reply.send({ acknowledgements: result.acknowledgements });
         } catch (error) {
             if (error instanceof RevisionConflictError) {
@@ -348,6 +546,24 @@ export function v4SessionRoutes(app: Fastify): void {
                     result: "revision_conflict",
                     ...getSyncV4MetricsLabelsFromRequest(request),
                 });
+                logServerSyncV4Diagnostic(request, {
+                    level: "warn",
+                    event: "ack",
+                    phase: "failed",
+                    transportOperation: "mutations",
+                    sessionHash,
+                    httpStatus: 409,
+                    errorKind: "conflict",
+                    count: requestMutationCount,
+                    durationMs: elapsedMs(startedAt),
+                });
+                observeSyncV4Operation(
+                    request,
+                    "mutations",
+                    "conflict",
+                    startedAt,
+                    requestMutationCount,
+                );
                 return reply.code(409).send({ error: "revisionConflict", ...error.details });
             }
             if (error instanceof MutationConflictError) {
@@ -355,14 +571,51 @@ export function v4SessionRoutes(app: Fastify): void {
                     result: "mutation_conflict",
                     ...getSyncV4MetricsLabelsFromRequest(request),
                 });
+                logServerSyncV4Diagnostic(request, {
+                    level: "warn",
+                    event: "ack",
+                    phase: "failed",
+                    transportOperation: "mutations",
+                    sessionHash,
+                    httpStatus: 409,
+                    errorKind: "conflict",
+                    count: requestMutationCount,
+                    durationMs: elapsedMs(startedAt),
+                });
+                observeSyncV4Operation(
+                    request,
+                    "mutations",
+                    "conflict",
+                    startedAt,
+                    requestMutationCount,
+                );
                 return reply.code(409).send({ error: "mutationConflict", mutationId: error.mutationId });
             }
+            logServerSyncV4Diagnostic(request, {
+                level: "error",
+                event: "transport",
+                phase: "failed",
+                transportOperation: "mutations",
+                sessionHash,
+                errorKind: classifySyncV4DiagnosticError(error),
+                count: requestMutationCount,
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(
+                request,
+                "mutations",
+                "error",
+                startedAt,
+                requestMutationCount,
+            );
             throw error;
         }
     });
 
     app.get("/v4/sessions/:sessionId/changes", {
-        onRequest: [app.authenticate, requireCompatibleSyncV4Client],
+        onRequest: [attachSyncV4Trace, app.authenticate, requireCompatibleSyncV4Client],
+        onError: [syncV4RouteErrorHandler("changes")],
+        onResponse: [syncV4RouteResponseHandler("changes")],
         schema: {
             params: sessionParamsSchema,
             querystring: changesQuerySchema,
@@ -370,6 +623,8 @@ export function v4SessionRoutes(app: Fastify): void {
     }, async (request, reply) => {
         const { sessionId } = request.params;
         const { after_seq: afterSeq, limit } = request.query;
+        const sessionHash = serverSyncV4DiagnosticHash(sessionId);
+        const startedAt = Date.now();
         const result = await inTx(async (tx) => {
             const session = await tx.session.findFirst({
                 where: { id: sessionId, accountId: request.userId },
@@ -422,14 +677,60 @@ export function v4SessionRoutes(app: Fastify): void {
                 highWatermark: session.syncV4Seq,
             };
         });
-        if (result.kind === "notFound") return reply.code(404).send({ error: "Session not found" });
+        if (result.kind === "notFound") {
+            logServerSyncV4Diagnostic(request, {
+                level: "warn",
+                event: "changes",
+                phase: "failed",
+                transportOperation: "changes",
+                sessionHash,
+                cursor: afterSeq,
+                httpStatus: 404,
+                errorKind: "notFound",
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(request, "changes", "not_found", startedAt, 0);
+            return reply.code(404).send({ error: "Session not found" });
+        }
         if (result.kind === "invalid") {
+            logServerSyncV4Diagnostic(request, {
+                level: "warn",
+                event: "changes",
+                phase: "failed",
+                transportOperation: "changes",
+                sessionHash,
+                cursor: afterSeq,
+                httpStatus: 400,
+                errorKind: "validation",
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(request, "changes", "invalid", startedAt, 0);
             return reply.code(400).send({ error: "Invalid changes cursor" });
         }
         const metricLabels = getSyncV4MetricsLabelsFromRequest(request);
         syncV4ProjectionLagHistogram.observe(metricLabels, result.highWatermark - afterSeq);
         if (result.kind === "snapshotRequired") {
             syncV4SnapshotFallbackCounter.inc({ reason: result.reason, ...metricLabels });
+            logServerSyncV4Diagnostic(request, {
+                level: "warn",
+                event: "snapshot",
+                phase: "required",
+                transportOperation: "changes",
+                sessionHash,
+                cursor: afterSeq,
+                seq: result.minimumSeq,
+                highWatermark: result.highWatermark,
+                reason: result.reason === "journal_expired" ? "journalExpired" : "journalGap",
+                httpStatus: 410,
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(
+                request,
+                "changes",
+                "snapshot_required",
+                startedAt,
+                0,
+            );
             return reply.code(410).send({
                 error: "snapshotRequired",
                 minimumSeq: result.minimumSeq,
@@ -437,6 +738,26 @@ export function v4SessionRoutes(app: Fastify): void {
             });
         }
 
+        logServerSyncV4Diagnostic(request, {
+            level: "debug",
+            event: "changes",
+            phase: "served",
+            transportOperation: "changes",
+            direction: "outbound",
+            sessionHash,
+            cursor: afterSeq,
+            highWatermark: result.highWatermark,
+            count: result.page.length,
+            httpStatus: 200,
+            durationMs: elapsedMs(startedAt),
+        });
+        observeSyncV4Operation(
+            request,
+            "changes",
+            "success",
+            startedAt,
+            result.page.length,
+        );
         return reply.send({
             changes: result.page.map((row) => ({
                 mutationId: row.mutationId,
@@ -455,20 +776,60 @@ export function v4SessionRoutes(app: Fastify): void {
     });
 
     app.get("/v4/sessions/:sessionId/snapshot", {
-        onRequest: [app.authenticate, requireCompatibleSyncV4Client],
+        onRequest: [attachSyncV4Trace, app.authenticate, requireCompatibleSyncV4Client],
+        onError: [syncV4RouteErrorHandler("snapshot")],
+        onResponse: [syncV4RouteResponseHandler("snapshot")],
         schema: {
             params: sessionParamsSchema,
             querystring: snapshotQuerySchema,
         },
     }, async (request, reply) => {
         const { sessionId } = request.params;
+        const sessionHash = serverSyncV4DiagnosticHash(sessionId);
+        const startedAt = Date.now();
         const session = await findOwnedSession(sessionId, request.userId);
-        if (!session) return reply.code(404).send({ error: "Session not found" });
+        if (!session) {
+            logServerSyncV4Diagnostic(request, {
+                level: "warn",
+                event: "snapshot",
+                phase: "failed",
+                transportOperation: "snapshot",
+                sessionHash,
+                httpStatus: 404,
+                errorKind: "notFound",
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(request, "snapshot", "not_found", startedAt, 0);
+            return reply.code(404).send({ error: "Session not found" });
+        }
         const decodedCursor = decodeSnapshotCursor(request.query.cursor);
         if (request.query.cursor && !decodedCursor) {
+            logServerSyncV4Diagnostic(request, {
+                level: "warn",
+                event: "snapshot",
+                phase: "failed",
+                transportOperation: "snapshot",
+                sessionHash,
+                httpStatus: 400,
+                errorKind: "validation",
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(request, "snapshot", "invalid", startedAt, 0);
             return reply.code(400).send({ error: "Invalid snapshot cursor" });
         }
         if (decodedCursor && decodedCursor.highWatermark > session.syncV4Seq) {
+            logServerSyncV4Diagnostic(request, {
+                level: "warn",
+                event: "snapshot",
+                phase: "failed",
+                transportOperation: "snapshot",
+                sessionHash,
+                highWatermark: decodedCursor.highWatermark,
+                httpStatus: 400,
+                errorKind: "validation",
+                durationMs: elapsedMs(startedAt),
+            });
+            observeSyncV4Operation(request, "snapshot", "invalid", startedAt, 0);
             return reply.code(400).send({ error: "Invalid snapshot cursor" });
         }
         const highWatermark = decodedCursor?.highWatermark ?? session.syncV4Seq;
@@ -485,6 +846,25 @@ export function v4SessionRoutes(app: Fastify): void {
                 take,
             }),
             (row) => row.entityId,
+        );
+        logServerSyncV4Diagnostic(request, {
+            level: "debug",
+            event: "snapshot",
+            phase: "served",
+            transportOperation: "snapshot",
+            direction: "outbound",
+            sessionHash,
+            highWatermark,
+            count: page.length,
+            httpStatus: 200,
+            durationMs: elapsedMs(startedAt),
+        });
+        observeSyncV4Operation(
+            request,
+            "snapshot",
+            "success",
+            startedAt,
+            page.length,
         );
         return reply.send({
             entities: page.map((row) => ({
@@ -504,4 +884,149 @@ export function v4SessionRoutes(app: Fastify): void {
                 : null,
         });
     });
+}
+
+function observeSyncV4Operation(
+    request: FastifyRequest,
+    operation: SyncV4MetricOperation,
+    outcome: SyncV4MetricOutcome,
+    startedAt: number,
+    pageSize?: number,
+): void {
+    if (
+        operation === "capabilities"
+        || operation === "mutations"
+        || operation === "changes"
+        || operation === "snapshot"
+    ) {
+        request.syncV4RouteOutcomeObserved = true;
+        completeServerSyncV4Request(request);
+    }
+    const clientLabels = getSyncV4MetricsLabelsFromRequest(request);
+    const labels = { operation, outcome, ...clientLabels };
+    syncV4OperationsCounter.inc(labels);
+    syncV4OperationDurationHistogram.observe(labels, elapsedMs(startedAt) / 1_000);
+    if (
+        pageSize !== undefined
+        && (operation === "mutations" || operation === "changes" || operation === "snapshot")
+    ) {
+        syncV4PageSizeHistogram.observe(
+            { operation, ...clientLabels },
+            pageSize,
+        );
+    }
+}
+
+function elapsedMs(startedAt: number): number {
+    return Math.max(0, Math.trunc(Date.now() - startedAt));
+}
+
+function syncV4RouteErrorHandler(
+    operation: "capabilities" | "mutations" | "changes" | "snapshot",
+) {
+    return async (
+        request: FastifyRequest,
+        reply: FastifyReply,
+        error: Error,
+    ): Promise<void> => {
+        if (request.syncV4RouteOutcomeObserved) return;
+        const startedAt = request.startTime ?? Date.now();
+        const status = syncV4ErrorStatus(error, reply.statusCode);
+        const sessionId = syncV4RequestSessionId(request);
+        const classifiedError = classifySyncV4DiagnosticError(error);
+        const event = operation === "changes" || operation === "snapshot"
+            ? operation
+            : "transport";
+        logServerSyncV4Diagnostic(request, {
+            level: "error",
+            event,
+            phase: "failed",
+            transportOperation: operation,
+            sessionHash: sessionId
+                ? serverSyncV4DiagnosticHash(sessionId)
+                : undefined,
+            httpStatus: status,
+            errorKind: classifiedError === "unknown"
+                ? classifySyncV4DiagnosticError({ statusCode: status })
+                : classifiedError,
+            durationMs: elapsedMs(startedAt),
+        });
+        observeSyncV4Operation(
+            request,
+            operation,
+            syncV4MetricOutcomeForStatus(status),
+            startedAt,
+        );
+    };
+}
+
+function syncV4RouteResponseHandler(
+    operation: "capabilities" | "mutations" | "changes" | "snapshot",
+) {
+    return async (
+        request: FastifyRequest,
+        reply: FastifyReply,
+    ): Promise<void> => {
+        if (request.syncV4RouteOutcomeObserved) return;
+        if (reply.statusCode < 400) {
+            completeServerSyncV4Request(request);
+            return;
+        }
+        const startedAt = request.startTime ?? Date.now();
+        const sessionId = syncV4RequestSessionId(request);
+        const event = operation === "changes" || operation === "snapshot"
+            ? operation
+            : "transport";
+        logServerSyncV4Diagnostic(request, {
+            level: reply.statusCode >= 500 ? "error" : "warn",
+            event,
+            phase: "failed",
+            transportOperation: operation,
+            sessionHash: sessionId
+                ? serverSyncV4DiagnosticHash(sessionId)
+                : undefined,
+            httpStatus: reply.statusCode,
+            errorKind: classifySyncV4DiagnosticError({
+                statusCode: reply.statusCode,
+            }),
+            durationMs: elapsedMs(startedAt),
+        });
+        observeSyncV4Operation(
+            request,
+            operation,
+            syncV4MetricOutcomeForStatus(reply.statusCode),
+            startedAt,
+        );
+    };
+}
+
+function syncV4RequestSessionId(request: FastifyRequest): string | null {
+    return (
+        request.params
+        && typeof request.params === "object"
+        && "sessionId" in request.params
+        && typeof request.params.sessionId === "string"
+    ) ? request.params.sessionId : null;
+}
+
+export function syncV4ErrorStatus(error: unknown, replyStatus: number): number {
+    let statusCode: unknown;
+    try {
+        statusCode = error && (typeof error === "object" || typeof error === "function")
+            ? (error as { statusCode?: unknown }).statusCode
+            : undefined;
+    } catch {
+        statusCode = undefined;
+    }
+    if (typeof statusCode === "number" && statusCode >= 400 && statusCode <= 599) {
+        return statusCode;
+    }
+    return replyStatus >= 400 && replyStatus <= 599 ? replyStatus : 500;
+}
+
+function syncV4MetricOutcomeForStatus(status: number): SyncV4MetricOutcome {
+    if (status === 404) return "not_found";
+    if (status === 409) return "conflict";
+    if (status >= 400 && status < 500) return "invalid";
+    return "error";
 }

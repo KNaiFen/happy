@@ -27,6 +27,7 @@ import { attachmentRoutes } from "./routes/attachmentRoutes";
 import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
 import * as path from "path";
 import * as fs from "fs";
+import { SYNC_V4_TRACE_HEADER } from "./routes/syncV4Diagnostics";
 
 export interface StartApiOptions {
     port?: number;
@@ -47,7 +48,8 @@ export async function startApi(opts: StartApiOptions = {}) {
     });
     app.register(import('@fastify/cors'), {
         origin: '*',
-        allowedHeaders: ['Authorization', 'Content-Type', 'X-Happy-Client'],
+        allowedHeaders: ['Authorization', 'Content-Type', 'X-Happy-Client', SYNC_V4_TRACE_HEADER],
+        exposedHeaders: [SYNC_V4_TRACE_HEADER],
         methods: ['GET', 'POST', 'PUT', 'DELETE']
     });
 

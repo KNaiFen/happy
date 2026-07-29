@@ -9,6 +9,7 @@ import {
     type SyncMutationBatchResponseV4,
     type SyncMutationV4,
     type SyncSnapshotResponseV4,
+    type SyncV4DiagnosticInput,
 } from "@slopus/happy-wire";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -146,6 +147,46 @@ afterEach(async () => {
 });
 
 describe("SyncV4Client", () => {
+    it("keeps synchronization running when the diagnostic sink fails", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const client = await SyncV4Client.create({
+            sessionId: "session-1",
+            sessionKey,
+            journalRoot: root,
+            transport,
+            diagnostics: {
+                record: () => {
+                    throw new Error("diagnostic sink unavailable");
+                },
+            },
+            generateTraceId: () => "00000000000000000000000000000001",
+            onEntity: async () => undefined,
+        });
+        openClients.add(client);
+
+        await expect(client.start()).resolves.toBeUndefined();
+        await expect(client.publishEntity(part("sink-failure"))).resolves.toBeDefined();
+        await expect(client.flushOutboundOnce()).resolves.toBeUndefined();
+    });
+
+    it("rejects malformed generated trace IDs before calling the transport", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        const client = await SyncV4Client.create({
+            sessionId: "session-1",
+            sessionKey,
+            journalRoot: root,
+            transport,
+            generateTraceId: () => "prompt-reasoning-secret",
+            onEntity: async () => undefined,
+        });
+        openClients.add(client);
+
+        await expect(client.start()).rejects.toThrow("128-bit lowercase hex");
+        expect(transport.postedBatches).toEqual([]);
+    });
+
     it("rejects invalid provider entities before allocating transport work", async () => {
         const root = await createRoot();
         const transport = new FakeTransport();
@@ -203,6 +244,118 @@ describe("SyncV4Client", () => {
         await reopened.flushOutboundOnce();
         expect(transport.postedBatches[1][0].mutationId).toBe(mutation.mutationId);
         expect(transport.committed.size).toBe(1);
+    });
+
+    it("records a protocol failure when a successful POST returns mismatched acknowledgements", async () => {
+        const root = await createRoot();
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const transport = new FakeTransport();
+        transport.postMutations = async (_sessionId, mutations) => ({
+            acknowledgements: mutations.map((mutation, index) => ({
+                mutationId: `wrong-${index}`,
+                seq: index + 1,
+                revision: mutation.revision,
+                status: "accepted" as const,
+            })),
+        });
+        const client = await SyncV4Client.create({
+            sessionId: "session-1",
+            sessionKey,
+            journalRoot: root,
+            transport,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+            generateTraceId: () => "00000000000000000000000000000001",
+            onEntity: async () => undefined,
+        });
+        openClients.add(client);
+        await client.publishEntity(part("bad-ack"));
+
+        await expect(client.flushOutboundOnce()).rejects.toThrow("acknowledgement");
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: "ack",
+            phase: "failed",
+            traceId: "00000000000000000000000000000001",
+            errorKind: "protocol",
+        }));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            event: "transport",
+            phase: "completed",
+            traceId: "00000000000000000000000000000001",
+        }));
+    });
+
+    it("records a protocol failure when changes contain a sequence gap", async () => {
+        const root = await createRoot();
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const transport = new FakeTransport();
+        transport.getChanges = async () => SyncChangesResponseV4Schema.parse({
+            changes: [],
+            hasMore: true,
+            highWatermark: 1,
+        });
+        const client = await SyncV4Client.create({
+            sessionId: "session-1",
+            sessionKey,
+            journalRoot: root,
+            transport,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+            generateTraceId: () => "00000000000000000000000000000002",
+            onEntity: async () => undefined,
+        });
+        openClients.add(client);
+
+        await expect(client.pullChangesOnce()).rejects.toThrow("sequence gap");
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: "changes",
+            phase: "failed",
+            traceId: "00000000000000000000000000000002",
+            errorKind: "protocol",
+        }));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            event: "transport",
+            phase: "completed",
+            traceId: "00000000000000000000000000000002",
+        }));
+    });
+
+    it("records an inbound decryption failure after a successful changes response", async () => {
+        const transport = new FakeTransport();
+        const publisher = await createClient(await createRoot(), transport);
+        const mutation = await publisher.publishEntity(part("corrupt-change"));
+        const secret = "prompt-reasoning-tool-output-secret";
+        transport.changes = [{
+            ...mutation,
+            ciphertext: secret,
+            seq: 1,
+            createdAt: 100,
+        }];
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const client = await SyncV4Client.create({
+            sessionId: "session-1",
+            sessionKey,
+            journalRoot: await createRoot(),
+            transport,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+            generateTraceId: () => "00000000000000000000000000000003",
+            onEntity: async () => undefined,
+        });
+        openClients.add(client);
+
+        await expect(client.pullChangesOnce()).rejects.toThrow("Unable to authenticate");
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: "transport",
+            phase: "completed",
+            transportOperation: "changes",
+            traceId: "00000000000000000000000000000003",
+        }));
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: "changes",
+            phase: "failed",
+            errorKind: "crypto",
+            seq: 1,
+        }));
+        expect(JSON.stringify(diagnostics)).not.toContain(secret);
+        expect(client.receiveCursor).toBe(0);
     });
 
     it("pulls and applies 225 contiguous changes without relying on invalidations", async () => {
@@ -337,6 +490,85 @@ describe("SyncV4Client", () => {
             "snapshot-crash-2",
         ]);
         expect(reopened.receiveCursor).toBe(2);
+    });
+
+    it("rejects duplicate entities across snapshot pages without committing the cursor", async () => {
+        const transport = new FakeTransport();
+        const publisher = await createClient(await createRoot(), transport);
+        const mutation = await publisher.publishEntity(part("duplicate-snapshot"));
+        const { mutationId: _mutationId, ...snapshot } = mutation;
+        transport.requireSnapshot = true;
+        transport.snapshots = [
+            {
+                entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+                highWatermark: 2,
+                nextCursor: "page-2",
+            },
+            {
+                entities: [{ ...snapshot, updatedSeq: 1, createdAt: 100, updatedAt: 100 }],
+                highWatermark: 2,
+                nextCursor: null,
+            },
+        ];
+        const diagnostics: SyncV4DiagnosticInput[] = [];
+        const applied: SyncV4AppliedEntity[] = [];
+        const traceIds = [
+            "00000000000000000000000000000004",
+            "00000000000000000000000000000005",
+            "00000000000000000000000000000006",
+        ];
+        const client = await SyncV4Client.create({
+            sessionId: "session-1",
+            sessionKey,
+            journalRoot: await createRoot(),
+            transport,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+            generateTraceId: () => traceIds.shift()!,
+            onEntity: async (event) => { applied.push(event); },
+        });
+        openClients.add(client);
+
+        await expect(client.pullChangesOnce()).rejects.toThrow("repeated an entity");
+        expect(applied).toHaveLength(1);
+        expect(client.receiveCursor).toBe(0);
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+            event: "snapshot",
+            phase: "failed",
+            traceId: "00000000000000000000000000000006",
+            page: 1,
+            errorKind: "protocol",
+        }));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            event: "transport",
+            phase: "completed",
+            traceId: "00000000000000000000000000000006",
+        }));
+    });
+
+    it("rejects snapshot entities newer than the page watermark before projection", async () => {
+        const transport = new FakeTransport();
+        const publisher = await createClient(await createRoot(), transport);
+        const mutation = await publisher.publishEntity(part("future-snapshot"));
+        const { mutationId: _mutationId, ...snapshot } = mutation;
+        transport.requireSnapshot = true;
+        transport.snapshots = [{
+            entities: [{ ...snapshot, updatedSeq: 2, createdAt: 100, updatedAt: 100 }],
+            highWatermark: 1,
+            nextCursor: null,
+        }];
+        transport.getSnapshot = async () => {
+            const page = transport.snapshots.shift();
+            if (!page) throw new Error("missing fake snapshot page");
+            return page;
+        };
+        const applied: SyncV4AppliedEntity[] = [];
+        const client = await createClient(await createRoot(), transport, applied);
+
+        await expect(client.pullChangesOnce()).rejects.toThrow(
+            "snapshot entity exceeds its high watermark",
+        );
+        expect(applied).toEqual([]);
+        expect(client.receiveCursor).toBe(0);
     });
 
     it("does not acknowledge an in-flight POST after stop", async () => {

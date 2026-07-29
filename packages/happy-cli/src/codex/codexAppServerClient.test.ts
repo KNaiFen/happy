@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxConfig } from '@/persistence';
+import { logger } from '@/ui/logger';
 
 const {
     mockExecFileSync,
@@ -215,7 +216,7 @@ describe('CodexAppServerClient sandbox integration', () => {
             { connection: 'disconnected', statusUnknown: true, error: null },
             { connection: 'connecting', statusUnknown: true, error: null },
             { connection: 'connected', statusUnknown: false, error: null },
-            { connection: 'error', statusUnknown: true, error: 'Error' },
+            { connection: 'error', statusUnknown: true, error: 'unknown' },
             { connection: 'disconnected', statusUnknown: true, error: null },
         ]);
     });
@@ -553,6 +554,91 @@ describe('CodexAppServerClient sandbox integration', () => {
             },
         });
         await expect(parentTurn).resolves.toEqual({ aborted: false });
+        expect(events.filter((event) => event.type === 'task_complete')).toHaveLength(1);
+
+        await client.disconnect();
+    });
+
+    it('drops malformed terminal notifications without settling the active turn', async () => {
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                if (msg.method === 'thread/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: { thread: { id: 'thread-malformed' }, model: 'gpt-test' },
+                    }), 0);
+                }
+                if (msg.method === 'turn/start' && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        result: {
+                            turn: {
+                                id: 'turn-malformed',
+                                items: [],
+                                status: 'inProgress',
+                                error: null,
+                            },
+                        },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const events: Array<Record<string, unknown>> = [];
+        const diagnostics: Array<Record<string, unknown>> = [];
+        client.setEventHandler((event) => events.push(event as Record<string, unknown>));
+        client.setDiagnosticSink({
+            record: (record) => diagnostics.push(record as Record<string, unknown>),
+        });
+        await client.connect();
+        await client.startThread({ model: 'gpt-test' });
+
+        let settled = false;
+        const activeTurn = client.sendTurnAndWait('keep running');
+        void activeTurn.then(() => { settled = true; });
+        await waitFor(() => client.turnId === 'turn-malformed');
+
+        for (const params of [
+            { turn: { id: 'turn-malformed', status: 'completed' } },
+            { threadId: 'thread-malformed', turn: { status: 'completed' } },
+            {
+                threadId: 'thread-malformed',
+                turn: { id: 'turn-malformed', status: 'inProgress' },
+            },
+            {
+                threadId: 'thread-malformed',
+                turn: { id: 'turn-malformed', status: 'futureTerminal' },
+            },
+        ]) {
+            pushJsonLine(proc.stdout, { method: 'turn/completed', params });
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(settled).toBe(false);
+        expect(events.filter((event) => event.type === 'task_complete')).toHaveLength(0);
+        expect(diagnostics.filter((record) => (
+            record.event === 'notification'
+            && record.phase === 'dropped'
+            && record.errorKind === 'protocol'
+        ))).toHaveLength(4);
+        expect(JSON.stringify(diagnostics)).not.toContain('futureTerminal');
+
+        pushJsonLine(proc.stdout, {
+            method: 'turn/completed',
+            params: {
+                threadId: 'thread-malformed',
+                turn: {
+                    id: 'turn-malformed',
+                    items: [],
+                    status: 'completed',
+                    error: null,
+                },
+            },
+        });
+        await expect(activeTurn).resolves.toEqual({ aborted: false });
         expect(events.filter((event) => event.type === 'task_complete')).toHaveLength(1);
 
         await client.disconnect();
@@ -2341,7 +2427,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
-    it('hydrates v2 file change approvals from raw item metadata', async () => {
+    it('hydrates a late v2 file change approval after item completion', async () => {
         const approvals: Array<Record<string, unknown>> = [];
         const proc = createMockProcess({
             pid: 3004,
@@ -2369,6 +2455,23 @@ describe('CodexAppServerClient sandbox integration', () => {
                                     type: 'fileChange',
                                     id: 'patch-approval-1',
                                     status: 'inProgress',
+                                    changes: [{
+                                        path: 'README.md',
+                                        kind: { type: 'update', move_path: null },
+                                        diff: '@@ -1 +1 @@',
+                                    }],
+                                },
+                            },
+                        });
+                        pushJsonLine(stdout, {
+                            method: 'item/completed',
+                            params: {
+                                threadId: 'thread-raw-4',
+                                turnId: 'turn-raw-4',
+                                item: {
+                                    type: 'fileChange',
+                                    id: 'patch-approval-1',
+                                    status: 'completed',
                                     changes: [{
                                         path: 'README.md',
                                         kind: { type: 'update', move_path: null },
@@ -2947,6 +3050,51 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it('never evicts an active provider request while compacting settled ids', async () => {
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        let releaseResponse!: () => void;
+        const responseGate = new Promise<void>((resolve) => {
+            releaseResponse = resolve;
+        });
+        const handler = vi.fn(async () => {
+            await responseGate;
+            return {
+                response: { decision: 'decline' },
+                markResponseSupplied: vi.fn(async () => {}),
+                markDelivered: vi.fn(async () => {}),
+                markAbandoned: vi.fn(async () => {}),
+            };
+        });
+        client.setServerRequestHandler(handler);
+        const internals = client as unknown as {
+            handleLine(line: string, sourceEpoch?: number): void;
+            settleServerRequestId(requestId: number, sourceEpoch: number): void;
+            activeServerRequestIds: Set<number>;
+            settledServerRequestIds: Set<number>;
+        };
+        const request = {
+            id: 0,
+            method: 'item/fileChange/requestApproval',
+            params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+        };
+
+        internals.handleLine(JSON.stringify(request), 0);
+        await waitFor(() => handler.mock.calls.length === 1);
+        for (let requestId = 1; requestId <= 5_000; requestId += 1) {
+            internals.settleServerRequestId(requestId, 0);
+        }
+
+        expect(internals.activeServerRequestIds.has(0)).toBe(true);
+        expect(internals.settledServerRequestIds.size).toBeLessThanOrEqual(4_096);
+        internals.handleLine(JSON.stringify(request), 0);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(handler).toHaveBeenCalledOnce();
+
+        releaseResponse();
+        await waitFor(() => !internals.activeServerRequestIds.has(0));
+    });
+
     it('returns a payload-free internal error when a managed request handler fails', async () => {
         const requests: MockRpcMessage[] = [];
         const proc = createMockProcess({ onRequest: (message) => requests.push(message) });
@@ -2991,6 +3139,70 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(requests.filter((message) => message.id === 94)).toEqual([{
             id: 94,
             error: { code: -32601, message: 'Method not found' },
+        }]);
+        await client.disconnect();
+    });
+
+    it('rejects malformed provider messages without throwing or leaking payloads', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({ onRequest: (message) => requests.push(message) });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        const internals = client as unknown as {
+            handleLine(line: string, sourceEpoch?: number): void;
+        };
+
+        expect(() => internals.handleLine('null')).not.toThrow();
+        expect(() => internals.handleLine('[]')).not.toThrow();
+        expect(() => internals.handleLine(JSON.stringify({
+            method: { secret: 'notification-prompt-secret' },
+        }))).not.toThrow();
+        expect(() => internals.handleLine(JSON.stringify({
+            id: 196,
+            method: { secret: 'request-prompt-secret' },
+        }))).not.toThrow();
+
+        await waitFor(() => requests.some((message) => message.id === 196));
+        expect(requests.filter((message) => message.id === 196)).toEqual([{
+            id: 196,
+            error: { code: -32600, message: 'Invalid request' },
+        }]);
+        const logs = JSON.stringify(vi.mocked(logger.debug).mock.calls);
+        expect(logs).not.toContain('notification-prompt-secret');
+        expect(logs).not.toContain('request-prompt-secret');
+        await client.disconnect();
+    });
+
+    it('writes only one overload response for a duplicated provider request', async () => {
+        const requests: MockRpcMessage[] = [];
+        const proc = createMockProcess({ onRequest: (message) => requests.push(message) });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        const internals = client as unknown as {
+            handleLine(line: string, sourceEpoch?: number): void;
+            activeServerRequestIds: Set<number>;
+        };
+        for (let requestId = 0; requestId < 4_096; requestId += 1) {
+            internals.activeServerRequestIds.add(requestId);
+        }
+        const overloaded = JSON.stringify({
+            id: 5_000,
+            method: 'future/request',
+            params: {},
+        });
+
+        internals.handleLine(overloaded);
+        internals.handleLine(overloaded);
+
+        await waitFor(() => requests.some((message) => message.id === 5_000));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(requests.filter((message) => message.id === 5_000)).toEqual([{
+            id: 5_000,
+            error: { code: -32000, message: 'Too many pending server requests' },
         }]);
         await client.disconnect();
     });
@@ -3193,5 +3405,90 @@ describe('CodexAppServerClient sandbox integration', () => {
         proc.stdout.push(null);
 
         await expect(compact).rejects.toBeInstanceOf(CodexRpcOutcomeUnknownError);
+    });
+
+    it('bounds legacy helper state and redacts hostile protocol labels from ordinary logs', async () => {
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const internals = client as unknown as {
+            handleLine(line: string, sourceEpoch?: number): void;
+            emitRawTurnCompletion(
+                threadId: string | null,
+                turnId: string | null,
+                status: string | null,
+                error: unknown,
+            ): void;
+            trackRawFileChangeMetadata(method: string, params: unknown): void;
+            handleRawNotification(method: string, params: unknown): boolean;
+            settleServerRequestId(requestId: number, sourceEpoch: number): void;
+            activeServerRequestIds: Set<number>;
+            settledServerRequestIds: Set<number>;
+            completedTurnIds: Set<string>;
+            rawFileChangesByItemId: Map<string, unknown>;
+            rawSubagentActivitySignaturesByItemId: Map<string, Set<string>>;
+        };
+
+        internals.handleLine(JSON.stringify({
+            id: 0,
+            method: 'private/request-prompt-secret',
+            params: {},
+        }));
+        await waitFor(() => internals.activeServerRequestIds.size === 0);
+        for (let index = 0; index < 4_097; index += 1) {
+            internals.settleServerRequestId(2 + index * 2, 0);
+        }
+        internals.handleLine(JSON.stringify({
+            'private-object-key-prompt-secret': true,
+        }));
+        internals.handleLine(JSON.stringify({
+            method: 'private/notification-prompt-secret',
+            params: {},
+        }));
+        expect(internals.settledServerRequestIds.size).toBeLessThanOrEqual(4_096);
+
+        for (let index = 0; index < 50_001; index += 1) {
+            internals.emitRawTurnCompletion('thread', `turn-${index}`, 'completed', null);
+        }
+        expect(internals.completedTurnIds.size).toBe(50_000);
+
+        for (let index = 0; index < 4_097; index += 1) {
+            internals.trackRawFileChangeMetadata('item/started', {
+                threadId: 'thread',
+                item: {
+                    type: 'fileChange',
+                    id: `file-${index}`,
+                    changes: [{ path: `file-${index}`, kind: { type: 'update' } }],
+                },
+            });
+            internals.handleRawNotification('item/started', {
+                threadId: 'thread',
+                item: {
+                    type: 'subAgentActivity',
+                    id: `activity-${index}`,
+                    kind: 'started',
+                    agentThreadId: `child-${index}`,
+                },
+            });
+        }
+        expect(internals.rawFileChangesByItemId.size).toBe(4_096);
+        expect(internals.rawSubagentActivitySignaturesByItemId.size).toBe(4_096);
+
+        internals.handleRawNotification('item/completed', {
+            threadId: 'thread',
+            item: {
+                type: 'subAgentActivity',
+                id: 'activity-4096',
+                kind: 'completed',
+                agentThreadId: 'child-4096',
+            },
+        });
+        expect(internals.rawSubagentActivitySignaturesByItemId.get('thread:activity-4096')?.size)
+            .toBeLessThanOrEqual(16);
+
+        const logs = JSON.stringify(vi.mocked(logger.debug).mock.calls);
+        expect(logs).not.toContain('private/request-prompt-secret');
+        expect(logs).not.toContain('private-object-key-prompt-secret');
+        expect(logs).not.toContain('private/notification-prompt-secret');
+        expect(logs).toMatch(/unknown:[0-9a-f]{24}/);
     });
 });

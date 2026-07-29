@@ -12,6 +12,12 @@ const protocolRoot = path.join(packageRoot, 'src', 'codex', 'protocol');
 const outputDirectory = path.join(protocolRoot, 'generated');
 const stagingDirectory = path.join(protocolRoot, `.generated-${process.pid}`);
 const codexBinary = process.env.HAPPY_CODEX_PROTOCOL_BIN?.trim() || 'codex';
+const methodSourceFiles = [
+    'ClientNotification.ts',
+    'ClientRequest.ts',
+    'ServerNotification.ts',
+    'ServerRequest.ts',
+];
 
 function readCodexVersion() {
     return execFileSync(codexBinary, ['--version'], {
@@ -29,6 +35,24 @@ const versionMatch = versionOutput.match(/^codex-cli\s+(\d+\.\d+\.\d+)$/);
 if (!versionMatch || versionMatch[1] !== CODEX_PROTOCOL_VERSION) {
     throw new Error(
         `Codex protocol generation requires codex-cli ${CODEX_PROTOCOL_VERSION}; received ${JSON.stringify(versionOutput)}`,
+    );
+}
+
+function writeStableMethodManifest(directory) {
+    const methods = new Set();
+    for (const filename of methodSourceFiles) {
+        const source = fs.readFileSync(path.join(directory, filename), 'utf8');
+        for (const match of source.matchAll(/"method": "([^"]+)"/g)) {
+            methods.add(match[1]);
+        }
+    }
+    if (methods.size === 0) {
+        throw new Error('Codex protocol generation produced no stable methods');
+    }
+    fs.writeFileSync(
+        path.join(directory, 'STABLE_METHODS.json'),
+        `${JSON.stringify([...methods].sort(), null, 2)}\n`,
+        'utf8',
     );
 }
 
@@ -57,6 +81,7 @@ try {
         }, null, 2)}\n`,
         'utf8',
     );
+    writeStableMethodManifest(stagingDirectory);
     fs.rmSync(outputDirectory, { recursive: true, force: true });
     fs.renameSync(stagingDirectory, outputDirectory);
 } finally {
