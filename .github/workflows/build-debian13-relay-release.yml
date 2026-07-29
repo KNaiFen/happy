@@ -107,8 +107,7 @@ jobs:
           sed "s/__VERSION__/$VERSION/g" \
             packages/happy-server/deploy/debian13-amd64/env.example > "$CONFIG_DIR/.env"
           printf '%064d\n' 0 > "$CONFIG_DIR/secrets/master-secret"
-          HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$CONFIG_DIR/secrets/master-secret")" \
-            docker compose \
+          docker compose \
             --project-directory "$CONFIG_DIR" \
             --env-file "$CONFIG_DIR/.env" \
             --file "$CONFIG_DIR/compose.yaml" \
@@ -224,10 +223,9 @@ jobs:
             "$VERSION"
 
       - name: Exercise delivered installer and relay lifecycle
-        env:
-          GITHUB_ACTIONS: 'true'
         run: |
-          scripts/ci/test-debian13-relay-bundle.sh \
+          sudo env "PATH=$PATH" GITHUB_ACTIONS=true \
+            scripts/ci/test-debian13-relay-bundle.sh \
             "$BUNDLE_DIR/happy-relay-server-$VERSION-debian13-amd64.tar.gz" \
             "$VERSION"
 

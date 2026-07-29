@@ -21,17 +21,20 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
-compose() (
-    HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$secret_file")"
-    export HAPPY_RELAY_MASTER_SECRET
+compose() {
     docker compose \
         --project-directory "$script_dir" \
         --env-file "$env_file" \
         --file "$compose_file" \
         "$@"
-)
+}
 
 validate_secret() {
+    [ ! -L "$secret_file" ] || die "secrets/master-secret must not be a symbolic link"
+    [ -f "$secret_file" ] || die "secrets/master-secret must be a regular file"
+    [ "$(stat -c '%h' "$secret_file")" = "1" ] \
+        || die "secrets/master-secret must not have hard links"
+
     secret_value="$(tr -d '\r\n' < "$secret_file")"
     case "$secret_value" in
         ""|*[!0-9a-fA-F]*)
@@ -91,6 +94,7 @@ wait_for_health() {
 
 [ "$(uname -s)" = "Linux" ] || die "this package supports Linux hosts only"
 [ "$(uname -m)" = "x86_64" ] || die "this package supports x86_64/amd64 hosts only"
+[ "$(id -u)" = "0" ] || die "run ./install.sh as root"
 
 require_command docker
 require_command sha256sum
@@ -98,6 +102,8 @@ require_command awk
 require_command mktemp
 require_command grep
 require_command od
+require_command chown
+require_command stat
 
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (docker compose)"
 docker info >/dev/null 2>&1 || die "cannot access the Docker daemon"
@@ -115,12 +121,22 @@ image_archive="$script_dir/image/happy-relay-server-${version}-debian13-amd64.im
 echo "Verifying release checksums..."
 (cd "$script_dir" && sha256sum --check SHA256SUMS)
 
+[ ! -L "$secret_dir" ] || die "secrets must not be a symbolic link"
+if [ -e "$secret_dir" ] && [ ! -d "$secret_dir" ]; then
+    die "secrets must be a directory"
+fi
 mkdir -p "$secret_dir"
+[ ! -L "$secret_dir" ] || die "secrets must not be a symbolic link"
+[ -d "$secret_dir" ] || die "secrets must be a directory"
+[ ! -L "$secret_file" ] || die "secrets/master-secret must not be a symbolic link"
+if [ -e "$secret_file" ] && [ ! -f "$secret_file" ]; then
+    die "secrets/master-secret must be a regular file"
+fi
+chown 0:0 "$secret_dir"
 chmod 700 "$secret_dir"
 
 if [ -f "$secret_file" ]; then
     validate_secret
-    chmod 600 "$secret_file"
 else
     if docker volume inspect "$volume_name" >/dev/null 2>&1; then
         die "existing data volume $volume_name found without its master secret; restore secrets/master-secret before continuing"
@@ -133,6 +149,8 @@ else
     validate_secret
     echo "Generated a new relay master secret in secrets/master-secret. Back it up with the data volume."
 fi
+chown 0:65532 "$secret_file"
+chmod 0440 "$secret_file"
 
 write_env_file "$image"
 

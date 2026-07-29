@@ -16,7 +16,7 @@ expected_version="${2:-}"
 [[ "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
     || die "expected version must be stable X.Y.Z"
 
-for command_name in docker sha256sum tar mktemp node grep; do
+for command_name in docker sha256sum tar mktemp node grep stat ln; do
     command -v "$command_name" >/dev/null 2>&1 || die "required command not found: $command_name"
 done
 
@@ -24,15 +24,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 temporary_dir="$(mktemp -d)"
 bundle_root="$temporary_dir/happy-relay"
 
-compose() (
-    HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$bundle_root/secrets/master-secret")"
-    export HAPPY_RELAY_MASTER_SECRET
+compose() {
     docker compose \
         --project-directory "$bundle_root" \
         --env-file "$bundle_root/.env" \
         --file "$bundle_root/compose.yaml" \
         "$@"
-)
+}
 
 container_node() {
     compose exec -T happy-relay /nodejs/bin/node "$@"
@@ -67,10 +65,66 @@ assert_capability() {
     ' "$expected"
 }
 
+assert_installer_rejects_secret_link() {
+    link_kind="$1"
+    case_root="$temporary_dir/link-$link_kind"
+    sentinel="$case_root/sentinel"
+
+    mkdir -p "$case_root"
+    tar -xzf "$archive" -C "$case_root"
+
+    if [[ "$link_kind" == "directory" ]]; then
+        mkdir "$sentinel"
+        chmod 0755 "$sentinel"
+        ln -s "$sentinel" "$case_root/happy-relay/secrets"
+    else
+        mkdir "$case_root/happy-relay/secrets"
+        printf '%064d\n' 0 > "$sentinel"
+        chmod 0644 "$sentinel"
+        ln -s "$sentinel" "$case_root/happy-relay/secrets/master-secret"
+    fi
+
+    sentinel_state_before="$(stat -c '%u:%g:%a' "$sentinel")"
+    if installer_output="$("$case_root/happy-relay/install.sh" 2>&1)"; then
+        die "installer accepted a symbolic $link_kind secret path"
+    fi
+    grep -Fq 'must not be a symbolic link' <<< "$installer_output" \
+        || die "installer returned the wrong error for a symbolic $link_kind secret path"
+    [[ "$(stat -c '%u:%g:%a' "$sentinel")" == "$sentinel_state_before" ]] \
+        || die "installer modified the symbolic $link_kind target"
+}
+
+assert_installer_rejects_hardlinked_secret() {
+    case_root="$temporary_dir/link-hard"
+    sentinel="$case_root/sentinel"
+
+    mkdir -p "$case_root"
+    tar -xzf "$archive" -C "$case_root"
+    mkdir "$case_root/happy-relay/secrets"
+    printf '%064d\n' 0 > "$sentinel"
+    chmod 0644 "$sentinel"
+    ln "$sentinel" "$case_root/happy-relay/secrets/master-secret"
+
+    sentinel_state_before="$(stat -c '%u:%g:%a:%h' "$sentinel")"
+    if installer_output="$("$case_root/happy-relay/install.sh" 2>&1)"; then
+        die "installer accepted a hard-linked master secret"
+    fi
+    grep -Fq 'must not have hard links' <<< "$installer_output" \
+        || die "installer returned the wrong error for a hard-linked master secret"
+    [[ "$(stat -c '%u:%g:%a:%h' "$sentinel")" == "$sentinel_state_before" ]] \
+        || die "installer modified the hard-linked master secret target"
+}
+
 "$script_dir/verify-debian13-relay-bundle.sh" "$archive" "$expected_version"
+assert_installer_rejects_secret_link directory
+assert_installer_rejects_secret_link file
+assert_installer_rejects_hardlinked_secret
 tar -xzf "$archive" -C "$temporary_dir"
 
 "$bundle_root/install.sh"
+
+[[ "$(stat -c '%u:%g:%a' "$bundle_root/secrets/master-secret")" == "0:65532:440" ]] \
+    || die "host master secret must be root:65532 mode 0440"
 
 container_id="$(compose ps --quiet happy-relay)"
 [[ -n "$container_id" ]] || die "relay container was not created"
@@ -125,7 +179,7 @@ container_node -e '
     const fs = require("node:fs");
     if (typeof process.getuid !== "function" || process.getuid() !== 65532) process.exit(1);
     const secret = fs.statSync("/run/secrets/happy_master_secret");
-    if (secret.uid !== 65532 || secret.gid !== 65532 || (secret.mode & 0o777) !== 0o400) process.exit(1);
+    if (secret.uid !== 0 || secret.gid !== 65532 || (secret.mode & 0o777) !== 0o440) process.exit(1);
 '
 docker inspect "$container_id" --format '{{json .HostConfig.CapDrop}}' | grep -q '"ALL"' \
     || die "container does not drop all Linux capabilities"

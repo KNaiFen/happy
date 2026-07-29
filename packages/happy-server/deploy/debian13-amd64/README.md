@@ -13,7 +13,7 @@ shell、npm、Perl、curl 或包管理器；请使用随包提供的 `relayctl.s
 - Debian 13 x86_64（amd64）
 - Docker Engine
 - Docker Compose v2（命令为 `docker compose`）
-- 当前用户有权访问 Docker daemon
+- 使用 root shell 运行安装和管理命令
 
 ## 安装
 
@@ -27,9 +27,10 @@ cd happy-relay
 `/health` 完成真实数据库查询。重复执行 `./install.sh` 会保留原 secret、配置和
 `happy-relay_happy-data` 数据卷。
 
-宿主 secret 始终保存在权限为 `0700` 的 `secrets/` 目录和 `0600` 文件中。
-`install.sh`/`relayctl.sh` 仅在调用 Compose 的子进程中短暂提供 secret 来源，
-容器内以 UID/GID `65532`、模式 `0400` 只读挂载，不进入容器环境或 `.env`。
+宿主 secret 始终保存在 `root:root 0700` 的 `secrets/` 目录中，文件权限固定为
+`root:65532 0440`。Compose 将同一个文件只读挂载给 GID `65532` 的非 root
+服务进程；secret 不复制，也不进入容器环境或 `.env`。安装器和管理脚本会拒绝
+符号链接、非普通 secret 文件和多重硬链接，避免 root 命令跟随被替换的路径。
 
 新安装默认仅监听 `127.0.0.1:3005`，Codex Sync v4 默认关闭。常用管理命令：
 

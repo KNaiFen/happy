@@ -23,9 +23,6 @@ services:
     secrets:
       - source: happy_master_secret
         target: happy_master_secret
-        uid: "65532"
-        gid: "65532"
-        mode: 0400
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=128m
@@ -51,4 +48,4 @@ volumes:
 
 secrets:
   happy_master_secret:
-    environment: HAPPY_RELAY_MASTER_SECRET
+    file: ./secrets/master-secret

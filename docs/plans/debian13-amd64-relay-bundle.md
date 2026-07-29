@@ -17,11 +17,13 @@
    Compose named volume 跨重启、升级和重新解压安装包保留。
 3. 镜像使用非 root 用户运行，Compose 启用 `no-new-privileges`、删除全部
    Linux capabilities、使用只读根文件系统并为 `/tmp` 提供 tmpfs。
-4. `HANDY_MASTER_SECRET` 由安装脚本首次生成到本地 `0600` secret 文件。管理
-   脚本仅在调用 Compose 时把它短暂提供给 environment-backed Compose secret，
-   再以 UID/GID `65532` 和模式 `0400` 只读挂载；不得写入容器环境、镜像、
-   `.env`、日志或 Artifact 元数据。file-backed secret 不可用，因为 Compose
-   的 bind mount 会忽略 `uid/gid/mode`，导致固定非 root UID 无法读取 `0600` 文件。
+4. `HANDY_MASTER_SECRET` 由以 root 运行的安装脚本首次生成到本地 secret 文件，
+   权限固定为 `root:65532 0440`，并由 `0700` 的 root-owned 父目录保护。Compose
+   以 file secret 只读挂载，容器内固定 GID `65532` 可读；不得写入容器环境、
+   镜像、`.env`、日志或 Artifact 元数据。安装和管理命令明确要求宿主 root，
+   但服务容器始终保持 UID/GID `65532` 非 root。root 脚本在修改所有权或启动
+   Compose 前必须拒绝符号链接、非预期文件类型和多重硬链接，避免跟随或修改被
+   替换的 secret 路径。
 5. 新安装默认只绑定 `127.0.0.1:3005`。暴露到局域网必须显式修改 bind 和
    `PUBLIC_URL`；HTTP 仍只适用于可信网络，主动 MITM 下不承诺 token、ACK、
    server identity、metadata 或零丢失。
@@ -36,7 +38,7 @@
    修复失败发行必须再次推进 Server patch，不复用已运行版本。
 10. 首次发行 `1.1.15` 被 ShellCheck 门禁阻断；`1.1.16` 缺少 App 跨包契约
     schema；`1.1.17` 被 runtime Critical CVE 门禁阻断。修复版本目标为 Server
-    `1.1.20`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
+    `1.1.21`。CLI `1.4.5`、App `1.11.11`、Wire `0.1.3` 不因纯 Server 打包
     变化推进版本。
 11. runtime 使用官方 `gcr.io/distroless/nodejs24-debian13:nonroot` amd64 镜像。
     入口、健康检查和生命周期断言使用 Node，不携带 shell、npm、Perl、curl、
@@ -116,8 +118,11 @@ Compose project name 固定为 `happy-relay`，确保从新版本目录运行时
 - 使用 `relayctl.sh enable-v4` 切换后确认 capability 为 `enabled=true`，再切回
   `false`，证明开关可逆且不会删除数据库。
 - 检查容器实际 security options、只读根文件系统和 dropped capabilities。
-- 检查容器内 secret 的 UID/GID 均为 `65532`、模式为 `0400`，并确认
+- 检查宿主 secret 为 `root:65532 0440`，容器内挂载保持相同所有权和模式，并确认
   `HANDY_MASTER_SECRET` 与 Compose secret 来源变量都不在容器配置环境中。
+- 用隔离目录模拟 `secrets/`、`secrets/master-secret` 符号链接和多重硬链接，确认
+  root 安装器在执行 `chown`、加载镜像或启动 Compose 前拒绝它们，且链接目标不
+  被修改。
 
 ### Artifact 门禁
 
@@ -199,3 +204,13 @@ secret 和 named volume 必须保持原值。
   来源支持所有权映射。`1.1.19` 不得复用；`1.1.20` 保留宿主文件 `0600`，通过
   管理脚本短暂提供 environment-backed secret，并断言两个 secret 变量都不进入
   容器配置环境。
+- 2026-07-29：`1.1.20` 分支 CI run `30453889993` 全绿；main CI run
+  `30454868475` 首次因两个 CLI 测试在 runner 高负载下超过 5 秒失败，本地对应
+  文件 `20/20` 通过，GitHub 原生失败 job 重跑 attempt 2 全绿。发行 run
+  `30454865700` 再次通过所有镜像与 tarball 门禁，但 Compose 在只读服务上拒绝
+  environment-backed secret，明确报错仅 file 来源受支持。`1.1.20` 不得复用；
+  用户确认宿主以 root 运行后，`1.1.21` 恢复 file secret，由 root 安装器把唯一
+  secret 文件设为 `root:65532 0440`。这保留只读根文件系统、非 root 服务和
+  宿主 `0700` 父目录保护，不引入环境泄漏或第二份持久 secret。最终安全审查同时
+  要求安装器和管理脚本拒绝 secret 目录、文件符号链接和多重硬链接，生命周期
+  测试覆盖 root 路径替换场景。

@@ -8,21 +8,20 @@ script_dir="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 compose_file="$script_dir/compose.yaml"
 env_file="$script_dir/.env"
 secret_file="$script_dir/secrets/master-secret"
+secret_dir="$script_dir/secrets"
 
 die() {
     echo "Error: $*" >&2
     exit 1
 }
 
-compose() (
-    HAPPY_RELAY_MASTER_SECRET="$(tr -d '\r\n' < "$secret_file")"
-    export HAPPY_RELAY_MASTER_SECRET
+compose() {
     docker compose \
         --project-directory "$script_dir" \
         --env-file "$env_file" \
         --file "$compose_file" \
         "$@"
-)
+}
 
 wait_for_health() {
     attempt=1
@@ -89,11 +88,20 @@ EOF
 }
 
 command -v docker >/dev/null 2>&1 || die "required command not found: docker"
+command -v stat >/dev/null 2>&1 || die "required command not found: stat"
+[ "$(id -u)" = "0" ] || die "run ./relayctl.sh as root"
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required (docker compose)"
 docker info >/dev/null 2>&1 || die "cannot access the Docker daemon"
 [ -f "$compose_file" ] || die "compose.yaml is missing"
 [ -f "$env_file" ] || die ".env is missing; run ./install.sh first"
-[ -r "$secret_file" ] || die "secrets/master-secret is missing; restore it before starting the relay"
+[ ! -L "$secret_dir" ] || die "secrets must not be a symbolic link"
+[ -d "$secret_dir" ] || die "secrets is missing; run ./install.sh first"
+[ "$(stat -c '%u:%g:%a' "$secret_dir")" = "0:0:700" ] \
+    || die "secrets must be root:root mode 0700; run ./install.sh to repair it"
+[ ! -L "$secret_file" ] || die "secrets/master-secret must not be a symbolic link"
+[ -f "$secret_file" ] || die "secrets/master-secret is missing; restore it before starting the relay"
+[ "$(stat -c '%u:%g:%a:%h' "$secret_file")" = "0:65532:440:1" ] \
+    || die "secrets/master-secret must be root:65532 mode 0440 with one link; run ./install.sh to repair it"
 
 command_name="${1:-}"
 if [ "$#" -gt 0 ]; then
