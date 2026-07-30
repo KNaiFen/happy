@@ -75,7 +75,12 @@ create_encrypted_business_state() {
             const response = await fetch(`http://127.0.0.1:3005${path}`, options);
             const body = await response.json();
             if (!response.ok) {
-                throw new Error(`${options.method ?? "GET"} ${path} returned ${response.status}`);
+                const detail = typeof body?.error === "string"
+                    ? `: ${body.error}`
+                    : "";
+                throw new Error(
+                    `${options.method ?? "GET"} ${path} returned ${response.status}${detail}`,
+                );
             }
             return body;
         }
@@ -178,6 +183,7 @@ create_encrypted_business_state() {
                 headers: authorization,
                 body: JSON.stringify({
                     tag: sessionTag,
+                    machineId,
                     metadata: "ci-encrypted-session-metadata",
                     agentState: null,
                     dataEncryptionKey: sessionKey,

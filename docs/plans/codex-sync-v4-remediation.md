@@ -5,7 +5,7 @@
 - 当前状态：本地实现、审查和验证完成，待提交、推送和云端交付。
 - 故障版本：CLI `1.4.6`、Server `1.1.24`、App `1.11.11`、
   Wire `0.1.3`。
-- 目标版本：CLI `1.4.7`、Server `1.1.26`、App `1.11.12`；
+- 目标版本：CLI `1.4.7`、Server `1.1.27`、App `1.11.12`；
   Wire 仅在公共 wire schema 变化时推进。
 - R8 现场记录：
   `docs/plans/archive/codex-sync-v4-remediation-r8-field-acceptance.md`
@@ -120,7 +120,7 @@
 - [x] 推进受影响发行版本，中文提交并推送 `origin`。
 - [ ] relay 离线 bundle 验收脚本使用真实 terminal auth
       request/approval 获得终端 token 后再注册 Machine，不得复用
-      App/account token。
+      App/account token；创建终端 Session 时显式携带已绑定的 `machineId`。
 - [ ] 跟踪 GitHub Actions，修复至 required CI、CLI、Server/relay 和 Android
       工作流全部通过；下载并验证 CLI tgz，Android 仅交付 Artifact 链接。
 
@@ -157,3 +157,6 @@
 - 2026-07-30：Server `1.1.25` 离线 relay 构建已健康启动，但验收脚本仍用
   account token 调用终端专属 Machine 注册而返回 403；计划修正为走真实
   terminal credential 流程，并推进新的 Server patch 版本。
+- 2026-07-30：Server `1.1.26` 已通过 terminal token 注册 Machine，验收推进
+  到 Session 创建；脚本遗漏终端会话必需的 `machineId` 而返回 400，补齐后
+  推进 Server `1.1.27`。
