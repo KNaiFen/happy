@@ -726,7 +726,7 @@ export async function sessionAbort(sessionId: string): Promise<void> {
     if (!rigCanAbort(metadata)) {
         throw new Error('Abort is not available for this session');
     }
-    if (sync.isCodexV4Activated(sessionId)) {
+    if (sync.isCodexV4Eligible(sessionId)) {
         const projection = storage.getState().codexV4Sessions[sessionId];
         const threadId = resolveCodexV4SessionCapabilities(metadata, projection).ownedThreadId;
         const activeTurn = projection ? findActiveCodexV4Turn(projection, threadId) : null;
@@ -770,7 +770,7 @@ export async function sessionSteerCodexQueuedMessage(sessionId: string, id: stri
  */
 export async function sessionAllow(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'approved' | 'approved_for_session', updatedInput?: Record<string, unknown>): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    if (sync.isCodexV4Activated(sessionId)) {
+    if (sync.isCodexV4Eligible(sessionId)) {
         await resolveCodexV4Request(sessionId, id, true, decision, updatedInput);
         return;
     }
@@ -783,7 +783,7 @@ export async function sessionAllow(sessionId: string, id: string, mode?: 'defaul
  */
 export async function sessionDeny(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'denied' | 'abort'): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    if (sync.isCodexV4Activated(sessionId)) {
+    if (sync.isCodexV4Eligible(sessionId)) {
         await resolveCodexV4Request(sessionId, id, false, decision);
         return;
     }
@@ -814,7 +814,7 @@ export async function sessionGoalAction(
     objective?: string,
 ): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    if (sync.isCodexV4Activated(sessionId)) {
+    if (sync.isCodexV4Eligible(sessionId)) {
         const state = storage.getState();
         const threadId = resolveCodexV4SessionCapabilities(
             state.sessions[sessionId]?.metadata,

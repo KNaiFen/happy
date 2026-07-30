@@ -289,6 +289,10 @@ async function runHttpRelayScenario(): Promise<void> {
     let fallbackCli: Awaited<ReturnType<
         typeof import('../../packages/happy-cli/src/api/syncV4Client').SyncV4Client.create
     >> | null = null;
+    let firstCommandApp: ScenarioAppRuntime | null = null;
+    let firstCommandCli: Awaited<ReturnType<
+        typeof import('../../packages/happy-cli/src/api/syncV4Client').SyncV4Client.create
+    >> | null = null;
     let cliDiagnostics: InstanceType<
         typeof import('../../packages/happy-cli/src/api/syncV4Diagnostics').CliSyncV4DiagnosticLog
     > | null = null;
@@ -341,6 +345,7 @@ async function runHttpRelayScenario(): Promise<void> {
             { AppSyncV4Client },
             { AppSyncV4HttpTransport },
             { AppSyncV4DiagnosticStore },
+            codexCommandModule,
             projectionModule,
         ] = await Promise.all([
             import('../../packages/happy-cli/src/api/syncV4Client'),
@@ -358,6 +363,7 @@ async function runHttpRelayScenario(): Promise<void> {
             import('../../packages/happy-app/sources/sync/syncV4Client'),
             import('../../packages/happy-app/sources/sync/syncV4HttpTransportCore'),
             import('../../packages/happy-app/sources/sync/syncV4Diagnostics'),
+            import('../../packages/happy-app/sources/sync/codexV4Commands'),
             import('../../packages/happy-app/sources/sync/codexV4Projection'),
         ]);
 
@@ -394,7 +400,7 @@ async function runHttpRelayScenario(): Promise<void> {
         const createAppRuntime = async (
             targetSessionId: string,
             targetSessionKey: Uint8Array,
-            selectedThreadId: string,
+            selectedThreadId: string | null,
             storage: ScenarioStorage,
             onEntity?: (entity: CodexEntityV4) => void,
         ): Promise<ScenarioAppRuntime> => {
@@ -475,6 +481,178 @@ async function runHttpRelayScenario(): Promise<void> {
                 },
             };
         };
+
+        const firstCommandSessionKey = randomBytes(32);
+        const firstCommandSessionId = await createSession(
+            baseUrl,
+            token,
+            machineState.id,
+            firstCommandSessionKey,
+            {
+                tag: `codex-first-command-${Date.now()}`,
+                threadId: null,
+            },
+        );
+        const firstCommandReceivedByCli: CodexEntityV4[] = [];
+        firstCommandCli = await SyncV4Client.create({
+            sessionId: firstCommandSessionId,
+            sessionKey: firstCommandSessionKey,
+            journalRoot: join(root, 'first-command-cli-journal'),
+            serverUrl: baseUrl,
+            token,
+            machineId: machineState.id,
+            pollIntervalMs: 25,
+            diagnostics: cliDiagnostics,
+            generateTraceId: nextCliTraceId,
+            onEntity: async (event) => {
+                firstCommandReceivedByCli.push(event.entity);
+            },
+        });
+        await firstCommandCli.start();
+        const firstCommandStorage = new ScenarioStorage();
+        firstCommandApp = await createAppRuntime(
+            firstCommandSessionId,
+            firstCommandSessionKey,
+            null,
+            firstCommandStorage,
+        );
+        const firstCommandId = randomUUID();
+        const firstPrompt = 'first-v4-message-before-activation';
+        const firstCommand = codexCommandModule.createCodexV4Command(
+            codexCommandModule.commandForCodexV4Input({
+                parsed: codexCommandModule.parseCodexV4Input(firstPrompt, []),
+                projection: firstCommandApp.projection(),
+                mode: { permissionMode: 'default' },
+            }),
+            { commandId: firstCommandId },
+        );
+        const firstCommandMutation = await firstCommandApp.client.publishEntity(firstCommand);
+        ciphertextCanaries.push(firstCommandMutation.ciphertext);
+        assert.equal(
+            firstCommandApp.projection().activated,
+            false,
+            'first v4 command unexpectedly required an activated projection',
+        );
+        assert(firstCommandApp.projection().messages.some(
+            (message) => message.kind === 'user-text' && message.text === firstPrompt,
+        ));
+
+        await firstCommandApp.client.start();
+        await firstCommandApp.client.flushOutboundOnce();
+        await firstCommandCli.pullChangesOnce();
+        await waitUntil(
+            () => firstCommandReceivedByCli.some(
+                (entity) => entity.entityType === 'codex.command'
+                    && entity.commandId === firstCommandId,
+            ),
+            5_000,
+            'first pre-activation App command at CLI',
+        );
+        const legacyMessagesResponse = await fetch(
+            `${baseUrl}/v3/sessions/${encodeURIComponent(firstCommandSessionId)}/messages?after_seq=0&limit=100`,
+            { headers: relayHeaders(appToken) },
+        );
+        assert.equal(legacyMessagesResponse.status, 200);
+        const legacyMessages = await legacyMessagesResponse.json() as {
+            messages?: unknown[];
+        };
+        assert.deepEqual(
+            legacyMessages.messages,
+            [],
+            'first Codex v4 prompt was duplicated into the v3 message stream',
+        );
+
+        const firstThreadId = 'field-first-thread-private-v4';
+        const firstTurnId = 'field-first-turn-private-v4';
+        const firstReply = 'first-v4-reply-after-cli-roundtrip';
+        const firstRuntime = CodexEntityV4Schema.parse({
+            schemaVersion: 1,
+            entityType: 'codex.runtime',
+            providerId: `${firstThreadId}\0runtime`,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            threadId: firstThreadId,
+            connection: 'connected',
+            execution: { type: 'idle' },
+            statusUnknown: false,
+            protocolVersion: 'v2',
+            codexCliVersion: '0.145.0',
+            syncState: 'ready',
+            pendingApprovalCount: 0,
+            pendingUserInputCount: 0,
+            activeSubagentCount: 0,
+            lastError: null,
+            lastKnownAt: Date.now(),
+        });
+        const firstTurn = CodexEntityV4Schema.parse({
+            ...seedTurn(firstThreadId),
+            providerId: firstTurnId,
+            turnId: firstTurnId,
+        });
+        const firstUserItem = CodexEntityV4Schema.parse({
+            ...seedItem(firstThreadId, 1),
+            providerId: 'field-first-user-item-private-v4',
+            turnId: firstTurnId,
+            itemId: 'field-first-user-item-private-v4',
+            itemType: 'userMessage',
+            clientId: firstCommandId,
+        });
+        const firstUserPart = CodexEntityV4Schema.parse({
+            ...seedPart(firstThreadId, 1),
+            providerId: 'field-first-user-part-private-v4',
+            turnId: firstTurnId,
+            itemId: 'field-first-user-item-private-v4',
+            partId: 'field-first-user-part-private-v4',
+            content: firstPrompt,
+        });
+        const firstAgentItem = CodexEntityV4Schema.parse({
+            ...seedItem(firstThreadId, 2),
+            providerId: 'field-first-agent-item-private-v4',
+            turnId: firstTurnId,
+            itemId: 'field-first-agent-item-private-v4',
+        });
+        const firstAgentPart = CodexEntityV4Schema.parse({
+            ...seedPart(firstThreadId, 2),
+            providerId: 'field-first-agent-part-private-v4',
+            turnId: firstTurnId,
+            itemId: 'field-first-agent-item-private-v4',
+            partId: 'field-first-agent-part-private-v4',
+            content: firstReply,
+        });
+        for (const entity of [
+            firstRuntime,
+            firstTurn,
+            firstUserItem,
+            firstUserPart,
+            firstAgentItem,
+            firstAgentPart,
+        ]) {
+            await firstCommandCli.publishEntity(entity);
+        }
+        await firstCommandCli.flushOutboundOnce();
+        await firstCommandApp.client.pullChangesOnce();
+        assert(firstCommandApp.projection().messages.some(
+            (message) => message.kind === 'user-text' && message.text === firstPrompt,
+        ));
+        assert(firstCommandApp.projection().messages.some(
+            (message) => message.kind === 'agent-text' && message.text === firstReply,
+        ));
+
+        firstCommandApp.client.stop();
+        firstCommandApp = await createAppRuntime(
+            firstCommandSessionId,
+            firstCommandSessionKey,
+            null,
+            firstCommandStorage,
+        );
+        await firstCommandApp.client.start();
+        assert(firstCommandApp.projection().messages.some(
+            (message) => message.kind === 'agent-text' && message.text === firstReply,
+        ));
+        firstCommandApp.client.stop();
+        firstCommandApp = null;
+        await firstCommandCli.close();
+        firstCommandCli = null;
 
         const assembleBinding = (
             targetSessionId: string,
@@ -1065,6 +1243,8 @@ async function runHttpRelayScenario(): Promise<void> {
         const protocolTraceText = await readRotatedText(protocolTracePath);
         const appDiagnosticText = JSON.stringify(appDiagnosticRecords);
         const sensitiveCanaries: Array<[string, string]> = [
+            ['firstPrompt', firstPrompt],
+            ['firstReply', firstReply],
             ['prompt', promptSecret],
             ['reasoningSummary', reasoningSummarySecret],
             ['rawReasoning', rawReasoningSecret],
@@ -1103,10 +1283,12 @@ async function runHttpRelayScenario(): Promise<void> {
         }
 
         console.log(
-            `Codex HTTP relay scenario passed: websocket=ok polling=ok restart=ok snapshot410=ok approval=ok child=ok trace=ok privacy=ok entities>=10000 deltas=${deltaCount} p95=${p95.toFixed(1)}ms`,
+            `Codex HTTP relay scenario passed: firstCommand=ok noV3Fallback=ok websocket=ok polling=ok restart=ok snapshot410=ok approval=ok child=ok trace=ok privacy=ok entities>=10000 deltas=${deltaCount} p95=${p95.toFixed(1)}ms`,
         );
     } finally {
         socket?.disconnect();
+        firstCommandApp?.client.stop();
+        await firstCommandCli?.close().catch(() => undefined);
         fallbackApp?.client.stop();
         await fallbackCli?.close().catch(() => undefined);
         childApp?.client.stop();
@@ -2168,7 +2350,7 @@ async function verifyCorsAndTrace(baseUrl: string): Promise<string> {
         headers: {
             Origin: origin,
             'Access-Control-Request-Method': 'GET',
-            'Access-Control-Request-Headers': 'X-Happy-Client,X-Happy-Sync-Trace',
+            'Access-Control-Request-Headers': 'X-Happy-Client,X-Happy-Machine-Id,X-Happy-Sync-Trace',
         },
     });
     assert(
@@ -2176,6 +2358,7 @@ async function verifyCorsAndTrace(baseUrl: string): Promise<string> {
         `CORS preflight returned HTTP ${preflight.status}`,
     );
     const allowedHeaders = preflight.headers.get('access-control-allow-headers')?.toLowerCase() ?? '';
+    assert(allowedHeaders.includes('x-happy-machine-id'));
     assert(allowedHeaders.includes('x-happy-sync-trace'));
 
     const response = await fetch(`${baseUrl}/v4/capabilities`, {

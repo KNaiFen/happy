@@ -55,6 +55,8 @@ interface MultiTextInputProps {
     onKeyPress?: OnKeyPressCallback;
     onSelectionChange?: (selection: { start: number; end: number }) => void;
     onStateChange?: (state: TextInputState) => void;
+    testID?: string;
+    accessibilityLabel?: string;
 }
 
 export const MultiTextInput = React.memo(React.forwardRef<MultiTextInputHandle, MultiTextInputProps>((props, ref) => {
@@ -255,6 +257,8 @@ export const MultiTextInput = React.memo(React.forwardRef<MultiTextInputHandle, 
             {editable ? (
                 <TextInput
                     ref={inputRef}
+                    testID={props.testID}
+                    accessibilityLabel={props.accessibilityLabel}
                     style={textStyle}
                     placeholder={placeholder}
                     placeholderTextColor={theme.colors.input.placeholder}

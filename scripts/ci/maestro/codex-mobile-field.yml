@@ -1,0 +1,67 @@
+appId: com.slopus.happy.dev
+name: Codex Sync v4 Android field round trip
+tags:
+  - codex
+  - sync-v4
+  - field
+---
+- launchApp:
+    clearState: true
+    permissions:
+      all: allow
+
+- extendedWaitUntil:
+    visible:
+      id: empty-main-new-session
+    timeout: 45000
+- assertVisible:
+    id: empty-main-machine-name
+- tapOn:
+    id: empty-main-new-session
+
+- extendedWaitUntil:
+    visible:
+      id: new-session-agent-picker
+    timeout: 15000
+- tapOn:
+    id: new-session-agent-picker
+- extendedWaitUntil:
+    visible:
+      id: picker-option-codex
+    timeout: 10000
+- tapOn:
+    id: picker-option-codex
+
+- tapOn:
+    id: new-session-prompt
+- inputText: hello-from-android-e2e
+- hideKeyboard
+- tapOn:
+    id: new-session-send
+
+- extendedWaitUntil:
+    visible: hello-from-android-e2e
+    timeout: 30000
+- extendedWaitUntil:
+    visible: Fake Codex response
+    timeout: 60000
+- takeScreenshot: codex-first-reply
+
+- pressKey: home
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: Fake Codex response
+    timeout: 30000
+
+- pressKey: home
+- killApp
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: hello-from-android-e2e
+    timeout: 45000
+- extendedWaitUntil:
+    visible: Fake Codex response
+    timeout: 45000
+- takeScreenshot: codex-recovered-after-process-death

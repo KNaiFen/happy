@@ -33,7 +33,11 @@ describe('fake Codex app-server', () => {
             send(fake, {
                 id: 3,
                 method: 'turn/start',
-                params: { threadId, input: [{ type: 'text', text: 'test', text_elements: [] }] },
+                params: {
+                    threadId,
+                    clientUserMessageId: 'command-3',
+                    input: [{ type: 'text', text: 'test', text_elements: [] }],
+                },
             });
             await waitFor(() => fake.messages.some((message) => message.method === 'turn/completed'));
 
@@ -46,7 +50,32 @@ describe('fake Codex app-server', () => {
 
             expect(response(fake, 1)?.result).toMatchObject({ userAgent: 'happy-fake-codex/0.145.0' });
             expect(response(fake, 3)?.result).toMatchObject({ turn: { status: 'inProgress' } });
+            expect(fake.messages.filter((message) => (
+                message.method === 'item/completed'
+                && ((message.params as Record<string, unknown>)?.item as Record<string, unknown>)?.type === 'userMessage'
+            ))).toEqual([
+                expect.objectContaining({
+                    params: expect.objectContaining({
+                        item: expect.objectContaining({
+                            clientId: 'command-3',
+                            content: [{ type: 'text', text: 'test', text_elements: [] }],
+                        }),
+                    }),
+                }),
+            ]);
             expect(fake.messages.filter((message) => message.method === 'item/agentMessage/delta')).toHaveLength(1);
+            expect(fake.messages.find((message) => (
+                message.method === 'turn/completed'
+            ))).toMatchObject({
+                params: {
+                    turn: {
+                        items: [
+                            { type: 'userMessage', clientId: 'command-3' },
+                            { type: 'agentMessage', text: 'Fake Codex response' },
+                        ],
+                    },
+                },
+            });
             expect(response(fake, 4)?.result).toEqual({});
             expect(fake.messages.filter((message) => (
                 message.method === 'item/started'

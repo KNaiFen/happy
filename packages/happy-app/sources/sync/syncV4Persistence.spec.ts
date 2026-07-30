@@ -132,6 +132,26 @@ describe('SyncV4Persistence', () => {
         expect(persistence.getReceiveCursor('session-1')).toBe(1);
     });
 
+    it('requires a snapshot when a persisted cursor has lost every entity record', () => {
+        const storage = new MemoryStorage();
+        const persistence = new SyncV4Persistence(storage);
+        persistence.applyChanges('session-1', [{
+            ...mutation,
+            mutationId: 'remote-1',
+            seq: 1,
+            createdAt: 100,
+        }]);
+        for (const key of storage.getAllKeys()) {
+            if (key.includes(':entity:')) storage.delete(key);
+        }
+
+        expect(persistence.loadSession('session-1')).toMatchObject({
+            receiveCursor: 1,
+            entities: [],
+            snapshotRequired: true,
+        });
+    });
+
     it('keeps tombstones and ignores lower revisions while consuming their seq', () => {
         const persistence = new SyncV4Persistence(new MemoryStorage());
         persistence.applyChanges('session-1', [{

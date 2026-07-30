@@ -380,6 +380,44 @@ describe('AppSyncV4Client', () => {
         receiver.stop();
     });
 
+    it('rebuilds a snapshot when the cursor survived but the entity cache did not', async () => {
+        const storage = new MemoryStorage();
+        const localPersistence = persistence(storage);
+        const transport = new FakeTransport();
+        const publisher = await client(new MemoryStorage(), transport);
+        const remoteMutation = await publisher.publishEntity(command('snapshot-recovered'));
+        localPersistence.applyChanges('session-1', [toChange(remoteMutation, 1)]);
+        for (const key of storage.getAllKeys()) {
+            if (key.includes(':entity:')) storage.delete(key);
+        }
+        const { mutationId: _mutationId, ...snapshotEntity } = remoteMutation;
+        transport.snapshots = [{
+            entities: [{
+                ...snapshotEntity,
+                updatedSeq: 1,
+                createdAt: 101,
+                updatedAt: 101,
+            }],
+            highWatermark: 1,
+            nextCursor: null,
+        }];
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const receiver = await client(storage, transport, applied);
+
+        await receiver.start();
+
+        expect(applied).toContainEqual(expect.objectContaining({
+            entity: expect.objectContaining({ providerId: 'snapshot-recovered' }),
+            source: 'snapshot',
+        }));
+        expect(persistence(storage).loadSession('session-1')).toMatchObject({
+            receiveCursor: 1,
+            snapshotRequired: false,
+            entities: [expect.objectContaining({ entityId: remoteMutation.entityId })],
+        });
+        receiver.stop();
+    });
+
     it('keeps pulling when the server reports a session became read-only', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();

@@ -1,9 +1,9 @@
 import React from 'react';
-import { View, Text, Pressable } from 'react-native';
+import { ActivityIndicator, View, Text, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useAllMachines } from '@/sync/storage';
+import { useAllMachines, useMachinesLoaded } from '@/sync/storage';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { useRouter } from 'expo-router';
 
@@ -59,6 +59,7 @@ export function EmptySessionsTablet() {
     const styles = stylesheet;
     const router = useRouter();
     const machines = useAllMachines();
+    const machinesLoaded = useMachinesLoaded();
     
     const hasOnlineMachines = React.useMemo(() => {
         return machines.some(machine => isMachineOnline(machine));
@@ -68,6 +69,14 @@ export function EmptySessionsTablet() {
         router.navigate('/new');
     };
     
+    if (!machinesLoaded) {
+        return (
+            <View style={styles.container}>
+                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+            </View>
+        );
+    }
+
     return (
         <View style={styles.container}>
             <Ionicons 

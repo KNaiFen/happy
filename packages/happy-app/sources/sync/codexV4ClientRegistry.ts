@@ -21,6 +21,7 @@ export interface CodexV4RegistryClient {
 export interface CodexV4RegistrySession {
     sessionId: string;
     sessionKey: Uint8Array;
+    machineId?: string | null;
 }
 
 export interface CodexV4RegistrySyncState {

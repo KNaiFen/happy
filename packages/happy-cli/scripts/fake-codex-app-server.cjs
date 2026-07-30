@@ -232,18 +232,50 @@ function startDefaultTurn(message, params) {
     const turn = createTurn();
     activeTurns.set(threadId, turn);
     respond(message, { turn });
-    const itemId = `fake-item-${nextItem++}`;
-    const startedItem = { type: 'agentMessage', id: itemId, text: '', phase: null, memoryCitation: null };
-    const completedItem = { ...startedItem, text: 'Fake Codex response' };
+    const userItem = {
+        type: 'userMessage',
+        id: `fake-item-${nextItem++}`,
+        clientId: typeof params.clientUserMessageId === 'string' ? params.clientUserMessageId : null,
+        content: Array.isArray(params.input) ? params.input : [],
+    };
+    const agentItemId = `fake-item-${nextItem++}`;
+    const startedAgentItem = {
+        type: 'agentMessage',
+        id: agentItemId,
+        text: '',
+        phase: null,
+        memoryCitation: null,
+    };
+    const completedAgentItem = { ...startedAgentItem, text: 'Fake Codex response' };
     schedule(0, () => send({ method: 'turn/started', params: { threadId, turn } }));
-    schedule(2, () => send({ method: 'item/started', params: { threadId, turnId: turn.id, item: startedItem } }));
-    schedule(4, () => send({
-        method: 'item/agentMessage/delta',
-        params: { threadId, turnId: turn.id, itemId, delta: 'Fake Codex response' },
+    schedule(1, () => send({
+        method: 'item/started',
+        params: { threadId, turnId: turn.id, item: userItem },
     }));
-    schedule(6, () => send({ method: 'item/completed', params: { threadId, turnId: turn.id, item: completedItem } }));
-    schedule(8, () => {
-        const completed = { ...turn, items: [completedItem], status: 'completed', completedAt: nowSeconds(), durationMs: 8 };
+    schedule(2, () => send({
+        method: 'item/completed',
+        params: { threadId, turnId: turn.id, item: userItem },
+    }));
+    schedule(3, () => send({
+        method: 'item/started',
+        params: { threadId, turnId: turn.id, item: startedAgentItem },
+    }));
+    schedule(5, () => send({
+        method: 'item/agentMessage/delta',
+        params: { threadId, turnId: turn.id, itemId: agentItemId, delta: 'Fake Codex response' },
+    }));
+    schedule(7, () => send({
+        method: 'item/completed',
+        params: { threadId, turnId: turn.id, item: completedAgentItem },
+    }));
+    schedule(9, () => {
+        const completed = {
+            ...turn,
+            items: [userItem, completedAgentItem],
+            status: 'completed',
+            completedAt: nowSeconds(),
+            durationMs: 9,
+        };
         activeTurns.delete(threadId);
         const thread = threads.get(threadId);
         if (thread) {

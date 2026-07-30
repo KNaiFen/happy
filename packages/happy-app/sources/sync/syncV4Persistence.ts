@@ -78,6 +78,9 @@ export class SyncV4Persistence {
         try {
             entities = this.readEntities(sessionId, activeGeneration);
             receiveCursor = this.readCursor(sessionId, activeGeneration);
+            if (receiveCursor > 0 && entities.length === 0) {
+                snapshotRequired = true;
+            }
         } catch {
             this.beginSnapshot(sessionId);
             entities = [];

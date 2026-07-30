@@ -5,14 +5,14 @@ const {
     machineRPC,
     request,
     getState,
-    isCodexV4Activated,
+    isCodexV4Eligible,
     publishCodexV4Command,
 } = vi.hoisted(() => ({
     sessionRPC: vi.fn(),
     machineRPC: vi.fn(),
     request: vi.fn(),
     getState: vi.fn((): any => ({ sessions: {} })),
-    isCodexV4Activated: vi.fn(() => false),
+    isCodexV4Eligible: vi.fn(() => false),
     publishCodexV4Command: vi.fn(),
 }));
 
@@ -23,7 +23,7 @@ vi.mock('./apiSocket', () => ({
 vi.mock('./sync', () => ({
     sync: {
         refreshSessions: vi.fn(),
-        isCodexV4Activated,
+        isCodexV4Eligible,
         publishCodexV4Command,
     },
 }));
@@ -39,8 +39,8 @@ describe('Codex queued message ops', () => {
         machineRPC.mockReset();
         request.mockReset();
         getState.mockReturnValue({ sessions: {} });
-        isCodexV4Activated.mockReset();
-        isCodexV4Activated.mockReturnValue(false);
+        isCodexV4Eligible.mockReset();
+        isCodexV4Eligible.mockReturnValue(false);
         publishCodexV4Command.mockReset();
         publishCodexV4Command.mockResolvedValue({});
     });
@@ -125,7 +125,7 @@ describe('Codex queued message ops', () => {
     });
 
     it('resolves a repeated provider request id only on the metadata-owned thread', async () => {
-        isCodexV4Activated.mockReturnValue(true);
+        isCodexV4Eligible.mockReturnValue(true);
         getState.mockReturnValue({
             sessions: {
                 'session-current': {

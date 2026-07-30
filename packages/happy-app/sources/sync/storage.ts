@@ -1772,6 +1772,10 @@ export function useAllMachines(options?: { includeOffline?: boolean }): Machine[
     }));
 }
 
+export function useMachinesLoaded(): boolean {
+    return storage((state) => state.machinesLoaded);
+}
+
 export function useMachine(machineId: string): Machine | null {
     return storage(useShallow((state) => state.machines[machineId] ?? null));
 }

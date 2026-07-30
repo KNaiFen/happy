@@ -120,6 +120,25 @@ describe('Codex v4 App commands', () => {
         });
     });
 
+    it('creates the first turn command before the v4 projection is activated', () => {
+        const empty = createCodexV4Projection();
+
+        expect(commandForCodexV4Input({
+            parsed: parseCodexV4Input('first prompt', []),
+            projection: empty,
+            mode: { permissionMode: 'default' },
+        })).toMatchObject({
+            command: 'turn.start',
+            threadId: null,
+            payload: {
+                text: 'first prompt',
+                displayText: 'first prompt',
+                permissionMode: 'default',
+            },
+        });
+        expect(empty.activated).toBe(false);
+    });
+
     it('maps approval, tool input, and MCP elicitation responses to official shapes', () => {
         expect(codexV4RequestResponse({
             request: request('commandApproval', {}),

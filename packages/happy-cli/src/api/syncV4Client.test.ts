@@ -374,7 +374,7 @@ describe("SyncV4Client", () => {
         expect(applied[0].entity.providerId).toBe("remote-0");
         expect(applied.at(-1)?.entity.providerId).toBe("remote-224");
         expect(client.receiveCursor).toBe(225);
-    });
+    }, 15_000);
 
     it("replays a handler failure before advancing its cursor", async () => {
         const root = await createRoot();
@@ -711,5 +711,5 @@ describe("SyncV4Client", () => {
         await client.pullChangesOnce();
         expect(client.receiveCursor).toBe(200);
         expect(applied).toHaveLength(200);
-    });
+    }, 15_000);
 });

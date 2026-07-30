@@ -40,6 +40,8 @@ import {
     installServerFetchTransport,
 } from '@/sync/serverTransport';
 import { ServerUrlPolicyError } from '@/sync/serverUrlPolicy';
+import { setAllowInsecureHttp } from '@/sync/serverConfig';
+import { shouldEnableDevE2eInsecureHttp } from '@/sync/devE2eBootstrap';
 
 // Configure notification handler — suppress push display when app is in foreground
 Notifications.setNotificationHandler({
@@ -261,6 +263,13 @@ export default function RootLayout() {
                     if (Platform.OS === 'web' && typeof window !== 'undefined') {
                         window.history.replaceState({}, '', window.location.pathname);
                     }
+                }
+
+                if (shouldEnableDevE2eInsecureHttp(
+                    __DEV__,
+                    process.env.EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP,
+                )) {
+                    setAllowInsecureHttp(true);
                 }
 
                 try {

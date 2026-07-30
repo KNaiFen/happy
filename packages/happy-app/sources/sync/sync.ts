@@ -85,6 +85,7 @@ import {
     parseCodexV4Input,
     type CodexV4CommandDraft,
 } from './codexV4Commands';
+import { createCodexV4Projection } from './codexV4Projection';
 import {
     assertCodexV4CommandPublishAllowed,
     resolveCodexV4SessionCapabilities,
@@ -185,6 +186,7 @@ class Sync {
             createClient: ({
                 sessionId,
                 sessionKey,
+                machineId,
                 onEntity,
                 onEntities,
                 onSnapshotReset,
@@ -194,7 +196,7 @@ class Sync {
                 sessionKey,
                 appVersion,
                 persistence: syncV4Persistence,
-                transport: new HttpAppSyncV4Transport(),
+                transport: new HttpAppSyncV4Transport(machineId),
                 diagnostics: appSyncV4Diagnostics,
                 diagnosticStats: () => appSyncV4Diagnostics.stats(),
                 transportSecurity: syncV4TransportSecurity,
@@ -384,7 +386,7 @@ class Sync {
 
 
     onSessionVisible = (sessionId: string) => {
-        if (this.isCodexV4Activated(sessionId)) {
+        if (this.isCodexV4Eligible(sessionId)) {
             this.codexV4Clients.invalidate(sessionId);
         } else {
             this.getMessagesSync(sessionId).invalidate();
@@ -408,21 +410,29 @@ class Sync {
         );
     }
 
+    isCodexV4Eligible(sessionId: string): boolean {
+        return isCodexV4SyncEligible(
+            storage.getState().sessions[sessionId]?.metadata,
+        );
+    }
+
     async publishCodexV4Command(
         sessionId: string,
         draft: CodexV4CommandDraft,
         commandId: string = randomUUID(),
     ) {
-        if (!this.isCodexV4Activated(sessionId)) {
-            throw new Error('Codex Sync v4 is not active for this session');
+        if (!this.isCodexV4Eligible(sessionId)) {
+            throw new Error('Codex Sync v4 is not enabled for this session');
         }
         const command = createCodexV4Command(draft, { commandId });
         const assertCurrentSessionAllowsCommand = () => {
             const state = storage.getState();
             const session = state.sessions[sessionId];
+            if (!session || !isCodexV4SyncEligible(session.metadata)) {
+                throw new Error('Codex Sync v4 is no longer enabled for this session');
+            }
             if (
-                session
-                && isSessionMachineDeleted(session, state.machines, state.machinesLoaded)
+                isSessionMachineDeleted(session, state.machines, state.machinesLoaded)
             ) {
                 throw new Error('The source machine was deleted; this session is read-only');
             }
@@ -749,7 +759,7 @@ class Sync {
         const localId = options?.localKey ?? randomUUID();
 
         const flavor = session.metadata?.flavor;
-        const useCodexV4 = this.isCodexV4Activated(sessionId);
+        const useCodexV4 = this.isCodexV4Eligible(sessionId);
         const codexV4Capabilities = useCodexV4
             ? resolveCodexV4SessionCapabilities(
                 session.metadata,
@@ -867,6 +877,7 @@ class Sync {
 
         const codexV4Projection = useCodexV4
             ? storage.getState().codexV4Sessions[sessionId]
+                ?? createCodexV4Projection(codexV4Capabilities?.ownedThreadId ?? null)
             : null;
         if (codexV4Projection && parsedCodexV4Input) {
             const draft = commandForCodexV4Input({
@@ -1524,8 +1535,7 @@ class Sync {
         });
 
         if (!response.ok) {
-            console.error(`Failed to fetch machines: ${response.status}`);
-            return;
+            throw new Error(`Failed to fetch machines: HTTP ${response.status}`);
         }
 
         const data = await response.json();
@@ -3009,11 +3019,19 @@ class Sync {
         }
     }
 
-    private reconcileCodexV4Clients(sessions: Array<{ id: string; metadata: Session['metadata'] }>): void {
+    private reconcileCodexV4Clients(sessions: Array<{
+        id: string;
+        metadata: Session['metadata'];
+        originMachineId?: string | null;
+    }>): void {
         this.codexV4Clients.reconcile(sessions.flatMap((session) => {
             if (!isCodexV4SyncEligible(session.metadata)) return [];
             const sessionKey = this.encryption.getSessionDataKey(session.id);
-            return sessionKey ? [{ sessionId: session.id, sessionKey }] : [];
+            return sessionKey ? [{
+                sessionId: session.id,
+                sessionKey,
+                machineId: session.metadata?.machineId ?? session.originMachineId ?? null,
+            }] : [];
         }));
     }
 

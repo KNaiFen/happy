@@ -305,6 +305,7 @@ function PickerContent({
         return (
             <BubblePressable
                 key={item.key}
+                testID={`picker-option-${item.key}`}
                 style={(p) => [
                     pickerStyles.option,
                     embedded && pickerStyles.embeddedOption,
@@ -694,6 +695,8 @@ const PromptInput = React.memo(React.forwardRef<MultiTextInputHandle, PromptInpu
         return (
             <MultiTextInput
                 ref={ref}
+                testID="new-session-prompt"
+                accessibilityLabel={props.placeholder}
                 value={value}
                 onChangeText={onChangeText}
                 placeholder={props.placeholder}
@@ -1809,6 +1812,7 @@ function NewSessionScreen() {
             ]}
         >
             <Pressable
+                testID="new-session-send"
                 style={(pressedState) => [
                     styles.sendButtonInner,
                     pressedState.pressed && styles.sendButtonInnerPressed,
@@ -1862,6 +1866,7 @@ function NewSessionScreen() {
                 {isNativeMobile && (
                     <View style={styles.mobileComposerLeftControls}>
                         <BubblePressable
+                            testID="new-session-agent-picker"
                             onPress={() => togglePicker('agent')}
                             style={(pressedState) => [
                                 styles.composerAgentButton,

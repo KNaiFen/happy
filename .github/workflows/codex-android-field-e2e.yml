@@ -1,0 +1,265 @@
+name: Codex Android field E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/happy-wire/**"
+      - "packages/happy-server/**"
+      - "packages/happy-cli/**"
+      - "packages/happy-app/**"
+      - "scripts/ci/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/codex-android-field-e2e.yml"
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-android-field-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-field:
+    name: API 36 App to Codex field round trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      CI: "1"
+      HAPPY_MOBILE_E2E_PORT: "53586"
+      HAPPY_MOBILE_E2E_ROUNDTRIP_TIMEOUT_MS: "900000"
+      MAESTRO_VERSION: "2.7.0"
+      MAESTRO_SHA256: "a4ccab6b604617e7aef6db4f885666056eabe5cfa32befaa3bc994041b8fcbb5"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+
+      - name: Configure Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire and CLI
+        run: |
+          pnpm --filter @slopus/happy-wire build
+          pnpm --filter happy build
+
+      - name: Install pinned Codex CLI
+        run: |
+          npm install --global @openai/codex@0.145.0
+          CODEX_BIN="$(npm prefix --global)/bin/codex"
+          test -x "$CODEX_BIN"
+          test "$(timeout 10s "$CODEX_BIN" --version)" = "codex-cli 0.145.0"
+          printf 'HAPPY_SCENARIO_CODEX_BIN=%s\n' "$CODEX_BIN" >> "$GITHUB_ENV"
+
+      - name: Generate Android development project
+        env:
+          APP_ENV: development
+          NODE_ENV: development
+          HAPPY_DISABLE_OTA: "1"
+          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+        run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
+
+      - name: Build x86_64 debug APK
+        env:
+          APP_ENV: development
+          NODE_ENV: development
+          HAPPY_DISABLE_OTA: "1"
+          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          packages/happy-app/android/gradlew \
+            -p packages/happy-app/android \
+            assembleDebug \
+            -PreactNativeArchitectures=x86_64 \
+            --no-daemon
+
+      - name: Install pinned Maestro CLI
+        run: |
+          ARCHIVE="$RUNNER_TEMP/maestro.zip"
+          INSTALL_ROOT="$RUNNER_TEMP/maestro-${MAESTRO_VERSION}"
+          curl --fail --location --silent --show-error \
+            "https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$MAESTRO_SHA256" "$ARCHIVE" | sha256sum --check
+          mkdir -p "$INSTALL_ROOT"
+          unzip -q "$ARCHIVE" -d "$INSTALL_ROOT"
+          MAESTRO_BIN="$INSTALL_ROOT/maestro/bin/maestro"
+          test -x "$MAESTRO_BIN"
+          test "$("$MAESTRO_BIN" --version)" = "$MAESTRO_VERSION"
+          printf 'MAESTRO_BIN=%s\n' "$MAESTRO_BIN" >> "$GITHUB_ENV"
+
+      - name: Start real relay and Happy daemon fixture
+        id: fixture
+        run: |
+          ROOT="$RUNNER_TEMP/happy-mobile-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          STATE_FILE="$ROOT/state.json"
+          FIXTURE_LOG="$RUNNER_TEMP/happy-mobile-e2e-fixture.log"
+          PID_FILE="$RUNNER_TEMP/happy-mobile-e2e.pid"
+          mkdir -p "$ROOT"
+          HAPPY_MOBILE_E2E_ROOT="$ROOT" \
+          HAPPY_MOBILE_E2E_STATE_FILE="$STATE_FILE" \
+          node node_modules/tsx/dist/cli.mjs \
+            --tsconfig packages/happy-cli/tsconfig.json \
+            scripts/ci/codex-mobile-field-fixture.ts \
+            > "$FIXTURE_LOG" 2>&1 &
+          FIXTURE_PID=$!
+          printf '%s\n' "$FIXTURE_PID" > "$PID_FILE"
+
+          for _ in $(seq 1 900); do
+            if test -f "$STATE_FILE"; then
+              break
+            fi
+            if ! kill -0 "$FIXTURE_PID" 2>/dev/null; then
+              echo "Mobile fixture exited during startup." >&2
+              tail -n 200 "$FIXTURE_LOG" >&2
+              exit 1
+            fi
+            sleep 0.1
+          done
+          test -f "$STATE_FILE"
+
+          node - "$STATE_FILE" "$GITHUB_ENV" <<'NODE'
+          const fs = require('node:fs');
+          const [statePath, envPath] = process.argv.slice(2);
+          const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+          for (const value of [state.appToken, state.appSecret]) {
+            process.stdout.write(`::add-mask::${value}\n`);
+          }
+          fs.appendFileSync(
+            envPath,
+            [
+              `EXPO_PUBLIC_DEV_TOKEN=${state.appToken}`,
+              `EXPO_PUBLIC_DEV_SECRET=${state.appSecret}`,
+              `HAPPY_MOBILE_E2E_ROOT=${state.root}`,
+              `HAPPY_MOBILE_E2E_STATE_FILE=${statePath}`,
+              `HAPPY_MOBILE_E2E_PID_FILE=${process.env.RUNNER_TEMP}/happy-mobile-e2e.pid`,
+              '',
+            ].join('\n'),
+          );
+          NODE
+
+      - name: Start Metro for the standalone debug APK
+        env:
+          APP_ENV: development
+          NODE_ENV: development
+          EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
+          EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
+        run: |
+          METRO_PID_FILE="$RUNNER_TEMP/happy-mobile-metro.pid"
+          pnpm --filter happy-app exec expo start --localhost \
+            > "$RUNNER_TEMP/happy-mobile-metro.log" 2>&1 &
+          METRO_PID=$!
+          printf '%s\n' "$METRO_PID" > "$METRO_PID_FILE"
+          for _ in $(seq 1 900); do
+            if curl --fail --silent http://127.0.0.1:8081/status \
+              | grep -Fq "packager-status:running"; then
+              exit 0
+            fi
+            if ! kill -0 "$METRO_PID" 2>/dev/null; then
+              echo "Metro exited during startup." >&2
+              tail -n 200 "$RUNNER_TEMP/happy-mobile-metro.log" >&2
+              exit 1
+            fi
+            sleep 0.1
+          done
+          echo "Timed out waiting for Metro." >&2
+          exit 1
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run API 36 Android field scenario
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          disable-spellchecker: true
+          script: bash scripts/ci/run-codex-android-field-e2e.sh
+
+      - name: Stop fixture and Metro
+        if: always()
+        run: |
+          for PID_FILE in \
+            "$RUNNER_TEMP/happy-mobile-metro.pid" \
+            "$RUNNER_TEMP/happy-mobile-e2e.pid"; do
+            if test ! -f "$PID_FILE"; then
+              continue
+            fi
+            PID="$(tr -d '[:space:]' < "$PID_FILE")"
+            if kill -0 "$PID" 2>/dev/null; then
+              kill -TERM "$PID"
+              for _ in $(seq 1 100); do
+                if ! kill -0 "$PID" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+            fi
+          done
+
+      - name: Upload Android field artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-android-field-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/happy-mobile-field-artifacts
+            ${{ runner.temp }}/happy-mobile-metro.log
+            ${{ runner.temp }}/happy-mobile-e2e-fixture.log
+            ${{ env.HAPPY_MOBILE_E2E_ROOT }}/roundtrip-verified.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload fixture logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-android-field-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/happy-mobile-e2e-fixture.log
+            ${{ env.HAPPY_MOBILE_E2E_ROOT }}/migration.log
+            ${{ env.HAPPY_MOBILE_E2E_ROOT }}/relay.log
+            ${{ env.HAPPY_MOBILE_E2E_ROOT }}/daemon.log
+            ${{ env.HAPPY_MOBILE_E2E_ROOT }}/cli-home/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7

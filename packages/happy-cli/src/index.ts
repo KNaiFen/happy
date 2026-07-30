@@ -40,6 +40,14 @@ import { getInsecureRelayWarning, isInsecureHttpUrl } from './utils/serverUrl'
 (async () => {
   const args = process.argv.slice(2)
 
+  if (
+    args.length === 1
+    && (args[0] === '--version' || args[0] === '-v')
+  ) {
+    console.log(`happy version: ${packageJson.version}`)
+    return
+  }
+
   // If --version is passed - do not log, its likely daemon inquiring about our version
   if (!args.includes('--version')) {
     logger.debug('Starting happy CLI with args: ', process.argv)

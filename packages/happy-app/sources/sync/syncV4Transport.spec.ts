@@ -89,6 +89,24 @@ describe('HttpAppSyncV4Transport', () => {
         ]);
     });
 
+    it('scopes every session request to its encrypted source machine', async () => {
+        const transport = new HttpAppSyncV4Transport('machine-1');
+
+        await transport.getCapabilities(traceIds.capabilities);
+        await transport.postMutations('session-1', [mutation], traceIds.mutations);
+        await transport.getChanges('session-1', 1, 100, traceIds.changes);
+        await transport.getSnapshot('session-1', null, 100, traceIds.snapshot);
+
+        expect(mocks.request.mock.calls.map(([, options]) => (
+            new Headers(options?.headers).get('X-Happy-Machine-Id')
+        ))).toEqual([
+            'machine-1',
+            'machine-1',
+            'machine-1',
+            'machine-1',
+        ]);
+    });
+
     it('rejects malformed trace IDs before issuing a request', async () => {
         const transport = new HttpAppSyncV4Transport();
 
