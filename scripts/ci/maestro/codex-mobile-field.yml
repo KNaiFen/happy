@@ -40,6 +40,11 @@ tags:
     id: new-session-send
 
 - extendedWaitUntil:
+    visible: Enjoying the app?
+    timeout: 30000
+- tapOn: Not really
+
+- extendedWaitUntil:
     visible: hello-from-android-e2e
     timeout: 30000
 - extendedWaitUntil:

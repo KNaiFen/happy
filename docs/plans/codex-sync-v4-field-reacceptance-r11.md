@@ -26,6 +26,22 @@ Android artifact 表明：
 `newArchEnabled=false` 已不再受支持且会被忽略，因此不得用 legacy-renderer
 构建制造错误的绿色验收。
 
+GitHub Actions run `30579843712` 随后证明 standalone 方向有效：
+
+- New Architecture release-type APK 成功构建、普通 launcher 冷启动，零 Machine
+  首页断言通过，不再复现 Dev Launcher/Fabric 启动崩溃。
+- App 创建 Codex 会话并发送首条 canary 后，relay、CLI 和 stable-v2 fake Codex
+  已完成真实往返。安全诊断报告为 `verified`，v3 message 为 `0`，snapshot 含
+  `codex.command`、`codex.commandResult`、两个 `codex.item`、两个
+  `codex.part`、`codex.runtime`、`codex.thread` 和 `codex.turn`。
+- 失败截图中 `Fake Codex response` 已实际渲染；Maestro 的可见性断言失败，是
+  首次创建会话后 App 正常弹出的 `Enjoying the app?` 反馈对话框遮挡了底层会话，
+  不是 v4 消息未到达。
+
+现场流程必须把该真实首次使用弹层作为用户路径的一部分：等待反馈对话框、选择
+`Not really` 使回答持久化，再断言首条回复和进程死亡恢复。不得通过关闭产品反馈
+逻辑或直接写 MMKV 绕过弹层。
+
 ## 已确认根因
 
 - `HttpAppSyncV4Transport` 为 v4 请求构造 `Headers`，以保留 trace 和
@@ -84,6 +100,9 @@ Android artifact 表明：
 - Android UI 流程拆成零 Machine、Machine 实时到达、业务交互和进程死亡恢复四个
   可观察阶段。任一阶段失败都留下 activity、logcat、Maestro hierarchy 和截图，
   不再把 Dev Launcher/Metro 生命周期问题误报为同步失败。
+- 首次会话建立后的真实反馈对话框由 Maestro 显式等待并选择拒绝；随后才验证
+  assistant part。该步骤同时保证弹层不会遮挡回复断言或在进程死亡恢复阶段再次
+  出现。
 - fixture 在每个场景完成后写出仅含 hash、v3 计数和 v4 entity 类型计数的安全
   验收报告；CI 必须解析并校验该报告，不能只等待完成标记。失败 artifact 同时上传
   relay/CLI 日志与报告。
