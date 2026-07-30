@@ -59,6 +59,13 @@ development-client 深链之间的时序竞态。本文是本轮实现、测试�
   当前 `expo-dev-launcher` 源码确认 URL host、`url` 参数和 scheme 均正确，
   因此修复为先等待 Dev Launcher 的 `Development Build` 首屏完整可见，再派发
   deep link；不得继续增加 Happy 首页断言超时来掩盖启动 intent 竞态。
+- 第五轮已越过 launcher、加载真实 Happy bundle，并从零 session 首页看到在线
+  Machine 后进入 Codex 新建页；这两项现场缺陷的 UI 路径均已实际执行。失败发生
+  在 Maestro `inputText`：API 36 设备服务逐字符输入到 `hello-from-a` 后卡住，
+  120 秒无响应并触发 gRPC deadline，App、relay 和 daemon 均未收到发送动作。
+  按 Maestro 官方抗抖动用法改为 `setClipboard` 后对已聚焦输入框执行
+  `pasteText`，保留完整 canary、发送按钮和消息可见断言，不通过缩短文本或直接
+  注入 App store 绕过 UI。
 
 ## 现场现象
 
@@ -150,6 +157,9 @@ development-client 深链之间的时序竞态。本文是本轮实现、测试�
 - Maestro 固定版本归档必须先通过固定 SHA-256；job 必须关闭匿名分析与功能
   通知，避免首次运行提示污染 `--version` stdout，再严格校验版本号。不得删除
   固定版本或校验和来绕过安装失败。
+- Android 文本录入使用 Maestro 内部 clipboard 的 `setClipboard`/`pasteText`
+  原子路径，避免 API 36 上逐字符 `inputText` 卡死；输入框聚焦、完整 canary
+  可见、发送按钮和最终消息仍由 UI 断言，不允许以 fixture/API 直接注入 prompt。
 - fixture round-trip 等待时间必须由受限整数环境变量控制；云端冷启动窗口设为
   15 分钟，不使用无界等待，也不把模拟器启动耗时误报为 Codex 消息丢失。
 - App 仅在 `__DEV__` 且显式 CI 环境变量存在时，自动写入临时凭据并允许

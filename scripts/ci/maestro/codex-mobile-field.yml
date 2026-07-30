@@ -39,7 +39,9 @@ tags:
 
 - tapOn:
     id: new-session-prompt
-- inputText: hello-from-android-e2e
+- setClipboard: hello-from-android-e2e
+- pasteText
+- assertVisible: hello-from-android-e2e
 - hideKeyboard
 - tapOn:
     id: new-session-send
