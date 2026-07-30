@@ -66,6 +66,23 @@ development-client 深链之间的时序竞态。本文是本轮实现、测试�
   按 Maestro 官方抗抖动用法改为 `setClipboard` 后对已聚焦输入框执行
   `pasteText`，保留完整 canary、发送按钮和消息可见断言，不通过缩短文本或直接
   注入 App store 绕过 UI。
+- 第六轮已通过 clipboard 输入、完整 canary 和发送动作，并由真实 Machine RPC
+  创建 Codex v4 session；Android 随后在发布首个 `codex.command` 前抛出
+  `_libsodium.default.crypto_aead_chacha20poly1305_ietf_encrypt is not a
+  function`。daemon 日志确认 session 已启动但 v4 inbound journal 始终为空，
+  因而不是 Codex 回复或 relay mutation 丢失。`@more-tech/react-native-libsodium`
+  的 native 入口只实现 XChaCha20-Poly1305，TypeScript 声明却继承 web/sumo
+  surface，导致 Node 单元测试使用 `libsodium-wrappers` 时产生假阳性。
+- 修复保持 Sync v4 ciphertext version 1、12 字节 nonce、16 字节 tag 和现有
+  CLI/OpenSSL 互操作格式不变；App 的标准 IETF ChaCha20-Poly1305 改由固定版本
+  的纯 TypeScript 审计库实现，native libsodium 只继续提供已实际支持的随机数、
+  box 和 secretbox 能力。不得改成 XChaCha 或静默生成新 wire version，否则会
+  破坏已有 v4 snapshot 和当前 CLI。
+- 本地修复验证已通过：native-surface mock 下 CLI 固定向量、默认随机 nonce
+  加/解密和篡改拒绝共 3 项；App 全量 `88/88` 文件、`973/973` 测试和 typecheck
+  通过，pnpm 10.11.0 frozen lockfile 通过，Expo Web export 成功解析并打包新的
+  Sync v4 crypto 模块。生产依赖审计仍为既有 `0 critical / 73 high`；新增
+  `@noble/ciphers 1.3.0` 无运行时依赖且没有新增 advisory。
 
 ## 现场现象
 
@@ -160,6 +177,10 @@ development-client 深链之间的时序竞态。本文是本轮实现、测试�
 - Android 文本录入使用 Maestro 内部 clipboard 的 `setClipboard`/`pasteText`
   原子路径，避免 API 36 上逐字符 `inputText` 卡死；输入框聚焦、完整 canary
   可见、发送按钮和最终消息仍由 UI 断言，不允许以 fixture/API 直接注入 prompt。
+- App Sync v4 单元测试必须使用与 native surface 一致、明确不含标准
+  `crypto_aead_chacha20poly1305_ietf_*` 的 libsodium mock，并继续匹配 CLI
+  固定向量；Android 现场工作流必须实际执行一次加密和一次解密，单纯检查导出名、
+  TypeScript 类型或 Node `libsodium-wrappers` 不算通过。
 - fixture round-trip 等待时间必须由受限整数环境变量控制；云端冷启动窗口设为
   15 分钟，不使用无界等待，也不把模拟器启动耗时误报为 Codex 消息丢失。
 - App 仅在 `__DEV__` 且显式 CI 环境变量存在时，自动写入临时凭据并允许
@@ -184,7 +205,8 @@ development-client 深链之间的时序竞态。本文是本轮实现、测试�
 
 ### 5. 版本与交付
 
-- App：`1.11.12 -> 1.11.13`。
+- App：首轮修复已发布 `1.11.13`；Android native AEAD 修复推进到 `1.11.14`，
+  不复用已运行 release workflow 的版本。
 - CLI：合并当前独立 `--version` 修复，`1.4.7 -> 1.4.8`。
 - Server：因新增 v4 Machine scope CORS header，`1.1.27 -> 1.1.28`。
 - Wire 无协议或运行时代码变更，不推进版本。

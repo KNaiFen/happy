@@ -6,6 +6,7 @@ import {
     type CodexEntityV4,
     type SyncV4Aad,
 } from '@slopus/happy-wire';
+import { chacha20poly1305 } from '@noble/ciphers/chacha';
 import { decodeBase64, encodeBase64 } from '../encryption/base64';
 import { deriveKey } from '../encryption/deriveKey';
 import { hmac_sha512 } from '../encryption/hmac_sha512';
@@ -65,10 +66,14 @@ export class SyncV4Crypto {
 
     async encryptEntity(aad: SyncV4Aad, entity: CodexEntityV4): Promise<string> {
         this.assertAadSession(aad);
-        if (entity.entityType !== aad.entityType) {
+        const canonicalEntity = CodexEntityV4Schema.parse(entity);
+        if (canonicalEntity.entityType !== aad.entityType) {
             throw new Error('Sync v4 entity type does not match AAD');
         }
-        const expectedEntityId = await this.opaqueEntityId(entity.entityType, entity.providerId);
+        const expectedEntityId = await this.opaqueEntityId(
+            canonicalEntity.entityType,
+            canonicalEntity.providerId,
+        );
         if (expectedEntityId !== aad.entityId) {
             throw new Error('Sync v4 provider ID does not match opaque entity ID');
         }
@@ -76,16 +81,13 @@ export class SyncV4Crypto {
         if (nonce.length !== SYNC_V4_NONCE_BYTES) {
             throw new Error('Sync v4 nonce source returned an invalid length');
         }
-        const plaintext = new TextEncoder().encode(JSON.stringify(entity));
+        const plaintext = new TextEncoder().encode(JSON.stringify(canonicalEntity));
         const additionalData = new TextEncoder().encode(encodeSyncV4Aad(aad));
-        const ciphertext = sodium.crypto_aead_chacha20poly1305_ietf_encrypt(
-            plaintext,
-            additionalData,
-            null,
-            nonce,
+        const ciphertext = chacha20poly1305(
             this.entityAeadKey,
-            'uint8array',
-        ) as Uint8Array;
+            nonce,
+            additionalData,
+        ).encrypt(plaintext);
         const bundle = new Uint8Array(1 + nonce.length + ciphertext.length);
         bundle[0] = SYNC_V4_CIPHERTEXT_VERSION;
         bundle.set(nonce, 1);
@@ -104,14 +106,11 @@ export class SyncV4Crypto {
             const nonce = bundle.slice(1, 1 + SYNC_V4_NONCE_BYTES);
             const ciphertext = bundle.slice(1 + SYNC_V4_NONCE_BYTES);
             const additionalData = new TextEncoder().encode(encodeSyncV4Aad(aad));
-            const plaintext = sodium.crypto_aead_chacha20poly1305_ietf_decrypt(
-                null,
-                ciphertext,
-                additionalData,
-                nonce,
+            const plaintext = chacha20poly1305(
                 this.entityAeadKey,
-                'uint8array',
-            ) as Uint8Array;
+                nonce,
+                additionalData,
+            ).decrypt(ciphertext);
             const entity = CodexEntityV4Schema.parse(JSON.parse(new TextDecoder().decode(plaintext)));
             if (entity.entityType !== aad.entityType) {
                 throw new SyncV4DecryptionError();

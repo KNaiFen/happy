@@ -6,7 +6,12 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@/encryption/libsodium.lib', async () => {
     const sodium = (await import('libsodium-wrappers')).default;
     await sodium.ready;
-    return { default: sodium };
+    return {
+        default: {
+            ready: sodium.ready,
+            randombytes_buf: sodium.randombytes_buf,
+        },
+    };
 });
 
 vi.mock('@/encryption/hmac_sha512', () => ({
@@ -18,7 +23,7 @@ vi.mock('@/encryption/hmac_sha512', () => ({
 const sessionKey = Uint8Array.from({ length: 32 }, (_, index) => index);
 const nonce = Uint8Array.from({ length: 12 }, (_, index) => 0xa0 + index);
 const opaqueEntityId = 'FB3k6oMuHXDCahGdf5_8oHMotEe6X9yuRE9QOf72uok';
-const encryptedVector = 'AaChoqOkpaanqKmqq/4yaqnQnL9rELQvKqBxR11IeGxODZ0EON3TTx6SDW+QXb+M/k2tZlY0VH/Lg69SiybDd3ZgzL6EgUp2fSjJ4VsiT3gG+4U9x+W7R/9mUVGIZ5yn54LNHt0w0OnVndM+9+pkqBVpjnWifPS+KtyLM3ujXH/EEfnWOM30iLOrwJ4q35CG46nyIuSrsTX9/S3P+gCzzULNGT+f5u3pFSRHly7a5sa+xJ0TV7RTqKLpG+vMnkmMYAsXY+gR2LV7GrtGY9DX451CLC0Fk+z0UgGG+OwyeTVN/t4Z5e1W4Ht84LKO5BqS9K27HtzH2yrFjIVVRCzVoCW5/g96gVE7F/BHyBObyWvjKAM2nc1oKuWpsiS5HY3v/xvM5I1EUd27I5y3Xi/uc3nCxA96FV60mGlcS3TTmlHM/WfXb+CnwD4EbGFrSA==';
+const encryptedVector = 'AaChoqOkpaanqKmqq/4yaqnQnL9rELQvKqBxR11IeGxOGIEfJ8DOfhWrDG+QXayC6Fz4eQR5BGibyuxWnC30ajA/j8fMgQUkaSjP8BJSGXYeqcZ0hPSwV9dmCj/AJ9WnqNDKEM0wzIbR3pt75OpkqBVpjnWifPS+KtyLM3ujXH/EEfnWOM30iLOrwJ4q35CG46nyIuSrsTX9/S3P+gCzzULNGT+f5u3pFSRHly7a5sa+xJ0TV7RTqKLpG+vMnkmMYAsXY+gR2LV7GrtGY9DX451CLC0Fk+z0UgGG+OwyeTVN/t4Z5e1W4Ht84LKO5BqS9K27HtzH2yrFjIVVRCzVoCW5/g96gVE7F/BHyBObyWvjKAM2nc1oKuWpsiS5HY3v/xvM5I1EUd27I5y3Xi/uc3nCxA96FV60mGlcS3TTCnMIzcSYY16HBbL+MOFM6Q==';
 const entity = {
     schemaVersion: 1 as const,
     entityType: 'codex.part' as const,
@@ -58,6 +63,23 @@ describe('SyncV4Crypto interoperability', () => {
         };
         await expect(crypto.encryptEntity(aad, entity)).resolves.toBe(encryptedVector);
         await expect(crypto.decryptEntity(aad, encryptedVector)).resolves.toEqual(entity);
+    });
+
+    it('encrypts and decrypts with the native libsodium surface', async () => {
+        const crypto = await SyncV4Crypto.create({
+            sessionId: 'session-1',
+            sessionKey,
+        });
+        const aad = {
+            sessionId: 'session-1',
+            entityId: opaqueEntityId,
+            entityType: entity.entityType,
+            revision: 1,
+            op: 'upsert' as const,
+        };
+        const ciphertext = await crypto.encryptEntity(aad, entity);
+        expect(ciphertext).not.toBe(encryptedVector);
+        await expect(crypto.decryptEntity(aad, ciphertext)).resolves.toEqual(entity);
     });
 
     it('rejects altered authenticated fields and ciphertext', async () => {
