@@ -3,6 +3,8 @@ import { Server, Socket } from "socket.io";
 import type { RemoteSocket } from "socket.io";
 import type { DefaultEventsMap } from "socket.io/dist/typed-events";
 import { Counter, Histogram, register } from 'prom-client';
+import { diagnosticHash } from "@/utils/diagnosticHash";
+import { canCallRpcMethod, canRegisterRpcMethod } from "./rpcScope";
 
 // RPC routing uses Socket.IO rooms. A daemon registering method M for user U
 // joins room `rpc:U:M`. Callers look the daemon up cross-replica via
@@ -93,9 +95,13 @@ async function fetchRoomSockets(io: Server, room: string, timeoutMs: number, con
         return await io.in(room)
             .timeout(timeoutMs)
             .fetchSockets();
-    } catch (error) {
+    } catch {
         rpcFetchSocketsTimeouts.inc({ context });
-        log({ module: 'websocket' }, `fetchSockets failed for ${room} (timeout=${timeoutMs}ms): ${error}`);
+        log({
+            module: 'websocket',
+            roomHash: diagnosticHash(room),
+            timeoutMs,
+        }, 'RPC room lookup failed');
         return [];
     }
 }
@@ -126,6 +132,12 @@ async function waitForRoomMember(io: Server, room: string, maxMs: number, metric
 }
 
 export function rpcHandler(userId: string, socket: Socket, io: Server) {
+    const scope = {
+        clientType: socket.data.clientType,
+        credentialId: socket.data.credentialId,
+        sessionId: socket.data.sessionId,
+        machineId: socket.data.machineId,
+    };
 
     socket.on('rpc-register', (data: any) => {
         try {
@@ -134,10 +146,14 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
                 socket.emit('rpc-error', { type: 'register', error: 'Invalid method name' });
                 return;
             }
+            if (!canRegisterRpcMethod(scope, method)) {
+                socket.emit('rpc-error', { type: 'register', error: 'RPC scope mismatch' });
+                return;
+            }
             socket.join(rpcRoom(userId, method));
             socket.emit('rpc-registered', { method });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in rpc-register: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'RPC registration failed');
             socket.emit('rpc-error', { type: 'register', error: 'Internal error' });
         }
     });
@@ -149,10 +165,14 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
                 socket.emit('rpc-error', { type: 'unregister', error: 'Invalid method name' });
                 return;
             }
+            if (!canRegisterRpcMethod(scope, method)) {
+                socket.emit('rpc-error', { type: 'unregister', error: 'RPC scope mismatch' });
+                return;
+            }
             socket.leave(rpcRoom(userId, method));
             socket.emit('rpc-unregistered', { method });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in rpc-unregister: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'RPC unregistration failed');
             socket.emit('rpc-error', { type: 'unregister', error: 'Internal error' });
         }
     });
@@ -174,6 +194,11 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
                 callback?.({ ok: false, error: 'Invalid parameters: method is required' });
                 return;
             }
+            if (!canCallRpcMethod(scope, method)) {
+                finish('scope_mismatch');
+                callback?.({ ok: false, error: 'RPC scope mismatch' });
+                return;
+            }
 
             // 1. Find the daemon socket(s) cross-replica via the adapter.
             // If the room is empty OR fetchSockets fails (peer replica
@@ -191,8 +216,12 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
                 return;
             }
             if (targets.length > 1) {
-                log({ module: 'websocket', level: 'warn' },
-                    `Multiple sockets in ${room} (${targets.length}); using first`);
+                log({
+                    module: 'websocket',
+                    level: 'warn',
+                    roomHash: diagnosticHash(room),
+                    targetCount: targets.length,
+                }, 'Multiple RPC providers found');
             }
 
             const target = targets[0];
@@ -242,15 +271,21 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
                 finish('success');
                 callback?.({ ok: true, result: response });
             } catch (error) {
-                const errorMsg = error instanceof Error ? error.message : 'RPC call failed';
-                finish(errorMsg === 'RPC target disconnected' ? 'target_disconnected' : 'timeout');
-                callback?.({ ok: false, error: errorMsg });
+                const targetDisconnected = error instanceof Error
+                    && error.message === 'RPC target disconnected';
+                finish(targetDisconnected ? 'target_disconnected' : 'timeout');
+                callback?.({
+                    ok: false,
+                    error: targetDisconnected
+                        ? 'RPC target disconnected'
+                        : 'RPC call timed out',
+                });
             } finally {
                 presenceAlive = false;
             }
-        } catch (error) {
+        } catch {
             finish('internal_error');
-            log({ module: 'websocket', level: 'error' }, `Error in rpc-call: ${error}`);
+            log({ module: 'websocket', level: 'error' }, 'RPC call failed');
             callback?.({ ok: false, error: 'Internal error' });
         }
     });

@@ -104,6 +104,7 @@ function makeSession() {
         metadata: {
             path: '/tmp',
             host: 'localhost',
+            machineId: 'machine-1',
             homeDir: '/home/user',
             happyHomeDir: '/home/user/.happy',
             happyLibDir: '/home/user/.happy/lib',
@@ -256,6 +257,17 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(order).toEqual(['handler', 'start']);
         await client.close();
         expect(syncV4.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses to start Sync v4 when decrypted machine identity is unavailable', async () => {
+        const create = vi.spyOn(SyncV4Client, 'create');
+        const client = new ApiSessionClient('fake-token', session);
+        (client as unknown as { metadata: null }).metadata = null;
+
+        await expect(client.enableSyncV4(() => async () => undefined))
+            .rejects.toThrow('requires a machine identity');
+        expect(create).not.toHaveBeenCalled();
+        await client.close();
     });
 
     it('shares one in-flight Sync v4 initialization across concurrent callers', async () => {

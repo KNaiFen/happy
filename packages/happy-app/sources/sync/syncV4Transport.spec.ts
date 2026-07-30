@@ -19,6 +19,7 @@ import {
     AppSyncV4HttpTransport,
     HttpAppSyncV4Transport,
 } from './syncV4Transport';
+import { AppSyncV4SessionReadOnlyError } from './syncV4Client';
 
 const traceIds = {
     capabilities: '00000000000000000000000000000001',
@@ -45,8 +46,8 @@ describe('HttpAppSyncV4Transport', () => {
                 codex: {
                     enabled: true,
                     protocolVersion: 4,
-                    minimumHappyCliVersion: '1.4.2',
-                    minimumHappyAppVersion: '1.11.4',
+                    minimumHappyCliVersion: '1.4.7',
+                    minimumHappyAppVersion: '1.11.12',
                     minimumCodexCliVersion: '0.145.0',
                 },
             }, traceIds.capabilities))
@@ -103,8 +104,8 @@ describe('HttpAppSyncV4Transport', () => {
                 codex: {
                     enabled: true,
                     protocolVersion: 4,
-                    minimumHappyCliVersion: '1.4.2',
-                    minimumHappyAppVersion: '1.11.4',
+                    minimumHappyCliVersion: '1.4.7',
+                    minimumHappyAppVersion: '1.11.12',
                     minimumCodexCliVersion: '0.145.0',
                 },
             }))
@@ -112,8 +113,8 @@ describe('HttpAppSyncV4Transport', () => {
                 codex: {
                     enabled: true,
                     protocolVersion: 4,
-                    minimumHappyCliVersion: '1.4.2',
-                    minimumHappyAppVersion: '1.11.4',
+                    minimumHappyCliVersion: '1.4.7',
+                    minimumHappyAppVersion: '1.11.12',
                     minimumCodexCliVersion: '0.145.0',
                 },
             }, 'f'.repeat(32)));
@@ -125,13 +126,32 @@ describe('HttpAppSyncV4Transport', () => {
             .rejects.toMatchObject({ name: 'SyncV4ProtocolError' });
     });
 
+    it('maps the server read-only response without exposing response details', async () => {
+        mocks.request
+            .mockReset()
+            .mockResolvedValueOnce(new Response(
+                JSON.stringify({ error: 'sessionReadOnly' }),
+                {
+                    status: 409,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Happy-Sync-Trace': traceIds.mutations,
+                    },
+                },
+            ));
+        const transport = new HttpAppSyncV4Transport();
+
+        await expect(transport.postMutations('session-1', [mutation], traceIds.mutations))
+            .rejects.toBeInstanceOf(AppSyncV4SessionReadOnlyError);
+    });
+
     it('shares the production transport behavior with injected HTTP request adapters', async () => {
         const request = vi.fn(async () => jsonResponse({
             codex: {
                 enabled: true,
                 protocolVersion: 4,
-                minimumHappyCliVersion: '1.4.2',
-                minimumHappyAppVersion: '1.11.4',
+                minimumHappyCliVersion: '1.4.7',
+                minimumHappyAppVersion: '1.11.12',
                 minimumCodexCliVersion: '0.145.0',
             },
         }, traceIds.capabilities));

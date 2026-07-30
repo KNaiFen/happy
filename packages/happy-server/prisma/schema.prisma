@@ -56,14 +56,17 @@ model Account {
 }
 
 model TerminalAuthRequest {
-    id                String   @id @default(cuid())
-    publicKey         String   @unique
-    supportsV2        Boolean  @default(false)
+    id                String    @id @default(cuid())
+    publicKey         String    @unique
+    supportsV2        Boolean   @default(false)
+    credentialVersion Int       @default(1)
     response          String?
     responseAccountId String?
-    responseAccount   Account? @relation(fields: [responseAccountId], references: [id])
-    createdAt         DateTime @default(now())
-    updatedAt         DateTime @updatedAt
+    responseAccount   Account?  @relation(fields: [responseAccountId], references: [id])
+    revokedAt         DateTime?
+    machine           Machine?  @relation("MachineCredential")
+    createdAt         DateTime  @default(now())
+    updatedAt         DateTime  @updatedAt
 }
 
 model AccountAuthRequest {
@@ -107,6 +110,8 @@ model Session {
     lastActiveAt      DateTime         @default(now())
     createdAt         DateTime         @default(now())
     updatedAt         DateTime         @updatedAt
+    originMachineId   String?
+    originMachine     Machine?         @relation("SessionOriginMachine", fields: [originMachineId], references: [id], onDelete: SetNull)
     messages          SessionMessage[]
     syncV4Entities    SessionEntityV4[]
     syncV4Mutations   SessionMutationV4[]
@@ -115,6 +120,7 @@ model Session {
 
     @@unique([accountId, tag])
     @@index([accountId, updatedAt(sort: Desc)])
+    @@index([originMachineId])
 }
 
 model SessionEntityV4 {
@@ -257,13 +263,18 @@ model Machine {
     dataEncryptionKey  Bytes?
     seq                Int         @default(0)
     active             Boolean     @default(true)
+    deletedAt          DateTime?
+    credentialId       String?     @unique
+    credential         TerminalAuthRequest? @relation("MachineCredential", fields: [credentialId], references: [id], onDelete: SetNull)
     lastActiveAt       DateTime    @default(now())
     createdAt          DateTime    @default(now())
     updatedAt          DateTime    @updatedAt
     accessKeys         AccessKey[]
+    originSessions     Session[]   @relation("SessionOriginMachine")
 
     @@unique([accountId, id])
     @@index([accountId])
+    @@index([accountId, deletedAt])
 }
 
 model UploadedFile {

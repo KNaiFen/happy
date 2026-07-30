@@ -4,6 +4,8 @@ import type { CodexV4Projection } from './codexV4Projection';
 
 export interface CodexV4SessionCapabilities {
     readOnly: boolean;
+    providerReadOnly: boolean;
+    machineDeleted: boolean;
     ownedThreadId: string | null;
 }
 
@@ -31,11 +33,16 @@ export function assertCodexSessionWritable(metadata: Metadata | null | undefined
 export function resolveCodexV4SessionCapabilities(
     metadata: Metadata | null | undefined,
     projection?: CodexV4Projection | null,
+    options: { machineDeleted?: boolean } = {},
 ): CodexV4SessionCapabilities {
     const metadataThreadId = nonEmptyString(metadata?.codexThreadId);
     const projectedThreadId = nonEmptyString(projection?.thread?.threadId);
+    const providerReadOnly = isCodexSessionReadOnly(metadata);
+    const machineDeleted = options.machineDeleted === true;
     return {
-        readOnly: isCodexSessionReadOnly(metadata),
+        readOnly: providerReadOnly || machineDeleted,
+        providerReadOnly,
+        machineDeleted,
         ownedThreadId: metadataThreadId ?? projectedThreadId,
     };
 }

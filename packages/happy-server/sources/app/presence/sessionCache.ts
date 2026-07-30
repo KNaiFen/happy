@@ -1,6 +1,7 @@
 import { db } from "@/storage/db";
 import { log } from "@/utils/log";
 import { sessionCacheCounter, databaseUpdatesSkippedCounter } from "@/app/monitoring/metrics2";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 
 interface SessionCacheEntry {
     validUntil: number;
@@ -41,8 +42,8 @@ class ActivityCache {
         }
         
         this.batchTimer = setInterval(() => {
-            this.flushPendingUpdates().catch(error => {
-                log({ module: 'session-cache', level: 'error' }, `Error flushing updates: ${error}`);
+            this.flushPendingUpdates().catch(() => {
+                log({ module: 'session-cache', level: 'error' }, 'Error flushing updates');
             });
         }, this.BATCH_INTERVAL);
     }
@@ -77,8 +78,12 @@ class ActivityCache {
             }
             
             return false;
-        } catch (error) {
-            log({ module: 'session-cache', level: 'error' }, `Error validating session ${sessionId}: ${error}`);
+        } catch {
+            log({
+                module: 'session-cache',
+                level: 'error',
+                sessionHash: diagnosticHash(sessionId),
+            }, 'Error validating session');
             return false;
         }
     }
@@ -97,13 +102,12 @@ class ActivityCache {
         
         // Cache miss - check database
         try {
-            const machine = await db.machine.findUnique({
+            const machine = await db.machine.findFirst({
                 where: {
-                    accountId_id: {
-                        accountId: userId,
-                        id: machineId
-                    }
-                }
+                    accountId: userId,
+                    id: machineId,
+                    deletedAt: null,
+                },
             });
             
             if (machine) {
@@ -119,8 +123,12 @@ class ActivityCache {
             }
             
             return false;
-        } catch (error) {
-            log({ module: 'session-cache', level: 'error' }, `Error validating machine ${machineId}: ${error}`);
+        } catch {
+            log({
+                module: 'session-cache',
+                level: 'error',
+                machineHash: diagnosticHash(machineId),
+            }, 'Error validating machine');
             return false;
         }
     }
@@ -161,6 +169,16 @@ class ActivityCache {
         return false; // No update needed
     }
 
+    invalidateMachine(machineId: string): void {
+        this.machineCache.delete(machineId);
+    }
+
+    invalidateSessions(sessionIds: readonly string[]): void {
+        for (const sessionId of sessionIds) {
+            this.sessionCache.delete(sessionId);
+        }
+    }
+
     private async flushPendingUpdates(): Promise<void> {
         const sessionUpdates: { id: string, timestamp: number }[] = [];
         const machineUpdates: { id: string, timestamp: number, userId: string }[] = [];
@@ -192,15 +210,21 @@ class ActivityCache {
         if (sessionUpdates.length > 0) {
             try {
                 await Promise.all(sessionUpdates.map(update =>
-                    db.session.update({
-                        where: { id: update.id },
+                    db.session.updateMany({
+                        where: {
+                            id: update.id,
+                            OR: [
+                                { originMachineId: null },
+                                { originMachine: { deletedAt: null } },
+                            ],
+                        },
                         data: { lastActiveAt: new Date(update.timestamp), active: true }
                     })
                 ));
                 
                 log({ module: 'session-cache' }, `Flushed ${sessionUpdates.length} session updates`);
-            } catch (error) {
-                log({ module: 'session-cache', level: 'error' }, `Error updating sessions: ${error}`);
+            } catch {
+                log({ module: 'session-cache', level: 'error' }, 'Error updating sessions');
             }
         }
         
@@ -208,20 +232,19 @@ class ActivityCache {
         if (machineUpdates.length > 0) {
             try {
                 await Promise.all(machineUpdates.map(update =>
-                    db.machine.update({
+                    db.machine.updateMany({
                         where: {
-                            accountId_id: {
-                                accountId: update.userId,
-                                id: update.id
-                            }
+                            accountId: update.userId,
+                            id: update.id,
+                            deletedAt: null,
                         },
                         data: { lastActiveAt: new Date(update.timestamp), active: true }
                     })
                 ));
                 
                 log({ module: 'session-cache' }, `Flushed ${machineUpdates.length} machine updates`);
-            } catch (error) {
-                log({ module: 'session-cache', level: 'error' }, `Error updating machines: ${error}`);
+            } catch {
+                log({ module: 'session-cache', level: 'error' }, 'Error updating machines');
             }
         }
     }
@@ -250,8 +273,8 @@ class ActivityCache {
         }
         
         // Flush any remaining updates
-        this.flushPendingUpdates().catch(error => {
-            log({ module: 'session-cache', level: 'error' }, `Error flushing final updates: ${error}`);
+        this.flushPendingUpdates().catch(() => {
+            log({ module: 'session-cache', level: 'error' }, 'Error flushing final updates');
         });
     }
 }

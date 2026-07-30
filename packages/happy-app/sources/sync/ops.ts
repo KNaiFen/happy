@@ -23,8 +23,21 @@ import {
     isCodexSessionReadOnly,
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
+import { isSessionMachineDeleted } from './sessionMachineAccess';
 
 export type { SessionAgentModesPatch };
+
+function assertSessionInteractionAllowed(sessionId: string): void {
+    const state = storage.getState();
+    const session = state.sessions[sessionId];
+    if (
+        session
+        && isSessionMachineDeleted(session, state.machines, state.machinesLoaded)
+    ) {
+        throw new Error('The source machine was deleted; this session is read-only');
+    }
+    assertCodexSessionWritable(session?.metadata);
+}
 
 // Strict type definitions for all operations
 
@@ -430,7 +443,7 @@ export async function machineResumeSession(options: ResumeSessionOptions & { mod
     const { machineId, sessionId, model, permissionMode } = options;
 
     try {
-        assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+        assertSessionInteractionAllowed(sessionId);
         const result = await apiSocket.machineRPC<SpawnSessionResult, { sessionId: string; model?: string; permissionMode?: string }>(
             machineId,
             'resume-happy-session',
@@ -657,7 +670,10 @@ async function sessionUpdateAgentModesMetadata(
 export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModesPatch): void {
     const state = storage.getState();
     const session = state.sessions[sessionId];
-    if (isCodexSessionReadOnly(session?.metadata)) return;
+    if (
+        isCodexSessionReadOnly(session?.metadata)
+        || (session && isSessionMachineDeleted(session, state.machines, state.machinesLoaded))
+    ) return;
 
     // Only touch fields that actually change — clearing modes on a session
     // with no picks (e.g. every abort) must not cost a metadata round-trip.
@@ -706,7 +722,7 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
  */
 export async function sessionAbort(sessionId: string): Promise<void> {
     const metadata = storage.getState().sessions[sessionId]?.metadata;
-    assertCodexSessionWritable(metadata);
+    assertSessionInteractionAllowed(sessionId);
     if (!rigCanAbort(metadata)) {
         throw new Error('Abort is not available for this session');
     }
@@ -739,13 +755,13 @@ export async function sessionUpdateCodexQueuedMessage(
     id: string,
     text: string,
 ): Promise<void> {
-    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+    assertSessionInteractionAllowed(sessionId);
     await apiSocket.sessionRPC(sessionId, 'codex-update-queued-message', { id, text });
 }
 
 /** Move one CLI-owned Codex follow-up into the currently active turn. */
 export async function sessionSteerCodexQueuedMessage(sessionId: string, id: string): Promise<void> {
-    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+    assertSessionInteractionAllowed(sessionId);
     await apiSocket.sessionRPC(sessionId, 'codex-steer-queued-message', { id });
 }
 
@@ -753,7 +769,7 @@ export async function sessionSteerCodexQueuedMessage(sessionId: string, id: stri
  * Allow a permission request
  */
 export async function sessionAllow(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'approved' | 'approved_for_session', updatedInput?: Record<string, unknown>): Promise<void> {
-    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+    assertSessionInteractionAllowed(sessionId);
     if (sync.isCodexV4Activated(sessionId)) {
         await resolveCodexV4Request(sessionId, id, true, decision, updatedInput);
         return;
@@ -766,7 +782,7 @@ export async function sessionAllow(sessionId: string, id: string, mode?: 'defaul
  * Deny a permission request
  */
 export async function sessionDeny(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'denied' | 'abort'): Promise<void> {
-    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+    assertSessionInteractionAllowed(sessionId);
     if (sync.isCodexV4Activated(sessionId)) {
         await resolveCodexV4Request(sessionId, id, false, decision);
         return;
@@ -779,7 +795,7 @@ export async function sessionDeny(sessionId: string, id: string, mode?: 'default
  * Request mode change for a session
  */
 export async function sessionSwitch(sessionId: string, to: 'remote' | 'local'): Promise<boolean> {
-    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+    assertSessionInteractionAllowed(sessionId);
     const request: SessionModeChangeRequest = { to };
     const response = await apiSocket.sessionRPC<boolean, SessionModeChangeRequest>(
         sessionId,
@@ -797,7 +813,7 @@ export async function sessionGoalAction(
     action: SessionGoalActionRequest['action'],
     objective?: string,
 ): Promise<void> {
-    assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+    assertSessionInteractionAllowed(sessionId);
     if (sync.isCodexV4Activated(sessionId)) {
         const state = storage.getState();
         const threadId = resolveCodexV4SessionCapabilities(
@@ -870,6 +886,7 @@ async function resolveCodexV4Request(
  */
 export async function sessionBash(sessionId: string, request: SessionBashRequest): Promise<SessionBashResponse> {
     try {
+        assertSessionInteractionAllowed(sessionId);
         const metadata = storage.getState().sessions[sessionId]?.metadata;
         if (!rigCanUseShell(metadata)) {
             throw new Error('Shell access is not available for this session');
@@ -896,6 +913,7 @@ export async function sessionBash(sessionId: string, request: SessionBashRequest
  */
 export async function sessionReadFile(sessionId: string, path: string): Promise<SessionReadFileResponse> {
     try {
+        assertSessionInteractionAllowed(sessionId);
         const metadata = storage.getState().sessions[sessionId]?.metadata;
         if (!rigCanReadFiles(metadata)) {
             throw new Error('File reading is not available for this session');
@@ -925,6 +943,7 @@ export async function sessionWriteFile(
     expectedHash?: string | null
 ): Promise<SessionWriteFileResponse> {
     try {
+        assertSessionInteractionAllowed(sessionId);
         const metadata = storage.getState().sessions[sessionId]?.metadata;
         if (!rigCanWriteFiles(metadata)) {
             throw new Error('File writing is not available for this session');
@@ -949,6 +968,7 @@ export async function sessionWriteFile(
  */
 export async function sessionListDirectory(sessionId: string, path: string): Promise<SessionListDirectoryResponse> {
     try {
+        assertSessionInteractionAllowed(sessionId);
         const metadata = storage.getState().sessions[sessionId]?.metadata;
         if (isRigMetadata(metadata) && !rigHasRpcMethod(metadata, 'listDirectory')) {
             throw new Error('Directory listing is not advertised by this Rig session');
@@ -977,6 +997,7 @@ export async function sessionGetDirectoryTree(
     maxDepth: number
 ): Promise<SessionGetDirectoryTreeResponse> {
     try {
+        assertSessionInteractionAllowed(sessionId);
         const metadata = storage.getState().sessions[sessionId]?.metadata;
         if (isRigMetadata(metadata) && !rigHasRpcMethod(metadata, 'getDirectoryTree')) {
             throw new Error('Directory tree is not advertised by this Rig session');
@@ -1005,6 +1026,7 @@ export async function sessionRipgrep(
     cwd?: string
 ): Promise<SessionRipgrepResponse> {
     try {
+        assertSessionInteractionAllowed(sessionId);
         const metadata = storage.getState().sessions[sessionId]?.metadata;
         if (!rigCanSearchFiles(metadata)) {
             throw new Error('File search is not available for this session');
@@ -1029,7 +1051,7 @@ export async function sessionRipgrep(
  */
 export async function sessionKill(sessionId: string): Promise<SessionKillResponse> {
     try {
-        assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
+        assertSessionInteractionAllowed(sessionId);
         const response = await apiSocket.sessionRPC<SessionKillResponse, {}>(
             sessionId,
             'killSession',
@@ -1138,7 +1160,7 @@ export async function forkAndSpawn(
 ): Promise<SpawnSessionResult> {
     if (source.kind === 'codex') {
         const sourceSession = storage.getState().sessions[source.sessionId];
-        assertCodexSessionWritable(sourceSession?.metadata);
+        assertSessionInteractionAllowed(source.sessionId);
         if (
             !sourceSession
             || sourceSession.metadata?.flavor !== 'codex'

@@ -7,6 +7,40 @@ import { log } from "@/utils/log";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { buildNewMachineUpdate, buildUpdateMachineUpdate, buildDeleteMachineUpdate } from "@/app/events/eventRouter";
+import { auth } from "@/app/auth/auth";
+import { activityCache } from "@/app/presence/sessionCache";
+import { diagnosticHash } from "@/utils/diagnosticHash";
+import { Prisma } from "@prisma/client";
+
+function machineResponse(machine: {
+    id: string;
+    metadata: string;
+    metadataVersion: number;
+    daemonState: string | null;
+    daemonStateVersion: number;
+    dataEncryptionKey: Uint8Array | null;
+    seq: number;
+    active: boolean;
+    lastActiveAt: Date;
+    createdAt: Date;
+    updatedAt: Date;
+}) {
+    return {
+        id: machine.id,
+        metadata: machine.metadata,
+        metadataVersion: machine.metadataVersion,
+        daemonState: machine.daemonState,
+        daemonStateVersion: machine.daemonStateVersion,
+        dataEncryptionKey: machine.dataEncryptionKey
+            ? Buffer.from(machine.dataEncryptionKey).toString('base64')
+            : null,
+        seq: machine.seq,
+        active: machine.active,
+        activeAt: machine.lastActiveAt.getTime(),
+        createdAt: machine.createdAt.getTime(),
+        updatedAt: machine.updatedAt.getTime(),
+    };
+}
 
 export function machinesRoutes(app: Fastify) {
     app.post('/v1/machines', {
@@ -22,90 +56,130 @@ export function machinesRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { id, metadata, daemonState, dataEncryptionKey } = request.body;
-
-        // Check if machine exists (like sessions do)
-        const machine = await db.machine.findFirst({
-            where: {
-                accountId: userId,
-                id: id
-            }
-        });
-
-        if (machine) {
-            // Machine exists - just return it
-            log({ module: 'machines', machineId: id, userId }, 'Found existing machine');
-            return reply.send({
-                machine: {
-                    id: machine.id,
-                    metadata: machine.metadata,
-                    metadataVersion: machine.metadataVersion,
-                    daemonState: machine.daemonState,
-                    daemonStateVersion: machine.daemonStateVersion,
-                    dataEncryptionKey: machine.dataEncryptionKey ? Buffer.from(machine.dataEncryptionKey).toString('base64') : null,
-                    active: machine.active,
-                    activeAt: machine.lastActiveAt.getTime(),  // Return as activeAt for API consistency
-                    createdAt: machine.createdAt.getTime(),
-                    updatedAt: machine.updatedAt.getTime()
-                }
-            });
-        } else {
-            // Create new machine
-            log({ module: 'machines', machineId: id, userId }, 'Creating new machine');
-
-            const newMachine = await db.machine.create({
-                data: {
-                    id,
-                    accountId: userId,
-                    metadata,
-                    metadataVersion: 1,
-                    daemonState: daemonState || null,
-                    daemonStateVersion: daemonState ? 1 : 0,
-                    dataEncryptionKey: dataEncryptionKey ? new Uint8Array(Buffer.from(dataEncryptionKey, 'base64')) : undefined,
-                    // Default to offline - in case the user does not start daemon
-                    active: false,
-                    // lastActiveAt and activeAt defaults to now() in schema
-                }
-            });
-
-            // Emit both new-machine and update-machine events for backward compatibility
-            const updSeq1 = await allocateUserSeq(userId);
-            const updSeq2 = await allocateUserSeq(userId);
-            
-            // Emit new-machine event with all data including dataEncryptionKey
-            const newMachinePayload = buildNewMachineUpdate(newMachine, updSeq1, randomKeyNaked(12));
-            eventRouter.emitUpdate({
-                userId,
-                payload: newMachinePayload,
-                recipientFilter: { type: 'user-scoped-only' }
-            });
-
-            // Emit update-machine event for backward compatibility (without dataEncryptionKey)
-            const machineMetadata = {
-                version: 1,
-                value: metadata
-            };
-            const updatePayload = buildUpdateMachineUpdate(newMachine.id, updSeq2, randomKeyNaked(12), machineMetadata);
-            eventRouter.emitUpdate({
-                userId,
-                payload: updatePayload,
-                recipientFilter: { type: 'machine-scoped-only', machineId: newMachine.id }
-            });
-
-            return reply.send({
-                machine: {
-                    id: newMachine.id,
-                    metadata: newMachine.metadata,
-                    metadataVersion: newMachine.metadataVersion,
-                    daemonState: newMachine.daemonState,
-                    daemonStateVersion: newMachine.daemonStateVersion,
-                    dataEncryptionKey: newMachine.dataEncryptionKey ? Buffer.from(newMachine.dataEncryptionKey).toString('base64') : null,
-                    active: newMachine.active,
-                    activeAt: newMachine.lastActiveAt.getTime(),  // Return as activeAt for API consistency
-                    createdAt: newMachine.createdAt.getTime(),
-                    updatedAt: newMachine.updatedAt.getTime()
-                }
-            });
+        const credentialId = request.authCredentialId;
+        if (!credentialId) {
+            return reply.code(403).send({ error: 'Terminal credential required' });
         }
+
+        let result;
+        try {
+            result = await inTx(async (tx) => {
+                const credential = await tx.terminalAuthRequest.findFirst({
+                    where: {
+                        id: credentialId,
+                        responseAccountId: userId,
+                        response: { not: null },
+                        revokedAt: null,
+                    },
+                    select: {
+                        id: true,
+                        credentialVersion: true,
+                        machine: { select: { id: true } },
+                    },
+                });
+                if (!credential) return { kind: 'credential-invalid' as const };
+                if (credential.machine && credential.machine.id !== id) {
+                    return { kind: 'credential-conflict' as const };
+                }
+
+                const existing = await tx.machine.findUnique({ where: { id } });
+                if (existing) {
+                    if (existing.accountId !== userId) {
+                        return { kind: 'machine-conflict' as const };
+                    }
+                    if (existing.deletedAt) {
+                        return { kind: 'machine-deleted' as const };
+                    }
+                    if (existing.credentialId && existing.credentialId !== credentialId) {
+                        return { kind: 'credential-conflict' as const };
+                    }
+                    const machine = existing.credentialId
+                        ? existing
+                        : await tx.machine.update({
+                            where: { id },
+                            data: { credentialId },
+                        });
+                    return { kind: 'existing' as const, machine };
+                }
+
+                if (credential.credentialVersion < 2) {
+                    return { kind: 'reauth-required' as const };
+                }
+
+                const machine = await tx.machine.create({
+                    data: {
+                        id,
+                        accountId: userId,
+                        credentialId,
+                        metadata,
+                        metadataVersion: 1,
+                        daemonState: daemonState || null,
+                        daemonStateVersion: daemonState ? 1 : 0,
+                        dataEncryptionKey: dataEncryptionKey
+                            ? new Uint8Array(Buffer.from(dataEncryptionKey, 'base64'))
+                            : undefined,
+                        active: false,
+                    }
+                });
+
+                afterTx(tx, async () => {
+                    const updSeq1 = await allocateUserSeq(userId);
+                    const updSeq2 = await allocateUserSeq(userId);
+                    const newMachinePayload = buildNewMachineUpdate(
+                        machine,
+                        updSeq1,
+                        randomKeyNaked(12),
+                    );
+                    eventRouter.emitUpdate({
+                        userId,
+                        payload: newMachinePayload,
+                        recipientFilter: { type: 'user-scoped-only' }
+                    });
+
+                    const machineMetadata = { version: 1, value: metadata };
+                    const updatePayload = buildUpdateMachineUpdate(
+                        machine.id,
+                        updSeq2,
+                        randomKeyNaked(12),
+                        machineMetadata,
+                    );
+                    eventRouter.emitUpdate({
+                        userId,
+                        payload: updatePayload,
+                        recipientFilter: { type: 'machine-scoped-only', machineId: machine.id }
+                    });
+                });
+                return { kind: 'created' as const, machine };
+            });
+        } catch (error) {
+            if (
+                error instanceof Prisma.PrismaClientKnownRequestError
+                && error.code === 'P2002'
+            ) {
+                return reply.code(409).send({ error: 'Machine credential conflict' });
+            }
+            throw error;
+        }
+
+        if (result.kind === 'credential-invalid') {
+            return reply.code(401).send({ error: 'Terminal credential revoked' });
+        }
+        if (result.kind === 'machine-deleted') {
+            return reply.code(410).send({ error: 'Machine was deleted; re-authentication required' });
+        }
+        if (result.kind === 'reauth-required') {
+            return reply.code(409).send({ error: 'Re-authentication required to register this machine' });
+        }
+        if (result.kind === 'machine-conflict' || result.kind === 'credential-conflict') {
+            return reply.code(409).send({ error: 'Machine credential conflict' });
+        }
+        log({
+            module: 'machines',
+            machineHash: diagnosticHash(id),
+            userHash: diagnosticHash(userId),
+            created: result.kind === 'created',
+        }, 'Machine registered');
+        return reply.send({ machine: machineResponse(result.machine) });
     });
 
 
@@ -114,25 +188,23 @@ export function machinesRoutes(app: Fastify) {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const userId = request.userId;
+        if (request.authCredentialId && !request.authMachineId) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
 
         const machines = await db.machine.findMany({
-            where: { accountId: userId },
+            where: {
+                accountId: userId,
+                deletedAt: null,
+                ...(request.authCredentialId ? {
+                    id: request.authMachineId,
+                    credentialId: request.authCredentialId,
+                } : {}),
+            },
             orderBy: { lastActiveAt: 'desc' }
         });
 
-        return machines.map(m => ({
-            id: m.id,
-            metadata: m.metadata,
-            metadataVersion: m.metadataVersion,
-            daemonState: m.daemonState,
-            daemonStateVersion: m.daemonStateVersion,
-            dataEncryptionKey: m.dataEncryptionKey ? Buffer.from(m.dataEncryptionKey).toString('base64') : null,
-            seq: m.seq,
-            active: m.active,
-            activeAt: m.lastActiveAt.getTime(),
-            createdAt: m.createdAt.getTime(),
-            updatedAt: m.updatedAt.getTime()
-        }));
+        return machines.map(machineResponse);
     });
 
     // GET /v1/machines/:id - Get single machine by ID
@@ -146,11 +218,21 @@ export function machinesRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { id } = request.params;
+        if (
+            request.authCredentialId
+            && request.authMachineId !== id
+        ) {
+            return reply.code(404).send({ error: 'Machine not found' });
+        }
 
         const machine = await db.machine.findFirst({
             where: {
                 accountId: userId,
-                id: id
+                id: id,
+                deletedAt: null,
+                ...(request.authCredentialId
+                    ? { credentialId: request.authCredentialId }
+                    : {}),
             }
         });
 
@@ -159,19 +241,7 @@ export function machinesRoutes(app: Fastify) {
         }
 
         return {
-            machine: {
-                id: machine.id,
-                metadata: machine.metadata,
-                metadataVersion: machine.metadataVersion,
-                daemonState: machine.daemonState,
-                daemonStateVersion: machine.daemonStateVersion,
-                dataEncryptionKey: machine.dataEncryptionKey ? Buffer.from(machine.dataEncryptionKey).toString('base64') : null,
-                seq: machine.seq,
-                active: machine.active,
-                activeAt: machine.lastActiveAt.getTime(),
-                createdAt: machine.createdAt.getTime(),
-                updatedAt: machine.updatedAt.getTime()
-            }
+            machine: machineResponse(machine)
         };
     });
 
@@ -187,6 +257,9 @@ export function machinesRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { id } = request.params;
+        if (request.authCredentialId) {
+            return reply.code(403).send({ error: 'Account credential required' });
+        }
 
         const deleted = await inTx(async (tx) => {
             const machine = await tx.machine.findFirst({
@@ -195,14 +268,61 @@ export function machinesRoutes(app: Fastify) {
             if (!machine) {
                 return false;
             }
+            if (machine.deletedAt) {
+                return true;
+            }
+
+            const accessKeys = await tx.accessKey.findMany({
+                where: { accountId: userId, machineId: id },
+                select: { sessionId: true },
+            });
+            const originSessions = await tx.session.findMany({
+                where: { accountId: userId, originMachineId: id },
+                select: { id: true },
+            });
+            const affectedSessionIds = [...new Set([
+                ...accessKeys.map((key) => key.sessionId),
+                ...originSessions.map((session) => session.id),
+            ])];
+            const inferredSessionIds = accessKeys.map((key) => key.sessionId);
+            if (inferredSessionIds.length > 0) {
+                await tx.session.updateMany({
+                    where: {
+                        accountId: userId,
+                        id: { in: inferredSessionIds },
+                        originMachineId: null,
+                    },
+                    data: { originMachineId: id },
+                });
+            }
+
+            const deletedAt = new Date();
+            await tx.session.updateMany({
+                where: { accountId: userId, originMachineId: id },
+                data: { active: false, lastActiveAt: deletedAt },
+            });
 
             await tx.accessKey.deleteMany({
                 where: { accountId: userId, machineId: id }
             });
 
-            await tx.machine.delete({
-                where: { id }
+            await tx.machine.update({
+                where: { id },
+                data: {
+                    active: false,
+                    deletedAt,
+                },
             });
+            if (machine.credentialId) {
+                await tx.terminalAuthRequest.updateMany({
+                    where: {
+                        id: machine.credentialId,
+                        responseAccountId: userId,
+                        revokedAt: null,
+                    },
+                    data: { revokedAt: deletedAt },
+                });
+            }
 
             afterTx(tx, async () => {
                 const updSeq = await allocateUserSeq(userId);
@@ -212,7 +332,18 @@ export function machinesRoutes(app: Fastify) {
                     payload: updatePayload,
                     recipientFilter: { type: 'user-scoped-only' }
                 });
-                log({ module: 'machines', machineId: id, userId }, 'Machine deleted');
+                if (machine.credentialId) {
+                    auth.invalidateCredentialTokens(machine.credentialId);
+                    eventRouter.disconnectCredential(userId, machine.credentialId);
+                }
+                activityCache.invalidateMachine(id);
+                activityCache.invalidateSessions(affectedSessionIds);
+                eventRouter.disconnectMachine(userId, id);
+                log({
+                    module: 'machines',
+                    machineHash: diagnosticHash(id),
+                    userHash: diagnosticHash(userId),
+                }, 'Machine deleted');
             });
 
             return true;

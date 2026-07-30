@@ -14,6 +14,8 @@ import { sessionUpdateHandler } from "./socket/sessionUpdateHandler";
 import { machineUpdateHandler } from "./socket/machineUpdateHandler";
 import { artifactUpdateHandler } from "./socket/artifactUpdateHandler";
 import { accessKeyHandler } from "./socket/accessKeyHandler";
+import { diagnosticHash } from "@/utils/diagnosticHash";
+import { authorizeSocketScope } from "./socket/authorizeSocketScope";
 
 export function startSocket(app: Fastify) {
     const io = new Server(app.server, {
@@ -103,21 +105,40 @@ export function startSocket(app: Fastify) {
             return;
         }
 
-        const verified = await auth.verifyToken(token);
-        if (!verified) {
-            log({ module: 'websocket' }, `Invalid token provided`);
-            next(new Error('Invalid authentication token'));
-            return;
-        }
+        try {
+            const verified = await auth.verifyToken(token);
+            if (!verified) {
+                log({ module: 'websocket' }, `Invalid token provided`);
+                next(new Error('Invalid authentication token'));
+                return;
+            }
 
-        socket.data.userId = verified.userId;
-        socket.data.clientType = clientType;
-        socket.data.sessionId = sessionId;
-        socket.data.machineId = machineId;
-        socket.data.happyClient = socket.handshake.auth.happyClient as string
-            || socket.handshake.headers['x-happy-client'] as string
-            || undefined;
-        next();
+            const authorized = await authorizeSocketScope({
+                userId: verified.userId,
+                credentialId: verified.credentialId,
+                clientType,
+                sessionId,
+                machineId,
+            });
+            if (!authorized) {
+                log({ module: 'websocket' }, 'Socket scope authorization failed');
+                next(new Error('Socket scope is not authorized'));
+                return;
+            }
+
+            socket.data.userId = verified.userId;
+            socket.data.credentialId = verified.credentialId;
+            socket.data.clientType = clientType;
+            socket.data.sessionId = sessionId;
+            socket.data.machineId = machineId;
+            socket.data.happyClient = socket.handshake.auth.happyClient as string
+                || socket.handshake.headers['x-happy-client'] as string
+                || undefined;
+            next();
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Socket authentication failed');
+            next(new Error('Socket authentication failed'));
+        }
     });
 
     io.on("connection", (socket) => {
@@ -125,6 +146,7 @@ export function startSocket(app: Fastify) {
         const clientType = socket.data.clientType as 'session-scoped' | 'user-scoped' | 'machine-scoped' | undefined;
         const sessionId = socket.data.sessionId as string | undefined;
         const machineId = socket.data.machineId as string | undefined;
+        const credentialId = socket.data.credentialId as string | undefined;
         const labels = getMetricsLabelsFromSocket(socket);
 
         log(
@@ -133,7 +155,12 @@ export function startSocket(app: Fastify) {
         );
 
         // Store connection based on type
-        const metadata = { clientType: clientType || 'user-scoped', sessionId, machineId };
+        const metadata = {
+            clientType: clientType || 'user-scoped',
+            sessionId,
+            machineId,
+            credentialId,
+        };
         const happyClient = socket.data.happyClient as string | undefined;
         let connection: ClientConnection;
         if (metadata.clientType === 'session-scoped' && sessionId) {
@@ -142,6 +169,8 @@ export function startSocket(app: Fastify) {
                 socket,
                 userId,
                 sessionId,
+                machineId,
+                credentialId,
                 happyClient
             };
         } else if (metadata.clientType === 'machine-scoped' && machineId) {
@@ -150,6 +179,7 @@ export function startSocket(app: Fastify) {
                 socket,
                 userId,
                 machineId,
+                credentialId,
                 happyClient
             };
         } else {
@@ -157,6 +187,7 @@ export function startSocket(app: Fastify) {
                 connectionType: 'user-scoped',
                 socket,
                 userId,
+                credentialId,
                 happyClient
             };
         }
@@ -194,7 +225,10 @@ export function startSocket(app: Fastify) {
             eventRouter.removeConnection(userId, connection);
             websocketConnectionsGauge.dec({ type: connection.connectionType, ...labels });
 
-            log({ module: 'websocket' }, `User disconnected: ${userId}`);
+            log({
+                module: 'websocket',
+                userHash: diagnosticHash(userId),
+            }, 'User disconnected');
 
             // Broadcast daemon offline status
             if (connection.connectionType === 'machine-scoped') {
@@ -209,15 +243,18 @@ export function startSocket(app: Fastify) {
 
         // Handlers
         rpcHandler(userId, socket, io);
-        usageHandler(userId, socket);
+        usageHandler(userId, socket, connection);
         sessionUpdateHandler(userId, socket, connection);
         pingHandler(socket);
         machineUpdateHandler(userId, socket);
         artifactUpdateHandler(userId, socket);
-        accessKeyHandler(userId, socket);
+        accessKeyHandler(userId, socket, connection);
 
         // Ready
-        log({ module: 'websocket' }, `User connected: ${userId}`);
+        log({
+            module: 'websocket',
+            userHash: diagnosticHash(userId),
+        }, 'User connected');
     });
 
     onShutdown('api', async () => {

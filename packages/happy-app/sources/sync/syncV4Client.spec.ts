@@ -16,6 +16,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import {
     AppSyncV4Client,
+    AppSyncV4SessionReadOnlyError,
     AppSyncV4SnapshotRequiredError,
     type AppSyncV4AppliedEntity,
     type AppSyncV4Crypto,
@@ -88,8 +89,8 @@ class FakeTransport implements AppSyncV4Transport {
         codex: {
             enabled: true,
             protocolVersion: 4,
-            minimumHappyCliVersion: '1.4.2',
-            minimumHappyAppVersion: '1.11.4',
+            minimumHappyCliVersion: '1.4.7',
+            minimumHappyAppVersion: '1.11.12',
             minimumCodexCliVersion: '0.145.0',
         },
     };
@@ -183,22 +184,24 @@ async function client(
     batchHandler?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>,
     snapshotReplace?: (events: readonly AppSyncV4AppliedEntity[]) => Promise<void>,
     crypto: AppSyncV4Crypto = fakeCrypto,
-diagnostics?: SyncV4DiagnosticSink,
-generateTraceId?: () => string,
-diagnosticStats?: AppSyncV4DiagnosticStatsProvider,
+    diagnostics?: SyncV4DiagnosticSink,
+    generateTraceId?: () => string,
+    diagnosticStats?: AppSyncV4DiagnosticStatsProvider,
+    canSendOutbound?: () => boolean,
 ): Promise<AppSyncV4Client> {
     return AppSyncV4Client.create({
         sessionId: 'session-1',
         sessionKey: new Uint8Array(32),
-        appVersion: '1.11.4',
+        appVersion: '1.11.12',
         persistence: persistence(storage),
         transport,
         crypto,
         generateMutationId: () => `00000000-0000-4000-8000-${String(++mutationCounter).padStart(12, '0')}`,
-generateTraceId,
-diagnostics,
-diagnosticStats,
-transportSecurity: 'insecureHttp',
+        generateTraceId,
+        diagnostics,
+        diagnosticStats,
+        transportSecurity: 'insecureHttp',
+        canSendOutbound,
         onEntity: handler ?? (async (event) => { applied.push(event); }),
         onEntities: batchHandler,
         onSnapshotReset: snapshotReset ?? (async () => undefined),
@@ -313,6 +316,82 @@ describe('AppSyncV4Client', () => {
             seq: null,
         }]);
         expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+    });
+
+    it('rejects new entities before persisting when outbound sync is disabled', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const sender = await client(
+            storage,
+            transport,
+            applied,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            undefined,
+            undefined,
+            undefined,
+            () => false,
+        );
+
+        await expect(sender.publishEntity(command('read-only-command')))
+            .rejects.toBeInstanceOf(AppSyncV4SessionReadOnlyError);
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(0);
+        expect(applied).toHaveLength(0);
+        expect(transport.posted).toHaveLength(0);
+    });
+
+    it('hydrates and pulls history while preserving a frozen durable outbox', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const writer = await client(storage, transport);
+        await writer.publishEntity(command('pending-before-delete'));
+        const remotePublisher = await client(new MemoryStorage(), transport);
+        const remoteMutation = await remotePublisher.publishEntity(command('remote-history'));
+        transport.changes = [toChange(remoteMutation, 1)];
+
+        const applied: AppSyncV4AppliedEntity[] = [];
+        const receiver = await client(
+            storage,
+            transport,
+            applied,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            undefined,
+            undefined,
+            undefined,
+            () => false,
+        );
+        await receiver.start();
+
+        expect(transport.posted).toHaveLength(0);
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+        expect(applied.map((event) => event.entity.providerId)).toEqual([
+            'pending-before-delete',
+            'remote-history',
+        ]);
+        expect(receiver.receiveCursor).toBe(1);
+        receiver.stop();
+    });
+
+    it('keeps pulling when the server reports a session became read-only', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const sender = await client(storage, transport);
+        await sender.publishEntity(command('raced-with-delete'));
+        transport.postMutations = async () => {
+            throw new AppSyncV4SessionReadOnlyError();
+        };
+
+        await expect(sender.start()).resolves.toBeUndefined();
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+        sender.stop();
     });
 
     it('records a protocol failure when a successful POST returns mismatched acknowledgements', async () => {

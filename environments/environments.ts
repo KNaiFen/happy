@@ -424,17 +424,69 @@ export async function seedEnvironment(name: string): Promise<void> {
     if (!authRes.ok) {
         throw new Error(`Auth failed: ${authRes.status} ${await authRes.text()}`);
     }
-    const { token } = (await authRes.json()) as { token: string };
+    const { token: accountToken } = (await authRes.json()) as { token: string };
 
     const secret = crypto.randomBytes(32);
     const secretBase64 = toBase64(secret);
+    const terminalPublicKey = toBase64(crypto.randomBytes(32));
+    const terminalRequest = await fetch(`${serverUrl}/v1/auth/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            publicKey: terminalPublicKey,
+            supportsV2: true,
+        }),
+    });
+    if (!terminalRequest.ok) {
+        throw new Error(`Terminal auth request failed: ${terminalRequest.status}`);
+    }
+
+    const terminalApproval = await fetch(`${serverUrl}/v1/auth/response`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${accountToken}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            publicKey: terminalPublicKey,
+            response: toBase64(crypto.randomBytes(32)),
+        }),
+    });
+    if (!terminalApproval.ok) {
+        throw new Error(`Terminal auth approval failed: ${terminalApproval.status}`);
+    }
+
+    const terminalAuthorized = await fetch(`${serverUrl}/v1/auth/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            publicKey: terminalPublicKey,
+            supportsV2: true,
+        }),
+    });
+    const terminalAuth = await terminalAuthorized.json() as {
+        state?: unknown;
+        token?: unknown;
+    };
+    if (
+        !terminalAuthorized.ok
+        || terminalAuth.state !== "authorized"
+        || typeof terminalAuth.token !== "string"
+    ) {
+        throw new Error(`Terminal auth completion failed: ${terminalAuthorized.status}`);
+    }
+    const terminalToken = terminalAuth.token;
 
     const cliHome = path.join(envDir, "cli", "home");
     fs.mkdirSync(cliHome, { recursive: true });
 
     fs.writeFileSync(
         path.join(cliHome, "access.key"),
-        JSON.stringify({ secret: secretBase64, token }, null, 2),
+        JSON.stringify({
+            secret: secretBase64,
+            token: terminalToken,
+            serverOrigin: serverUrl,
+        }, null, 2),
     );
 
     fs.writeFileSync(
@@ -450,7 +502,11 @@ export async function seedEnvironment(name: string): Promise<void> {
         ),
     );
 
-    const authenticatedWebUrl = buildAuthenticatedWebUrl(config.expoPort, token, secretBase64);
+    const authenticatedWebUrl = buildAuthenticatedWebUrl(
+        config.expoPort,
+        accountToken,
+        secretBase64,
+    );
     writeEnvironmentConfig({ ...config, authenticatedWebUrl });
 
     const daemonStatePath = path.join(envDir, "cli", "home", "daemon.state.json");
@@ -479,7 +535,7 @@ export async function seedEnvironment(name: string): Promise<void> {
 
     const machineRegistered = await waitFor(async () => {
         const res = await fetch(`${serverUrl}/v1/machines`, {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${terminalToken}` },
         });
         if (!res.ok) return false;
         const machines = (await res.json()) as unknown[];
@@ -487,7 +543,7 @@ export async function seedEnvironment(name: string): Promise<void> {
     }, 10_000, "machine registration").then(() => true, () => false);
 
     console.log(`  Seeded: credentials written, daemon ${machineRegistered ? "registered" : "starting"}`);
-    console.log(`  Auth URL: ${authenticatedWebUrl}`);
+    console.log("  Auth URL written to environment config");
 }
 
 export function stopEnvironment(name: string): void {

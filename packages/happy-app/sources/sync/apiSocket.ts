@@ -291,16 +291,16 @@ class ApiSocket {
         });
 
         // Error events
-        this.socket.on('connect_error', (error) => {
+        this.socket.on('connect_error', () => {
             if (this.isVerboseLogging()) {
-                console.error('🔌 SyncSocket: Connection error', error);
+                console.error('SyncSocket: Connection error');
             }
             this.updateStatus('error');
         });
 
-        this.socket.on('error', (error) => {
+        this.socket.on('error', () => {
             if (this.isVerboseLogging()) {
-                console.error('🔌 SyncSocket: Error', error);
+                console.error('SyncSocket: Error');
             }
             this.updateStatus('error');
         });
@@ -308,7 +308,7 @@ class ApiSocket {
         // Message handling
         this.socket.onAny((event, data) => {
             if (this.isVerboseLogging()) {
-                console.log(`📥 SyncSocket: Received event '${event}':`, JSON.stringify(data).substring(0, 200));
+                console.log(`SyncSocket: Received event '${event}'`);
             }
             const handler = this.messageHandlers.get(event);
             if (handler) {

@@ -5,6 +5,11 @@ import { allocateUserSeq } from "@/storage/seq";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { log } from "@/utils/log";
 import { deleteSessionAttachments } from "@/storage/files";
+import { diagnosticHash } from "@/utils/diagnosticHash";
+import {
+    buildSessionAccessWhere,
+    type SessionAccessIdentity,
+} from "@/app/api/utils/sessionAccess";
 
 /**
  * Delete a session and all its related data.
@@ -19,21 +24,24 @@ import { deleteSessionAttachments } from "@/storage/files";
  * @param sessionId - ID of the session to delete
  * @returns true if deletion was successful, false if session not found or not owned by user
  */
-export async function sessionDelete(ctx: Context, sessionId: string): Promise<boolean> {
+export async function sessionDelete(
+    ctx: Context,
+    sessionId: string,
+    identity: SessionAccessIdentity = { userId: ctx.uid },
+): Promise<boolean> {
     return await inTx(async (tx) => {
+        const accessWhere = buildSessionAccessWhere(identity, { id: sessionId });
+        if (!accessWhere) return false;
         // Verify session exists and belongs to the user
         const session = await tx.session.findFirst({
-            where: {
-                id: sessionId,
-                accountId: ctx.uid
-            }
+            where: accessWhere,
         });
 
         if (!session) {
             log({ 
                 module: 'session-delete', 
-                userId: ctx.uid, 
-                sessionId 
+                userHash: diagnosticHash(ctx.uid),
+                sessionHash: diagnosticHash(sessionId),
             }, `Session not found or not owned by user`);
             return false;
         }
@@ -47,8 +55,8 @@ export async function sessionDelete(ctx: Context, sessionId: string): Promise<bo
         });
         log({ 
             module: 'session-delete', 
-            userId: ctx.uid, 
-            sessionId,
+            userHash: diagnosticHash(ctx.uid),
+            sessionHash: diagnosticHash(sessionId),
             deletedCount: deletedMessages.count
         }, `Deleted ${deletedMessages.count} session messages`);
 
@@ -58,8 +66,8 @@ export async function sessionDelete(ctx: Context, sessionId: string): Promise<bo
         });
         log({ 
             module: 'session-delete', 
-            userId: ctx.uid, 
-            sessionId,
+            userHash: diagnosticHash(ctx.uid),
+            sessionHash: diagnosticHash(sessionId),
             deletedCount: deletedReports.count
         }, `Deleted ${deletedReports.count} usage reports`);
 
@@ -69,8 +77,8 @@ export async function sessionDelete(ctx: Context, sessionId: string): Promise<bo
         });
         log({ 
             module: 'session-delete', 
-            userId: ctx.uid, 
-            sessionId,
+            userHash: diagnosticHash(ctx.uid),
+            sessionHash: diagnosticHash(sessionId),
             deletedCount: deletedAccessKeys.count
         }, `Deleted ${deletedAccessKeys.count} access keys`);
 
@@ -80,8 +88,8 @@ export async function sessionDelete(ctx: Context, sessionId: string): Promise<bo
         });
         log({ 
             module: 'session-delete', 
-            userId: ctx.uid, 
-            sessionId 
+            userHash: diagnosticHash(ctx.uid),
+            sessionHash: diagnosticHash(sessionId),
         }, `Session deleted successfully`);
 
         // Send notification and clean up storage after transaction commits
@@ -91,10 +99,9 @@ export async function sessionDelete(ctx: Context, sessionId: string): Promise<bo
 
             log({
                 module: 'session-delete',
-                userId: ctx.uid,
-                sessionId,
+                userHash: diagnosticHash(ctx.uid),
+                sessionHash: diagnosticHash(sessionId),
                 updateType: 'delete-session',
-                updatePayload: JSON.stringify(updatePayload)
             }, `Emitting delete-session update to user-scoped connections`);
 
             eventRouter.emitUpdate({
@@ -106,9 +113,17 @@ export async function sessionDelete(ctx: Context, sessionId: string): Promise<bo
             // Delete attachment blobs (local dir or S3 prefix)
             try {
                 await deleteSessionAttachments(sessionId);
-                log({ module: 'session-delete', userId: ctx.uid, sessionId }, `Attachment blobs deleted`);
-            } catch (err) {
-                log({ module: 'session-delete', userId: ctx.uid, sessionId, err }, `Failed to delete attachment blobs (non-fatal)`);
+                log({
+                    module: 'session-delete',
+                    userHash: diagnosticHash(ctx.uid),
+                    sessionHash: diagnosticHash(sessionId),
+                }, `Attachment blobs deleted`);
+            } catch {
+                log({
+                    module: 'session-delete',
+                    userHash: diagnosticHash(ctx.uid),
+                    sessionHash: diagnosticHash(sessionId),
+                }, `Failed to delete attachment blobs (non-fatal)`);
             }
         });
 

@@ -9,6 +9,14 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 
 export function machineUpdateHandler(userId: string, socket: Socket) {
     const labels = getMetricsLabelsFromSocket(socket);
+    const credentialId = socket.data.credentialId as string | undefined;
+    const scopedMachineId = credentialId
+        ? socket.data.machineId as string | undefined
+        : undefined;
+
+    const canTargetMachine = (machineId: string): boolean => (
+        credentialId ? scopedMachineId === machineId : true
+    );
 
     socket.on('machine-alive', async (data: {
         machineId: string;
@@ -23,6 +31,7 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
             if (!data || typeof data.time !== 'number' || !data.machineId) {
                 return;
             }
+            if (!canTargetMachine(data.machineId)) return;
 
             let t = data.time;
             if (t > Date.now()) {
@@ -47,8 +56,8 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 payload: machineActivity,
                 recipientFilter: { type: 'user-scoped-only' }
             });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in machine-alive: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Machine heartbeat failed');
         }
     });
 
@@ -64,12 +73,18 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 }
                 return;
             }
+            if (!canTargetMachine(machineId)) {
+                callback?.({ result: 'error', message: 'Machine scope mismatch' });
+                return;
+            }
 
             // Resolve machine
             const machine = await db.machine.findFirst({
                 where: {
                     accountId: userId,
-                    id: machineId
+                    id: machineId,
+                    deletedAt: null,
+                    ...(credentialId ? { credentialId } : {}),
                 }
             });
             if (!machine) {
@@ -94,7 +109,9 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 where: {
                     accountId: userId,
                     id: machineId,
-                    metadataVersion: expectedVersion  // Atomic CAS
+                    metadataVersion: expectedVersion,
+                    deletedAt: null,
+                    ...(credentialId ? { credentialId } : {}),
                 },
                 data: {
                     metadata: metadata,
@@ -108,7 +125,9 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 const current = await db.machine.findFirst({
                     where: {
                         accountId: userId,
-                        id: machineId
+                        id: machineId,
+                        deletedAt: null,
+                        ...(credentialId ? { credentialId } : {}),
                     }
                 });
                 callback({
@@ -138,8 +157,8 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 version: expectedVersion + 1,
                 metadata: metadata
             });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in machine-update-metadata: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Machine metadata update failed');
             if (callback) {
                 callback({ result: 'error', message: 'Internal error' });
             }
@@ -158,12 +177,18 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 }
                 return;
             }
+            if (!canTargetMachine(machineId)) {
+                callback?.({ result: 'error', message: 'Machine scope mismatch' });
+                return;
+            }
 
             // Resolve machine
             const machine = await db.machine.findFirst({
                 where: {
                     accountId: userId,
-                    id: machineId
+                    id: machineId,
+                    deletedAt: null,
+                    ...(credentialId ? { credentialId } : {}),
                 }
             });
             if (!machine) {
@@ -188,7 +213,9 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 where: {
                     accountId: userId,
                     id: machineId,
-                    daemonStateVersion: expectedVersion  // Atomic CAS
+                    daemonStateVersion: expectedVersion,
+                    deletedAt: null,
+                    ...(credentialId ? { credentialId } : {}),
                 },
                 data: {
                     daemonState: daemonState,
@@ -203,7 +230,9 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 const current = await db.machine.findFirst({
                     where: {
                         accountId: userId,
-                        id: machineId
+                        id: machineId,
+                        deletedAt: null,
+                        ...(credentialId ? { credentialId } : {}),
                     }
                 });
                 callback({
@@ -233,8 +262,8 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 version: expectedVersion + 1,
                 daemonState: daemonState
             });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in machine-update-state: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Machine state update failed');
             if (callback) {
                 callback({ result: 'error', message: 'Internal error' });
             }

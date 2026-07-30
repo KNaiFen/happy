@@ -80,6 +80,13 @@ export class AppSyncV4SnapshotRequiredError extends Error {
     }
 }
 
+export class AppSyncV4SessionReadOnlyError extends Error {
+    constructor() {
+        super('Sync v4 session is read-only because its source machine was deleted');
+        this.name = 'AppSyncV4SessionReadOnlyError';
+    }
+}
+
 class AppSyncV4ProtocolError extends Error {
     constructor(message: string) {
         super(message);
@@ -125,6 +132,7 @@ interface AppSyncV4ClientOptions {
     diagnostics?: SyncV4DiagnosticSink;
     diagnosticStats?: AppSyncV4DiagnosticStatsProvider;
     transportSecurity?: SyncV4DiagnosticTransportSecurity;
+    canSendOutbound?: () => boolean;
 }
 
 export class AppSyncV4Client {
@@ -156,6 +164,7 @@ export class AppSyncV4Client {
             options.diagnosticStats ?? null,
             diagnosticSessionHash,
             options.transportSecurity ?? 'https',
+            options.canSendOutbound ?? (() => true),
         );
     }
 
@@ -192,6 +201,7 @@ export class AppSyncV4Client {
         private readonly diagnosticStats: AppSyncV4DiagnosticStatsProvider | null,
         private readonly diagnosticSessionHash: string,
         private readonly transportSecurity: SyncV4DiagnosticTransportSecurity,
+        private readonly canSendOutbound: () => boolean,
     ) {
         this.sendSync = new InvalidateSync(() => this.flushOutboundOnce());
         this.receiveSync = new InvalidateSync(() => this.pullChangesOnce());
@@ -473,6 +483,7 @@ export class AppSyncV4Client {
 
     async publishEntities(entries: AppSyncV4PublishEntity[]): Promise<SyncMutationV4[]> {
         if (entries.length === 0) return [];
+        this.assertOutboundEnabled();
         const canonicalEntries = entries.map((entry) => ({
             ...entry,
             entity: CodexEntityV4Schema.parse(entry.entity),
@@ -510,6 +521,7 @@ export class AppSyncV4Client {
                 }));
                 this.assertCurrentGeneration(generation);
             }
+            this.assertOutboundEnabled();
             this.persistence.enqueueMutations(this.sessionId, nextMutations);
             this.recordDiagnostic({
                 level: 'debug',
@@ -545,6 +557,7 @@ export class AppSyncV4Client {
         await this.sendLock.inLock(async () => {
             while (true) {
                 if (!this.isCurrentGeneration(generation)) return;
+                if (!this.isOutboundEnabled()) return;
                 const pending = this.persistence.getPendingOutbox(this.sessionId);
                 if (pending.length === 0) return;
                 const batch = takeMutationBatch(pending);
@@ -566,8 +579,24 @@ export class AppSyncV4Client {
                 });
                 let response: SyncMutationBatchResponseV4;
                 try {
+                    if (!this.isOutboundEnabled()) return;
                     response = await this.transport.postMutations(this.sessionId, batch, traceId);
                 } catch (error) {
+                    if (error instanceof AppSyncV4SessionReadOnlyError) {
+                        this.recordDiagnostic({
+                            level: 'warn',
+                            event: 'transport',
+                            phase: 'failed',
+                            direction: 'outbound',
+                            transportOperation: 'mutations',
+                            traceId,
+                            count: batch.length,
+                            durationMs: elapsedMs(startedAt),
+                            errorKind: 'conflict',
+                            state: 'blocked',
+                        });
+                        return;
+                    }
                     this.recordDiagnostic({
                         level: 'warn',
                         event: 'transport',
@@ -634,6 +663,20 @@ export class AppSyncV4Client {
                 });
             }
         });
+    }
+
+    private isOutboundEnabled(): boolean {
+        try {
+            return this.canSendOutbound();
+        } catch {
+            return false;
+        }
+    }
+
+    private assertOutboundEnabled(): void {
+        if (!this.isOutboundEnabled()) {
+            throw new AppSyncV4SessionReadOnlyError();
+        }
     }
 
     async pullChangesOnce(): Promise<void> {

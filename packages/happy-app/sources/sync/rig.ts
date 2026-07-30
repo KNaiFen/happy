@@ -32,7 +32,8 @@ export function isRigMetadataV1(metadata: Metadata | null | undefined): boolean 
 }
 
 export function usesControlledSessionUi(metadata: Metadata | null | undefined): boolean {
-    return !isRigMetadata(metadata);
+    return !isRigMetadata(metadata)
+        && !(metadata?.flavor === 'codex' && metadata.codexSyncVersion === 4);
 }
 
 export function getProviderIconKind(kind: string | null | undefined): ProviderIconKind {

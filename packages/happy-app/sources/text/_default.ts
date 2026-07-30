@@ -326,6 +326,8 @@ export const en = {
         inputPlaceholder: 'Type a message ...',
         inactiveArchived: 'This session is inactive.',
         resumeFromTerminal: 'To resume it from the terminal:',
+        machineDeleted: 'Source machine deleted',
+        machineDeletedDescription: 'History remains available, but this session is read-only and can no longer control Codex.',
         newChat: 'New chat',
         statusBarContext: 'Context',
         statusBarPathTitle: 'Working directory',

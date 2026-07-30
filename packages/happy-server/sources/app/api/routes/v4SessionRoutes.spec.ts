@@ -11,6 +11,14 @@ type SessionRecord = {
     id: string;
     accountId: string;
     syncV4Seq: number;
+    originMachineId: string | null;
+};
+
+type MachineRecord = {
+    id: string;
+    accountId: string;
+    credentialId: string | null;
+    deletedAt: Date | null;
 };
 
 type MutationRecord = {
@@ -60,6 +68,7 @@ const {
 } = vi.hoisted(() => {
     const state = {
         sessions: [] as SessionRecord[],
+        machines: [] as MachineRecord[],
         mutations: [] as MutationRecord[],
         entities: [] as EntityRecord[],
         nextMutationId: 1,
@@ -69,6 +78,7 @@ const {
 
     const resetState = () => {
         state.sessions = [];
+        state.machines = [];
         state.mutations = [];
         state.entities = [];
         state.nextMutationId = 1;
@@ -76,11 +86,29 @@ const {
         state.nowMs = 1700000000000;
     };
 
-    const seedSession = (id: string, accountId: string) => {
-        state.sessions.push({ id, accountId, syncV4Seq: 0 });
+    const seedSession = (
+        id: string,
+        accountId: string,
+        options: { orphan?: boolean } = {},
+    ) => {
+        const originMachineId = options.orphan ? null : `machine-${id}`;
+        if (originMachineId) {
+            state.machines.push({
+                id: originMachineId,
+                accountId,
+                credentialId: null,
+                deletedAt: null,
+            });
+        }
+        state.sessions.push({
+            id,
+            accountId,
+            syncV4Seq: 0,
+            originMachineId,
+        });
     };
 
-    const selectFields = <T extends Record<string, unknown>>(row: T, select?: Record<string, boolean>) => {
+    const selectFields = <T extends Record<string, unknown>>(row: T, select?: Record<string, unknown>) => {
         if (!select) return { ...row };
         const result: Record<string, unknown> = {};
         for (const [key, enabled] of Object.entries(select)) {
@@ -91,11 +119,27 @@ const {
 
     const sessionFindFirst = vi.fn(async (args: any) => {
         const session = state.sessions.find((candidate) => (
-            candidate.id === args?.where?.id && candidate.accountId === args?.where?.accountId
+            candidate.id === args?.where?.id
+            && candidate.accountId === args?.where?.accountId
+            && (
+                args?.where?.originMachineId === undefined
+                || candidate.originMachineId === args.where.originMachineId
+            )
+            && (
+                !args?.where?.originMachine?.is
+                || state.machines.some((machine) => (
+                    machine.id === candidate.originMachineId
+                    && machine.credentialId === args.where.originMachine.is.credentialId
+                    && machine.deletedAt === args.where.originMachine.is.deletedAt
+                ))
+            )
         ));
-        return session
-            ? selectFields(session as unknown as Record<string, unknown>, args?.select)
-            : null;
+        if (!session) return null;
+        const originMachine = state.machines.find((machine) => machine.id === session.originMachineId);
+        return selectFields({
+            ...session,
+            originMachine: originMachine ? { deletedAt: originMachine.deletedAt } : null,
+        }, args?.select);
     });
 
     const sessionUpdate = vi.fn(async (args: any) => {
@@ -104,6 +148,27 @@ const {
         session.syncV4Seq += args?.data?.syncV4Seq?.increment ?? 0;
         return selectFields(session as unknown as Record<string, unknown>, args?.select);
     });
+
+    const sessionUpdateMany = vi.fn(async (args: any) => {
+        let count = 0;
+        for (const session of state.sessions) {
+            if (session.id !== args?.where?.id) continue;
+            if (session.accountId !== args?.where?.accountId) continue;
+            if (session.originMachineId !== args?.where?.originMachineId) continue;
+            Object.assign(session, args.data);
+            count += 1;
+        }
+        return { count };
+    });
+
+    const machineFindFirst = vi.fn(async (args: any) => (
+        state.machines.find((machine) => (
+            machine.id === args?.where?.id
+            && machine.accountId === args?.where?.accountId
+            && machine.credentialId === args?.where?.credentialId
+            && machine.deletedAt === args?.where?.deletedAt
+        )) ?? null
+    ));
 
     const mutationFindMany = vi.fn(async (args: any) => {
         let rows = state.mutations.filter((mutation) => mutation.sessionId === args?.where?.sessionId);
@@ -197,7 +262,11 @@ const {
     });
 
     const txClient = {
-        session: { findFirst: sessionFindFirst, update: sessionUpdate },
+        session: {
+            findFirst: sessionFindFirst,
+            update: sessionUpdate,
+            updateMany: sessionUpdateMany,
+        },
         sessionMutationV4: {
             findMany: mutationFindMany,
             create: mutationCreate,
@@ -207,7 +276,12 @@ const {
     };
 
     const dbMock = {
-        session: { findFirst: sessionFindFirst, update: sessionUpdate },
+        session: {
+            findFirst: sessionFindFirst,
+            update: sessionUpdate,
+            updateMany: sessionUpdateMany,
+        },
+        machine: { findFirst: machineFindFirst },
         sessionMutationV4: {
             findMany: mutationFindMany,
             create: mutationCreate,
@@ -268,7 +342,7 @@ const mutation = {
     ciphertext: "encrypted-v1",
 };
 
-async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.2"): Promise<Fastify> {
+async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.7"): Promise<Fastify> {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
@@ -280,6 +354,14 @@ async function createApp(defaultHappyClient: string | null = "cli-coding-session
         const userId = request.headers["x-user-id"];
         if (typeof userId !== "string") return reply.code(401).send({ error: "Unauthorized" });
         request.userId = userId;
+        if (typeof request.headers["x-credential-id"] === "string") {
+            request.authCredentialId = request.headers["x-credential-id"];
+            request.authMachineId = state.machines.find((machine) => (
+                machine.accountId === userId
+                && machine.credentialId === request.authCredentialId
+                && machine.deletedAt === null
+            ))?.id;
+        }
     });
     if (defaultHappyClient) {
         typed.addHook("onRequest", async (request) => {
@@ -302,12 +384,12 @@ describe("v4SessionRoutes", () => {
     });
 
     it("accepts only coordinated CLI and App versions on v4 data routes", async () => {
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.2")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("android/1.11.4")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.1")).toEqual({
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.7")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("android/1.11.12")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.6")).toEqual({
             compatible: false,
             clientType: "happy-cli",
-            minimumVersion: "1.4.2",
+            minimumVersion: "1.4.7",
         });
         expect(getSyncV4ClientCompatibility("test/9.0.0")).toEqual({
             compatible: false,
@@ -315,21 +397,21 @@ describe("v4SessionRoutes", () => {
             minimumVersion: null,
         });
 
-        seedSession("session-1", "user-1");
+        seedSession("session-1", "user-1", { orphan: true });
         app = await createApp(null);
         const response = await app.inject({
             method: "GET",
             url: "/v4/sessions/session-1/changes?after_seq=0",
             headers: {
                 "x-user-id": "user-1",
-                "x-happy-client": "web/1.11.3",
+                "x-happy-client": "web/1.11.11",
             },
         });
         expect(response.statusCode).toBe(426);
         expect(response.json()).toEqual({
             error: "syncV4UpgradeRequired",
             clientType: "happy-app",
-            minimumVersion: "1.11.4",
+            minimumVersion: "1.11.12",
         });
         expect(operationMetricMock).toHaveBeenCalledWith({
             operation: "changes",
@@ -354,6 +436,135 @@ describe("v4SessionRoutes", () => {
             outcome: "invalid",
             client_type: "test",
         });
+    });
+
+    it("restricts terminal v4 traffic to its active machine while App tokens retain history access", async () => {
+        seedSession("session-1", "user-1", { orphan: true });
+        state.sessions[0].originMachineId = "machine-1";
+        state.machines.push({
+            id: "machine-1",
+            accountId: "user-1",
+            credentialId: "credential-1",
+            deletedAt: null,
+        });
+        app = await createApp();
+
+        const missingMachine = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0",
+            headers: {
+                "x-user-id": "user-1",
+                "x-credential-id": "credential-1",
+            },
+        });
+        expect(missingMachine.statusCode).toBe(404);
+
+        const terminal = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0",
+            headers: {
+                "x-user-id": "user-1",
+                "x-credential-id": "credential-1",
+                "x-happy-machine-id": "machine-1",
+            },
+        });
+        expect(terminal.statusCode).toBe(200);
+        expect(state.sessions[0].originMachineId).toBe("machine-1");
+
+        state.machines[0].deletedAt = new Date();
+        const revokedMachine = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0",
+            headers: {
+                "x-user-id": "user-1",
+                "x-credential-id": "credential-1",
+                "x-happy-machine-id": "machine-1",
+            },
+        });
+        expect(revokedMachine.statusCode).toBe(404);
+
+        const appHistory = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0",
+            headers: { "x-user-id": "user-1" },
+        });
+        expect(appHistory.statusCode).toBe(200);
+    });
+
+    it("keeps a session without a proven origin read-only to terminal credentials", async () => {
+        seedSession("session-orphan", "user-1", { orphan: true });
+        state.machines.push({
+            id: "machine-1",
+            accountId: "user-1",
+            credentialId: "credential-1",
+            deletedAt: null,
+        });
+        app = await createApp();
+
+        const terminal = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-orphan/changes?after_seq=0",
+            headers: {
+                "x-user-id": "user-1",
+                "x-credential-id": "credential-1",
+                "x-happy-machine-id": "machine-1",
+            },
+        });
+        const account = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-orphan/changes?after_seq=0",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(terminal.statusCode).toBe(404);
+        expect(account.statusCode).toBe(200);
+        expect(state.sessions[0].originMachineId).toBeNull();
+    });
+
+    it("keeps orphaned and tombstoned sessions readable but rejects App mutations", async () => {
+        seedSession("session-orphan", "user-1", { orphan: true });
+        seedSession("session-deleted", "user-1");
+        app = await createApp();
+
+        const initial = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-deleted/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [mutation] },
+        });
+        expect(initial.statusCode).toBe(200);
+
+        const deletedSession = state.sessions.find((session) => session.id === "session-deleted")!;
+        state.machines.find((machine) => machine.id === deletedSession.originMachineId)!.deletedAt = new Date();
+
+        const orphanMutation = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-orphan/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [{ ...mutation, mutationId: "mutation-orphan" }] },
+        });
+        const deletedMutation = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-deleted/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [{ ...mutation, mutationId: "mutation-after-delete", revision: 2 }] },
+        });
+        const history = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-deleted/changes?after_seq=0",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(orphanMutation.statusCode).toBe(409);
+        expect(orphanMutation.json()).toEqual({ error: "sessionReadOnly" });
+        expect(deletedMutation.statusCode).toBe(409);
+        expect(deletedMutation.json()).toEqual({ error: "sessionReadOnly" });
+        expect(history.statusCode).toBe(200);
+        expect(history.json().changes).toEqual([
+            expect.objectContaining({ mutationId: "mutation-1", seq: 1 }),
+        ]);
+        expect(deletedSession.syncV4Seq).toBe(1);
+        expect(state.mutations).toHaveLength(1);
     });
 
     it("classifies a frozen pre-handler error without mutating it or double-counting", async () => {
@@ -421,8 +632,8 @@ describe("v4SessionRoutes", () => {
             codex: {
                 enabled: false,
                 protocolVersion: 4,
-                minimumHappyCliVersion: "1.4.2",
-                minimumHappyAppVersion: "1.11.4",
+                minimumHappyCliVersion: "1.4.7",
+                minimumHappyAppVersion: "1.11.12",
                 minimumCodexCliVersion: "0.145.0",
             },
         });

@@ -452,6 +452,8 @@ export const ru: TranslationStructure = {
         inputPlaceholder: 'Введите сообщение...',
         inactiveArchived: 'Эта сессия неактивна.',
         resumeFromTerminal: 'Чтобы возобновить её из терминала:',
+        machineDeleted: 'Исходное устройство удалено',
+        machineDeletedDescription: 'История остаётся доступной, но сеанс переведён в режим только для чтения и больше не может управлять Codex.',
         newChat: 'Новый чат',
         statusBarContext: 'Контекст',
         statusBarPathTitle: 'Рабочая директория',

@@ -164,7 +164,13 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
 
     async withClient<TResult>(sessionId: string, operation: (client: TClient) => Promise<TResult>): Promise<TResult> {
         const active = this.clients.get(sessionId);
-        if (active) return await operation(active);
+        if (active) {
+            if (!this.options.isEligible(sessionId)) {
+                this.stop(sessionId);
+                throw new Error('Codex Sync v4 client is no longer eligible');
+            }
+            return await operation(active);
+        }
 
         const starting = this.starts.get(sessionId);
         if (!starting) throw new Error('Codex Sync v4 client is not available');

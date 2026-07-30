@@ -12,6 +12,8 @@ export interface SessionScopedConnection {
     socket: Socket;
     userId: string;
     sessionId: string;
+    machineId?: string;
+    credentialId?: string;
     happyClient?: string;
 }
 
@@ -19,6 +21,7 @@ export interface UserScopedConnection {
     connectionType: 'user-scoped';
     socket: Socket;
     userId: string;
+    credentialId?: string;
     happyClient?: string;
 }
 
@@ -27,6 +30,7 @@ export interface MachineScopedConnection {
     socket: Socket;
     userId: string;
     machineId: string;
+    credentialId?: string;
     happyClient?: string;
 }
 
@@ -232,6 +236,9 @@ class EventRouter {
     addConnection(userId: string, connection: ClientConnection): void {
         const socket = connection.socket;
         socket.join(`user:${userId}`);
+        if (connection.credentialId) {
+            socket.join(`user:${userId}:credential:${connection.credentialId}`);
+        }
 
         switch (connection.connectionType) {
             case 'user-scoped':
@@ -248,6 +255,18 @@ class EventRouter {
 
     removeConnection(userId: string, connection: ClientConnection): void {
         // Socket.IO automatically removes sockets from all rooms on disconnect
+    }
+
+    disconnectCredential(userId: string, credentialId: string): void {
+        this.io
+            .in(`user:${userId}:credential:${credentialId}`)
+            .disconnectSockets(true);
+    }
+
+    disconnectMachine(userId: string, machineId: string): void {
+        this.io
+            .in(`user:${userId}:machine:${machineId}`)
+            .disconnectSockets(true);
     }
 
     // === EVENT EMISSION METHODS ===

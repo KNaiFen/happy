@@ -8,6 +8,7 @@ import { githubConnect } from "@/app/github/githubConnect";
 import { githubDisconnect } from "@/app/github/githubDisconnect";
 import { Context } from "@/context";
 import { db } from "@/storage/db";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 
 export function connectRoutes(app: Fastify) {
 
@@ -37,7 +38,13 @@ export function connectRoutes(app: Fastify) {
                 (req as any).rawBody = bodyStr;
                 done(null, json);
             } catch (err: any) {
-                log({ module: 'content-parser', level: 'error' }, `JSON parse error on ${req.method} ${req.url}: ${err.message}, body: "${body}"`);
+                log({
+                    module: 'content-parser',
+                    level: 'error',
+                    method: req.method,
+                    route: req.url.split('?')[0],
+                    bodyLength: Buffer.byteLength(String(body), 'utf8'),
+                }, 'JSON parse error');
                 err.statusCode = 400;
                 done(err, undefined);
             }
@@ -98,7 +105,10 @@ export function connectRoutes(app: Fastify) {
         // Verify the state token to get userId
         const tokenData = await auth.verifyGithubToken(state);
         if (!tokenData) {
-            log({ module: 'github-oauth' }, `Invalid state token: ${state}`);
+            log({
+                module: 'github-oauth',
+                stateHash: diagnosticHash(state),
+            }, 'Invalid state token');
             return reply.redirect('https://app.happy.engineering?error=invalid_state');
         }
 
@@ -158,8 +168,8 @@ export function connectRoutes(app: Fastify) {
             // Redirect to app with success
             return reply.redirect(`https://app.happy.engineering?github=connected&user=${encodeURIComponent(userData.login)}`);
 
-        } catch (error) {
-            log({ module: 'github-oauth' }, `Error in GitHub GET callback: ${error}`);
+        } catch {
+            log({ module: 'github-oauth', level: 'error' }, 'GitHub callback failed');
             return reply.redirect('https://app.happy.engineering?error=server_error');
         }
     });

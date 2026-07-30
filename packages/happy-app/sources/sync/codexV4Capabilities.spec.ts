@@ -70,7 +70,21 @@ describe('Codex v4 App capabilities', () => {
             }),
         )).toEqual({
             readOnly: false,
+            providerReadOnly: false,
+            machineDeleted: false,
             ownedThreadId: 'thread-metadata',
+        });
+    });
+
+    it('keeps deleted-machine read-only separate from provider child ownership', () => {
+        expect(resolveCodexV4SessionCapabilities(
+            metadata(),
+            projection(),
+            { machineDeleted: true },
+        )).toMatchObject({
+            readOnly: true,
+            providerReadOnly: false,
+            machineDeleted: true,
         });
     });
 

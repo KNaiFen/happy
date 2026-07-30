@@ -45,8 +45,8 @@ const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
 const JOURNAL_CLEANUP_INTERVAL = 1_024;
 const RESPONSE_FETCH_CHUNK_SIZE = 16;
 const SYNC_V4_MUTATION_BODY_LIMIT = MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH + 1024 * 1024;
-const MINIMUM_HAPPY_CLI_VERSION = "1.4.2";
-const MINIMUM_HAPPY_APP_VERSION = "1.11.4";
+const MINIMUM_HAPPY_CLI_VERSION = "1.4.7";
+const MINIMUM_HAPPY_APP_VERSION = "1.11.12";
 const MINIMUM_CODEX_CLI_VERSION = "0.145.0";
 
 type SyncV4MetricOperation =
@@ -68,6 +68,13 @@ type SyncV4MetricOutcome =
 type SyncV4ClientCompatibility =
     | { compatible: true }
     | { compatible: false; clientType: "happy-cli" | "happy-app" | "unknown"; minimumVersion: string | null };
+
+class SyncV4SessionReadOnlyError extends Error {
+    constructor() {
+        super("Sync v4 session is read-only");
+        this.name = "SyncV4SessionReadOnlyError";
+    }
+}
 
 export function getSyncV4ClientCompatibility(header: unknown): SyncV4ClientCompatibility {
     if (typeof header !== "string") {
@@ -167,10 +174,65 @@ function decodeSnapshotCursor(cursor: string | undefined): { highWatermark: numb
     return { highWatermark, entityId: cursor.slice(separator + 1) };
 }
 
-async function findOwnedSession(sessionId: string, accountId: string) {
-    return db.session.findFirst({
-        where: { id: sessionId, accountId },
-        select: { id: true, syncV4Seq: true },
+interface SyncV4SessionAccess {
+    allowed: boolean;
+    machineId?: string;
+}
+
+function authorizeSyncV4Session(
+    request: FastifyRequest,
+): SyncV4SessionAccess {
+    const credentialId = request.authCredentialId;
+    if (!credentialId) return { allowed: true };
+    const machineIdHeader = request.headers["x-happy-machine-id"];
+    if (
+        typeof machineIdHeader !== "string"
+        || machineIdHeader.length < 1
+        || machineIdHeader.length > 200
+    ) {
+        return { allowed: false };
+    }
+    return request.authMachineId === machineIdHeader
+        ? { allowed: true, machineId: machineIdHeader }
+        : { allowed: false };
+}
+
+function sessionAccessWhere(
+    request: FastifyRequest,
+    sessionId: string,
+    access: SyncV4SessionAccess,
+) {
+    return {
+        id: sessionId,
+        accountId: request.userId,
+        ...(request.authCredentialId ? {
+            originMachineId: access.machineId,
+            originMachine: {
+                is: {
+                    credentialId: request.authCredentialId,
+                    deletedAt: null,
+                },
+            },
+        } : {}),
+    };
+}
+
+async function findOwnedSession(
+    store: Pick<typeof db, "session">,
+    request: FastifyRequest,
+    sessionId: string,
+    access: SyncV4SessionAccess,
+) {
+    return store.session.findFirst({
+        where: sessionAccessWhere(request, sessionId, access),
+        select: {
+            id: true,
+            syncV4Seq: true,
+            originMachineId: true,
+            originMachine: {
+                select: { deletedAt: true },
+            },
+        },
     });
 }
 
@@ -302,6 +364,10 @@ export function v4SessionRoutes(app: Fastify): void {
         const sessionHash = serverSyncV4DiagnosticHash(sessionId);
         const startedAt = Date.now();
         const requestMutationCount = request.body.mutations.length;
+        const access = authorizeSyncV4Session(request);
+        if (!access.allowed) {
+            return reply.code(404).send({ error: "Session not found" });
+        }
         logServerSyncV4Diagnostic(request, {
             level: "debug",
             event: "transport",
@@ -318,11 +384,18 @@ export function v4SessionRoutes(app: Fastify): void {
 
         try {
             const result = await inTx(async (tx) => {
-                const session = await tx.session.findFirst({
-                    where: { id: sessionId, accountId: request.userId },
-                    select: { id: true, syncV4Seq: true },
-                });
+                const session = await findOwnedSession(tx, request, sessionId, access);
                 if (!session) return null;
+                if (
+                    !request.authCredentialId
+                    && (
+                        !session.originMachineId
+                        || !session.originMachine
+                        || session.originMachine.deletedAt !== null
+                    )
+                ) {
+                    throw new SyncV4SessionReadOnlyError();
+                }
                 const mutations = request.body.mutations;
                 const mutationIds = mutations.map((mutation) => mutation.mutationId);
                 const entityIds = [...new Set(mutations.map((mutation) => mutation.entityId))];
@@ -541,6 +614,31 @@ export function v4SessionRoutes(app: Fastify): void {
             );
             return reply.send({ acknowledgements: result.acknowledgements });
         } catch (error) {
+            if (error instanceof SyncV4SessionReadOnlyError) {
+                syncV4MutationResultsCounter.inc({
+                    result: "session_read_only",
+                    ...getSyncV4MetricsLabelsFromRequest(request),
+                });
+                logServerSyncV4Diagnostic(request, {
+                    level: "warn",
+                    event: "ack",
+                    phase: "failed",
+                    transportOperation: "mutations",
+                    sessionHash,
+                    httpStatus: 409,
+                    errorKind: "conflict",
+                    count: requestMutationCount,
+                    durationMs: elapsedMs(startedAt),
+                });
+                observeSyncV4Operation(
+                    request,
+                    "mutations",
+                    "conflict",
+                    startedAt,
+                    requestMutationCount,
+                );
+                return reply.code(409).send({ error: "sessionReadOnly" });
+            }
             if (error instanceof RevisionConflictError) {
                 syncV4MutationResultsCounter.inc({
                     result: "revision_conflict",
@@ -625,11 +723,12 @@ export function v4SessionRoutes(app: Fastify): void {
         const { after_seq: afterSeq, limit } = request.query;
         const sessionHash = serverSyncV4DiagnosticHash(sessionId);
         const startedAt = Date.now();
+        const access = authorizeSyncV4Session(request);
+        if (!access.allowed) {
+            return reply.code(404).send({ error: "Session not found" });
+        }
         const result = await inTx(async (tx) => {
-            const session = await tx.session.findFirst({
-                where: { id: sessionId, accountId: request.userId },
-                select: { id: true, syncV4Seq: true },
-            });
+            const session = await findOwnedSession(tx, request, sessionId, access);
             if (!session) return { kind: "notFound" as const };
             const minimum = await tx.sessionMutationV4.aggregate({
                 where: { sessionId, prunedAt: null },
@@ -787,7 +886,11 @@ export function v4SessionRoutes(app: Fastify): void {
         const { sessionId } = request.params;
         const sessionHash = serverSyncV4DiagnosticHash(sessionId);
         const startedAt = Date.now();
-        const session = await findOwnedSession(sessionId, request.userId);
+        const access = authorizeSyncV4Session(request);
+        if (!access.allowed) {
+            return reply.code(404).send({ error: "Session not found" });
+        }
+        const session = await findOwnedSession(db, request, sessionId, access);
         if (!session) {
             logServerSyncV4Diagnostic(request, {
                 level: "warn",

@@ -7,6 +7,9 @@ import { AsyncLock } from "@/utils/lock";
 import { log } from "@/utils/log";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { Socket } from "socket.io";
+import { sessionWhereForConnection } from "./sessionScope";
+import { diagnosticHash } from "@/utils/diagnosticHash";
+import { inTx } from "@/storage/inTx";
 
 export function sessionUpdateHandler(userId: string, socket: Socket, connection: ClientConnection) {
     const labels = getMetricsLabelsFromSocket(socket);
@@ -21,10 +24,15 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 }
                 return;
             }
+            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            if (!accessWhere) {
+                callback?.({ result: 'error' });
+                return;
+            }
 
             // Resolve session
-            const session = await db.session.findUnique({
-                where: { id: sid, accountId: userId }
+            const session = await db.session.findFirst({
+                where: accessWhere,
             });
             if (!session) {
                 return;
@@ -38,7 +46,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
 
             // Update metadata
             const { count } = await db.session.updateMany({
-                where: { id: sid, metadataVersion: expectedVersion },
+                where: { ...accessWhere, metadataVersion: expectedVersion },
                 data: {
                     metadata: metadata,
                     metadataVersion: expectedVersion + 1
@@ -64,8 +72,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
 
             // Send success response with new version via callback
             callback({ result: 'success', version: expectedVersion + 1, metadata: metadata });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in update-metadata: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Session metadata update failed');
             if (callback) {
                 callback({ result: 'error' });
             }
@@ -83,13 +91,15 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 }
                 return;
             }
+            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            if (!accessWhere) {
+                callback?.({ result: 'error' });
+                return;
+            }
 
             // Resolve session
-            const session = await db.session.findUnique({
-                where: {
-                    id: sid,
-                    accountId: userId
-                }
+            const session = await db.session.findFirst({
+                where: accessWhere,
             });
             if (!session) {
                 callback({ result: 'error' });
@@ -104,7 +114,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
 
             // Update agent state
             const { count } = await db.session.updateMany({
-                where: { id: sid, agentStateVersion: expectedVersion },
+                where: { ...accessWhere, agentStateVersion: expectedVersion },
                 data: {
                     agentState: agentState,
                     agentStateVersion: expectedVersion + 1
@@ -130,8 +140,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
 
             // Send success response with new version via callback
             callback({ result: 'success', version: expectedVersion + 1, agentState: agentState });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in update-state: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Session state update failed');
             if (callback) {
                 callback({ result: 'error' });
             }
@@ -161,6 +171,13 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             }
 
             const { sid, thinking } = data;
+            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            if (!accessWhere) return;
+            const session = await db.session.findFirst({
+                where: accessWhere,
+                select: { id: true },
+            });
+            if (!session) return;
 
             // Check session validity using cache
             const isValid = await activityCache.isSessionValid(sid, userId);
@@ -178,8 +195,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 payload: sessionActivity,
                 recipientFilter: { type: 'user-scoped-only' }
             });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in session-alive: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Session heartbeat failed');
         }
     });
 
@@ -188,59 +205,76 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
         await receiveMessageLock.inLock(async () => {
             try {
                 websocketEventsCounter.inc({ event_type: 'message', ...labels });
-                const { sid, message, localId } = data;
-
-                log({ module: 'websocket' }, `Received message from socket ${socket.id}: sessionId=${sid}, messageLength=${message.length} bytes, connectionType=${connection.connectionType}, connectionSessionId=${connection.connectionType === 'session-scoped' ? connection.sessionId : 'N/A'}`);
-
-                // Resolve session
-                const session = await db.session.findUnique({
-                    where: { id: sid, accountId: userId }
-                });
-                if (!session) {
+                const { sid, message, localId } = data ?? {};
+                if (
+                    typeof sid !== 'string'
+                    || typeof message !== 'string'
+                    || (localId !== undefined && localId !== null && typeof localId !== 'string')
+                ) {
                     return;
                 }
-                let useLocalId = typeof localId === 'string' ? localId : null;
+                const accessWhere = sessionWhereForConnection(userId, connection, sid);
+                if (!accessWhere) return;
 
-                // Create encrypted message
-                const msgContent: PrismaJson.SessionMessageContent = {
-                    t: 'encrypted',
-                    c: message
-                };
+                log({
+                    module: 'websocket',
+                    sessionHash: diagnosticHash(sid),
+                    messageLength: Buffer.byteLength(message, 'utf8'),
+                    connectionType: connection.connectionType,
+                }, 'Received encrypted session message');
 
-                // Resolve seq
-                const updSeq = await allocateUserSeq(userId);
-                const msgSeq = await allocateSessionSeq(sid);
-
-                // Check if message already exists
-                if (useLocalId) {
-                    const existing = await db.sessionMessage.findFirst({
-                        where: { sessionId: sid, localId: useLocalId }
+                const result = await inTx(async (tx) => {
+                    const session = await tx.session.findFirst({
+                        where: accessWhere,
+                        select: { id: true },
                     });
-                    if (existing) {
-                        return { msg: existing, update: null };
-                    }
-                }
+                    if (!session) return null;
 
-                // Create message
-                const msg = await db.sessionMessage.create({
-                    data: {
-                        sessionId: sid,
-                        seq: msgSeq,
-                        content: msgContent,
-                        localId: useLocalId
+                    const useLocalId = typeof localId === 'string' ? localId : null;
+                    if (useLocalId) {
+                        const existing = await tx.sessionMessage.findFirst({
+                            where: { sessionId: sid, localId: useLocalId }
+                        });
+                        if (existing) {
+                            return { msg: existing, update: null };
+                        }
                     }
+
+                    const updSeq = await allocateUserSeq(userId, tx);
+                    const msgSeq = await allocateSessionSeq(sid, tx);
+                    const msgContent: PrismaJson.SessionMessageContent = {
+                        t: 'encrypted',
+                        c: message
+                    };
+                    const msg = await tx.sessionMessage.create({
+                        data: {
+                            sessionId: sid,
+                            seq: msgSeq,
+                            content: msgContent,
+                            localId: useLocalId
+                        }
+                    });
+                    return {
+                        msg,
+                        update: buildNewMessageUpdate(
+                            msg,
+                            sid,
+                            updSeq,
+                            randomKeyNaked(12),
+                        ),
+                    };
                 });
+                if (!result?.update) return;
 
                 // Emit new message update to relevant clients
-                const updatePayload = buildNewMessageUpdate(msg, sid, updSeq, randomKeyNaked(12));
                 eventRouter.emitUpdate({
                     userId,
-                    payload: updatePayload,
+                    payload: result.update,
                     recipientFilter: { type: 'all-interested-in-session', sessionId: sid },
                     skipSenderConnection: connection
                 });
-            } catch (error) {
-                log({ module: 'websocket', level: 'error' }, `Error in message handler: ${error}`);
+            } catch {
+                log({ module: 'websocket', level: 'error' }, 'Session message handler failed');
             }
         });
     });
@@ -261,20 +295,15 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             if (t < Date.now() - 1000 * 60 * 10) { // Ignore if time is in the past 10 minutes
                 return;
             }
-
-            // Resolve session
-            const session = await db.session.findUnique({
-                where: { id: sid, accountId: userId }
-            });
-            if (!session) {
-                return;
-            }
+            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            if (!accessWhere) return;
 
             // Update last active at
-            await db.session.update({
-                where: { id: sid },
+            const { count } = await db.session.updateMany({
+                where: accessWhere,
                 data: { lastActiveAt: new Date(t), active: false }
             });
+            if (count === 0) return;
 
             // Emit session activity update
             const sessionActivity = buildSessionActivityEphemeral(sid, false, t, false);
@@ -283,8 +312,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 payload: sessionActivity,
                 recipientFilter: { type: 'user-scoped-only' }
             });
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in session-end: ${error}`);
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Session end update failed');
         }
     });
 

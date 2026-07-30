@@ -43,6 +43,9 @@ const tsxPath = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const appVersion = loadPackageVersion(
     join(repoRoot, 'packages', 'happy-app', 'package.json'),
 );
+const cliVersion = loadPackageVersion(
+    join(repoRoot, 'packages', 'happy-cli', 'package.json'),
+);
 const deltaCount = 20;
 const deltaIntervalMs = 200;
 const realLongTurnMinimumMs = 10 * 60 * 1_000;
@@ -302,15 +305,16 @@ async function runHttpRelayScenario(): Promise<void> {
         await waitForHealth(baseUrl, relay);
 
         manualTraceIds.push(await verifyCorsAndTrace(baseUrl));
-        const token = await createToken(baseUrl);
+        const appToken = await createToken(baseUrl);
+        const token = await createTerminalToken(baseUrl, appToken);
         const machineState = await createMachine(baseUrl, token);
         const sessionKey = randomBytes(32);
-        const sessionId = await createSession(baseUrl, token, sessionKey, {
+        const sessionId = await createSession(baseUrl, token, machineState.id, sessionKey, {
             tag: `codex-http-scenario-${Date.now()}`,
             threadId: null,
         });
         const invalidations: number[] = [];
-        socket = await connectSocket(baseUrl, token, (payload) => {
+        socket = await connectSocket(baseUrl, appToken, (payload) => {
             if (
                 payload?.type === 'sync-v4-invalidate'
                 && payload.sessionId === sessionId
@@ -406,7 +410,7 @@ async function runHttpRelayScenario(): Promise<void> {
                 const response = await fetch(`${baseUrl}${path}`, {
                     ...init,
                     headers: {
-                        ...relayHeaders(token),
+                        ...relayHeaders(appToken),
                         ...Object.fromEntries(requestHeaders.entries()),
                     },
                 });
@@ -568,6 +572,7 @@ async function runHttpRelayScenario(): Promise<void> {
             journalRoot: cliJournalRoot,
             serverUrl: baseUrl,
             token,
+            machineId: machineState.id,
             pollIntervalMs: 250,
             diagnostics: cliDiagnostics,
             generateTraceId: nextCliTraceId,
@@ -601,6 +606,7 @@ async function runHttpRelayScenario(): Promise<void> {
             journalRoot: cliJournalRoot,
             serverUrl: baseUrl,
             token,
+            machineId: machineState.id,
             pollIntervalMs: 250,
             diagnostics: cliDiagnostics,
             generateTraceId: nextCliTraceId,
@@ -640,6 +646,7 @@ async function runHttpRelayScenario(): Promise<void> {
                 const childSessionId = await createSession(
                     baseUrl,
                     token,
+                    machineState.id,
                     identity.sessionKey,
                     {
                         tag: identity.tag,
@@ -656,6 +663,7 @@ async function runHttpRelayScenario(): Promise<void> {
                     journalRoot: join(root, 'child-journals', identity.tag),
                     serverUrl: baseUrl,
                     token,
+                    machineId: machineState.id,
                     pollIntervalMs: 250,
                     diagnostics: cliDiagnostics!,
                     generateTraceId: nextCliTraceId,
@@ -950,6 +958,7 @@ async function runHttpRelayScenario(): Promise<void> {
             journalRoot: join(root, 'fallback-cli-journal'),
             serverUrl: baseUrl,
             token,
+            machineId: machineState.id,
             pollIntervalMs: 250,
             diagnostics: cliDiagnostics,
             generateTraceId: nextCliTraceId,
@@ -967,6 +976,14 @@ async function runHttpRelayScenario(): Promise<void> {
         fallbackApp = null;
         await fallbackCli.close();
         fallbackCli = null;
+
+        await assertMachineDeletion({
+            baseUrl,
+            appToken,
+            terminalToken: token,
+            machineId: machineState.id,
+            sessionId,
+        });
 
         await terminateRelay(relay.child);
         relayOutputs.push(relay.output());
@@ -1064,6 +1081,7 @@ async function runHttpRelayScenario(): Promise<void> {
             ['childTurnId', childTurnId],
             ['childAgentItemId', childAgentItemId],
             ['token', token],
+            ['appToken', appToken],
             ['sessionKey', Buffer.from(sessionKey).toString('base64')],
             ...ciphertextCanaries.map(
                 (ciphertext, index): [string, string] => [`ciphertext${index}`, ciphertext],
@@ -1847,9 +1865,57 @@ async function createToken(baseUrl: string): Promise<string> {
     return body.token;
 }
 
+async function createTerminalToken(
+    baseUrl: string,
+    appToken: string,
+): Promise<string> {
+    const keypair = nacl.box.keyPair();
+    const publicKey = Buffer.from(keypair.publicKey).toString('base64');
+    const request = async () => fetch(`${baseUrl}/v1/auth/request`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Happy-Client': `cli/${cliVersion}`,
+        },
+        body: JSON.stringify({
+            publicKey,
+            supportsV2: true,
+        }),
+    });
+
+    const pending = await request();
+    assert.equal(pending.status, 200, `terminal auth request returned HTTP ${pending.status}`);
+    assert.equal((await pending.json() as { state?: unknown }).state, 'requested');
+
+    const approval = await fetch(`${baseUrl}/v1/auth/response`, {
+        method: 'POST',
+        headers: {
+            ...relayHeaders(appToken),
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            publicKey,
+            response: Buffer.from('scenario-encrypted-auth-response').toString('base64'),
+        }),
+    });
+    assert.equal(approval.status, 200, `terminal auth approval returned HTTP ${approval.status}`);
+
+    const authorized = await request();
+    assert.equal(authorized.status, 200, `terminal auth poll returned HTTP ${authorized.status}`);
+    const body = await authorized.json() as {
+        state?: unknown;
+        token?: unknown;
+    };
+    assert.equal(body.state, 'authorized');
+    assert.equal(typeof body.token, 'string');
+    assert(body.token.length > 0);
+    return body.token;
+}
+
 async function createSession(
     baseUrl: string,
     token: string,
+    machineId: string,
     sessionKey: Uint8Array,
     options: {
         tag: string;
@@ -1863,6 +1929,7 @@ async function createSession(
         flavor: 'codex',
         codexSyncVersion: 4,
         codexThreadId: options.threadId,
+        machineId,
         ...(options.parentSessionId
             ? { parentSessionId: options.parentSessionId }
             : {}),
@@ -1888,12 +1955,157 @@ async function createSession(
             metadata: encodeBase64(encrypt(sessionKey, 'dataKey', metadata)),
             agentState: null,
             dataEncryptionKey: encodeBase64(versionedSessionKey),
+            machineId,
         }),
     });
     assert.equal(response.status, 200, `session create returned HTTP ${response.status}`);
     const body = await response.json() as { session?: { id?: unknown } };
     assert.equal(typeof body.session?.id, 'string');
     return body.session.id;
+}
+
+async function assertMachineDeletion(options: {
+    baseUrl: string;
+    appToken: string;
+    terminalToken: string;
+    machineId: string;
+    sessionId: string;
+}): Promise<void> {
+    const deleted = await fetch(
+        `${options.baseUrl}/v1/machines/${encodeURIComponent(options.machineId)}`,
+        {
+            method: 'DELETE',
+            headers: relayHeaders(options.appToken),
+        },
+    );
+    assert.equal(deleted.status, 200, `machine delete returned HTTP ${deleted.status}`);
+
+    const duplicateDelete = await fetch(
+        `${options.baseUrl}/v1/machines/${encodeURIComponent(options.machineId)}`,
+        {
+            method: 'DELETE',
+            headers: relayHeaders(options.appToken),
+        },
+    );
+    assert.equal(
+        duplicateDelete.status,
+        200,
+        `idempotent machine delete returned HTTP ${duplicateDelete.status}`,
+    );
+
+    const terminalList = await fetch(`${options.baseUrl}/v1/machines`, {
+        headers: relayHeaders(options.terminalToken),
+    });
+    assert.equal(
+        terminalList.status,
+        401,
+        `revoked terminal token remained valid with HTTP ${terminalList.status}`,
+    );
+
+    const terminalChanges = await fetch(
+        `${options.baseUrl}/v4/sessions/${encodeURIComponent(options.sessionId)}/changes?after_seq=0`,
+        {
+            headers: {
+                ...relayHeaders(options.terminalToken),
+                'X-Happy-Client': `cli-coding-session/${cliVersion}`,
+                'X-Happy-Machine-Id': options.machineId,
+            },
+        },
+    );
+    assert.equal(
+        terminalChanges.status,
+        401,
+        `revoked terminal token retained Sync v4 access with HTTP ${terminalChanges.status}`,
+    );
+
+    const appSessions = await fetch(`${options.baseUrl}/v1/sessions`, {
+        headers: relayHeaders(options.appToken),
+    });
+    assert.equal(appSessions.status, 200);
+    const sessions = await appSessions.json() as {
+        sessions?: Array<{
+            id?: unknown;
+            active?: unknown;
+            originMachineId?: unknown;
+            machineDeletedAt?: unknown;
+        }>;
+    };
+    const preserved = sessions.sessions?.find((session) => session.id === options.sessionId);
+    assert(preserved, 'deleted machine removed its session history');
+    assert.equal(preserved.active, false);
+    assert.equal(preserved.originMachineId, options.machineId);
+    assert.equal(typeof preserved.machineDeletedAt, 'number');
+
+    const blockedMutation = await fetch(
+        `${options.baseUrl}/v4/sessions/${encodeURIComponent(options.sessionId)}/mutations`,
+        {
+            method: 'POST',
+            headers: {
+                ...relayHeaders(options.appToken),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                mutations: [{
+                    mutationId: `blocked-after-delete-${Date.now()}`,
+                    producerId: 'app-delete-verification',
+                    entityId: 'blocked-after-delete',
+                    entityType: 'codex.command',
+                    revision: 1,
+                    op: 'upsert',
+                    ciphertext: 'encrypted-blocked-command',
+                }],
+            }),
+        },
+    );
+    assert.equal(
+        blockedMutation.status,
+        409,
+        `App mutation on deleted-machine session returned HTTP ${blockedMutation.status}`,
+    );
+    assert.deepEqual(await blockedMutation.json(), { error: 'sessionReadOnly' });
+
+    const blockedAccessKey = await fetch(
+        `${options.baseUrl}/v1/access-keys/${encodeURIComponent(options.sessionId)}/${encodeURIComponent(options.machineId)}`,
+        {
+            method: 'POST',
+            headers: {
+                ...relayHeaders(options.appToken),
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ data: 'encrypted-blocked-access-key' }),
+        },
+    );
+    assert.equal(
+        blockedAccessKey.status,
+        404,
+        `AccessKey was recreated after machine deletion with HTTP ${blockedAccessKey.status}`,
+    );
+
+    const appChanges = await fetch(
+        `${options.baseUrl}/v4/sessions/${encodeURIComponent(options.sessionId)}/changes?after_seq=0`,
+        {
+            headers: relayHeaders(options.appToken),
+        },
+    );
+    if (appChanges.status === 410) {
+        const snapshot = await fetch(
+            `${options.baseUrl}/v4/sessions/${encodeURIComponent(options.sessionId)}/snapshot?limit=100`,
+            {
+                headers: relayHeaders(options.appToken),
+            },
+        );
+        assert.equal(
+            snapshot.status,
+            200,
+            `App could not rebuild read-only history from snapshot: HTTP ${snapshot.status}`,
+        );
+    } else {
+        assert.equal(
+            appChanges.status,
+            200,
+            `App lost read-only Sync v4 history with HTTP ${appChanges.status}`,
+        );
+    }
 }
 
 async function createMachine(

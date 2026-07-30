@@ -51,7 +51,8 @@ describe('AxiosSyncV4Transport diagnostics', () => {
         const transport = new AxiosSyncV4Transport(
             'http://relay.example.test',
             'bearer-secret',
-            'cli-coding-session/1.4.5',
+            'cli-coding-session/1.4.7',
+            'machine-1',
         );
         const traceIds = [
             '1'.repeat(32),
@@ -66,6 +67,9 @@ describe('AxiosSyncV4Transport diagnostics', () => {
         expect(axiosMock.post.mock.calls[0][2].headers['X-Happy-Sync-Trace']).toBe(traceIds[0]);
         expect(axiosMock.get.mock.calls[0][1].headers['X-Happy-Sync-Trace']).toBe(traceIds[1]);
         expect(axiosMock.get.mock.calls[1][1].headers['X-Happy-Sync-Trace']).toBe(traceIds[2]);
+        expect(axiosMock.post.mock.calls[0][2].headers['X-Happy-Machine-Id']).toBe('machine-1');
+        expect(axiosMock.get.mock.calls[0][1].headers['X-Happy-Machine-Id']).toBe('machine-1');
+        expect(axiosMock.get.mock.calls[1][1].headers['X-Happy-Machine-Id']).toBe('machine-1');
     });
 
     it('rejects malformed trace IDs before issuing a request', async () => {

@@ -313,6 +313,8 @@ export const zhHant: TranslationStructure = {
         inputPlaceholder: '輸入訊息...',
         inactiveArchived: '此會話處於非活動狀態。',
         resumeFromTerminal: '若要從終端恢復它：',
+        machineDeleted: '來源裝置已刪除',
+        machineDeletedDescription: '歷史記錄仍會保留，但此會話已變為唯讀，無法再控制 Codex。',
         newChat: '新對話',
         statusBarContext: '上下文',
         statusBarPathTitle: '工作目錄',

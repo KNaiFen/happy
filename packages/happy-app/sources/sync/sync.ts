@@ -68,6 +68,9 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { isRigMetadataV1, rigCanUseAttachments, usesControlledSessionUi } from './rig';
 import { AppSyncV4Client, type AppSyncV4AppliedEntity } from './syncV4Client';
+import {
+    nativeSyncV4Entropy,
+} from './syncV4Entropy';
 import { syncV4Persistence } from './syncV4Persistence.mmkv';
 import { HttpAppSyncV4Transport } from './syncV4Transport';
 import { appSyncV4Diagnostics } from './syncV4Diagnostics.mmkv';
@@ -86,6 +89,7 @@ import {
     assertCodexV4CommandPublishAllowed,
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
+import { isSessionMachineDeleted } from './sessionMachineAccess';
 
 type V3GetSessionMessagesResponse = {
     messages: ApiMessage[];
@@ -194,6 +198,19 @@ class Sync {
                 diagnostics: appSyncV4Diagnostics,
                 diagnosticStats: () => appSyncV4Diagnostics.stats(),
                 transportSecurity: syncV4TransportSecurity,
+                ...nativeSyncV4Entropy,
+                canSendOutbound: () => {
+                    const state = storage.getState();
+                    const session = state.sessions[sessionId];
+                    return Boolean(
+                        session
+                        && !isSessionMachineDeleted(
+                            session,
+                            state.machines,
+                            state.machinesLoaded,
+                        )
+                    );
+                },
                 onEntity,
                 onEntities,
                 onSnapshotReset,
@@ -402,9 +419,16 @@ class Sync {
         const command = createCodexV4Command(draft, { commandId });
         const assertCurrentSessionAllowsCommand = () => {
             const state = storage.getState();
+            const session = state.sessions[sessionId];
+            if (
+                session
+                && isSessionMachineDeleted(session, state.machines, state.machinesLoaded)
+            ) {
+                throw new Error('The source machine was deleted; this session is read-only');
+            }
             assertCodexV4CommandPublishAllowed({
                 command,
-                metadata: state.sessions[sessionId]?.metadata,
+                metadata: session?.metadata,
                 projection: state.codexV4Sessions[sessionId],
             });
         };
@@ -709,6 +733,14 @@ class Sync {
                 return;
             }
         }
+        const currentState = storage.getState();
+        if (isSessionMachineDeleted(
+            session,
+            currentState.machines,
+            currentState.machinesLoaded,
+        )) {
+            throw new Error('The source machine was deleted; this session is read-only');
+        }
 
         const modeMeta = resolveMessageModeMeta(session, {
             agentDefaultOverrides: storage.getState().localSettings.agentDefaultOverrides,
@@ -722,6 +754,13 @@ class Sync {
             ? resolveCodexV4SessionCapabilities(
                 session.metadata,
                 storage.getState().codexV4Sessions[sessionId],
+                {
+                    machineDeleted: isSessionMachineDeleted(
+                        session,
+                        storage.getState().machines,
+                        storage.getState().machinesLoaded,
+                    ),
+                },
             )
             : null;
         if (codexV4Capabilities?.readOnly) {
@@ -1125,6 +1164,8 @@ class Sync {
             createdAt: number;
             updatedAt: number;
             lastMessage: ApiMessage | null;
+            originMachineId: string | null;
+            machineDeletedAt: number | null;
         }>;
 
         // Initialize all session encryptions first
@@ -1592,15 +1633,9 @@ class Sync {
             }
         }
 
-        // Replace entire machine state with fetched machines — but never wipe
-        // a populated store with an empty result. An empty list here almost
-        // always means a transient fetch/decrypt problem, not "user has no
-        // machines"; destroying good state would blank /new until restart.
-        const existingMachineCount = Object.keys(storage.getState().machines).length;
-        if (decryptedMachines.length === 0 && existingMachineCount > 0) {
-            log.log(`🖥️ fetchMachines: empty result, keeping ${existingMachineCount} existing machine(s)`);
-            return;
-        }
+        // A successful response is authoritative, including an empty list.
+        // Keeping a stale local Machine after a valid empty response revives
+        // devices that the user already deleted.
         storage.getState().applyMachines(decryptedMachines, true);
         log.log(`🖥️ fetchMachines completed - processed ${decryptedMachines.length} machines`);
     }
@@ -2316,8 +2351,7 @@ class Sync {
     private handleUpdate = async (update: unknown) => {
         const validatedUpdate = ApiUpdateContainerSchema.safeParse(update);
         if (!validatedUpdate.success) {
-            console.log('❌ Sync: Invalid update received:', validatedUpdate.error);
-            console.error('❌ Sync: Invalid update data:', update);
+            console.error('Sync: Invalid update received');
             return;
         }
         const updateData = validatedUpdate.data;
@@ -2671,13 +2705,9 @@ class Sync {
         } else if (updateData.body.t === 'delete-machine') {
             const machineId = updateData.body.machineId;
             log.log(`🗑️ Delete machine update received for ${machineId}`);
-            if (!storage.getState().machines[machineId]) {
-                log.log(`Machine ${machineId} not in storage, skipping delete`);
-            } else {
-                storage.getState().deleteMachine(machineId);
-                this.encryption.removeMachineEncryption(machineId);
-                this.machineDataKeys.delete(machineId);
-            }
+            storage.getState().deleteMachine(machineId);
+            this.encryption.removeMachineEncryption(machineId);
+            this.machineDataKeys.delete(machineId);
         } else if (updateData.body.t === 'relationship-updated') {
             log.log('👥 Received relationship-updated update');
             const relationshipUpdate = updateData.body;
@@ -2870,8 +2900,7 @@ class Sync {
     private handleEphemeralUpdate = (update: unknown) => {
         const validatedUpdate = ApiEphemeralUpdateSchema.safeParse(update);
         if (!validatedUpdate.success) {
-            console.log('Invalid ephemeral update received:', validatedUpdate.error);
-            console.error('Invalid ephemeral update received:', update);
+            console.error('Invalid ephemeral update received');
             return;
         } else {
             // console.log('Ephemeral update received:', update);

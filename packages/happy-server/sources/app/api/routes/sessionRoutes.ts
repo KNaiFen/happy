@@ -4,9 +4,50 @@ import { db } from "@/storage/db";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { log } from "@/utils/log";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { sessionDelete } from "@/app/session/sessionDelete";
+import { inTx } from "@/storage/inTx";
+import {
+    buildSessionAccessWhere,
+    sessionAccessIdentityFromRequest,
+} from "@/app/api/utils/sessionAccess";
+
+function sessionResponse(session: {
+    id: string;
+    seq: number;
+    metadata: string;
+    metadataVersion: number;
+    agentState: string | null;
+    agentStateVersion: number;
+    dataEncryptionKey: Uint8Array | null;
+    active: boolean;
+    lastActiveAt: Date;
+    createdAt: Date;
+    updatedAt: Date;
+    originMachineId: string | null;
+    originMachine: { deletedAt: Date | null } | null;
+}) {
+    return {
+        id: session.id,
+        seq: session.seq,
+        createdAt: session.createdAt.getTime(),
+        updatedAt: session.updatedAt.getTime(),
+        active: session.active,
+        activeAt: session.lastActiveAt.getTime(),
+        metadata: session.metadata,
+        metadataVersion: session.metadataVersion,
+        agentState: session.agentState,
+        agentStateVersion: session.agentStateVersion,
+        dataEncryptionKey: session.dataEncryptionKey
+            ? Buffer.from(session.dataEncryptionKey).toString('base64')
+            : null,
+        originMachineId: session.originMachineId,
+        machineDeletedAt: session.originMachine?.deletedAt?.getTime() ?? null,
+        lastMessage: null,
+    };
+}
 
 export function sessionRoutes(app: Fastify) {
 
@@ -15,9 +56,15 @@ export function sessionRoutes(app: Fastify) {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const userId = request.userId;
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
 
         const sessions = await db.session.findMany({
-            where: { accountId: userId },
+            where: accessWhere,
             orderBy: { updatedAt: 'desc' },
             take: 150,
             select: {
@@ -32,6 +79,8 @@ export function sessionRoutes(app: Fastify) {
                 dataEncryptionKey: true,
                 active: true,
                 lastActiveAt: true,
+                originMachineId: true,
+                originMachine: { select: { deletedAt: true } },
                 // messages: {
                 //     orderBy: { seq: 'desc' },
                 //     take: 1,
@@ -47,26 +96,7 @@ export function sessionRoutes(app: Fastify) {
         });
 
         return reply.send({
-            sessions: sessions.map((v) => {
-                // const lastMessage = v.messages[0];
-                const sessionUpdatedAt = v.updatedAt.getTime();
-                // const lastMessageCreatedAt = lastMessage ? lastMessage.createdAt.getTime() : 0;
-
-                return {
-                    id: v.id,
-                    seq: v.seq,
-                    createdAt: v.createdAt.getTime(),
-                    updatedAt: sessionUpdatedAt,
-                    active: v.active,
-                    activeAt: v.lastActiveAt.getTime(),
-                    metadata: v.metadata,
-                    metadataVersion: v.metadataVersion,
-                    agentState: v.agentState,
-                    agentStateVersion: v.agentStateVersion,
-                    dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-                    lastMessage: null
-                };
-            })
+            sessions: sessions.map(sessionResponse)
         });
     });
 
@@ -81,13 +111,19 @@ export function sessionRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const limit = request.query?.limit || 150;
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            {
+                active: true,
+                lastActiveAt: { gt: new Date(Date.now() - 1000 * 60 * 15) },
+            },
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
 
         const sessions = await db.session.findMany({
-            where: {
-                accountId: userId,
-                active: true,
-                lastActiveAt: { gt: new Date(Date.now() - 1000 * 60 * 15) /* 15 minutes */ }
-            },
+            where: accessWhere,
             orderBy: { lastActiveAt: 'desc' },
             take: limit,
             select: {
@@ -102,23 +138,13 @@ export function sessionRoutes(app: Fastify) {
                 dataEncryptionKey: true,
                 active: true,
                 lastActiveAt: true,
+                originMachineId: true,
+                originMachine: { select: { deletedAt: true } },
             }
         });
 
         return reply.send({
-            sessions: sessions.map((v) => ({
-                id: v.id,
-                seq: v.seq,
-                createdAt: v.createdAt.getTime(),
-                updatedAt: v.updatedAt.getTime(),
-                active: v.active,
-                activeAt: v.lastActiveAt.getTime(),
-                metadata: v.metadata,
-                metadataVersion: v.metadataVersion,
-                agentState: v.agentState,
-                agentStateVersion: v.agentStateVersion,
-                dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-            }))
+            sessions: sessions.map(sessionResponse)
         });
     });
 
@@ -147,7 +173,13 @@ export function sessionRoutes(app: Fastify) {
         }
 
         // Build where clause
-        const where: Prisma.SessionWhereInput = { accountId: userId };
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+        const where: Prisma.SessionWhereInput = accessWhere;
 
         // Add changedSince filter (just a filter, doesn't affect pagination)
         if (changedSince) {
@@ -182,6 +214,8 @@ export function sessionRoutes(app: Fastify) {
                 dataEncryptionKey: true,
                 active: true,
                 lastActiveAt: true,
+                originMachineId: true,
+                originMachine: { select: { deletedAt: true } },
             }
         });
 
@@ -197,19 +231,7 @@ export function sessionRoutes(app: Fastify) {
         }
 
         return reply.send({
-            sessions: resultSessions.map((v) => ({
-                id: v.id,
-                seq: v.seq,
-                createdAt: v.createdAt.getTime(),
-                updatedAt: v.updatedAt.getTime(),
-                active: v.active,
-                activeAt: v.lastActiveAt.getTime(),
-                metadata: v.metadata,
-                metadataVersion: v.metadataVersion,
-                agentState: v.agentState,
-                agentStateVersion: v.agentStateVersion,
-                dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-            })),
+            sessions: resultSessions.map(sessionResponse),
             nextCursor,
             hasNext
         });
@@ -222,87 +244,111 @@ export function sessionRoutes(app: Fastify) {
                 tag: z.string(),
                 metadata: z.string(),
                 agentState: z.string().nullish(),
-                dataEncryptionKey: z.string().nullish()
+                dataEncryptionKey: z.string().nullish(),
+                machineId: z.string().min(1).max(200).optional(),
             })
         },
         preHandler: app.authenticate
     }, async (request, reply) => {
         const userId = request.userId;
-        const { tag, metadata, dataEncryptionKey } = request.body;
+        const { tag, metadata, agentState, dataEncryptionKey, machineId } = request.body;
+        const credentialId = request.authCredentialId;
 
-        const session = await db.session.findFirst({
-            where: {
-                accountId: userId,
-                tag: tag
+        if (credentialId && !machineId) {
+            return reply.code(400).send({ error: 'machineId is required for terminal sessions' });
+        }
+        if (credentialId && request.authMachineId !== machineId) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+
+        const result = await inTx(async (tx) => {
+            if (credentialId) {
+                const machine = await tx.machine.findFirst({
+                    where: {
+                        id: machineId,
+                        accountId: userId,
+                        credentialId,
+                        deletedAt: null,
+                    },
+                    select: { id: true },
+                });
+                if (!machine) return { kind: 'machine-not-authorized' as const };
             }
-        });
-        if (session) {
-            log({ module: 'session-create', sessionId: session.id, userId, tag }, `Found existing session: ${session.id} for tag ${tag}`);
-            return reply.send({
-                session: {
-                    id: session.id,
-                    seq: session.seq,
-                    metadata: session.metadata,
-                    metadataVersion: session.metadataVersion,
-                    agentState: session.agentState,
-                    agentStateVersion: session.agentStateVersion,
-                    dataEncryptionKey: session.dataEncryptionKey ? Buffer.from(session.dataEncryptionKey).toString('base64') : null,
-                    active: session.active,
-                    activeAt: session.lastActiveAt.getTime(),
-                    createdAt: session.createdAt.getTime(),
-                    updatedAt: session.updatedAt.getTime(),
-                    lastMessage: null
-                }
-            });
-        } else {
 
-            // Resolve seq
-            const updSeq = await allocateUserSeq(userId);
-
-            // Create session
-            log({ module: 'session-create', userId, tag }, `Creating new session for user ${userId} with tag ${tag}`);
-            const session = await db.session.create({
-                data: {
+            let session = await tx.session.findFirst({
+                where: {
                     accountId: userId,
-                    tag: tag,
-                    metadata: metadata,
-                    dataEncryptionKey: dataEncryptionKey ? new Uint8Array(Buffer.from(dataEncryptionKey, 'base64')) : undefined
-                }
+                    tag,
+                },
+                include: {
+                    originMachine: { select: { deletedAt: true } },
+                },
             });
-            log({ module: 'session-create', sessionId: session.id, userId }, `Session created: ${session.id}`);
+            if (!session) {
+                session = await tx.session.create({
+                    data: {
+                        accountId: userId,
+                        tag,
+                        metadata,
+                        agentState: agentState ?? null,
+                        agentStateVersion: agentState ? 1 : 0,
+                        originMachineId: credentialId ? machineId : null,
+                        dataEncryptionKey: dataEncryptionKey
+                            ? new Uint8Array(Buffer.from(dataEncryptionKey, 'base64'))
+                            : undefined,
+                    },
+                    include: {
+                        originMachine: { select: { deletedAt: true } },
+                    },
+                });
+                return { kind: 'created' as const, session };
+            }
+            if (
+                credentialId
+                && session.originMachineId
+                && session.originMachineId !== machineId
+            ) {
+                return { kind: 'machine-conflict' as const };
+            }
+            if (credentialId && !session.originMachineId) {
+                return { kind: 'machine-conflict' as const };
+            }
+            return { kind: 'existing' as const, session };
+        });
 
-            // Emit new session update
-            const updatePayload = buildNewSessionUpdate(session, updSeq, randomKeyNaked(12));
+        if (result.kind === 'machine-not-authorized') {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+        if (result.kind === 'machine-conflict') {
+            return reply.code(409).send({ error: 'Session belongs to another machine' });
+        }
+        if (result.kind === 'existing') {
             log({
                 module: 'session-create',
-                userId,
-                sessionId: session.id,
-                updateType: 'new-session',
-                updatePayload: JSON.stringify(updatePayload)
-            }, `Emitting new-session update to user-scoped connections`);
-            eventRouter.emitUpdate({
-                userId,
-                payload: updatePayload,
-                recipientFilter: { type: 'user-scoped-only' }
-            });
-
-            return reply.send({
-                session: {
-                    id: session.id,
-                    seq: session.seq,
-                    metadata: session.metadata,
-                    metadataVersion: session.metadataVersion,
-                    agentState: session.agentState,
-                    agentStateVersion: session.agentStateVersion,
-                    dataEncryptionKey: session.dataEncryptionKey ? Buffer.from(session.dataEncryptionKey).toString('base64') : null,
-                    active: session.active,
-                    activeAt: session.lastActiveAt.getTime(),
-                    createdAt: session.createdAt.getTime(),
-                    updatedAt: session.updatedAt.getTime(),
-                    lastMessage: null
-                }
-            });
+                sessionHash: diagnosticHash(result.session.id),
+                userHash: diagnosticHash(userId),
+            }, 'Found existing session');
+            return reply.send({ session: sessionResponse(result.session) });
         }
+
+        const updSeq = await allocateUserSeq(userId);
+        log({
+            module: 'session-create',
+            sessionHash: diagnosticHash(result.session.id),
+            userHash: diagnosticHash(userId),
+        }, 'Session created');
+        const updatePayload = buildNewSessionUpdate(
+            result.session,
+            updSeq,
+            randomKeyNaked(12),
+        );
+        eventRouter.emitUpdate({
+            userId,
+            payload: updatePayload,
+            recipientFilter: { type: 'user-scoped-only' }
+        });
+
+        return reply.send({ session: sessionResponse(result.session) });
     });
 
     app.get('/v1/sessions/:sessionId/messages', {
@@ -317,12 +363,13 @@ export function sessionRoutes(app: Fastify) {
         const { sessionId } = request.params;
 
         // Verify session belongs to user
-        const session = await db.session.findFirst({
-            where: {
-                id: sessionId,
-                accountId: userId
-            }
-        });
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        const session = accessWhere
+            ? await db.session.findFirst({ where: accessWhere })
+            : null;
 
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
@@ -366,8 +413,15 @@ export function sessionRoutes(app: Fastify) {
         const userId = request.userId;
         const { sessionId } = request.params;
 
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
         const result = await db.session.updateMany({
-            where: { id: sessionId, accountId: userId },
+            where: accessWhere,
             data: { active: false, lastActiveAt: new Date() }
         });
 
@@ -398,7 +452,11 @@ export function sessionRoutes(app: Fastify) {
         const userId = request.userId;
         const { sessionId } = request.params;
 
-        const deleted = await sessionDelete({ uid: userId }, sessionId);
+        const deleted = await sessionDelete(
+            { uid: userId },
+            sessionId,
+            sessionAccessIdentityFromRequest(request),
+        );
 
         if (!deleted) {
             return reply.code(404).send({ error: 'Session not found or not owned by user' });

@@ -1,9 +1,15 @@
 import { Socket } from "socket.io";
 import { db } from "@/storage/db";
 import { log } from "@/utils/log";
-import { eventRouter } from "@/app/events/eventRouter";
+import type { ClientConnection } from "@/app/events/eventRouter";
+import { sessionWhereForConnection } from "./sessionScope";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 
-export function accessKeyHandler(userId: string, socket: Socket) {
+export function accessKeyHandler(
+    userId: string,
+    socket: Socket,
+    connection: ClientConnection,
+) {
     // Get access key via socket
     socket.on('access-key-get', async (data: { sessionId: string; machineId: string }, callback: (response: any) => void) => {
         try {
@@ -18,14 +24,40 @@ export function accessKeyHandler(userId: string, socket: Socket) {
                 }
                 return;
             }
+            const scopedMachineId = connection.connectionType === 'user-scoped'
+                ? undefined
+                : connection.machineId;
+            if (
+                connection.credentialId
+                && (!scopedMachineId || scopedMachineId !== machineId)
+            ) {
+                callback?.({ ok: false, error: 'Session or machine not found' });
+                return;
+            }
+            const sessionWhere = sessionWhereForConnection(
+                userId,
+                connection,
+                sessionId,
+            );
+            if (!sessionWhere) {
+                callback?.({ ok: false, error: 'Session or machine not found' });
+                return;
+            }
 
             // Verify session and machine belong to user
             const [session, machine] = await Promise.all([
                 db.session.findFirst({
-                    where: { id: sessionId, accountId: userId }
+                    where: sessionWhere,
                 }),
                 db.machine.findFirst({
-                    where: { id: machineId, accountId: userId }
+                    where: {
+                        id: machineId,
+                        accountId: userId,
+                        deletedAt: null,
+                        ...(connection.credentialId
+                            ? { credentialId: connection.credentialId }
+                            : {}),
+                    }
                 })
             ]);
 
@@ -69,9 +101,13 @@ export function accessKeyHandler(userId: string, socket: Socket) {
                 }
             }
 
-            log({ module: 'websocket-access-key' }, `Access key retrieved for session ${sessionId}, machine ${machineId}`);
-        } catch (error) {
-            log({ module: 'websocket', level: 'error' }, `Error in access-key-get: ${error}`);
+            log({
+                module: 'websocket-access-key',
+                sessionHash: diagnosticHash(sessionId),
+                machineHash: diagnosticHash(machineId),
+            }, 'Access key retrieved');
+        } catch {
+            log({ module: 'websocket', level: 'error' }, 'Access key request failed');
             if (callback) {
                 callback({
                     ok: false,

@@ -1,5 +1,7 @@
 import * as privacyKit from "privacy-kit";
+import { db } from "@/storage/db";
 import { log } from "@/utils/log";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 
 /** Cache entries expire after 24 hours */
 const TOKEN_CACHE_TTL = 24 * 60 * 60 * 1000;
@@ -10,8 +12,16 @@ const CLEANUP_INTERVAL = 10 * 60 * 1000;
 
 interface TokenCacheEntry {
     userId: string;
-    extras?: any;
+    extras?: Record<string, unknown>;
+    credentialId?: string;
     cachedAt: number;
+}
+
+export interface VerifiedAuthToken {
+    userId: string;
+    extras?: Record<string, unknown>;
+    credentialId?: string;
+    machineId?: string;
 }
 
 interface AuthTokens {
@@ -21,7 +31,28 @@ interface AuthTokens {
     githubGenerator: Awaited<ReturnType<typeof privacyKit.createEphemeralTokenGenerator>>;
 }
 
-class AuthModule {
+interface ActiveTerminalCredential {
+    machineId?: string;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return typeof value === "object" && value !== null
+        ? value as Record<string, unknown>
+        : undefined;
+}
+
+export function terminalCredentialIdFromExtras(extras: unknown): string | undefined {
+    const record = asRecord(extras);
+    if (!record) return undefined;
+    if (typeof record.credentialId === "string" && record.credentialId.length > 0) {
+        return record.credentialId;
+    }
+    return typeof record.session === "string" && record.session.length > 0
+        ? record.session
+        : undefined;
+}
+
+export class AuthModule {
     private tokenCache = new Map<string, TokenCacheEntry>();
     private tokens: AuthTokens | null = null;
     private cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -64,7 +95,7 @@ class AuthModule {
         log({ module: 'auth' }, 'Auth module initialized');
     }
     
-    async createToken(userId: string, extras?: any): Promise<string> {
+    async createToken(userId: string, extras?: Record<string, unknown>): Promise<string> {
         if (!this.tokens) {
             throw new Error('Auth module not initialized');
         }
@@ -80,22 +111,37 @@ class AuthModule {
         this.tokenCache.set(token, {
             userId,
             extras,
+            credentialId: terminalCredentialIdFromExtras(extras),
             cachedAt: Date.now()
         });
         
         return token;
     }
     
-    async verifyToken(token: string): Promise<{ userId: string; extras?: any } | null> {
+    async verifyToken(token: string): Promise<VerifiedAuthToken | null> {
         // Check cache first (with TTL)
         const cached = this.tokenCache.get(token);
         if (cached) {
             if (Date.now() - cached.cachedAt > TOKEN_CACHE_TTL) {
                 this.tokenCache.delete(token);
             } else {
+                let machineId: string | undefined;
+                if (cached.credentialId) {
+                    const credential = await this.loadActiveTerminalCredential(
+                        cached.userId,
+                        cached.credentialId,
+                    );
+                    if (!credential) {
+                        this.tokenCache.delete(token);
+                        return null;
+                    }
+                    machineId = credential.machineId;
+                }
                 return {
                     userId: cached.userId,
-                    extras: cached.extras
+                    extras: cached.extras,
+                    credentialId: cached.credentialId,
+                    machineId,
                 };
             }
         }
@@ -112,7 +158,17 @@ class AuthModule {
             }
             
             const userId = verified.user as string;
-            const extras = verified.extras;
+            const extras = asRecord(verified.extras);
+            const credentialId = terminalCredentialIdFromExtras(extras);
+            let machineId: string | undefined;
+            if (credentialId) {
+                const credential = await this.loadActiveTerminalCredential(
+                    userId,
+                    credentialId,
+                );
+                if (!credential) return null;
+                machineId = credential.machineId;
+            }
             
             // Evict oldest entries if cache is at capacity
             if (this.tokenCache.size >= MAX_CACHE_SIZE) {
@@ -127,13 +183,60 @@ class AuthModule {
             this.tokenCache.set(token, {
                 userId,
                 extras,
+                credentialId,
                 cachedAt: Date.now()
             });
             
-            return { userId, extras };
+            return { userId, extras, credentialId, machineId };
             
-        } catch (error) {
-            log({ module: 'auth', level: 'error' }, `Token verification failed: ${error}`);
+        } catch {
+            log({ module: 'auth', level: 'error' }, 'Token verification failed');
+            return null;
+        }
+    }
+
+    private async loadActiveTerminalCredential(
+        userId: string,
+        credentialId: string,
+    ): Promise<ActiveTerminalCredential | null> {
+        try {
+            const credential = await db.terminalAuthRequest.findUnique({
+                where: { id: credentialId },
+                select: {
+                    responseAccountId: true,
+                    response: true,
+                    revokedAt: true,
+                    machine: {
+                        select: {
+                            id: true,
+                            accountId: true,
+                            deletedAt: true,
+                        },
+                    },
+                },
+            });
+            if (
+                credential?.responseAccountId !== userId
+                || credential.response === null
+                || credential.revokedAt !== null
+            ) {
+                return null;
+            }
+            if (
+                credential.machine
+                && (
+                    credential.machine.accountId !== userId
+                    || credential.machine.deletedAt !== null
+                )
+            ) {
+                return null;
+            }
+            return { machineId: credential.machine?.id };
+        } catch {
+            log({
+                module: 'auth',
+                level: 'error',
+            }, 'Terminal credential validation failed');
             return null;
         }
     }
@@ -147,7 +250,19 @@ class AuthModule {
             }
         }
         
-        log({ module: 'auth' }, `Invalidated tokens for user: ${userId}`);
+        log({
+            module: 'auth',
+            userHash: diagnosticHash(userId),
+        }, 'Invalidated user tokens');
+    }
+
+    invalidateCredentialTokens(credentialId: string): void {
+        for (const [token, entry] of this.tokenCache.entries()) {
+            if (entry.credentialId === credentialId) {
+                this.tokenCache.delete(token);
+            }
+        }
+        log({ module: 'auth' }, 'Invalidated terminal credential tokens');
     }
     
     invalidateToken(token: string): void {
@@ -195,8 +310,8 @@ class AuthModule {
             }
             
             return { userId: verified.user as string };
-        } catch (error) {
-            log({ module: 'auth', level: 'error' }, `GitHub token verification failed: ${error}`);
+        } catch {
+            log({ module: 'auth', level: 'error' }, 'GitHub token verification failed');
             return null;
         }
     }

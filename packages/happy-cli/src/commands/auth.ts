@@ -7,6 +7,8 @@ import { createInterface } from 'node:readline';
 import { stopDaemon, checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/controlClient';
 import { logger } from '@/ui/logger';
 import os from 'node:os';
+import { ApiClient } from '@/api/api';
+import { initialMachineMetadata } from '@/daemon/run';
 
 export async function handleAuthCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
@@ -89,13 +91,7 @@ async function handleAuthLogin(args: string[]): Promise<void> {
     const existingCreds = await readCredentials();
     const settings = await readSettings();
 
-    if (existingCreds && settings?.machineId) {
-      console.log(chalk.green('✓ Already authenticated'));
-      console.log(chalk.gray(`  Machine ID: ${settings.machineId}`));
-      console.log(chalk.gray(`  Host: ${os.hostname()}`));
-      console.log(chalk.gray(`  Use 'happy auth login --force' to re-authenticate`));
-      return;
-    } else if (existingCreds && !settings?.machineId) {
+    if (existingCreds && !settings?.machineId) {
       console.log(chalk.yellow('⚠️  Credentials exist but machine ID is missing'));
       console.log(chalk.gray('  This can happen if --auth flag was used previously'));
       console.log(chalk.gray('  Fixing by setting up machine...\n'));
@@ -106,6 +102,14 @@ async function handleAuthLogin(args: string[]): Promise<void> {
   // "Finally we'll run the auth and setup machine if needed"
   try {
     const result = await authAndSetupMachineIfNeeded();
+    const api = await ApiClient.create(result.credentials);
+    const machine = await api.getOrCreateMachine({
+      machineId: result.machineId,
+      metadata: initialMachineMetadata,
+    });
+    if (!machine) {
+      throw new Error('Machine registration did not complete');
+    }
     console.log(chalk.green('\n✓ Authentication successful'));
     console.log(chalk.gray(`  Machine ID: ${result.machineId}`));
   } catch (error) {
@@ -176,10 +180,6 @@ async function handleAuthStatus(): Promise<void> {
   }
 
   console.log(chalk.green('✓ Authenticated'));
-
-  // Token preview (first few chars for security)
-  const tokenPreview = credentials.token.substring(0, 30) + '...';
-  console.log(chalk.gray(`  Token: ${tokenPreview}`));
 
   // Machine status
   if (settings?.machineId) {

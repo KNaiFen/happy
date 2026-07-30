@@ -205,6 +205,28 @@ describe('CodexV4ClientRegistry', () => {
         await Promise.resolve();
     });
 
+    it('stops an active client before publishing after eligibility is revoked', async () => {
+        let eligible = true;
+        const client = new TestClient();
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async () => client,
+            isEligible: () => eligible,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+        });
+        registry.reconcile([session]);
+        await Promise.resolve();
+        client.started.resolve();
+        await client.started.promise;
+        await Promise.resolve();
+
+        eligible = false;
+        await expect(registry.withClient(session.sessionId, async () => 'published'))
+            .rejects.toThrow('no longer eligible');
+        expect(client.stopCount).toBe(1);
+        expect(registry.hasClient(session.sessionId)).toBe(false);
+    });
+
     it('retries failed startup with bounded backoff and exposes sync health', async () => {
         vi.useFakeTimers();
         try {

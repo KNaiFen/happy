@@ -32,7 +32,6 @@ export async function doAuth(): Promise<Credentials | null> {
     try {
         if (process.env.DEBUG) {
             console.log(`[AUTH DEBUG] Sending auth request to: ${configuration.serverUrl}/v1/auth/request`);
-            console.log(`[AUTH DEBUG] Public key: ${encodeBase64(keypair.publicKey).substring(0, 20)}...`);
         }
         await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
             publicKey: encodeBase64(keypair.publicKey),

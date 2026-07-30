@@ -275,6 +275,7 @@ export class ApiClient {
           metadata: encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.metadata)),
           agentState: opts.state ? encodeBase64(encrypt(encryptionKey, encryptionVariant, opts.state)) : null,
           dataEncryptionKey: dataEncryptionKey ? encodeBase64(dataEncryptionKey) : null,
+          machineId: opts.metadata.machineId,
         },
         {
           headers: {

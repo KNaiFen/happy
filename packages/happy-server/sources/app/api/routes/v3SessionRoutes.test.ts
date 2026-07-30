@@ -7,6 +7,9 @@ type SessionRecord = {
     id: string;
     accountId: string;
     seq: number;
+    originMachineId: string | null;
+    originCredentialId: string | null;
+    machineDeletedAt: Date | null;
 };
 
 type MessageRecord = {
@@ -47,7 +50,10 @@ const {
         state.sessions.push({
             id: input.id,
             accountId: input.accountId,
-            seq: input.seq ?? 0
+            seq: input.seq ?? 0,
+            originMachineId: input.originMachineId ?? null,
+            originCredentialId: input.originCredentialId ?? null,
+            machineDeletedAt: input.machineDeletedAt ?? null,
         });
         if (!state.accountSeqById.has(input.accountId)) {
             state.accountSeqById.set(input.accountId, 0);
@@ -89,9 +95,22 @@ const {
     };
 
     const sessionFindFirst = vi.fn(async (args: any) => {
+        const origin = args?.where?.originMachine?.is;
         const row = state.sessions.find((session) => (
             session.id === args?.where?.id &&
-            session.accountId === args?.where?.accountId
+            session.accountId === args?.where?.accountId &&
+            (
+                args?.where?.originMachineId === undefined
+                || session.originMachineId === args.where.originMachineId
+            ) &&
+            (
+                origin?.credentialId === undefined
+                || session.originCredentialId === origin.credentialId
+            ) &&
+            (
+                origin?.deletedAt === undefined
+                || session.machineDeletedAt === origin.deletedAt
+            )
         ));
         if (!row) {
             return null;
@@ -169,6 +188,7 @@ const {
 
     const txClient = {
         session: {
+            findFirst: sessionFindFirst,
             update: sessionUpdate
         },
         sessionMessage: {
@@ -245,6 +265,10 @@ async function createApp() {
             return reply.code(401).send({ error: "Unauthorized" });
         }
         request.userId = userId;
+        const credentialId = request.headers["x-credential-id"];
+        const machineId = request.headers["x-machine-id"];
+        request.authCredentialId = typeof credentialId === "string" ? credentialId : undefined;
+        request.authMachineId = typeof machineId === "string" ? machineId : undefined;
     });
 
     v3SessionRoutes(typed);
@@ -540,5 +564,37 @@ describe("v3SessionRoutes", () => {
             }
         });
         expect(wrongOwner.statusCode).toBe(404);
+    });
+
+    it("does not let a terminal credential write another machine session", async () => {
+        seedSession({
+            id: "session-1",
+            accountId: "user-1",
+            originMachineId: "machine-1",
+            originCredentialId: "credential-1",
+        });
+        seedSession({
+            id: "session-2",
+            accountId: "user-1",
+            originMachineId: "machine-2",
+            originCredentialId: "credential-2",
+        });
+        app = await createApp();
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v3/sessions/session-2/messages",
+            headers: {
+                "x-user-id": "user-1",
+                "x-credential-id": "credential-1",
+                "x-machine-id": "machine-1",
+            },
+            payload: {
+                messages: [{ localId: "cross-machine", content: "encrypted" }],
+            },
+        });
+
+        expect(response.statusCode).toBe(404);
+        expect(state.messages).toHaveLength(0);
     });
 });

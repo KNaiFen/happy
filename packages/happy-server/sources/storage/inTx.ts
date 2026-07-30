@@ -1,13 +1,16 @@
 import { Prisma } from "@prisma/client";
 import { delay } from "@/utils/delay";
 import { db } from "@/storage/db";
+import { log } from "@/utils/log";
 
 export type Tx = Prisma.TransactionClient;
 
 const symbol = Symbol();
 
-export function afterTx(tx: Tx, callback: () => void) {
-    let callbacks = (tx as any)[symbol] as (() => void)[];
+type AfterTxCallback = () => void | Promise<void>;
+
+export function afterTx(tx: Tx, callback: AfterTxCallback) {
+    let callbacks = (tx as any)[symbol] as AfterTxCallback[];
     callbacks.push(callback);
 }
 
@@ -16,7 +19,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     let wrapped = async (tx: Tx) => {
         (tx as any)[symbol] = [];
         let result = await fn(tx);
-        let callbacks = (tx as any)[symbol] as (() => void)[];
+        let callbacks = (tx as any)[symbol] as AfterTxCallback[];
         return { result, callbacks };
     }
     while (true) {
@@ -24,9 +27,17 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
             let result = await db.$transaction(wrapped, { isolationLevel: 'Serializable', timeout: 10000 });
             for (let callback of result.callbacks) {
                 try {
-                    callback();
-                } catch (e) { // Ignore errors in callbacks because they are used mostly for notifications
-                    console.error(e);
+                    Promise.resolve(callback()).catch(() => {
+                        log({
+                            module: 'transaction',
+                            level: 'error',
+                        }, 'Post-transaction callback failed');
+                    });
+                } catch { // Ignore errors in callbacks because they are used mostly for notifications
+                    log({
+                        module: 'transaction',
+                        level: 'error',
+                    }, 'Post-transaction callback failed');
                 }
             }
             return result.result;

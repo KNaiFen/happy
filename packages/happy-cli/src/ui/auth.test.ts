@@ -23,7 +23,7 @@ vi.mock('axios', () => ({
 vi.mock('@/configuration', () => ({
     configuration: {
         serverUrl: 'http://relay.example.test:3005',
-        currentCliVersion: '1.4.6',
+        currentCliVersion: '1.4.7',
     },
 }));
 

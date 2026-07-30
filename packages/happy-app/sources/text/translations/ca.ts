@@ -313,6 +313,8 @@ export const ca: TranslationStructure = {
         inputPlaceholder: 'Escriu un missatge...',
         inactiveArchived: 'Aquesta sessió està inactiva.',
         resumeFromTerminal: 'Per reprendre-la des del terminal:',
+        machineDeleted: 'La màquina d’origen s’ha suprimit',
+        machineDeletedDescription: 'L’historial continua disponible, però aquesta sessió és de només lectura i ja no pot controlar Codex.',
         newChat: 'Nou xat',
         statusBarContext: 'Context',
         statusBarPathTitle: 'Directori de treball',

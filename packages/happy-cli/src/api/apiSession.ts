@@ -402,6 +402,7 @@ export class ApiSessionClient extends EventEmitter {
                 token: this.token,
                 clientType: 'session-scoped' as const,
                 sessionId: this.sessionId,
+                machineId: this.metadata.machineId,
                 happyClient: `cli-coding-session/${configuration.currentCliVersion}`
             },
             path: '/v1/updates',
@@ -555,10 +556,15 @@ export class ApiSessionClient extends EventEmitter {
                 }
             };
             try {
+                const machineId = this.metadata?.machineId;
+                if (!machineId) {
+                    throw new Error('Codex Sync v4 requires a machine identity');
+                }
                 client = await SyncV4Client.create({
                     sessionId: this.sessionId,
                     sessionKey: this.encryptionKey,
                     token: this.token,
+                    machineId,
                     diagnostics,
                     onEntity: async (event) => {
                         assertCurrent();

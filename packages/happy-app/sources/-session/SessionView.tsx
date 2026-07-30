@@ -29,7 +29,7 @@ import { voiceHooks } from '@/realtime/hooks/voiceHooks';
 import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
 import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat, sessionKill, sessionArchive } from '@/sync/ops';
-import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
+import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { resolveCodexV4SessionCapabilities } from '@/sync/codexV4Capabilities';
 import { useSession } from '@/sync/storage';
@@ -102,6 +102,7 @@ export const SessionView = React.memo((props: { id: string }) => {
     const { width: windowWidth } = useWindowDimensions();
     const fileDiffsSidebarEnabled = useSetting('fileDiffsSidebar');
     const zenMode = useLocalSetting('zenMode');
+    const machineDeleted = useIsSessionMachineDeleted(sessionId);
     const [headerBackdropVisible, setHeaderBackdropVisible] = React.useState(false);
 
     React.useEffect(() => {
@@ -112,6 +113,7 @@ export const SessionView = React.memo((props: { id: string }) => {
     const canShowSidebar = fileDiffsSidebarEnabled
         && (isRunningOnMac() || Platform.OS === 'web')
         && windowWidth >= SIDEBAR_MIN_WINDOW_WIDTH
+        && !machineDeleted
         && (!session || (rigCanBrowseFiles(session.metadata) && rigCanUseShell(session.metadata)))
         && isDataReady && !!session;
 
@@ -642,7 +644,12 @@ export function SessionViewLoaded({
     const deviceType = useDeviceType();
     const isTablet = useIsTablet();
     const realtimeStatus = useRealtimeStatus();
-    const codexV4Capabilities = resolveCodexV4SessionCapabilities(session.metadata, codexV4Session);
+    const machineDeleted = useIsSessionMachineDeleted(sessionId);
+    const codexV4Capabilities = resolveCodexV4SessionCapabilities(
+        session.metadata,
+        codexV4Session,
+        { machineDeleted },
+    );
     const isCodexReadOnly = codexV4Capabilities.readOnly;
     const isCodexV4Active = isCodexV4SyncActive(session.metadata, codexV4Session);
     const isSessionExecuting = isCodexV4Active
@@ -1031,7 +1038,11 @@ export function SessionViewLoaded({
     // Resume button when canResume is true, falls back to the
     // copy-this-command hint when the experiments toggle is off or the
     // machine isn't reachable.
-    const inactiveHint = isDisconnected && !isRig ? (
+    const inactiveHint = machineDeleted ? (
+        <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
+            <MachineDeletedHint />
+        </CenteredInputWidth>
+    ) : isDisconnected && !isRig ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <InactiveArchivedHint
                 resumeCommandBlock={expResumeSession ? resumeCommandBlock : null}
@@ -1181,6 +1192,41 @@ export function SessionViewLoaded({
             }
         </>
     )
+}
+
+function MachineDeletedHint() {
+    const { theme } = useUnistyles();
+    return (
+        <View style={{
+            paddingHorizontal: 8,
+            paddingTop: 12,
+            paddingBottom: 10,
+            gap: 4,
+        }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons
+                    name="lock-closed-outline"
+                    size={16}
+                    color={theme.colors.agentEventText}
+                />
+                <Text style={{
+                    color: theme.colors.agentEventText,
+                    fontSize: 13,
+                    lineHeight: 18,
+                    fontWeight: '600',
+                }}>
+                    {t('session.machineDeleted')}
+                </Text>
+            </View>
+            <Text style={{
+                color: theme.colors.agentEventText,
+                fontSize: 13,
+                lineHeight: 18,
+            }}>
+                {t('session.machineDeletedDescription')}
+            </Text>
+        </View>
+    );
 }
 
 function InactiveArchivedHint(props: {

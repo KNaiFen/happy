@@ -321,6 +321,8 @@ export interface Session {
     activeAt: number,
     metadata: Metadata | null,
     metadataVersion: number,
+    originMachineId: string | null,
+    machineDeletedAt: number | null,
     agentState: AgentState | null,
     agentStateVersion: number,
     thinking: boolean,

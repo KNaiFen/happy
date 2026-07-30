@@ -49,6 +49,7 @@ import {
     isCodexV4SyncActive,
     type CodexV4RegistrySyncState,
 } from './codexV4ClientRegistry';
+import { isSessionMachineDeleted } from './sessionMachineAccess';
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -213,6 +214,7 @@ interface StorageState {
     pathProjectFiles: Record<string, ProjectFilesList | null>;  // keyed by "machineId:path"
     sessionFileCache: Record<string, Record<string, { content: string | null; diff: string | null; isBinary: boolean; cachedAt: number }>>;
     machines: Record<string, Machine>;
+    machinesLoaded: boolean;
     artifacts: Record<string, DecryptedArtifact>;  // New artifacts storage
     friends: Record<string, UserProfile>;  // All relationships (friends, pending, requested, etc.)
     users: Record<string, UserProfile | null>;  // Global user cache, null = 404/failed fetch
@@ -423,6 +425,7 @@ export const storage = create<StorageState>()((set, get) => {
         profile,
         sessions: {},
         machines: {},
+        machinesLoaded: false,
         artifacts: {},  // Initialize artifacts
         friends: {},  // Initialize relationships cache
         users: {},  // Initialize global user cache
@@ -1273,18 +1276,33 @@ export const storage = create<StorageState>()((set, get) => {
             return {
                 ...state,
                 machines: mergedMachines,
+                machinesLoaded: replace ? true : state.machinesLoaded,
                 sessionListViewData
             };
         }),
         deleteMachine: (machineId: string) => set((state) => {
-            if (!state.machines[machineId]) {
-                return state;
+            const deletedAt = Date.now();
+            const sessions = { ...state.sessions };
+            for (const [sessionId, session] of Object.entries(sessions)) {
+                const belongsToMachine = session.originMachineId === machineId
+                    || (!session.originMachineId && session.metadata?.machineId === machineId);
+                if (belongsToMachine) {
+                    sessions[sessionId] = {
+                        ...session,
+                        active: false,
+                        machineDeletedAt: deletedAt,
+                    };
+                }
             }
             const { [machineId]: _removed, ...remaining } = state.machines;
             return {
                 ...state,
                 machines: remaining,
-                sessionListViewData: buildSessionListViewData(state.sessions)
+                sessions,
+                sessionListViewData: buildSessionListViewData(
+                    sessions,
+                    state.unreadSessionIds,
+                ),
             };
         }),
         // Artifact methods
@@ -1531,6 +1549,15 @@ export function useSessions() {
 
 export function useSession(id: string): Session | null {
     return storage(useShallow((state) => state.sessions[id] ?? null));
+}
+
+export function useIsSessionMachineDeleted(sessionId: string): boolean {
+    return storage((state) => {
+        const session = state.sessions[sessionId];
+        return session
+            ? isSessionMachineDeleted(session, state.machines, state.machinesLoaded)
+            : false;
+    });
 }
 
 export function useCodexV4Session(sessionId: string): CodexV4Projection | null {

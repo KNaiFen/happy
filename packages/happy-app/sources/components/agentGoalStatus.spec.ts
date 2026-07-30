@@ -17,6 +17,8 @@ function sessionWith(overrides: Partial<Session>): Session {
             codexThreadId: 'codex-thread-1',
         },
         metadataVersion: 1,
+        originMachineId: null,
+        machineDeletedAt: null,
         agentState: null,
         agentStateVersion: 1,
         thinking: false,

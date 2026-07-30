@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { type Fastify } from "../types";
+import {
+    buildSessionAccessWhere,
+    sessionAccessIdentityFromRequest,
+} from "@/app/api/utils/sessionAccess";
 import { db } from "@/storage/db";
 import { dispatchSessionEventPush } from "@/app/push/pushDispatch";
 import { buildSessionEventEphemeral, eventRouter } from "@/app/events/eventRouter";
@@ -112,8 +116,12 @@ export function pushRoutes(app: Fastify) {
         const { sessionId } = request.params;
         const { kind, title, body, data } = request.body;
 
-        const session = await db.session.findFirst({
-            where: { id: sessionId, accountId: userId },
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        const session = accessWhere && await db.session.findFirst({
+            where: accessWhere,
             select: { id: true }
         });
         if (!session) {

@@ -46,7 +46,7 @@ vi.mock('@/utils/deriveKey', () => ({
 vi.mock('@/configuration', () => ({
     configuration: {
         serverUrl: 'https://api.example.com',
-        currentCliVersion: '1.4.2',
+        currentCliVersion: '1.4.7',
     }
 }));
 
@@ -59,6 +59,7 @@ vi.mock('./libsodiumEncryption', () => ({
 const testMetadata = {
     path: '/tmp',
     host: 'localhost',
+    machineId: 'test-machine',
     homeDir: '/home/user',
     happyHomeDir: '/home/user/.happy',
     happyLibDir: '/home/user/.happy/lib',
@@ -101,8 +102,8 @@ describe('Api server error handling', () => {
                     codex: {
                         enabled: true,
                         protocolVersion: 4,
-                        minimumHappyCliVersion: '1.4.2',
-                        minimumHappyAppVersion: '1.11.4',
+                        minimumHappyCliVersion: '1.4.7',
+                        minimumHappyAppVersion: '1.11.12',
                         minimumCodexCliVersion: '0.145.0',
                     },
                 },
@@ -253,8 +254,8 @@ describe('Api server error handling', () => {
                 codex: {
                     enabled: true,
                     protocolVersion: 4,
-                    minimumHappyCliVersion: '1.4.2',
-                    minimumHappyAppVersion: '1.11.4',
+                    minimumHappyCliVersion: '1.4.7',
+                    minimumHappyAppVersion: '1.11.12',
                     minimumCodexCliVersion: '0.145.0',
                 },
             };
@@ -287,8 +288,8 @@ describe('Api server error handling', () => {
                 codex: {
                     enabled: true,
                     protocolVersion: 4,
-                    minimumHappyCliVersion: '1.4.2',
-                    minimumHappyAppVersion: '1.11.4',
+                    minimumHappyCliVersion: '1.4.7',
+                    minimumHappyAppVersion: '1.11.12',
                     minimumCodexCliVersion: '0.146.0',
                 },
             };
@@ -373,6 +374,7 @@ describe('Api server error handling', () => {
                 expect.objectContaining({
                     tag: 'opaque-child-tag',
                     dataEncryptionKey: expect.any(Uint8Array),
+                    machineId: 'test-machine',
                 }),
                 expect.anything(),
             );

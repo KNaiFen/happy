@@ -3,8 +3,15 @@ import { AsyncLock } from "@/utils/lock";
 import { db } from "@/storage/db";
 import { buildUsageEphemeral, eventRouter } from "@/app/events/eventRouter";
 import { log } from "@/utils/log";
+import type { ClientConnection } from "@/app/events/eventRouter";
+import { sessionWhereForConnection } from "./sessionScope";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 
-export function usageHandler(userId: string, socket: Socket) {
+export function usageHandler(
+    userId: string,
+    socket: Socket,
+    connection: ClientConnection,
+) {
     const receiveUsageLock = new AsyncLock();
     socket.on('usage-report', async (data: any, callback?: (response: any) => void) => {
         await receiveUsageLock.inLock(async () => {
@@ -45,11 +52,17 @@ export function usageHandler(userId: string, socket: Socket) {
                 try {
                     // If sessionId provided, verify it belongs to the user
                     if (sessionId) {
+                        const accessWhere = sessionWhereForConnection(
+                            userId,
+                            connection,
+                            sessionId,
+                        );
+                        if (!accessWhere) {
+                            callback?.({ success: false, error: 'Session not found' });
+                            return;
+                        }
                         const session = await db.session.findFirst({
-                            where: {
-                                id: sessionId,
-                                accountId: userId
-                            }
+                            where: accessWhere,
                         });
 
                         if (!session) {
@@ -58,6 +71,9 @@ export function usageHandler(userId: string, socket: Socket) {
                             }
                             return;
                         }
+                    } else if (connection.credentialId) {
+                        callback?.({ success: false, error: 'Session not found' });
+                        return;
                     }
 
                     // Prepare usage data
@@ -87,7 +103,11 @@ export function usageHandler(userId: string, socket: Socket) {
                         }
                     });
 
-                    log({ module: 'websocket' }, `Usage report saved: key=${key}, sessionId=${sessionId || 'none'}, userId=${userId}`);
+                    log({
+                        module: 'websocket',
+                        userHash: diagnosticHash(userId),
+                        sessionHash: sessionId ? diagnosticHash(sessionId) : undefined,
+                    }, 'Usage report saved');
 
                     // Emit usage ephemeral update if sessionId is provided
                     if (sessionId) {
@@ -107,14 +127,14 @@ export function usageHandler(userId: string, socket: Socket) {
                             updatedAt: report.updatedAt.getTime()
                         });
                     }
-                } catch (error) {
-                    log({ module: 'websocket', level: 'error' }, `Failed to save usage report: ${error}`);
+                } catch {
+                    log({ module: 'websocket', level: 'error' }, 'Failed to save usage report');
                     if (callback) {
                         callback({ success: false, error: 'Failed to save usage report' });
                     }
                 }
-            } catch (error) {
-                log({ module: 'websocket', level: 'error' }, `Error in usage-report handler: ${error}`);
+            } catch {
+                log({ module: 'websocket', level: 'error' }, 'Usage report handler failed');
                 if (callback) {
                     callback({ success: false, error: 'Internal error' });
                 }

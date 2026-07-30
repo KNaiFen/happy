@@ -15,6 +15,10 @@ import * as crypto from 'crypto';
 import { Fastify } from '../types';
 import { db } from '@/storage/db';
 import { s3client, s3bucket, isLocalStorage, getLocalFilesDir, putLocalFile } from '@/storage/files';
+import {
+    buildSessionAccessWhere,
+    sessionAccessIdentityFromRequest,
+} from '@/app/api/utils/sessionAccess';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const PRESIGNED_TTL_SECONDS = 15 * 60; // 15 minutes (design spec)
@@ -106,9 +110,13 @@ export function attachmentRoutes(app: Fastify) {
         }
 
         // Verify session ownership
-        const session = await db.session.findFirst({
-            where: { id: sessionId, accountId: userId },
-        });
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        const session = accessWhere
+            ? await db.session.findFirst({ where: accessWhere })
+            : null;
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -175,9 +183,13 @@ export function attachmentRoutes(app: Fastify) {
         const userId = request.userId;
 
         // Verify session ownership
-        const session = await db.session.findFirst({
-            where: { id: sessionId, accountId: userId },
-        });
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        const session = accessWhere
+            ? await db.session.findFirst({ where: accessWhere })
+            : null;
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -226,9 +238,13 @@ export function attachmentRoutes(app: Fastify) {
         const { ref } = request.body;
         const userId = request.userId;
 
-        const session = await db.session.findFirst({
-            where: { id: sessionId, accountId: userId },
-        });
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        const session = accessWhere
+            ? await db.session.findFirst({ where: accessWhere })
+            : null;
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -272,9 +288,13 @@ export function attachmentRoutes(app: Fastify) {
         const userId = request.userId;
 
         // Verify session ownership
-        const session = await db.session.findFirst({
-            where: { id: sessionId, accountId: userId },
-        });
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        const session = accessWhere
+            ? await db.session.findFirst({ where: accessWhere })
+            : null;
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
         }

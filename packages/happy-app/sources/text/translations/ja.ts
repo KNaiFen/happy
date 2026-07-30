@@ -314,6 +314,8 @@ export const ja: TranslationStructure = {
         inputPlaceholder: 'メッセージを入力...',
         inactiveArchived: 'このセッションは非アクティブです。',
         resumeFromTerminal: 'ターミナルから再開するには:',
+        machineDeleted: '接続元のマシンは削除されました',
+        machineDeletedDescription: '履歴は引き続き表示できますが、このセッションは読み取り専用となり、Codex を操作できません。',
         newChat: '新規チャット',
         statusBarContext: 'コンテキスト',
         statusBarPathTitle: '作業ディレクトリ',

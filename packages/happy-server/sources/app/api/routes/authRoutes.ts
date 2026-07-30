@@ -53,7 +53,7 @@ export function authRoutes(app: Fastify) {
                     response: z.string()
                 })]),
                 401: z.object({
-                    error: z.literal('Invalid public key')
+                    error: z.enum(['Invalid public key', 'Credential revoked'])
                 })
             }
         }
@@ -66,16 +66,25 @@ export function authRoutes(app: Fastify) {
         }
 
         const publicKeyHex = privacyKit.encodeHex(publicKey);
-        log({ module: 'auth-request' }, `Terminal auth request - publicKey hex: ${publicKeyHex}`);
 
         const answer = await db.terminalAuthRequest.upsert({
             where: { publicKey: publicKeyHex },
-            update: {},
-            create: { publicKey: publicKeyHex, supportsV2: request.body.supportsV2 ?? false }
+            update: { supportsV2: request.body.supportsV2 ?? false },
+            create: {
+                publicKey: publicKeyHex,
+                supportsV2: request.body.supportsV2 ?? false,
+                credentialVersion: 2,
+            }
         });
 
+        if (answer.revokedAt) {
+            return reply.code(401).send({ error: 'Credential revoked' });
+        }
         if (answer.response && answer.responseAccountId) {
-            const token = await auth.createToken(answer.responseAccountId!, { session: answer.id });
+            const token = await auth.createToken(answer.responseAccountId, {
+                credentialId: answer.id,
+                session: answer.id,
+            });
             return reply.send({
                 state: 'authorized',
                 token: token,
@@ -116,6 +125,9 @@ export function authRoutes(app: Fastify) {
             return reply.send({ status: 'not_found', supportsV2: false });
         }
 
+        if (authRequest.revokedAt) {
+            return reply.send({ status: 'not_found', supportsV2: false });
+        }
         if (authRequest.response && authRequest.responseAccountId) {
             return reply.send({ status: 'authorized', supportsV2: false });
         }
@@ -133,34 +145,60 @@ export function authRoutes(app: Fastify) {
             })
         }
     }, async (request, reply) => {
-        log({ module: 'auth-response' }, `Auth response endpoint hit - user: ${request.userId}, publicKey: ${request.body.publicKey.substring(0, 20)}...`);
+        if (request.authCredentialId) {
+            return reply.code(403).send({ error: 'Account credential required' });
+        }
         const tweetnacl = (await import("tweetnacl")).default;
         const publicKey = privacyKit.decodeBase64(request.body.publicKey);
         const isValid = tweetnacl.box.publicKeyLength === publicKey.length;
         if (!isValid) {
-            log({ module: 'auth-response' }, `Invalid public key length: ${publicKey.length}`);
             return reply.code(401).send({ error: 'Invalid public key' });
         }
         const publicKeyHex = privacyKit.encodeHex(publicKey);
-        log({ module: 'auth-response' }, `Looking for auth request with publicKey hex: ${publicKeyHex}`);
         const authRequest = await db.terminalAuthRequest.findUnique({
             where: { publicKey: publicKeyHex }
         });
         if (!authRequest) {
-            log({ module: 'auth-response' }, `Auth request not found for publicKey: ${publicKeyHex}`);
-            // Let's also check what auth requests exist
-            const allRequests = await db.terminalAuthRequest.findMany({
-                take: 5,
-                orderBy: { createdAt: 'desc' }
-            });
-            log({ module: 'auth-response' }, `Recent auth requests in DB: ${JSON.stringify(allRequests.map(r => ({ id: r.id, publicKey: r.publicKey.substring(0, 20) + '...', hasResponse: !!r.response })))}`);
             return reply.code(404).send({ error: 'Request not found' });
         }
-        if (!authRequest.response) {
-            await db.terminalAuthRequest.update({
+        if (authRequest.revokedAt) {
+            return reply.code(410).send({ error: 'Request revoked' });
+        }
+        if (
+            authRequest.responseAccountId
+            && authRequest.responseAccountId !== request.userId
+        ) {
+            return reply.code(409).send({ error: 'Request already approved' });
+        }
+        if (authRequest.response && authRequest.responseAccountId === request.userId) {
+            return reply.send({ success: true });
+        }
+        const claimed = await db.terminalAuthRequest.updateMany({
+            where: {
+                id: authRequest.id,
+                response: null,
+                responseAccountId: null,
+                revokedAt: null,
+            },
+            data: {
+                response: request.body.response,
+                responseAccountId: request.userId,
+            },
+        });
+        if (claimed.count === 0) {
+            const latest = await db.terminalAuthRequest.findUnique({
                 where: { id: authRequest.id },
-                data: { response: request.body.response, responseAccountId: request.userId }
             });
+            if (latest?.revokedAt) {
+                return reply.code(410).send({ error: 'Request revoked' });
+            }
+            if (
+                latest?.response
+                && latest.responseAccountId === request.userId
+            ) {
+                return reply.send({ success: true });
+            }
+            return reply.code(409).send({ error: 'Request already approved' });
         }
         return reply.send({ success: true });
     });
@@ -220,6 +258,9 @@ export function authRoutes(app: Fastify) {
             })
         }
     }, async (request, reply) => {
+        if (request.authCredentialId) {
+            return reply.code(403).send({ error: 'Account credential required' });
+        }
         const tweetnacl = (await import("tweetnacl")).default;
         const publicKey = privacyKit.decodeBase64(request.body.publicKey);
         const isValid = tweetnacl.box.publicKeyLength === publicKey.length;
@@ -232,11 +273,37 @@ export function authRoutes(app: Fastify) {
         if (!authRequest) {
             return reply.code(404).send({ error: 'Request not found' });
         }
-        if (!authRequest.response) {
-            await db.accountAuthRequest.update({
+        if (
+            authRequest.responseAccountId
+            && authRequest.responseAccountId !== request.userId
+        ) {
+            return reply.code(409).send({ error: 'Request already approved' });
+        }
+        if (authRequest.response && authRequest.responseAccountId === request.userId) {
+            return reply.send({ success: true });
+        }
+        const claimed = await db.accountAuthRequest.updateMany({
+            where: {
+                id: authRequest.id,
+                response: null,
+                responseAccountId: null,
+            },
+            data: {
+                response: request.body.response,
+                responseAccountId: request.userId,
+            },
+        });
+        if (claimed.count === 0) {
+            const latest = await db.accountAuthRequest.findUnique({
                 where: { id: authRequest.id },
-                data: { response: request.body.response, responseAccountId: request.userId }
             });
+            if (
+                latest?.response
+                && latest.responseAccountId === request.userId
+            ) {
+                return reply.send({ success: true });
+            }
+            return reply.code(409).send({ error: 'Request already approved' });
         }
         return reply.send({ success: true });
     });

@@ -53,6 +53,8 @@ export type Fastify = FastifyInstance<
 declare module 'fastify' {
     interface FastifyRequest {
         userId: string;
+        authCredentialId?: string;
+        authMachineId?: string;
         startTime?: number;
         syncV4TraceId?: string;
         syncV4RouteOutcomeObserved?: boolean;

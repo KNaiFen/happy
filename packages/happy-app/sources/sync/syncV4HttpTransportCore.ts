@@ -14,6 +14,7 @@ import {
     type SyncV4Capabilities,
 } from '@slopus/happy-wire';
 import {
+    AppSyncV4SessionReadOnlyError,
     AppSyncV4SnapshotRequiredError,
     type AppSyncV4Transport,
 } from './syncV4Client';
@@ -52,7 +53,12 @@ export class AppSyncV4HttpTransport implements AppSyncV4Transport {
             },
         );
         validateTraceEcho(response, traceId);
-        if (!response.ok) throw syncV4HttpError('mutation', response.status);
+        if (!response.ok) {
+            if (response.status === 409 && await isSessionReadOnlyResponse(response)) {
+                throw new AppSyncV4SessionReadOnlyError();
+            }
+            throw syncV4HttpError('mutation', response.status);
+        }
         return SyncMutationBatchResponseV4Schema.parse(await response.json());
     }
 
@@ -106,4 +112,13 @@ function syncV4HttpError(operation: string, statusCode: number): Error {
         new Error(`Sync v4 ${operation} request failed with HTTP ${statusCode}`),
         { statusCode },
     );
+}
+
+async function isSessionReadOnlyResponse(response: Response): Promise<boolean> {
+    try {
+        const body = await response.json() as { error?: unknown };
+        return body.error === 'sessionReadOnly';
+    } catch {
+        return false;
+    }
 }

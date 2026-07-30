@@ -9,7 +9,7 @@ import { Metadata } from "@/sync/storageTypes";
 import { ToolView } from "./tools/ToolView";
 import { AgentEvent } from "@/sync/typesRaw";
 import { sync } from '@/sync/sync';
-import { useSetting } from '@/sync/storage';
+import { useIsSessionMachineDeleted, useSetting } from '@/sync/storage';
 import { Option } from './markdown/MarkdownView';
 import { layout } from "./layout";
 import { parseLocalCommandMessage, isUserSlashCommandEcho } from './parseLocalCommandMessage';
@@ -24,7 +24,10 @@ export const MessageView = React.memo((props: {
   readOnly?: boolean;
   getMessageById?: (id: string) => Message | null;
 }) => {
-  const readOnly = props.readOnly ?? isCodexSessionReadOnly(props.metadata);
+  const machineDeleted = useIsSessionMachineDeleted(props.sessionId);
+  const readOnly = props.readOnly === true
+    || isCodexSessionReadOnly(props.metadata)
+    || machineDeleted;
   return (
     <View
       style={styles.messageContainer}

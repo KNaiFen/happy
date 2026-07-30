@@ -330,6 +330,8 @@ export const pl: TranslationStructure = {
         inputPlaceholder: 'Wpisz wiadomość...',
         inactiveArchived: 'Ta sesja jest nieaktywna.',
         resumeFromTerminal: 'Aby wznowić ją z terminala:',
+        machineDeleted: 'Maszyna źródłowa została usunięta',
+        machineDeletedDescription: 'Historia pozostaje dostępna, ale ta sesja jest tylko do odczytu i nie może już sterować Codex.',
         newChat: 'Nowy czat',
         statusBarContext: 'Kontekst',
         statusBarPathTitle: 'Katalog roboczy',

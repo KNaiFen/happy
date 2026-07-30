@@ -30,6 +30,13 @@ describe('Rig metadata', () => {
             modelName: 'GPT Shared',
         });
         expect(usesControlledSessionUi(rigMetadataFixture)).toBe(false);
+        expect(usesControlledSessionUi({
+            flavor: 'codex',
+            codexSyncVersion: 4,
+        } as Parameters<typeof usesControlledSessionUi>[0])).toBe(false);
+        expect(usesControlledSessionUi({
+            flavor: 'codex',
+        } as Parameters<typeof usesControlledSessionUi>[0])).toBe(true);
     });
 
     it('maps known provider kinds and gives unknown providers a neutral fallback', () => {

@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const syncV4Migration = "20260728123500_add_codex_sync_v4";
+const terminalCredentialMigration = "20260730123000_bind_terminal_credentials_to_machines";
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = join(serverRoot, "prisma", "schema.prisma");
 const migrationsPath = join(serverRoot, "prisma", "migrations");
@@ -199,7 +200,93 @@ function assertSyncV4Schema({ expectMigratedSession }) {
     `);
 }
 
-function createPreSyncV4MigrationTree(tempRoot) {
+function assertTerminalCredentialSchema({ expectHistoricalBackfill }) {
+    const historicalChecks = expectHistoricalBackfill
+        ? `
+            IF NOT EXISTS (
+                SELECT 1 FROM "TerminalAuthRequest"
+                WHERE "id" = 'migration-old-credential'
+                  AND "credentialVersion" = 1
+                  AND "revokedAt" IS NULL
+            ) THEN
+                RAISE EXCEPTION 'old terminal credential lifecycle defaults were not preserved';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM "Session"
+                WHERE "id" = 'migration-unique-origin-session'
+                  AND "originMachineId" = 'migration-origin-machine-1'
+            ) THEN
+                RAISE EXCEPTION 'unique AccessKey origin was not backfilled';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM "Session"
+                WHERE "id" = 'migration-ambiguous-origin-session'
+                  AND "originMachineId" IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION 'ambiguous AccessKey origin was backfilled unsafely';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM "Session"
+                WHERE "id" = 'migration-no-origin-session'
+                  AND "originMachineId" IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION 'session without AccessKey acquired an origin';
+            END IF;
+        `
+        : "";
+
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'TerminalAuthRequest'
+                  AND column_name = 'credentialVersion'
+            ) OR NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'TerminalAuthRequest'
+                  AND column_name = 'revokedAt'
+            ) OR NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'Machine'
+                  AND column_name = 'credentialId'
+            ) OR NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'Machine'
+                  AND column_name = 'deletedAt'
+            ) OR NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'Session'
+                  AND column_name = 'originMachineId'
+            ) THEN
+                RAISE EXCEPTION 'terminal credential lifecycle columns are missing';
+            END IF;
+            IF to_regclass('"Machine_credentialId_key"') IS NULL
+                OR to_regclass('"Machine_accountId_deletedAt_idx"') IS NULL
+                OR to_regclass('"Session_originMachineId_idx"') IS NULL THEN
+                RAISE EXCEPTION 'terminal credential lifecycle indexes are missing';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'Machine_credentialId_fkey'
+            ) OR NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'Session_originMachineId_fkey'
+            ) THEN
+                RAISE EXCEPTION 'terminal credential lifecycle foreign keys are missing';
+            END IF;
+            ${historicalChecks}
+        END
+        $$;
+    `);
+}
+
+function createMigrationTreeBefore(tempRoot, migrationName) {
     const tempPrismaPath = join(tempRoot, "prisma");
     const tempMigrationsPath = join(tempPrismaPath, "migrations");
     mkdirSync(tempMigrationsPath, { recursive: true });
@@ -209,7 +296,7 @@ function createPreSyncV4MigrationTree(tempRoot) {
         join(tempMigrationsPath, "migration_lock.toml"),
     );
     for (const entry of readdirSync(migrationsPath, { withFileTypes: true })) {
-        if (!entry.isDirectory() || entry.name >= syncV4Migration) continue;
+        if (!entry.isDirectory() || entry.name >= migrationName) continue;
         cpSync(
             join(migrationsPath, entry.name),
             join(tempMigrationsPath, entry.name),
@@ -224,12 +311,16 @@ resetPublicSchema();
 deploy(schemaPath);
 assertNoSchemaDrift();
 assertSyncV4Schema({ expectMigratedSession: false });
+assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
 
 const tempRoot = mkdtempSync(join(tmpdir(), "happy-sync-v4-migration-"));
 try {
     console.log("Verifying Sync v4 migration from the previous PostgreSQL schema...");
     resetPublicSchema();
-    const oldSchemaPath = createPreSyncV4MigrationTree(tempRoot);
+    const oldSchemaPath = createMigrationTreeBefore(
+        join(tempRoot, "pre-sync-v4"),
+        syncV4Migration,
+    );
     deploy(oldSchemaPath);
     runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
         INSERT INTO "Account" ("id", "publicKey", "updatedAt")
@@ -246,6 +337,111 @@ try {
     deploy(schemaPath);
     assertNoSchemaDrift();
     assertSyncV4Schema({ expectMigratedSession: true });
+    assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
+
+    console.log("Verifying terminal credential migration from the R8 PostgreSQL schema...");
+    resetPublicSchema();
+    const preCredentialSchemaPath = createMigrationTreeBefore(
+        join(tempRoot, "pre-terminal-credential"),
+        terminalCredentialMigration,
+    );
+    deploy(preCredentialSchemaPath);
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        INSERT INTO "Account" ("id", "publicKey", "updatedAt")
+        VALUES (
+            'migration-origin-account',
+            'migration-origin-public-key',
+            CURRENT_TIMESTAMP
+        );
+        INSERT INTO "TerminalAuthRequest" (
+            "id", "publicKey", "supportsV2", "response", "responseAccountId",
+            "createdAt", "updatedAt"
+        )
+        VALUES (
+            'migration-old-credential',
+            'migration-old-terminal-public-key',
+            TRUE,
+            'encrypted-response',
+            'migration-origin-account',
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        );
+        INSERT INTO "Machine" (
+            "id", "accountId", "metadata", "active", "updatedAt"
+        )
+        VALUES
+            (
+                'migration-origin-machine-1',
+                'migration-origin-account',
+                'encrypted-machine-1',
+                FALSE,
+                CURRENT_TIMESTAMP
+            ),
+            (
+                'migration-origin-machine-2',
+                'migration-origin-account',
+                'encrypted-machine-2',
+                FALSE,
+                CURRENT_TIMESTAMP
+            );
+        INSERT INTO "Session" (
+            "id", "tag", "accountId", "metadata", "updatedAt"
+        )
+        VALUES
+            (
+                'migration-unique-origin-session',
+                'migration-unique-origin-tag',
+                'migration-origin-account',
+                'encrypted-session-1',
+                CURRENT_TIMESTAMP
+            ),
+            (
+                'migration-ambiguous-origin-session',
+                'migration-ambiguous-origin-tag',
+                'migration-origin-account',
+                'encrypted-session-2',
+                CURRENT_TIMESTAMP
+            ),
+            (
+                'migration-no-origin-session',
+                'migration-no-origin-tag',
+                'migration-origin-account',
+                'encrypted-session-3',
+                CURRENT_TIMESTAMP
+            );
+        INSERT INTO "AccessKey" (
+            "id", "accountId", "machineId", "sessionId", "data", "updatedAt"
+        )
+        VALUES
+            (
+                'migration-access-unique',
+                'migration-origin-account',
+                'migration-origin-machine-1',
+                'migration-unique-origin-session',
+                'encrypted-access-1',
+                CURRENT_TIMESTAMP
+            ),
+            (
+                'migration-access-ambiguous-1',
+                'migration-origin-account',
+                'migration-origin-machine-1',
+                'migration-ambiguous-origin-session',
+                'encrypted-access-2',
+                CURRENT_TIMESTAMP
+            ),
+            (
+                'migration-access-ambiguous-2',
+                'migration-origin-account',
+                'migration-origin-machine-2',
+                'migration-ambiguous-origin-session',
+                'encrypted-access-3',
+                CURRENT_TIMESTAMP
+            );
+    `);
+    deploy(schemaPath);
+    assertNoSchemaDrift();
+    assertSyncV4Schema({ expectMigratedSession: false });
+    assertTerminalCredentialSchema({ expectHistoricalBackfill: true });
 } finally {
     rmSync(tempRoot, { recursive: true, force: true });
 }

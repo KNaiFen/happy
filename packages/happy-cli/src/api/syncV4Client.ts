@@ -113,6 +113,7 @@ export class AxiosSyncV4Transport implements SyncV4Transport {
         private readonly serverUrl: string,
         private readonly token: string,
         private readonly happyClient: string,
+        private readonly machineId?: string,
     ) {}
 
     async postMutations(
@@ -180,6 +181,7 @@ export class AxiosSyncV4Transport implements SyncV4Transport {
             Authorization: `Bearer ${this.token}`,
             "Content-Type": "application/json",
             "X-Happy-Client": this.happyClient,
+            ...(this.machineId ? { "X-Happy-Machine-Id": this.machineId } : {}),
             ...(traceId ? { "X-Happy-Sync-Trace": requireSyncV4TraceId(traceId) } : {}),
         };
     }
@@ -204,6 +206,7 @@ interface SyncV4ClientOptions {
     onEntity: (event: SyncV4AppliedEntity) => Promise<void>;
     transport?: SyncV4Transport;
     token?: string;
+    machineId?: string;
     serverUrl?: string;
     journalRoot?: string;
     pollIntervalMs?: number;
@@ -228,6 +231,7 @@ export class SyncV4Client {
                 serverUrl,
                 requiredToken(options.token),
                 `cli-coding-session/${configuration.currentCliVersion}`,
+                options.machineId,
             );
             return new SyncV4Client(
                 options.sessionId,

@@ -4,6 +4,11 @@ import { allocateSessionSeqBatch, allocateUserSeq } from "@/storage/seq";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { z } from "zod";
 import { type Fastify } from "../types";
+import {
+    buildSessionAccessWhere,
+    sessionAccessIdentityFromRequest,
+} from "@/app/api/utils/sessionAccess";
+import { inTx } from "@/storage/inTx";
 
 // Pagination contract:
 //   - after_seq=N  → forward sync: messages with seq > N, ordered ASC.
@@ -75,11 +80,12 @@ export function v3SessionRoutes(app: Fastify) {
         const { sessionId } = request.params;
         const { after_seq, before_seq, limit } = request.query;
 
-        const session = await db.session.findFirst({
-            where: {
-                id: sessionId,
-                accountId: userId
-            },
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        const session = accessWhere && await db.session.findFirst({
+            where: accessWhere,
             select: { id: true }
         });
 
@@ -133,15 +139,12 @@ export function v3SessionRoutes(app: Fastify) {
         const { sessionId } = request.params;
         const { messages } = request.body;
 
-        const session = await db.session.findFirst({
-            where: {
-                id: sessionId,
-                accountId: userId
-            },
-            select: { id: true }
-        });
-
-        if (!session) {
+        const accessIdentity = sessionAccessIdentityFromRequest(request);
+        const accessWhere = buildSessionAccessWhere(
+            accessIdentity,
+            { id: sessionId },
+        );
+        if (!accessWhere) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
@@ -155,7 +158,13 @@ export function v3SessionRoutes(app: Fastify) {
         const uniqueMessages = Array.from(firstMessageByLocalId.values());
         const contentByLocalId = new Map(uniqueMessages.map((message) => [message.localId, message.content]));
 
-        const txResult = await db.$transaction(async (tx) => {
+        const txResult = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: accessWhere,
+                select: { id: true },
+            });
+            if (!session) return null;
+
             const localIds = uniqueMessages.map((message) => message.localId);
             const existing = await tx.sessionMessage.findMany({
                 where: {
@@ -213,6 +222,9 @@ export function v3SessionRoutes(app: Fastify) {
                 createdMessages
             };
         });
+        if (!txResult) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
 
         for (const message of txResult.createdMessages) {
             const content = message.localId ? contentByLocalId.get(message.localId) : null;

@@ -4,7 +4,7 @@ import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
 import { machineResumeSession, sessionArchive, sessionKill, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
-import { storage, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
+import { storage, useIsSessionMachineDeleted, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
 import { Machine, Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { resolveMessageModeMeta } from '@/sync/messageMeta';
@@ -124,13 +124,16 @@ export function useSessionQuickActions(
     const navigateToSession = useNavigateToSession();
     const sessionStatus = useSessionStatus(session);
     const isCodexReadOnly = session.metadata?.codexReadOnly === true;
+    const machineDeleted = useIsSessionMachineDeleted(session.id);
     const machineId = session.metadata?.machineId ?? '';
     const machine = useMachine(machineId);
     const devModeEnabled = useLocalSetting('devModeEnabled');
     const expResumeSession = useSetting('expResumeSession');
     const resumeAvailability = React.useMemo(
-        () => expResumeSession ? getResumeAvailability(session, machine, sessionStatus.isConnected) : { canResume: false, canShowResume: false, subtitle: '', message: '' },
-        [machine, session, sessionStatus.isConnected, expResumeSession],
+        () => expResumeSession && !machineDeleted
+            ? getResumeAvailability(session, machine, sessionStatus.isConnected)
+            : { canResume: false, canShowResume: false, subtitle: '', message: '' },
+        [machine, machineDeleted, session, sessionStatus.isConnected, expResumeSession],
     );
 
     // Fork eligibility — separate from resume because fork works on both
@@ -148,6 +151,7 @@ export function useSessionQuickActions(
     ]);
     const canFork = Boolean(
         expResumeSession
+        && !machineDeleted
         && !isRigMetadata(session.metadata)
         && forkSource
         && machine
@@ -218,6 +222,11 @@ export function useSessionQuickActions(
     });
 
     const [archivingSession, performArchive] = useHappyAction(async () => {
+        if (machineDeleted) {
+            await sessionArchive(session.id);
+            onAfterArchive?.();
+            return;
+        }
         await maybeCleanupWorktree(session.id, session.metadata?.path, session.metadata?.machineId);
 
         // Try to kill the CLI process; if it's already dead, force-archive via server

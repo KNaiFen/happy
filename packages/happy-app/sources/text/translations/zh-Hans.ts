@@ -314,6 +314,8 @@ export const zhHans: TranslationStructure = {
         inputPlaceholder: '输入消息...',
         inactiveArchived: '此会话处于非活动状态。',
         resumeFromTerminal: '要从终端恢复它：',
+        machineDeleted: '来源设备已删除',
+        machineDeletedDescription: '历史记录仍会保留，但此会话已变为只读，无法再控制 Codex。',
         newChat: '新对话',
         statusBarContext: '上下文',
         statusBarPathTitle: '工作目录',

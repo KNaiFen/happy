@@ -311,6 +311,8 @@ export const it: TranslationStructure = {
         inputPlaceholder: 'Scrivi un messaggio ...',
         inactiveArchived: 'Questa sessione è inattiva.',
         resumeFromTerminal: 'Per riprenderla dal terminale:',
+        machineDeleted: 'Macchina di origine eliminata',
+        machineDeletedDescription: 'La cronologia resta disponibile, ma questa sessione è di sola lettura e non può più controllare Codex.',
         newChat: 'Nuova chat',
         statusBarContext: 'Contesto',
         statusBarPathTitle: 'Directory di lavoro',
