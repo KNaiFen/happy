@@ -85,6 +85,20 @@ GitHub Actions run `30586402126` 按该路径全部通过：杀进程后首页�
 - Android 现场流程在首条回复和进程死亡恢复后都负向断言 option/title 控制文本
   不可见，避免只靠用户文本子串再次漏检。
 
+GitHub Actions run `30589803432` 已验证 canonical 清理提交的普通 CI 全绿，
+包括完整 CLI/Server/App/Wire 测试、stable-v2 schema drift、真实传输、迁移、
+macOS Tauri 和十分钟 turn。对应 Android field run `30589820480` 尚未进入
+emulator 业务场景，在 `:app:packageRelease` 的 zipflinger 压缩阶段确定性暴露
+`java.lang.OutOfMemoryError: Java heap space`；完整堆栈排除了磁盘耗尽和 Sync v4
+运行时失败。现场 prebuild 生成的 Gradle heap 仍为 `2048m`，低于同仓库正式
+Android release workflow 已使用的 `5120m`。
+
+现场构建应与正式 Android release 对齐到 `5120m` heap、`1024m` metaspace，并
+将 Gradle worker 限制为 2，避免托管 runner 上编译 worker 与 APK 压缩争抢内存。
+该调整只改变 CI 构建资源，不改变发布包或任何 distributable 版本。修复后必须重新
+执行完整 Android field workflow；只有 APK 构建、真实 UI 往返、控制文本负向断言
+和进程死亡恢复在同一个 run 中全部通过，才可关闭 R11。
+
 ## 已确认根因
 
 - `HttpAppSyncV4Transport` 为 v4 请求构造 `Headers`，以保留 trace 和
