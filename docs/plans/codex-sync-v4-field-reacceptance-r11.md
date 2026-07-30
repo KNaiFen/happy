@@ -58,6 +58,17 @@ Maestro 启动前的 Gradle `:app:packageRelease` 阶段失败。日志仅包含
 - 若后续运行成功，只有在容量证据正常且真实 UI 场景也通过时才能判定本次为云端
   runner 瞬时故障；若再次失败，则依据完整堆栈继续修正本计划和工作流。
 
+GitHub Actions run `30584372984` 的 APK 构建随后成功，零 Machine 首页、
+Machine 实时到达、首条 Codex v4 命令、真实反馈弹层和首条回复全部通过。安全诊断
+再次为 `verified`、v3 message 为 `0`，且包含完整 command/result、thread、turn、
+item、part 和 runtime entity。最后的进程死亡恢复断言失败，但现场截图显示 App
+冷启动到了正常首页，已有的 `New chat` 会话卡片已经恢复；原恢复脚本未点击会话，
+却直接在首页查找聊天正文，因此不能据此判断历史丢失。
+
+进程死亡复验必须按真实用户路径执行：等待已有会话卡片出现、点击该卡片，再分别
+断言用户首条消息和 Codex 回复。这样才能覆盖用户报告的“退出会话后重新点入为空”，
+同时不把 Android 冷启动回到首页误报为 Sync v4 水合失败。
+
 ## 已确认根因
 
 - `HttpAppSyncV4Transport` 为 v4 请求构造 `Headers`，以保留 trace 和

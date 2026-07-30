@@ -8,6 +8,10 @@ tags:
 - launchApp:
     stopApp: false
 - extendedWaitUntil:
+    visible: New chat
+    timeout: 45000
+- tapOn: New chat
+- extendedWaitUntil:
     visible: hello-from-android-e2e
     timeout: 45000
 - extendedWaitUntil:
