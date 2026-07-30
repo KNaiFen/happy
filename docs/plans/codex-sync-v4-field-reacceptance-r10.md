@@ -2,8 +2,9 @@
 
 ## 状态
 
-本地实现与验证完成，等待提交和云端验收。本文是本轮实现、测试和发布的权威范围；
-发现新证据时先修订本文，再调整代码。
+实现已提交并进入 `origin/main`，主分支完整 CI 已通过；Android 现场工作流首轮
+暴露出 Maestro 启动提示干扰版本校验，正在修复该测试基础设施问题。本文是本轮
+实现、测试和发布的权威范围；发现新证据时先修订本文，再调整代码。
 
 当前进度：
 
@@ -32,6 +33,13 @@
   `156/156`、CLI `1109/1109`；三端 typecheck、fixture 独立 TypeScript、
   workflow/Maestro YAML、Shell 语法和 diff check 均通过。生产依赖审计为
   `0 critical`，73 个 high 均为本轮前已存在且锁文件未变。
+- 分支及 `main` 的完整 monorepo CI 均已通过，包括真实 Codex 0.145.0
+  stable-v2 十分钟 turn、PostgreSQL 迁移、Tauri Rust、Web export、100k
+  mutation chaos 和 provider-to-App 现场场景。
+- 首轮 API 36 云端执行已完成 x86_64 APK 冷构建，但 Maestro `2.7.0`
+  首次 `--version` 会向 stdout 输出匿名分析和功能提示，导致严格版本字符串
+  校验失败，业务链路尚未启动。zip 固定校验和及可执行路径均已独立复核正确；
+  修复方式是在 job 级关闭分析与功能提示后继续执行精确版本校验。
 
 ## 现场现象
 
@@ -120,6 +128,9 @@
 - 在 API 36 x86_64 emulator 上使用固定版本 Maestro 驱动 Machine 零会话首页、
   新建 Codex、发送首条消息、收到 fake provider 回复、后台/前台、Android
   process death 和历史恢复。
+- Maestro 固定版本归档必须先通过固定 SHA-256；job 必须关闭匿名分析与功能
+  通知，避免首次运行提示污染 `--version` stdout，再严格校验版本号。不得删除
+  固定版本或校验和来绕过安装失败。
 - fixture round-trip 等待时间必须由受限整数环境变量控制；云端冷启动窗口设为
   15 分钟，不使用无界等待，也不把模拟器启动耗时误报为 Codex 消息丢失。
 - App 仅在 `__DEV__` 且显式 CI 环境变量存在时，自动写入临时凭据并允许
@@ -130,8 +141,8 @@
   能直接读取并上传该日志。
 - 该工作流在 `main`、手工触发和夜间运行；PR 必需门保留 headless 场景，以控制
   时间和模拟器偶发失败。
-- 本轮分支推送后手工 dispatch 该工作流，以便在合入 `main` 前完成一次云端
-  Android 现场验收。
+- 新 workflow 只有进入默认分支后才可由 GitHub 注册并手工 dispatch；首次由
+  `main` push 自动触发，后续修复可在分支注册存在后手工复跑。
 
 ### 5. 版本与交付
 
