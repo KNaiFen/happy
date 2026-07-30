@@ -100,8 +100,55 @@ create_encrypted_business_state() {
                 throw new Error("relay authentication did not return a token");
             }
 
-            const authorization = {
+            const accountAuthorization = {
                 Authorization: `Bearer ${auth.token}`,
+                "Content-Type": "application/json",
+                "X-Happy-Client": "cli/ci",
+            };
+            const terminalKeypair = nacl.box.keyPair();
+            const terminalPublicKey = Buffer.from(
+                terminalKeypair.publicKey,
+            ).toString("base64");
+            await request("/v1/auth/request", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Happy-Client": "cli/ci",
+                },
+                body: JSON.stringify({
+                    publicKey: terminalPublicKey,
+                    supportsV2: true,
+                }),
+            });
+            await request("/v1/auth/response", {
+                method: "POST",
+                headers: accountAuthorization,
+                body: JSON.stringify({
+                    publicKey: terminalPublicKey,
+                    response: Buffer.from(nacl.randomBytes(32)).toString("base64"),
+                }),
+            });
+            const terminalAuth = await request("/v1/auth/request", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Happy-Client": "cli/ci",
+                },
+                body: JSON.stringify({
+                    publicKey: terminalPublicKey,
+                    supportsV2: true,
+                }),
+            });
+            if (
+                terminalAuth.state !== "authorized"
+                || typeof terminalAuth.token !== "string"
+                || terminalAuth.token.length === 0
+            ) {
+                throw new Error("terminal authentication did not return a token");
+            }
+
+            const authorization = {
+                Authorization: `Bearer ${terminalAuth.token}`,
                 "Content-Type": "application/json",
                 "X-Happy-Client": "cli/ci",
             };
@@ -169,7 +216,7 @@ create_encrypted_business_state() {
             }
 
             process.stdout.write(JSON.stringify({
-                token: auth.token,
+                token: terminalAuth.token,
                 machineId,
                 machineKey,
                 sessionId: session.session.id,
