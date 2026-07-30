@@ -47,6 +47,11 @@
   命令确认 `localhost/status` 返回 `packager-status:running`，而 IPv4
   `127.0.0.1` 立即拒绝连接；readiness 改为 Expo 实际声明的 `localhost`，
   不以固定 sleep 替代探针。
+- 第三轮通过 Metro readiness 并启动 API 36 emulator；Maestro 首屏截图确认
+  debug APK 停在 Expo Dev Launcher，因此普通 `launchApp` 不会加载 Happy
+  bundle。APK manifest 已注册 `exp+happy`，按 Expo 官方自动化格式在清空状态后
+  打开 `exp+happy://expo-development-client/?url=...&disableOnboarding=1`；进程
+  死亡恢复也通过同一 deep link 冷启动，保留 MMKV/App 数据并避免回到 launcher。
 
 ## 现场现象
 
@@ -143,6 +148,10 @@
 - App 仅在 `__DEV__` 且显式 CI 环境变量存在时，自动写入临时凭据并允许
   loopback HTTP；production bundle 中该路径保持关闭。关键控件使用稳定
   `testID`，不依赖语言或布局坐标。
+- 开发 APK 必须先以 `clearState` 建立干净基线，再通过 APK 已注册的
+  `exp+happy` Expo development-client deep link 加载反向代理后的 Metro；
+  首次 bundle 等待保持有界但覆盖冷编译。进程死亡测试不得清除 App 数据，并以
+  同一 deep link 冷启动 bundle 后验证历史恢复。
 - relay、fake Codex 和 App 日志及失败截图作为 artifact 上传。
 - Metro readiness 必须探测 Expo 实际声明的 host/endpoint，并同时确认父进程
   存活；不得因 `localhost`/IPv4 解析差异误判，也不得用无条件等待掩盖 bundler

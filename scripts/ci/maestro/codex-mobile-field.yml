@@ -9,11 +9,13 @@ tags:
     clearState: true
     permissions:
       all: allow
+- openLink:
+    link: "exp+happy://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081&disableOnboarding=1"
 
 - extendedWaitUntil:
     visible:
       id: empty-main-new-session
-    timeout: 45000
+    timeout: 180000
 - assertVisible:
     id: empty-main-machine-name
 - tapOn:
@@ -56,8 +58,8 @@ tags:
 
 - pressKey: home
 - killApp
-- launchApp:
-    stopApp: false
+- openLink:
+    link: "exp+happy://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081&disableOnboarding=1"
 - extendedWaitUntil:
     visible: hello-from-android-e2e
     timeout: 45000
