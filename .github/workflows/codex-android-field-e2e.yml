@@ -182,7 +182,7 @@ jobs:
           METRO_PID=$!
           printf '%s\n' "$METRO_PID" > "$METRO_PID_FILE"
           for _ in $(seq 1 900); do
-            if curl --fail --silent http://127.0.0.1:8081/status \
+            if curl --fail --silent http://localhost:8081/status \
               | grep -Fq "packager-status:running"; then
               exit 0
             fi

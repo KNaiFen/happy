@@ -40,6 +40,13 @@
   首次 `--version` 会向 stdout 输出匿名分析和功能提示，导致严格版本字符串
   校验失败，业务链路尚未启动。zip 固定校验和及可执行路径均已独立复核正确；
   修复方式是在 job 级关闭分析与功能提示后继续执行精确版本校验。
+- 第二轮已通过 Maestro 精确校验并启动真实 relay/daemon fixture，但 Expo 日志
+  已显示 `Waiting on http://localhost:8081` 时，固定
+  `http://127.0.0.1:8081/status` 探针仍在 90 秒后超时。React Native DevTools
+  的 Chrome sandbox 安装错误为非致命，Metro 进程保持存活。本地同一 Expo
+  命令确认 `localhost/status` 返回 `packager-status:running`，而 IPv4
+  `127.0.0.1` 立即拒绝连接；readiness 改为 Expo 实际声明的 `localhost`，
+  不以固定 sleep 替代探针。
 
 ## 现场现象
 
@@ -137,6 +144,9 @@
   loopback HTTP；production bundle 中该路径保持关闭。关键控件使用稳定
   `testID`，不依赖语言或布局坐标。
 - relay、fake Codex 和 App 日志及失败截图作为 artifact 上传。
+- Metro readiness 必须探测 Expo 实际声明的 host/endpoint，并同时确认父进程
+  存活；不得因 `localhost`/IPv4 解析差异误判，也不得用无条件等待掩盖 bundler
+  失败。
 - fixture 父进程日志不得位于 fixture 启动时递归清理的根目录内；失败分支必须
   能直接读取并上传该日志。
 - 该工作流在 `main`、手工触发和夜间运行；PR 必需门保留 headless 场景，以控制
