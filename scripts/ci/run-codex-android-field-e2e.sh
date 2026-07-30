@@ -8,12 +8,16 @@ set -euo pipefail
 
 APP_ID="com.slopus.happy.dev"
 APK_PATH="packages/happy-app/android/app/build/outputs/apk/debug/app-debug.apk"
+BOOTSTRAP_FLOW_PATH="scripts/ci/maestro/codex-mobile-bootstrap.yml"
 FLOW_PATH="scripts/ci/maestro/codex-mobile-field.yml"
 ARTIFACT_DIR="${RUNNER_TEMP}/happy-mobile-field-artifacts"
+BOOTSTRAP_REPORT_PATH="${ARTIFACT_DIR}/maestro-bootstrap-junit.xml"
 REPORT_PATH="${ARTIFACT_DIR}/maestro-junit.xml"
 TEST_OUTPUT_DIR="${ARTIFACT_DIR}/maestro-output"
 DEBUG_OUTPUT_DIR="${ARTIFACT_DIR}/maestro-debug"
 VERIFICATION_FILE="${HAPPY_MOBILE_E2E_ROOT}/roundtrip-verified.json"
+DIAGNOSTICS_FILE="${HAPPY_MOBILE_E2E_ROOT}/field-diagnostics.json"
+APP_READY_FILE="${HAPPY_MOBILE_E2E_ROOT}/app-ready"
 
 mkdir -p "${ARTIFACT_DIR}" "${TEST_OUTPUT_DIR}" "${DEBUG_OUTPUT_DIR}"
 
@@ -27,6 +31,7 @@ capture_diagnostics() {
 trap capture_diagnostics EXIT
 
 test -f "${APK_PATH}"
+test -f "${BOOTSTRAP_FLOW_PATH}"
 test -f "${FLOW_PATH}"
 test -x "${MAESTRO_BIN}"
 test -f "${HAPPY_MOBILE_E2E_PID_FILE}"
@@ -41,21 +46,52 @@ adb logcat -c
   --no-ansi \
   test \
   --format junit \
+  --output "${BOOTSTRAP_REPORT_PATH}" \
+  --test-output-dir "${TEST_OUTPUT_DIR}/bootstrap" \
+  --debug-output "${DEBUG_OUTPUT_DIR}/bootstrap" \
+  "${BOOTSTRAP_FLOW_PATH}"
+
+fixture_pid="$(tr -d '[:space:]' < "${HAPPY_MOBILE_E2E_PID_FILE}")"
+if ! kill -0 "${fixture_pid}" 2>/dev/null; then
+  echo "Mobile fixture exited before the Android zero-machine bootstrap completed." >&2
+  exit 1
+fi
+touch "${APP_READY_FILE}"
+
+"${MAESTRO_BIN}" \
+  --no-ansi \
+  test \
+  --format junit \
   --output "${REPORT_PATH}" \
   --test-output-dir "${TEST_OUTPUT_DIR}" \
   --debug-output "${DEBUG_OUTPUT_DIR}" \
   "${FLOW_PATH}"
 
-fixture_pid="$(tr -d '[:space:]' < "${HAPPY_MOBILE_E2E_PID_FILE}")"
 for _ in $(seq 1 600); do
   if [[ -f "${VERIFICATION_FILE}" ]]; then
     node -e '
       const fs = require("node:fs");
-      const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const [verificationPath, diagnosticsPath] = process.argv.slice(1);
+      if (!fs.existsSync(diagnosticsPath)) {
+        throw new Error("Missing mobile field diagnostics");
+      }
+      const result = JSON.parse(fs.readFileSync(verificationPath, "utf8"));
+      const diagnostics = JSON.parse(fs.readFileSync(diagnosticsPath, "utf8"));
       if (result.verified !== true || typeof result.sessionHash !== "string") {
         throw new Error("Invalid mobile field verification marker");
       }
-    ' "${VERIFICATION_FILE}"
+      if (
+        diagnostics.schemaVersion !== 1
+        || diagnostics.phase !== "verified"
+        || diagnostics.machineRegistered !== true
+        || diagnostics.sessionObserved !== true
+        || diagnostics.commandAccepted !== true
+        || diagnostics.cliRoundTripObserved !== true
+        || diagnostics.v3MessageCount !== 0
+      ) {
+        throw new Error("Mobile field diagnostics did not prove the Sync v4 round trip");
+      }
+    ' "${VERIFICATION_FILE}" "${DIAGNOSTICS_FILE}"
     exit 0
   fi
   if ! kill -0 "${fixture_pid}" 2>/dev/null; then

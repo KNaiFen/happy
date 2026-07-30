@@ -69,7 +69,7 @@ export function EmptySessionsTablet() {
         router.navigate('/new');
     };
     
-    if (!machinesLoaded) {
+    if (!machinesLoaded && machines.length === 0) {
         return (
             <View style={styles.container}>
                 <ActivityIndicator size="small" color={theme.colors.textSecondary} />

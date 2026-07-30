@@ -385,7 +385,7 @@ describe("v4SessionRoutes", () => {
 
     it("accepts only coordinated CLI and App versions on v4 data routes", async () => {
         expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.7")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("android/1.11.12")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("android/1.11.15")).toEqual({ compatible: true });
         expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.6")).toEqual({
             compatible: false,
             clientType: "happy-cli",
@@ -404,14 +404,14 @@ describe("v4SessionRoutes", () => {
             url: "/v4/sessions/session-1/changes?after_seq=0",
             headers: {
                 "x-user-id": "user-1",
-                "x-happy-client": "web/1.11.11",
+                "x-happy-client": "web/1.11.14",
             },
         });
         expect(response.statusCode).toBe(426);
         expect(response.json()).toEqual({
             error: "syncV4UpgradeRequired",
             clientType: "happy-app",
-            minimumVersion: "1.11.12",
+            minimumVersion: "1.11.15",
         });
         expect(operationMetricMock).toHaveBeenCalledWith({
             operation: "changes",
@@ -436,6 +436,24 @@ describe("v4SessionRoutes", () => {
             outcome: "invalid",
             client_type: "test",
         });
+    });
+
+    it("echoes a valid trace when mutation validation fails", async () => {
+        app = await createApp();
+        const traceId = "0123456789abcdef0123456789abcdef";
+        const response = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: {
+                "x-user-id": "user-1",
+                "x-happy-sync-trace": traceId,
+            },
+            payload: { mutations: [] },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.headers["x-happy-sync-trace"]).toBe(traceId);
+        expect(String(response.body)).not.toContain(traceId);
     });
 
     it("restricts terminal v4 traffic to its active machine while App tokens retain history access", async () => {
@@ -633,7 +651,7 @@ describe("v4SessionRoutes", () => {
                 enabled: false,
                 protocolVersion: 4,
                 minimumHappyCliVersion: "1.4.7",
-                minimumHappyAppVersion: "1.11.12",
+                minimumHappyAppVersion: "1.11.15",
                 minimumCodexCliVersion: "0.145.0",
             },
         });

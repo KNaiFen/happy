@@ -7,6 +7,7 @@ import { storage } from './storage';
 import { isTauri } from '@/utils/isTauri';
 import { assertServerUrlAllowed } from './serverConfig';
 import { serverFetch } from './serverTransport';
+import { createAuthenticatedRequestHeaders } from './requestHeaders';
 
 export function getHappyClientId(): string {
     let platform: string = Platform.OS; // 'ios' | 'android' | 'web'
@@ -222,11 +223,11 @@ class ApiSocket {
         }
 
         const url = `${this.config.endpoint}${path}`;
-        const headers = {
-            'Authorization': `Bearer ${credentials.token}`,
-            'X-Happy-Client': getHappyClientId(),
-            ...options?.headers
-        };
+        const headers = createAuthenticatedRequestHeaders(
+            credentials.token,
+            getHappyClientId(),
+            options?.headers,
+        );
 
         return serverFetch(url, {
             ...options,

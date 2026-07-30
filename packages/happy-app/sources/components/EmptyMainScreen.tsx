@@ -190,7 +190,7 @@ export function EmptyMainScreen() {
     }
 
     return (
-        <View style={styles.container}>
+        <View testID="empty-main-pair-machine" style={styles.container}>
             {/* Terminal-style code block */}
             <Text style={styles.title}>{t('components.emptyMainScreen.readyToCode')}</Text>
             <View style={styles.terminalBlock}>

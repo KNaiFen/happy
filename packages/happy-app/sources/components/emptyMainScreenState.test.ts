@@ -10,6 +10,10 @@ describe('resolveEmptyMainScreenState', () => {
         expect(resolveEmptyMainScreenState(true, 1)).toBe('start-session');
     });
 
+    it('offers a new session as soon as a realtime machine update is available', () => {
+        expect(resolveEmptyMainScreenState(false, 1)).toBe('start-session');
+    });
+
     it('shows pairing only after a successful empty machine snapshot', () => {
         expect(resolveEmptyMainScreenState(true, 0)).toBe('pair-machine');
     });

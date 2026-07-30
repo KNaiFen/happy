@@ -3,6 +3,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, openSync, readFileSync } from 'node:fs';
 import {
+    access,
     chmod,
     mkdir,
     rename,
@@ -29,10 +30,23 @@ interface FixtureState {
     serverUrl: string;
     appToken: string;
     appSecret: string;
-    machineId: string;
+    machineId: string | null;
+    phase: 'awaiting-app' | 'machine-ready';
     appId: string;
     root: string;
     verificationFile: string;
+    diagnosticsFile: string;
+}
+
+interface FieldDiagnostic {
+    schemaVersion: 1;
+    phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
+    machineRegistered: boolean;
+    sessionObserved: boolean;
+    commandAccepted: boolean;
+    cliRoundTripObserved: boolean;
+    v3MessageCount: number;
+    entityCounts: Record<string, number>;
 }
 
 interface ManagedProcess {
@@ -54,6 +68,13 @@ const roundTripTimeoutMs = parseBoundedInteger(
     1_000,
     30 * 60_000,
     'HAPPY_MOBILE_E2E_ROUNDTRIP_TIMEOUT_MS',
+);
+const waitForAppReady = process.env.HAPPY_MOBILE_E2E_WAIT_FOR_APP_READY === '1';
+const appReadyTimeoutMs = parseBoundedInteger(
+    process.env.HAPPY_MOBILE_E2E_APP_READY_TIMEOUT_MS ?? '300000',
+    1_000,
+    30 * 60_000,
+    'HAPPY_MOBILE_E2E_APP_READY_TIMEOUT_MS',
 );
 const serverUrl = `http://127.0.0.1:${port}`;
 const processes: ManagedProcess[] = [];
@@ -88,6 +109,47 @@ async function main(): Promise<void> {
         JSON.stringify({ strictStableV2: true }, null, 2),
         { encoding: 'utf8', mode: 0o600 },
     );
+    const verificationFile = join(fixtureRoot, 'roundtrip-verified.json');
+    const diagnosticsFile = join(fixtureRoot, 'field-diagnostics.json');
+    const appReadyFile = join(fixtureRoot, 'app-ready');
+    const baseState = {
+        serverUrl,
+        appToken,
+        appSecret: sharedSecret.toString('base64url'),
+        appId: 'com.slopus.happy.dev',
+        root: fixtureRoot,
+        verificationFile,
+        diagnosticsFile,
+    };
+
+    await writeState({
+        ...baseState,
+        machineId: null,
+        phase: 'awaiting-app',
+    });
+    await writeFieldDiagnostic(diagnosticsFile, {
+        schemaVersion: 1,
+        phase: 'awaiting-app',
+        machineRegistered: false,
+        sessionObserved: false,
+        commandAccepted: false,
+        cliRoundTripObserved: false,
+        v3MessageCount: 0,
+        entityCounts: {},
+    });
+    if (waitForAppReady) {
+        await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
+        await writeFieldDiagnostic(diagnosticsFile, {
+            schemaVersion: 1,
+            phase: 'app-ready',
+            machineRegistered: false,
+            sessionObserved: false,
+            commandAccepted: false,
+            cliRoundTripObserved: false,
+            v3MessageCount: 0,
+            entityCounts: {},
+        });
+    }
 
     const daemon = startManagedProcess(
         'daemon',
@@ -107,20 +169,24 @@ async function main(): Promise<void> {
     );
     const machineId = await waitForOnlineMachine(appToken, daemon);
     await assertNoSessions(appToken);
-    const verificationFile = join(fixtureRoot, 'roundtrip-verified.json');
-
     await writeState({
-        serverUrl,
-        appToken,
-        appSecret: sharedSecret.toString('base64url'),
+        ...baseState,
         machineId,
-        appId: 'com.slopus.happy.dev',
-        root: fixtureRoot,
-        verificationFile,
+        phase: 'machine-ready',
+    });
+    await writeFieldDiagnostic(diagnosticsFile, {
+        schemaVersion: 1,
+        phase: 'machine-ready',
+        machineRegistered: true,
+        sessionObserved: false,
+        commandAccepted: false,
+        cliRoundTripObserved: false,
+        v3MessageCount: 0,
+        entityCounts: {},
     });
 
     console.log(`Mobile field fixture ready for machine ${hashForLog(machineId)}`);
-    void verifyFieldRoundTrip(appToken, machineId, verificationFile).catch((error) => {
+    void verifyFieldRoundTrip(appToken, machineId, verificationFile, diagnosticsFile).catch((error) => {
         console.error(
             `Mobile field round trip failed: ${
                 error instanceof Error ? error.message : String(error)
@@ -349,74 +415,111 @@ async function verifyFieldRoundTrip(
     appToken: string,
     machineId: string,
     verificationFile: string,
+    diagnosticsFile: string,
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
-    await waitUntil(async () => {
-        const sessionsResponse = await fetch(`${serverUrl}/v1/sessions`, {
-            headers: appHeaders(appToken),
-        });
-        if (!sessionsResponse.ok) return false;
-        const sessionsBody = await sessionsResponse.json() as {
-            sessions?: Array<{
-                id?: unknown;
-                originMachineId?: unknown;
-            }>;
-        };
-        const session = sessionsBody.sessions?.find((candidate) => (
-            typeof candidate.id === 'string'
-            && candidate.originMachineId === machineId
-        ));
-        if (!session || typeof session.id !== 'string') return false;
+    const diagnostic: FieldDiagnostic = {
+        schemaVersion: 1,
+        phase: 'waiting-for-roundtrip',
+        machineRegistered: true,
+        sessionObserved: false,
+        commandAccepted: false,
+        cliRoundTripObserved: false,
+        v3MessageCount: 0,
+        entityCounts: {},
+    };
+    let lastDiagnostic = '';
+    const persistDiagnostic = async (): Promise<void> => {
+        const serialized = JSON.stringify(diagnostic);
+        if (serialized === lastDiagnostic) return;
+        lastDiagnostic = serialized;
+        await writeFieldDiagnostic(diagnosticsFile, diagnostic);
+    };
 
-        const v3Response = await fetch(
-            `${serverUrl}/v3/sessions/${encodeURIComponent(session.id)}/messages?after_seq=0&limit=100`,
-            { headers: appHeaders(appToken) },
-        );
-        assert.equal(v3Response.status, 200);
-        const v3Body = await v3Response.json() as { messages?: unknown[] };
-        assert.deepEqual(
-            v3Body.messages ?? [],
-            [],
-            'Android first Codex prompt fell back to the v3 message stream',
-        );
+    await persistDiagnostic();
+    try {
+        await waitUntil(async () => {
+            const sessionsResponse = await fetch(`${serverUrl}/v1/sessions`, {
+                headers: appHeaders(appToken),
+            });
+            if (!sessionsResponse.ok) return false;
+            const sessionsBody = await sessionsResponse.json() as {
+                sessions?: Array<{
+                    id?: unknown;
+                    originMachineId?: unknown;
+                }>;
+            };
+            const session = sessionsBody.sessions?.find((candidate) => (
+                typeof candidate.id === 'string'
+                && candidate.originMachineId === machineId
+            ));
+            if (!session || typeof session.id !== 'string') return false;
+            diagnostic.sessionObserved = true;
 
-        const snapshotResponse = await fetch(
-            `${serverUrl}/v4/sessions/${encodeURIComponent(session.id)}/snapshot?limit=100`,
-            {
-                headers: {
-                    ...appHeaders(appToken),
-                    'X-Happy-Machine-Id': machineId,
+            const v3Response = await fetch(
+                `${serverUrl}/v3/sessions/${encodeURIComponent(session.id)}/messages?after_seq=0&limit=100`,
+                { headers: appHeaders(appToken) },
+            );
+            assert.equal(v3Response.status, 200);
+            const v3Body = await v3Response.json() as { messages?: unknown[] };
+            diagnostic.v3MessageCount = (v3Body.messages ?? []).length;
+            await persistDiagnostic();
+            assert.deepEqual(
+                v3Body.messages ?? [],
+                [],
+                'Android first Codex prompt fell back to the v3 message stream',
+            );
+
+            const snapshotResponse = await fetch(
+                `${serverUrl}/v4/sessions/${encodeURIComponent(session.id)}/snapshot?limit=100`,
+                {
+                    headers: {
+                        ...appHeaders(appToken),
+                        'X-Happy-Machine-Id': machineId,
+                    },
                 },
-            },
-        );
-        if (!snapshotResponse.ok) return false;
-        const snapshot = await snapshotResponse.json() as {
-            entities?: Array<{ entityType?: unknown }>;
-        };
-        const counts = new Map<string, number>();
-        for (const entity of snapshot.entities ?? []) {
-            if (typeof entity.entityType !== 'string') continue;
-            counts.set(entity.entityType, (counts.get(entity.entityType) ?? 0) + 1);
-        }
-        if (
-            (counts.get('codex.command') ?? 0) < 1
-            || (counts.get('codex.thread') ?? 0) < 1
-            || (counts.get('codex.runtime') ?? 0) < 1
-            || (counts.get('codex.turn') ?? 0) < 1
-            || (counts.get('codex.item') ?? 0) < 2
-            || (counts.get('codex.part') ?? 0) < 2
-        ) {
-            return false;
-        }
-        verifiedSessionHash = hashForLog(session.id);
-        return true;
-    }, roundTripTimeoutMs, 'Android App to Codex to App round trip');
+            );
+            if (!snapshotResponse.ok) return false;
+            const snapshot = await snapshotResponse.json() as {
+                entities?: Array<{ entityType?: unknown }>;
+            };
+            const counts = new Map<string, number>();
+            for (const entity of snapshot.entities ?? []) {
+                if (typeof entity.entityType !== 'string') continue;
+                counts.set(entity.entityType, (counts.get(entity.entityType) ?? 0) + 1);
+            }
+            diagnostic.entityCounts = Object.fromEntries(
+                [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)),
+            );
+            diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 1;
+            diagnostic.cliRoundTripObserved = (
+                diagnostic.commandAccepted
+                && (counts.get('codex.thread') ?? 0) >= 1
+                && (counts.get('codex.runtime') ?? 0) >= 1
+                && (counts.get('codex.turn') ?? 0) >= 1
+                && (counts.get('codex.item') ?? 0) >= 2
+                && (counts.get('codex.part') ?? 0) >= 2
+            );
+            await persistDiagnostic();
+            if (!diagnostic.cliRoundTripObserved) return false;
+            verifiedSessionHash = hashForLog(session.id);
+            return true;
+        }, roundTripTimeoutMs, 'Android App to Codex to App round trip');
+    } catch (error) {
+        diagnostic.phase = 'failed';
+        await persistDiagnostic();
+        throw error;
+    }
 
+    diagnostic.phase = 'verified';
+    await persistDiagnostic();
     await writeFile(
         verificationFile,
         JSON.stringify({
             verified: true,
             sessionHash: verifiedSessionHash,
+            v3MessageCount: diagnostic.v3MessageCount,
+            entityCounts: diagnostic.entityCounts,
             verifiedAt: Date.now(),
         }, null, 2),
         { encoding: 'utf8', mode: 0o600 },
@@ -439,6 +542,31 @@ async function writeState(state: FixtureState): Promise<void> {
     );
     await chmod(temporaryPath, 0o600);
     await rename(temporaryPath, stateFile);
+}
+
+async function writeFieldDiagnostic(
+    path: string,
+    diagnostic: FieldDiagnostic,
+): Promise<void> {
+    const temporaryPath = `${path}.${process.pid}.tmp`;
+    await writeFile(
+        temporaryPath,
+        JSON.stringify(diagnostic, null, 2),
+        { encoding: 'utf8', mode: 0o600 },
+    );
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, path);
+}
+
+async function waitForFile(path: string, timeoutMs: number, label: string): Promise<void> {
+    await waitUntil(async () => {
+        try {
+            await access(path);
+            return true;
+        } catch {
+            return false;
+        }
+    }, timeoutMs, label);
 }
 
 async function waitForStop(): Promise<void> {

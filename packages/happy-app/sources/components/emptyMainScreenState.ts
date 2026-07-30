@@ -4,6 +4,6 @@ export function resolveEmptyMainScreenState(
     machinesLoaded: boolean,
     machineCount: number,
 ): EmptyMainScreenState {
-    if (!machinesLoaded) return 'loading';
-    return machineCount > 0 ? 'start-session' : 'pair-machine';
+    if (machineCount > 0) return 'start-session';
+    return machinesLoaded ? 'pair-machine' : 'loading';
 }
