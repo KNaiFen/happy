@@ -2,9 +2,10 @@
 
 ## 状态
 
-实现已提交并进入 `origin/main`，主分支完整 CI 已通过；Android 现场工作流首轮
-暴露出 Maestro 启动提示干扰版本校验，正在修复该测试基础设施问题。本文是本轮
-实现、测试和发布的权威范围；发现新证据时先修订本文，再调整代码。
+实现已提交并进入 `origin/main`，主分支完整 CI 已通过；Android 现场工作流已
+逐步越过构建、Maestro、fixture、Metro 和模拟器启动，目前正在修复首次启动与
+development-client 深链之间的时序竞态。本文是本轮实现、测试和发布的权威
+范围；发现新证据时先修订本文，再调整代码。
 
 当前进度：
 
@@ -52,6 +53,12 @@
   bundle。APK manifest 已注册 `exp+happy`，按 Expo 官方自动化格式在清空状态后
   打开 `exp+happy://expo-development-client/?url=...&disableOnboarding=1`；进程
   死亡恢复也通过同一 deep link 冷启动，保留 MMKV/App 数据并避免回到 launcher。
+- 第四轮确认 Android 已解析并派发上述 deep link，但 `launchApp` 返回时
+  `MainActivity` 仍在创建，deep-link intent 在进程初始化前约 250 ms 到达；
+  最终活动仍是 `DevLauncherActivity`，Metro 没有收到 manifest/bundle 请求。
+  当前 `expo-dev-launcher` 源码确认 URL host、`url` 参数和 scheme 均正确，
+  因此修复为先等待 Dev Launcher 的 `Development Build` 首屏完整可见，再派发
+  deep link；不得继续增加 Happy 首页断言超时来掩盖启动 intent 竞态。
 
 ## 现场现象
 
@@ -150,8 +157,10 @@
   `testID`，不依赖语言或布局坐标。
 - 开发 APK 必须先以 `clearState` 建立干净基线，再通过 APK 已注册的
   `exp+happy` Expo development-client deep link 加载反向代理后的 Metro；
-  首次 bundle 等待保持有界但覆盖冷编译。进程死亡测试不得清除 App 数据，并以
-  同一 deep link 冷启动 bundle 后验证历史恢复。
+  首次 `launchApp` 后必须先观察到 Dev Launcher 首屏已完整渲染，再发送 deep
+  link，避免 `MainActivity` 初始化期间的第二个 intent 丢失。首次 bundle 等待
+  保持有界但覆盖冷编译。进程死亡测试不得清除 App 数据，并以同一 deep link
+  冷启动 bundle 后验证历史恢复。
 - relay、fake Codex 和 App 日志及失败截图作为 artifact 上传。
 - Metro readiness 必须探测 Expo 实际声明的 host/endpoint，并同时确认父进程
   存活；不得因 `localhost`/IPv4 解析差异误判，也不得用无条件等待掩盖 bundler
