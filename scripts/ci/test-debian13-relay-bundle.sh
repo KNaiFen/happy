@@ -66,6 +66,8 @@ assert_capability() {
 }
 
 create_encrypted_business_state() {
+    # JavaScript is single-quoted so the shell cannot expand template literals.
+    # shellcheck disable=SC2016
     container_node -e '
         const nacl = require("tweetnacl");
 
@@ -184,6 +186,8 @@ create_encrypted_business_state() {
 
 assert_encrypted_business_state() {
     state="$1"
+    # JavaScript is single-quoted so the shell cannot expand template literals.
+    # shellcheck disable=SC2016
     container_node -e '
         async function request(path, token) {
             const response = await fetch(`http://127.0.0.1:3005${path}`, {

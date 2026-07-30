@@ -3,11 +3,13 @@
 ## 状态
 
 - 分支：`codex/sync-v4`
-- 当前状态：staged diff 已审查，等待提交与云端 CI
-- 目标版本：CLI `1.4.6`、Server `1.1.23`
+- 当前状态：分支 CI 全绿且已同步 main，等待发布工作流
+- 目标版本：CLI `1.4.6`、Server `1.1.24`
 - 保持版本：App `1.11.11`、Wire `0.1.3`
 - 本地实现归档：
   `docs/plans/archive/codex-sync-v4-remediation-r8-local.md`
+- 分支 CI 与 main 同步归档：
+  `docs/plans/archive/codex-sync-v4-remediation-r8-branch-ci.md`
 - R1-R7 归档：
   `docs/plans/archive/codex-sync-v4-remediation-r1-r7.md`
 
@@ -27,11 +29,7 @@
 
 ## 待完成
 
-- [ ] 使用简短中文主题提交并推送 `origin/codex/sync-v4`。
-- [ ] 等待分支 required gate；逐项修复 Server build、CLI、App Web、Tauri、
-      stable-v2、十分钟 turn、HTTP 场景、migration 和 dependency audit。
-- [ ] 分支全绿后 fetch `origin/main`、rebase，并正常推送 `HEAD:main`。
-- [ ] 等待 main CI、CLI `1.4.6` release 和 relay `1.1.23` release 全绿。
+- [ ] 等待 main CI、CLI `1.4.6` release 和 relay `1.1.24` release 全绿。
 - [ ] 下载并校验 `happy-1.4.6.tgz`、relay tarball 和 SHA-256。
 - [ ] 保留原 `.env`、secret 和 named volume 升级 relay；不得 reset 或重新安装
       数据目录。
@@ -54,3 +52,6 @@ Codex -> CLI -> HTTP relay -> App 场景；链路 p95 `236.4 ms`，production au
 - 2026-07-30：R8 本地实现完成并归档；活动文件缩减为云端、发布和实机验收清单。
 - 2026-07-30：51 个业务/计划文件完成 staged diff 审查；本地 `.agents` 和其他
   AI 文件均未暂存。
+- 2026-07-30：提交 `64170a01` 的分支 required gate 全绿并正常同步 main；
+  已归档该阶段。relay 1.1.23 release 在 ShellCheck 阶段停止且无制品，修复版
+  推进到 1.1.24。
