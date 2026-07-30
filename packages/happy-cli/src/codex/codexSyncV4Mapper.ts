@@ -8,6 +8,7 @@ import {
     CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
     MAX_CODEX_SYNC_V4_PART_BYTES,
     recordSyncV4DiagnosticSafely,
+    stripLeadingTaskNotificationWrappers,
     type CodexEntityV4,
     type CodexItemEntityV4,
     type CodexPartEntityV4,
@@ -34,6 +35,7 @@ import type {
     UserInput,
 } from './protocol';
 import { redactCodexProtocolMethod } from './codexProtocolMethod';
+import { stripHappySystemBlocks } from './codexPrompt';
 
 type SyncPublisher = Pick<
     SyncV4Client,
@@ -1881,8 +1883,12 @@ function userInputPart(input: UserInput): {
     contentType: CodexPartEntityV4['contentType'];
 } {
     switch (input.type) {
-        case 'text':
-            return { content: input.text, contentType: 'text' };
+        case 'text': {
+            const visibleText = stripLeadingTaskNotificationWrappers(
+                stripHappySystemBlocks(input.text),
+            );
+            return { content: visibleText, contentType: 'text' };
+        }
         case 'image':
         case 'localImage':
         case 'audio':

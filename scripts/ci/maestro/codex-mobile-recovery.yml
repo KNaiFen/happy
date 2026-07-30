@@ -17,4 +17,7 @@ tags:
 - extendedWaitUntil:
     visible: Fake Codex response
     timeout: 45000
+- assertNotVisible: Plan mode with options
+- assertNotVisible: Based on this message, call
+- assertNotVisible: <happy-system>
 - takeScreenshot: codex-recovered-after-process-death

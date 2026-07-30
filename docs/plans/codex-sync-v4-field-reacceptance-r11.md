@@ -69,6 +69,22 @@ item、part 和 runtime entity。最后的进程死亡恢复断言失败，但�
 断言用户首条消息和 Codex 回复。这样才能覆盖用户报告的“退出会话后重新点入为空”，
 同时不把 Android 冷启动回到首页误报为 Sync v4 水合失败。
 
+GitHub Actions run `30586402126` 按该路径全部通过：杀进程后首页恢复既有会话，
+点击后用户消息和 Codex 回复都从持久化状态恢复。但人工检查成功截图发现，用户消息
+同时显示了 CLI 注入的 `<happy-system>` option/title 控制文本。现有断言只查找用户
+消息子串，因此会把这种错误 UI 判为成功。
+
+该泄漏来自 canonical v4 mapper：旧 `SessionEnvelope` 历史映射已经在投影前调用
+`stripHappySystemBlocks`，`CodexSyncV4Mapper.userInputPart()` 却把 stable-v2
+`UserMessage` 的包装后文本原样写入 `codex.part`。修复必须：
+
+- 在 CLI canonical mapper 分块和加密前，复用现有 Happy system block 与 leading
+  task notification 清理逻辑；发送给 Codex 的原始 prompt 不变。
+- 同时覆盖官方 snapshot 导入和 live item 通知，确保重启、迁移和实时路径一致。
+- 单元测试断言 canonical part 只含用户原文，且不含 sentinel 或注入内容。
+- Android 现场流程在首条回复和进程死亡恢复后都负向断言 option/title 控制文本
+  不可见，避免只靠用户文本子串再次漏检。
+
 ## 已确认根因
 
 - `HttpAppSyncV4Transport` 为 v4 请求构造 `Headers`，以保留 trace 和
@@ -156,9 +172,13 @@ item、part 和 runtime entity。最后的进程死亡恢复断言失败，但�
   最低 App 版本提升到 `1.11.15`，并推进 `1.1.28 -> 1.1.29`。旧 App 必须收到
   明确的 426 升级响应，不得继续尝试 v4 首条命令；测试入口不改变线上协议，因此
   Server 最低版本保持 `1.11.15`。
-- CLI/Wire 无发布代码变更，不推进版本。
-- 本地完成 App/Server 相关测试、typecheck、Web export、workflow/YAML 校验和
-  `git diff --check` 后提交并推送 `origin/codex/sync-v4`。
+- CLI canonical user-message 清理属于发布代码变更，推进 `1.4.8 -> 1.4.9`；
+  为防止旧 CLI 继续产生错误 canonical part，Server 将最低 Happy CLI 提升到
+  `1.4.9` 并推进 `1.1.29 -> 1.1.30`；Wire 无发布代码变更。
+- 本地既有 App/Server 验收保持有效；新增清理修复完成 CLI `113/113` 文件、
+  `1110/1110` 测试与 build、Server `24/24` 文件、`157/157` 测试、两侧
+  typecheck、Maestro YAML 校验和 `git diff --check` 后提交并推送
+  `origin/codex/sync-v4`。
 - 云端先运行普通 CI 和 Android field workflow。任何失败都以本文件为基准补充
   根因、修复、递增受影响版本、提交并重新运行，直到 required checks 与 Android
   现场场景均通过。

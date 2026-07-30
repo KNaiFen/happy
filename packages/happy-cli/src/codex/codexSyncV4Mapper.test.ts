@@ -834,6 +834,60 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.close();
     });
 
+    it('removes Happy control scaffolding from snapshot and live user-message parts', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        const wrapped = (visibleText: string) => [
+            '<task-notification>',
+            '<task-id>child-1</task-id>',
+            '<status>completed</status>',
+            '</task-notification>',
+            '<happy-system>',
+            'private option instructions',
+            '</happy-system>',
+            visibleText,
+            '<happy-system>',
+            'private title instructions',
+            '</happy-system>',
+        ].join('\n');
+
+        mapper.importThread(thread('thread-visible', [
+            turn('turn-snapshot', 'completed', [{
+                type: 'userMessage',
+                id: 'user-snapshot',
+                clientId: 'command-snapshot',
+                content: [{ type: 'text', text: wrapped('snapshot user text'), text_elements: [] }],
+            }]),
+        ]));
+        mapper.handleNotification(notification({
+            method: 'item/completed',
+            params: {
+                threadId: 'thread-visible',
+                turnId: 'turn-live',
+                completedAtMs: 1_700_000_010,
+                item: {
+                    type: 'userMessage',
+                    id: 'user-live',
+                    clientId: 'command-live',
+                    content: [{ type: 'text', text: wrapped('live user text'), text_elements: [] }],
+                },
+            },
+        }));
+        await mapper.flush();
+
+        const userParts = publisher.latest('codex.part')
+            .filter((part) => part.kind === 'userInput' && part.contentType === 'text');
+        expect(userParts.find((part) => part.itemId === 'user-snapshot')?.content)
+            .toBe('snapshot user text');
+        expect(userParts.find((part) => part.itemId === 'user-live')?.content)
+            .toBe('live user text');
+        expect(JSON.stringify(userParts)).not.toContain('happy-system');
+        expect(JSON.stringify(userParts)).not.toContain('private option instructions');
+        expect(JSON.stringify(userParts)).not.toContain('private title instructions');
+        expect(JSON.stringify(userParts)).not.toContain('task-notification');
+        await mapper.close();
+    });
+
     it('projects every stable-v2 ThreadItem and UserInput variant without raw reasoning text', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });

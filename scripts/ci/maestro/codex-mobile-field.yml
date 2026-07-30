@@ -50,6 +50,9 @@ tags:
 - extendedWaitUntil:
     visible: Fake Codex response
     timeout: 60000
+- assertNotVisible: Plan mode with options
+- assertNotVisible: Based on this message, call
+- assertNotVisible: <happy-system>
 - takeScreenshot: codex-first-reply
 
 - pressKey: home
@@ -58,6 +61,9 @@ tags:
 - extendedWaitUntil:
     visible: Fake Codex response
     timeout: 30000
+- assertNotVisible: Plan mode with options
+- assertNotVisible: Based on this message, call
+- assertNotVisible: <happy-system>
 
 - pressKey: home
 - killApp
