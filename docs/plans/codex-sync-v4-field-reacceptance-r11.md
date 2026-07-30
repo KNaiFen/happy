@@ -42,6 +42,22 @@ GitHub Actions run `30579843712` 随后证明 standalone 方向有效：
 `Not really` 使回答持久化，再断言首条回复和进程死亡恢复。不得通过关闭产品反馈
 逻辑或直接写 MMKV 绕过弹层。
 
+GitHub Actions run `30582342821` 使用相同 App 源码复验上述弹层路径时，在
+Maestro 启动前的 Gradle `:app:packageRelease` 阶段失败。日志仅包含
+`PackageAndroidArtifact$IncrementalSplitterRunnable` 外层异常，没有底层堆栈；
+第一次现场 run 的相同 APK 构建已成功，因此目前既不能把它归为产品回归，也不能
+在没有诊断证据时把重跑成功当成已修复。
+
+现场工作流应为 APK 打包增加以下可诊断性：
+
+- Gradle 必须带 `--stacktrace`，保留实际打包异常链。
+- 构建前后（包括失败路径）记录 runner 根分区可用空间，区分磁盘耗尽与 Android
+  packaging 工具自身异常；只记录容量，不遍历或上传 runner 文件。
+- 失败 artifact 纳入 Android/Gradle problems report，但仍不得上传现场 APK、
+  一次性凭据或任何明文业务内容。
+- 若后续运行成功，只有在容量证据正常且真实 UI 场景也通过时才能判定本次为云端
+  runner 瞬时故障；若再次失败，则依据完整堆栈继续修正本计划和工作流。
+
 ## 已确认根因
 
 - `HttpAppSyncV4Transport` 为 v4 请求构造 `Headers`，以保留 trace 和

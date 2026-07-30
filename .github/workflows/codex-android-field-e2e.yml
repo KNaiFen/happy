@@ -146,6 +146,9 @@ jobs:
           EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
         run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
 
+      - name: Report Android build capacity before packaging
+        run: df -h /
+
       - name: Build standalone New Architecture x86_64 field APK
         env:
           APP_ENV: development
@@ -162,12 +165,17 @@ jobs:
             assembleRelease \
             -PreactNativeArchitectures=x86_64 \
             -PnewArchEnabled=true \
-            --no-daemon
+            --no-daemon \
+            --stacktrace
           test -f "$APK"
           BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK")"
           APK_ENTRIES="$(unzip -Z1 "$APK")"
           grep -Fq "package: name='com.slopus.happy.dev'" <<< "$BADGING"
           grep -Fq "assets/index.android.bundle" <<< "$APK_ENTRIES"
+
+      - name: Report Android build capacity after packaging
+        if: always()
+        run: df -h /
 
       - name: Install pinned Maestro CLI
         run: |
@@ -248,5 +256,7 @@ jobs:
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/daemon.log
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/cli-home/logs/*.log
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/field-diagnostics.json
+            packages/happy-app/android/build/reports/problems
+            packages/happy-app/android/app/build/reports
           if-no-files-found: warn
           retention-days: 7
