@@ -1,0 +1,16 @@
+appId: com.slopus.happy.dev
+name: Codex Sync v4 Android recovery after process death
+tags:
+  - codex
+  - sync-v4
+  - field
+---
+- launchApp:
+    stopApp: false
+- extendedWaitUntil:
+    visible: hello-from-android-e2e
+    timeout: 45000
+- extendedWaitUntil:
+    visible: Fake Codex response
+    timeout: 45000
+- takeScreenshot: codex-recovered-after-process-death

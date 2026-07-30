@@ -41,7 +41,11 @@ import {
 } from '@/sync/serverTransport';
 import { ServerUrlPolicyError } from '@/sync/serverUrlPolicy';
 import { setAllowInsecureHttp } from '@/sync/serverConfig';
-import { shouldEnableDevE2eInsecureHttp } from '@/sync/devE2eBootstrap';
+import { loadAppConfig } from '@/sync/appConfig';
+import {
+    shouldAllowE2EBootstrap,
+    shouldEnableDevE2eInsecureHttp,
+} from '@/sync/devE2eBootstrap';
 
 // Configure notification handler — suppress push display when app is in foreground
 Notifications.setNotificationHandler({
@@ -181,8 +185,8 @@ async function loadFonts() {
     });
 }
 
-function getDevEnvironmentCredentials(): AuthCredentials | null {
-    if (!__DEV__) {
+function getE2EEnvironmentCredentials(allowed: boolean): AuthCredentials | null {
+    if (!allowed) {
         return null;
     }
 
@@ -247,16 +251,19 @@ export default function RootLayout() {
                 await sodium.ready;
 
                 credentials = await TokenStorage.getCredentials();
-                const devCredentials = getDevWebQueryCredentials() ?? getDevEnvironmentCredentials();
+                const mobileFieldE2E = loadAppConfig().mobileFieldE2E === true;
+                const allowE2EBootstrap = shouldAllowE2EBootstrap(__DEV__, mobileFieldE2E);
+                const bootstrapCredentials = getDevWebQueryCredentials()
+                    ?? getE2EEnvironmentCredentials(allowE2EBootstrap);
 
-                if (devCredentials) {
-                    const credentialsChanged = credentials?.token !== devCredentials.token
-                        || credentials?.secret !== devCredentials.secret;
+                if (bootstrapCredentials) {
+                    const credentialsChanged = credentials?.token !== bootstrapCredentials.token
+                        || credentials?.secret !== bootstrapCredentials.secret;
 
                     if (credentialsChanged) {
-                        const saved = await TokenStorage.setCredentials(devCredentials);
+                        const saved = await TokenStorage.setCredentials(bootstrapCredentials);
                         if (saved) {
-                            credentials = devCredentials;
+                            credentials = bootstrapCredentials;
                         }
                     }
 
@@ -268,6 +275,7 @@ export default function RootLayout() {
                 if (shouldEnableDevE2eInsecureHttp(
                     __DEV__,
                     process.env.EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP,
+                    mobileFieldE2E,
                 )) {
                     setAllowInsecureHttp(true);
                 }

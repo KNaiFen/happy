@@ -9,12 +9,3 @@ tags:
     clearState: true
     permissions:
       all: allow
-- extendedWaitUntil:
-    visible: Development Build
-    timeout: 30000
-- openLink:
-    link: "exp+happy://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081&disableOnboarding=1"
-- extendedWaitUntil:
-    visible:
-      id: empty-main-pair-machine
-    timeout: 180000

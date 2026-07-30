@@ -6,6 +6,26 @@ R10 的 Android API 36 现场场景已真正经过零会话首页、Machine RPC�
 会话和首条消息发送动作，但在 relay 收到首条 mutation 时失败。本文件是该现场
 回归的后续权威计划；完成后将 R10/R11 一并归档，避免活动上下文继续膨胀。
 
+## 云端现场平台阻塞
+
+GitHub Actions run `30572012765` 在零 Machine bootstrap 阶段失败。下载的
+Android artifact 表明：
+
+- Maestro 的 `openLink` 已实际发出 `exp+happy` 的 `VIEW` intent，Android
+  ActivityManager 两次确认 `com.slopus.happy.dev/.MainActivity` 被启动。
+- Metro 初次加载较慢后，React Native 已执行 `Running "main"`；随后进程在
+  Android API 36 x86_64 emulator 的 Fabric
+  `MountingCoordinator::pullTransaction` 发生 `SIGSEGV`。桌面截图是 native
+  进程崩溃后的结果，不是 App 未被深链启动的证据。
+- 崩溃发生在 Happy 首页和任何 Sync v4 mutation 之前，因此不能把这次失败归因
+  为 v4 传输，也不能让它掩盖首条消息回归的验收。
+
+该问题目前只在 GitHub 托管的 API 36 x86_64 现场测试中复现；它不证明或反证
+真实 arm64 设备的 Fabric 状态。生产 App 的 New Architecture 配置不因此改变。
+本地随依赖安装的 React Native `0.83.1` Gradle 插件同时确认，从 `0.82` 起
+`newArchEnabled=false` 已不再受支持且会被忽略，因此不得用 legacy-renderer
+构建制造错误的绿色验收。
+
 ## 已确认根因
 
 - `HttpAppSyncV4Transport` 为 v4 请求构造 `Headers`，以保留 trace 和
@@ -53,6 +73,17 @@ R10 的 Android API 36 现场场景已真正经过零会话首页、Machine RPC�
 
 - Android API 36 场景保留真实 PGlite relay、正式 auth API、真实 CLI daemon、
   stable-v2 fake Codex、Machine RPC 与 UI 操作，不以 store/API 注入替代首条消息。
+- 不再用 Metro/Dev Launcher 承载业务验收。工作流先启动真实 relay/auth fixture，
+  再构建 development 包名、debug 签名但使用 release build type 的 standalone APK；
+  它保留 New Architecture、Hermes 和内嵌 production-mode JS bundle，通过普通
+  launcher 冷启动，更接近最终 arm64 发布包。
+- standalone 现场 APK 只在 `APP_ENV=development` 且显式
+  `HAPPY_MOBILE_FIELD_E2E=1` 时允许从编译环境读取一次性测试凭据并启用 fixture 的
+  HTTP relay。生产/preview 配置遇到该标记必须在配置阶段失败；CI 对凭据做 mask，
+  不上传 APK、凭据、明文消息或密钥。
+- Android UI 流程拆成零 Machine、Machine 实时到达、业务交互和进程死亡恢复四个
+  可观察阶段。任一阶段失败都留下 activity、logcat、Maestro hierarchy 和截图，
+  不再把 Dev Launcher/Metro 生命周期问题误报为同步失败。
 - fixture 在每个场景完成后写出仅含 hash、v3 计数和 v4 entity 类型计数的安全
   验收报告；CI 必须解析并校验该报告，不能只等待完成标记。失败 artifact 同时上传
   relay/CLI 日志与报告。
@@ -73,10 +104,12 @@ R10 的 Android API 36 现场场景已真正经过零会话首页、Machine RPC�
 
 ## 版本与验收
 
-- App 修复后推进 `1.11.14 -> 1.11.15`。
+- App 首条同步和零会话修复已推进 `1.11.14 -> 1.11.15`；新增受严格构建标记约束
+  的 standalone 现场测试入口后再推进到 `1.11.16`。
 - Server 为避免旧 App 继续静默发送错误形状的 mutation，将 Codex Sync v4 的协调
   最低 App 版本提升到 `1.11.15`，并推进 `1.1.28 -> 1.1.29`。旧 App 必须收到
-  明确的 426 升级响应，不得继续尝试 v4 首条命令。
+  明确的 426 升级响应，不得继续尝试 v4 首条命令；测试入口不改变线上协议，因此
+  Server 最低版本保持 `1.11.15`。
 - CLI/Wire 无发布代码变更，不推进版本。
 - 本地完成 App/Server 相关测试、typecheck、Web export、workflow/YAML 校验和
   `git diff --check` 后提交并推送 `origin/codex/sync-v4`。

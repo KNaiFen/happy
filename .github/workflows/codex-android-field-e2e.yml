@@ -34,7 +34,7 @@ jobs:
       HAPPY_MOBILE_E2E_PORT: "53586"
       HAPPY_MOBILE_E2E_ROUNDTRIP_TIMEOUT_MS: "900000"
       HAPPY_MOBILE_E2E_WAIT_FOR_APP_READY: "1"
-      HAPPY_MOBILE_E2E_APP_READY_TIMEOUT_MS: "300000"
+      HAPPY_MOBILE_E2E_APP_READY_TIMEOUT_MS: "1800000"
       MAESTRO_VERSION: "2.7.0"
       MAESTRO_SHA256: "a4ccab6b604617e7aef6db4f885666056eabe5cfa32befaa3bc994041b8fcbb5"
       MAESTRO_CLI_NO_ANALYTICS: "1"
@@ -85,43 +85,7 @@ jobs:
           test "$(timeout 10s "$CODEX_BIN" --version)" = "codex-cli 0.145.0"
           printf 'HAPPY_SCENARIO_CODEX_BIN=%s\n' "$CODEX_BIN" >> "$GITHUB_ENV"
 
-      - name: Generate Android development project
-        env:
-          APP_ENV: development
-          NODE_ENV: development
-          HAPPY_DISABLE_OTA: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
-        run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
-
-      - name: Build x86_64 debug APK
-        env:
-          APP_ENV: development
-          NODE_ENV: development
-          HAPPY_DISABLE_OTA: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
-        run: |
-          packages/happy-app/android/gradlew \
-            -p packages/happy-app/android \
-            assembleDebug \
-            -PreactNativeArchitectures=x86_64 \
-            --no-daemon
-
-      - name: Install pinned Maestro CLI
-        run: |
-          ARCHIVE="$RUNNER_TEMP/maestro.zip"
-          INSTALL_ROOT="$RUNNER_TEMP/maestro-${MAESTRO_VERSION}"
-          curl --fail --location --silent --show-error \
-            "https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip" \
-            --output "$ARCHIVE"
-          printf '%s  %s\n' "$MAESTRO_SHA256" "$ARCHIVE" | sha256sum --check
-          mkdir -p "$INSTALL_ROOT"
-          unzip -q "$ARCHIVE" -d "$INSTALL_ROOT"
-          MAESTRO_BIN="$INSTALL_ROOT/maestro/bin/maestro"
-          test -x "$MAESTRO_BIN"
-          test "$("$MAESTRO_BIN" --version)" = "$MAESTRO_VERSION"
-          printf 'MAESTRO_BIN=%s\n' "$MAESTRO_BIN" >> "$GITHUB_ENV"
-
-      - name: Start real relay and Happy daemon fixture
+      - name: Start real relay and prepare App authentication
         id: fixture
         run: |
           ROOT="$RUNNER_TEMP/happy-mobile-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -171,32 +135,54 @@ jobs:
           );
           NODE
 
-      - name: Start Metro for the standalone debug APK
+      - name: Generate Android development project
         env:
           APP_ENV: development
-          NODE_ENV: development
+          NODE_ENV: production
+          HAPPY_DISABLE_OTA: "1"
+          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+          HAPPY_MOBILE_FIELD_E2E: "1"
+          EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
+          EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
+        run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
+
+      - name: Build standalone New Architecture x86_64 field APK
+        env:
+          APP_ENV: development
+          NODE_ENV: production
+          HAPPY_DISABLE_OTA: "1"
+          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+          HAPPY_MOBILE_FIELD_E2E: "1"
           EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
           EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
         run: |
-          METRO_PID_FILE="$RUNNER_TEMP/happy-mobile-metro.pid"
-          pnpm --filter happy-app exec expo start --localhost \
-            > "$RUNNER_TEMP/happy-mobile-metro.log" 2>&1 &
-          METRO_PID=$!
-          printf '%s\n' "$METRO_PID" > "$METRO_PID_FILE"
-          for _ in $(seq 1 900); do
-            if curl --fail --silent http://localhost:8081/status \
-              | grep -Fq "packager-status:running"; then
-              exit 0
-            fi
-            if ! kill -0 "$METRO_PID" 2>/dev/null; then
-              echo "Metro exited during startup." >&2
-              tail -n 200 "$RUNNER_TEMP/happy-mobile-metro.log" >&2
-              exit 1
-            fi
-            sleep 0.1
-          done
-          echo "Timed out waiting for Metro." >&2
-          exit 1
+          APK="packages/happy-app/android/app/build/outputs/apk/release/app-release.apk"
+          packages/happy-app/android/gradlew \
+            -p packages/happy-app/android \
+            assembleRelease \
+            -PreactNativeArchitectures=x86_64 \
+            -PnewArchEnabled=true \
+            --no-daemon
+          test -f "$APK"
+          BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK")"
+          APK_ENTRIES="$(unzip -Z1 "$APK")"
+          grep -Fq "package: name='com.slopus.happy.dev'" <<< "$BADGING"
+          grep -Fq "assets/index.android.bundle" <<< "$APK_ENTRIES"
+
+      - name: Install pinned Maestro CLI
+        run: |
+          ARCHIVE="$RUNNER_TEMP/maestro.zip"
+          INSTALL_ROOT="$RUNNER_TEMP/maestro-${MAESTRO_VERSION}"
+          curl --fail --location --silent --show-error \
+            "https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip" \
+            --output "$ARCHIVE"
+          printf '%s  %s\n' "$MAESTRO_SHA256" "$ARCHIVE" | sha256sum --check
+          mkdir -p "$INSTALL_ROOT"
+          unzip -q "$ARCHIVE" -d "$INSTALL_ROOT"
+          MAESTRO_BIN="$INSTALL_ROOT/maestro/bin/maestro"
+          test -x "$MAESTRO_BIN"
+          test "$("$MAESTRO_BIN" --version)" = "$MAESTRO_VERSION"
+          printf 'MAESTRO_BIN=%s\n' "$MAESTRO_BIN" >> "$GITHUB_ENV"
 
       - name: Enable KVM
         run: |
@@ -220,15 +206,11 @@ jobs:
           disable-spellchecker: true
           script: bash scripts/ci/run-codex-android-field-e2e.sh
 
-      - name: Stop fixture and Metro
+      - name: Stop fixture
         if: always()
         run: |
-          for PID_FILE in \
-            "$RUNNER_TEMP/happy-mobile-metro.pid" \
-            "$RUNNER_TEMP/happy-mobile-e2e.pid"; do
-            if test ! -f "$PID_FILE"; then
-              continue
-            fi
+          PID_FILE="$RUNNER_TEMP/happy-mobile-e2e.pid"
+          if test -f "$PID_FILE"; then
             PID="$(tr -d '[:space:]' < "$PID_FILE")"
             if kill -0 "$PID" 2>/dev/null; then
               kill -TERM "$PID"
@@ -239,7 +221,7 @@ jobs:
                 sleep 0.1
               done
             fi
-          done
+          fi
 
       - name: Upload Android field artifacts
         if: always()
@@ -248,7 +230,6 @@ jobs:
           name: codex-android-field-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/happy-mobile-field-artifacts
-            ${{ runner.temp }}/happy-mobile-metro.log
             ${{ runner.temp }}/happy-mobile-e2e-fixture.log
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/roundtrip-verified.json
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/field-diagnostics.json

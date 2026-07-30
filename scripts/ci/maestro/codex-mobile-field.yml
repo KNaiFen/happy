@@ -56,12 +56,3 @@ tags:
 
 - pressKey: home
 - killApp
-- openLink:
-    link: "exp+happy://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081&disableOnboarding=1"
-- extendedWaitUntil:
-    visible: hello-from-android-e2e
-    timeout: 45000
-- extendedWaitUntil:
-    visible: Fake Codex response
-    timeout: 45000
-- takeScreenshot: codex-recovered-after-process-death

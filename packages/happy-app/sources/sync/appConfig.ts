@@ -11,6 +11,7 @@ export interface AppConfig {
     serverUrl?: string;
     buildCommitSha?: string;
     buildCommitTimestamp?: string;
+    mobileFieldE2E?: boolean;
 }
 
 /**

@@ -1,0 +1,11 @@
+appId: com.slopus.happy.dev
+name: Codex Sync v4 Android zero-machine App surface
+tags:
+  - codex
+  - sync-v4
+  - field
+---
+- extendedWaitUntil:
+    visible:
+      id: empty-main-pair-machine
+    timeout: 180000
