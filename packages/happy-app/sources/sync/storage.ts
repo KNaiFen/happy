@@ -50,6 +50,7 @@ import {
     type CodexV4RegistrySyncState,
 } from './codexV4ClientRegistry';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
+import { isSupportedExistingSession } from './sessionFlavor';
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -306,7 +307,7 @@ function buildSessionListViewData(
     Object.values(sessions).forEach(session => {
         // Side chats are hidden children of another session — they render only
         // inside the parent's sidebar panel, never in the top-level list.
-        if (session.metadata?.isSideChat) {
+        if (session.metadata?.isSideChat || !isSupportedExistingSession(session.metadata)) {
             return;
         }
         if (isSessionActive(session)) {
@@ -1789,7 +1790,7 @@ export function useAllSessions(): Session[] {
         if (!state.isDataReady) return [];
         // Side chats are hidden children — exclude them from every list.
         return Object.values(state.sessions)
-            .filter((s) => !s.metadata?.isSideChat)
+            .filter((s) => !s.metadata?.isSideChat && isSupportedExistingSession(s.metadata))
             .sort((a, b) => b.updatedAt - a.updatedAt);
     }));
 }

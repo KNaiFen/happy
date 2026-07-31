@@ -25,6 +25,7 @@ import {
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
+import { assertSupportedExistingSession } from './sessionFlavor';
 
 export type { SessionAgentModesPatch };
 
@@ -37,6 +38,7 @@ function assertSessionInteractionAllowed(sessionId: string): void {
     ) {
         throw new Error('The source machine was deleted; this session is read-only');
     }
+    assertSupportedExistingSession(session?.metadata);
     assertCodexSessionWritable(session?.metadata);
 }
 

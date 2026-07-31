@@ -68,6 +68,7 @@ import { readFileBytes } from '@/utils/readFileBytes';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { isRigMetadataV1, rigCanUseAttachments, usesControlledSessionUi } from './rig';
+import { assertSupportedExistingSession } from './sessionFlavor';
 import { AppSyncV4Client, type AppSyncV4AppliedEntity } from './syncV4Client';
 import {
     nativeSyncV4Entropy,
@@ -752,6 +753,7 @@ class Sync {
         )) {
             throw new Error('The source machine was deleted; this session is read-only');
         }
+        assertSupportedExistingSession(session.metadata);
 
         const modeMeta = resolveMessageModeMeta(session, {
             agentDefaultOverrides: storage.getState().localSettings.agentDefaultOverrides,
