@@ -11,12 +11,16 @@ tags:
     visible: New chat
     timeout: 45000
 - tapOn: New chat
-- extendedWaitUntil:
-    visible: hello-from-android-e2e
+- scrollUntilVisible:
+    element: hello-from-android-e2e
+    direction: UP
     timeout: 45000
-- extendedWaitUntil:
-    visible: Official Codex source E2E response
+- assertVisible: hello-from-android-e2e
+- scrollUntilVisible:
+    element: Official Codex source E2E response
+    direction: DOWN
     timeout: 45000
+- assertVisible: Official Codex source E2E response
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
 - assertNotVisible: <happy-system>

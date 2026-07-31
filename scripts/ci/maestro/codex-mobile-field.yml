@@ -44,12 +44,16 @@ tags:
     timeout: 30000
 - tapOn: Not really
 
-- extendedWaitUntil:
-    visible: hello-from-android-e2e
+- scrollUntilVisible:
+    element: hello-from-android-e2e
+    direction: UP
     timeout: 30000
-- extendedWaitUntil:
-    visible: Official Codex source E2E response
+- assertVisible: hello-from-android-e2e
+- scrollUntilVisible:
+    element: Official Codex source E2E response
+    direction: DOWN
     timeout: 60000
+- assertVisible: Official Codex source E2E response
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
 - assertNotVisible: <happy-system>
@@ -58,9 +62,11 @@ tags:
 - pressKey: home
 - launchApp:
     stopApp: false
-- extendedWaitUntil:
-    visible: Official Codex source E2E response
+- scrollUntilVisible:
+    element: Official Codex source E2E response
+    direction: DOWN
     timeout: 30000
+- assertVisible: Official Codex source E2E response
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
 - assertNotVisible: <happy-system>

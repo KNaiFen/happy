@@ -64,6 +64,7 @@
 - 零机器启动页能发现新注册 Codex 机器并创建会话。
 - App 发出的消息成为 durable v4 command，官方 app-server 收到 turn，fixture 至少收到一个 Responses 请求。
 - App 显示官方链路返回的唯一 sentinel 回复，刷新后仍存在且不重复。
+- 消息历史断言不得等同于“当前 viewport 可见”。工具卡把用户消息顶出屏幕后，Maestro 必须显式向上滚动定位用户消息，再向下滚动定位回复；首轮与进程恢复 flow 都以实际历史存在性为准。
 - 日志和 artifact 记录 Codex tag/commit、provider 请求计数和各 v4 entity 数量，不记录 prompt、token、key 或模型输出正文。
 
 ### 确定性故障注入
@@ -112,4 +113,5 @@
 - [x] 让精确 target cache 命中时复用已校验的源码构建二进制，避免每条工作流重复执行 40 分钟冷编译。
 - [x] 修复 run `30640510094` 暴露的单文件伪 bundle：补齐官方 bundled bwrap/摘要和 code-mode host，并要求真实 shell command 的流式与最终输出、退出码全部成功。
 - [x] 修复 run `30642025606` 暴露的 hosted runner user namespace 限制：按官方 Codex CI 配置 AppArmor/sysctl，使完整 bundle 的默认 bubblewrap 沙箱实际执行命令，不降级到 deprecated Landlock。
+- [x] 修复 Android run `30646021694` 暴露的 viewport 假阴性：后端 round-trip 与回复已完成时，长工具卡会把用户消息顶出当前画面；首轮和恢复 flow 改为双向滚动定位真实历史项。
 - [ ] monorepo required gate 与手动 Android field E2E 全绿后归档本计划。
