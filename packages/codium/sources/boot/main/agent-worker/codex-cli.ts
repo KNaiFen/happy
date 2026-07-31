@@ -45,6 +45,7 @@ export interface CodexExecutableOptions {
     platform?: NodeJS.Platform
     arch?: string
     resolvePackageJson?: (specifier: string) => string
+    pathExists?: (path: PathLike) => boolean
 }
 
 export function resolveCodexExecutable(options: CodexExecutableOptions = {}): CodexExecutable {
@@ -65,10 +66,25 @@ export function resolveCodexExecutable(options: CodexExecutableOptions = {}): Co
         : '@openai/codex-darwin-x64'
     const resolvePackageJson = options.resolvePackageJson
         ?? ((specifier: string) => nodeRequire.resolve(specifier))
+    const pathExists = options.pathExists ?? existsSync
     const vendorRoot = join(dirname(resolvePackageJson(`${pkg}/package.json`)), 'vendor', targetTriple)
+    const layouts = [
+        {
+            executable: join(vendorRoot, 'bin', 'codex'),
+            pathDirectory: join(vendorRoot, 'codex-path'),
+        },
+        {
+            executable: join(vendorRoot, 'codex', 'codex'),
+            pathDirectory: join(vendorRoot, 'path'),
+        },
+    ]
+    const layout = layouts.find(({ executable }) => pathExists(executable))
+    if (!layout) {
+        throw new Error(`Bundled Codex executable is missing from ${vendorRoot}.`)
+    }
     return {
-        executable: join(vendorRoot, 'codex', 'codex'),
-        extraPathDirs: [join(vendorRoot, 'path')],
+        executable: layout.executable,
+        extraPathDirs: pathExists(layout.pathDirectory) ? [layout.pathDirectory] : [],
     }
 }
 
@@ -134,6 +150,7 @@ export async function launchCodexTurn(
             platform: dependencies.platform,
             arch: dependencies.arch,
             resolvePackageJson: dependencies.resolvePackageJson,
+            pathExists: dependencies.pathExists,
         })
         const args = buildCodexExecArgs({ ...input, outputPath })
         const child = dependencies.spawn(executable, args, {

@@ -27,6 +27,9 @@ rewind、授权、连接或配置 Claude；所有未指定 Agent 的新操作使
 - Codium 删除 Claude SDK worker 与 Anthropic plugin，保留 Codex one-shot runner；
   云端 macOS 门禁将以 `@openai/codex 0.146.0` 实际运行工具 follow-up 与最终输出。
   runner 在 spawn error/close 与 renderer turn-close 的竞态均有独立回归覆盖。
+- 首轮 macOS 门禁还暴露出官方 `0.146.0` 平台包的 `bin/codex`、`codex-path` 布局；
+  runner 将以存在性检测同时支持该布局和旧版 `codex/codex`、`path` 布局，不能因
+  npm 包内部重排而回退或失去 Codex 执行能力。
 - `.agents` 外的五个本地 Claude-first 指令文件已按用户授权删除，未纳入 Git。
 
 待完成：版本 `CLI 1.4.11`、`App 1.11.18`、`Server 1.1.32`、`Wire 0.1.5`、

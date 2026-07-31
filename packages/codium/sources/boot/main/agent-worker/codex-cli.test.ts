@@ -35,7 +35,11 @@ function createHarness(options: { finalText?: string; pathExists?: boolean } = {
         createTempDirectory: vi.fn(async () => '/tmp/codium-turn'),
         readText,
         removeDirectory,
-        pathExists: vi.fn(() => options.pathExists ?? true),
+        pathExists: vi.fn((path) => {
+            const value = String(path)
+            if (value.endsWith('/bin/codex') || value.endsWith('/codex-path')) return true
+            return options.pathExists ?? true
+        }),
         spawn,
         temporaryRoot: () => '/tmp',
         env: { PATH: '/usr/bin' },
@@ -78,22 +82,39 @@ describe('buildCodexExecArgs', () => {
 })
 
 describe('resolveCodexExecutable', () => {
-    it('resolves both supported macOS package layouts', () => {
+    it('resolves the current macOS package layout', () => {
         const resolvePackageJson = (specifier: string) => `/packages/${specifier}`
         expect(resolveCodexExecutable({
             platform: 'darwin',
             arch: 'arm64',
             resolvePackageJson,
-        }).executable).toBe(
-            '/packages/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex',
-        )
+            pathExists: (path) => String(path).includes('/bin/codex') || String(path).includes('/codex-path'),
+        })).toEqual({
+            executable: '/packages/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex',
+            extraPathDirs: ['/packages/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path'],
+        })
+    })
+
+    it('retains the legacy macOS package layout fallback', () => {
+        const resolvePackageJson = (specifier: string) => `/packages/${specifier}`
         expect(resolveCodexExecutable({
             platform: 'darwin',
             arch: 'x64',
             resolvePackageJson,
-        }).executable).toBe(
-            '/packages/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex',
-        )
+            pathExists: (path) => String(path).includes('/codex/codex') || String(path).endsWith('/path'),
+        })).toEqual({
+            executable: '/packages/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/codex/codex',
+            extraPathDirs: ['/packages/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/path'],
+        })
+    })
+
+    it('fails clearly when a platform package has no executable', () => {
+        expect(() => resolveCodexExecutable({
+            platform: 'darwin',
+            arch: 'arm64',
+            resolvePackageJson: (specifier) => `/packages/${specifier}`,
+            pathExists: () => false,
+        })).toThrow('Bundled Codex executable is missing')
     })
 
     it('rejects unsupported platforms and architectures', () => {
@@ -120,11 +141,11 @@ describe('launchCodexTurn', () => {
         expect(harness.observer.onTurnDone).toHaveBeenCalledWith({ subtype: 'success' })
         expect(harness.removeDirectory).toHaveBeenCalledWith('/tmp/codium-turn')
         expect(harness.spawn).toHaveBeenCalledWith(
-            expect.stringContaining('/codex/codex'),
+            expect.stringContaining('/bin/codex'),
             expect.arrayContaining(['model_reasoning_effort="high"']),
             expect.objectContaining({
                 cwd: '/repo',
-                env: expect.objectContaining({ PATH: expect.stringContaining('/vendor/aarch64-apple-darwin/path') }),
+                env: expect.objectContaining({ PATH: expect.stringContaining('/vendor/aarch64-apple-darwin/codex-path') }),
             }),
         )
     })
