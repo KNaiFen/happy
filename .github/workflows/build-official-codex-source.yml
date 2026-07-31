@@ -161,6 +161,35 @@ jobs:
           restore-keys: |
             official-codex-cargo-home-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Resolve the official Cargo dependency graph
+        id: cargo_lock
+        working-directory: .ci/openai-codex/codex-rs
+        run: |
+          set -euo pipefail
+          SOURCE_ROOT="$GITHUB_WORKSPACE/.ci/openai-codex"
+          SOURCE_LOCK="$RUNNER_TEMP/Cargo.lock.source"
+          RESOLVED_LOCK="$RUNNER_TEMP/Cargo.lock.resolved"
+          cp Cargo.lock "$SOURCE_LOCK"
+          SOURCE_SHA256="$(sha256sum "$SOURCE_LOCK" | cut -d' ' -f1)"
+
+          # OpenAI's release workflow deliberately resolves without --locked.
+          # Freeze that resolved graph before the expensive compilation phase.
+          cargo metadata --format-version 1 > "$RUNNER_TEMP/official-codex-metadata.json"
+
+          while IFS= read -r changed_file; do
+            if test "$changed_file" != "codex-rs/Cargo.lock"; then
+              echo "Cargo dependency resolution changed unexpected source file: $changed_file" >&2
+              exit 1
+            fi
+          done < <(git -C "$SOURCE_ROOT" diff --name-only)
+
+          cp Cargo.lock "$RESOLVED_LOCK"
+          RESOLVED_SHA256="$(sha256sum "$RESOLVED_LOCK" | cut -d' ' -f1)"
+          printf 'source_sha256=%s\n' "$SOURCE_SHA256" >> "$GITHUB_OUTPUT"
+          printf 'resolved_sha256=%s\n' "$RESOLVED_SHA256" >> "$GITHUB_OUTPUT"
+          printf 'Source Cargo.lock:   %s\n' "$SOURCE_SHA256"
+          printf 'Resolved Cargo.lock: %s\n' "$RESOLVED_SHA256"
+
       - name: Cache exact official Codex target
         uses: actions/cache@v5
         with:
@@ -180,6 +209,8 @@ jobs:
           install -m 0755 \
             .ci/openai-codex/codex-rs/target/release/codex \
             "$ARTIFACT_ROOT/bin/codex"
+          install -m 0644 "$RUNNER_TEMP/Cargo.lock.source" "$ARTIFACT_ROOT/Cargo.lock.source"
+          install -m 0644 "$RUNNER_TEMP/Cargo.lock.resolved" "$ARTIFACT_ROOT/Cargo.lock.resolved"
           test "$(timeout 15s "$ARTIFACT_ROOT/bin/codex" --version)" = \
             "codex-cli ${{ steps.release.outputs.version }}"
           jq -n \
@@ -190,7 +221,9 @@ jobs:
             --arg rustToolchain "${{ steps.rust.outputs.toolchain }}" \
             --arg target "${{ steps.v8.outputs.target }}" \
             --arg rustyV8Version "${{ steps.v8.outputs.version }}" \
-            '{schemaVersion: 1, repository: $repository, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version}' \
+            --arg sourceCargoLockSha256 "${{ steps.cargo_lock.outputs.source_sha256 }}" \
+            --arg resolvedCargoLockSha256 "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
+            '{schemaVersion: 2, repository: $repository, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version, sourceCargoLockSha256: $sourceCargoLockSha256, resolvedCargoLockSha256: $resolvedCargoLockSha256}' \
             > "$ARTIFACT_ROOT/source.json"
 
       - name: Upload official Codex binary

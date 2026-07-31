@@ -24,7 +24,7 @@
    - 通过 GitHub API 解析最新稳定 Release。
    - 校验版本不低于 `0.145.0`，解析 annotated tag 到 commit。
    - checkout `openai/codex` 的精确 commit。
-   - 从源码的 Rust toolchain 文件读取 toolchain，使用 Cargo lockfile 和 Rust cache。
+   - 从源码的 Rust toolchain 文件读取 toolchain，并使用 Cargo cache。官方 Release 的 Cargo 构建不带 `--locked`，且当前稳定标签的锁文件在 Linux 上需要补充解析；因此先按官方语义运行依赖解析，校验工作树只能改动 `codex-rs/Cargo.lock`，记录源码锁与解析后锁的 SHA-256，再以解析后的锁执行 `cargo build --locked`。
    - 构建 `codex-rs` 中的 `codex-cli`/`codex` release 二进制。
    - 校验 `codex --version` 与解析出的 Release 一致。
    - 上传二进制和不含敏感信息的来源元数据，供同一 workflow 的测试 job 下载。
@@ -104,5 +104,6 @@
 - [x] 新增无凭据 Responses SSE fixture、shell 工具 follow-up、reasoning summary、分块回复及源码自测。
 - [x] 用独立的官方 app-server 短生命周期门禁替换 fake 十分钟等待；两小时无假结束继续由虚拟时钟单测覆盖。
 - [x] Android field fixture 改为官方 app-server 全链路，并补充 provider/tool/provenance 诊断。
-- [ ] 提交并推送分支，修复 GitHub Actions 的源码编译或真实协议运行错误。
+- [x] 提交并推送分支；首次云端运行确认官方标签源码、Rust toolchain、Linux 依赖与 `rusty_v8` 均可取得，并暴露标签锁文件无法直接使用 `--locked` 的真实构建差异。
+- [ ] 采用“官方解析语义 + 双锁文件指纹 + 解析后 locked 编译”修复云端源码构建，再继续处理真实协议运行错误。
 - [ ] monorepo required gate 与手动 Android field E2E 全绿后归档本计划。
