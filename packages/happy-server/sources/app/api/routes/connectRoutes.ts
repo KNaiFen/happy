@@ -10,6 +10,9 @@ import { Context } from "@/context";
 import { db } from "@/storage/db";
 import { diagnosticHash } from "@/utils/diagnosticHash";
 
+export const supportedInferenceVendorSchema = z.enum(['openai', 'gemini']);
+const supportedInferenceVendors = supportedInferenceVendorSchema.options;
+
 export function connectRoutes(app: Fastify) {
 
     // Add content type parser for webhook endpoints to preserve raw body
@@ -262,7 +265,7 @@ export function connectRoutes(app: Fastify) {
                 token: z.string()
             }),
             params: z.object({
-                vendor: z.enum(['openai', 'anthropic', 'gemini'])
+                vendor: supportedInferenceVendorSchema
             })
         }
     }, async (request, reply) => {
@@ -280,7 +283,7 @@ export function connectRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params: z.object({
-                vendor: z.enum(['openai', 'anthropic', 'gemini'])
+                vendor: supportedInferenceVendorSchema
             }),
             response: {
                 200: z.object({
@@ -305,7 +308,7 @@ export function connectRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params: z.object({
-                vendor: z.enum(['openai', 'anthropic', 'gemini'])
+                vendor: supportedInferenceVendorSchema
             }),
             response: {
                 200: z.object({
@@ -333,7 +336,12 @@ export function connectRoutes(app: Fastify) {
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        const tokens = await db.serviceAccountToken.findMany({ where: { accountId: userId } });
+        const tokens = await db.serviceAccountToken.findMany({
+            where: {
+                accountId: userId,
+                vendor: { in: [...supportedInferenceVendors] },
+            },
+        });
         let decrypted = [];
         for (const token of tokens) {
             decrypted.push({ vendor: token.vendor, token: decryptString(['user', userId, 'vendors', token.vendor, 'token'], token.token) });
