@@ -196,3 +196,26 @@ Android release workflow 已使用的 `5120m`。
 - 云端先运行普通 CI 和 Android field workflow。任何失败都以本文件为基准补充
   根因、修复、递增受影响版本、提交并重新运行，直到 required checks 与 Android
   现场场景均通过。
+
+## 完成记录
+
+R11 已于 GitHub Actions run `30591047332` 与 `30591077045` 完成云端验收并
+归档：
+
+- 同一提交 `32c1a7ce` 的 monorepo CI 全绿，包含 CLI、Server、App、Wire、
+  PostgreSQL 迁移、stable-v2 drift、macOS Tauri、真实传输、100,000 mutation
+  chaos、Web export、生产依赖审计和 `10m58s` 真实 Codex turn；required gate
+  通过。
+- Android API 36 standalone New Architecture 场景在 `21m31s` 内通过零 Machine
+  首页、Machine 实时到达、UI 新建 Codex、首条 v4 command、CLI/stable-v2 fake
+  Codex 回复、首次反馈弹层、前后台切换和杀进程恢复。
+- 脱敏诊断为 `verified`，v3 message 为 `0`；snapshot 含 1 个
+  `codex.command`、1 个 `codex.commandResult`、2 个 `codex.item`、2 个
+  `codex.part`、1 个 `codex.runtime`、1 个 `codex.thread` 和 1 个
+  `codex.turn`。
+- 人工检查首条回复与进程死亡恢复截图，均只显示用户 canary 和 Fake Codex 回复，
+  不含 `<happy-system>`、option prompt 或 title prompt。
+
+仍未完成的物理 Android 15 arm64、普通用户/root 启动、真实 provider 长 turn、
+审批、compact/review、子线程和设备删除复验继续由活动 remediation 计划与本地
+open items 跟踪，不属于本次云端 x86_64 R11 的完成声明。

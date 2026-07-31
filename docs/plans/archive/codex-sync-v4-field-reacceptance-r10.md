@@ -2,10 +2,9 @@
 
 ## 状态
 
-实现已提交并进入 `origin/main`，主分支完整 CI 已通过；Android 现场工作流已
-逐步越过构建、Maestro、fixture、Metro 和模拟器启动，目前正在修复首次启动与
-development-client 深链之间的时序竞态。本文是本轮实现、测试和发布的权威
-范围；发现新证据时先修订本文，再调整代码。
+已完成并归档。实现已提交并进入 `origin/main`，主分支完整 CI 已通过；后续
+Android standalone 现场验收、首条消息 header 根因和 canonical 控制文本清理
+由 R11 接续并完成。本文仅保留 R10 的实现与验证记录，不再作为活动计划。
 
 当前进度：
 
