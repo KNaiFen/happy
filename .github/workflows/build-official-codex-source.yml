@@ -191,13 +191,31 @@ jobs:
           printf 'Resolved Cargo.lock: %s\n' "$RESOLVED_SHA256"
 
       - name: Cache exact official Codex target
+        id: target_cache
         uses: actions/cache@v5
         with:
           path: |
             .ci/openai-codex/codex-rs/target
           key: official-codex-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.commit }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
 
+      - name: Verify cached official Codex binary
+        id: cached_binary
+        run: |
+          set -euo pipefail
+          CANDIDATE="$GITHUB_WORKSPACE/.ci/openai-codex/codex-rs/target/release/codex"
+          if test "${{ steps.target_cache.outputs.cache-hit }}" = true \
+            && test -x "$CANDIDATE" \
+            && test "$(timeout 15s "$CANDIDATE" --version)" = "codex-cli ${{ steps.release.outputs.version }}"; then
+            printf 'usable=true\n' >> "$GITHUB_OUTPUT"
+            printf 'Using exact verified official Codex target cache.\n'
+          else
+            rm -f "$CANDIDATE"
+            printf 'usable=false\n' >> "$GITHUB_OUTPUT"
+            printf 'Exact verified official Codex target cache unavailable; compiling from source.\n'
+          fi
+
       - name: Build official codex app-server binary
+        if: steps.cached_binary.outputs.usable != 'true'
         working-directory: .ci/openai-codex/codex-rs
         run: cargo build --locked --release -p codex-cli --bin codex
 
