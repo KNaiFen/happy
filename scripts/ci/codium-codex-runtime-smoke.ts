@@ -24,6 +24,11 @@ async function main(): Promise<void> {
     const originalPath = process.env.PATH;
     const fixture = await startCodexResponsesFixture();
     try {
+        execFileSync('git', ['init', '--quiet'], {
+            cwd: root,
+            stdio: 'ignore',
+            timeout: 15_000,
+        });
         await writeCodexResponsesConfig(codexHome, fixture.baseUrl);
         process.env.CODEX_HOME = codexHome;
 
