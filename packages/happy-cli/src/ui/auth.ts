@@ -4,7 +4,6 @@ import { randomBytes } from "node:crypto";
 import tweetnacl from 'tweetnacl';
 import axios from 'axios';
 import { displayQRCode } from "./qrcode";
-import { delay } from "@/utils/time";
 import { writeCredentialsLegacy, readCredentials, updateSettings, Credentials, writeCredentialsDataKey } from "@/persistence";
 import { generateWebAuthUrl } from "@/api/webAuth";
 import { openBrowser } from "@/utils/browser";
@@ -13,6 +12,285 @@ import { render } from 'ink';
 import React from 'react';
 import { randomUUID } from 'node:crypto';
 import { logger } from './logger';
+
+export type AuthRequestStage = 'create' | 'status' | 'claim';
+
+export type AuthRetryEvent = {
+    stage: AuthRequestStage;
+    code: string | undefined;
+    status: number | undefined;
+    attempt: number;
+    delayMs: number;
+};
+
+type AuthStatusResponse = {
+    status: 'not_found' | 'pending' | 'authorized';
+    supportsV2: boolean;
+};
+
+type AuthClaimResponse = {
+    state: 'authorized';
+    token: string;
+    response: string;
+};
+
+type AuthRetryOptions = {
+    maxAttempts?: number;
+    random?: () => number;
+    sleep?: (delayMs: number) => Promise<void>;
+    signal?: AbortSignal;
+    onRetry?: (event: AuthRetryEvent) => void;
+};
+
+const AUTH_POLL_INTERVAL_MS = 1_000;
+const AUTH_MAX_ATTEMPTS = 5;
+const AUTH_MAX_RETRY_DELAY_MS = 10_000;
+const TRANSIENT_AUTH_CODES = new Set([
+    'ECONNABORTED',
+    'ECONNRESET',
+    'EPIPE',
+    'ERR_NETWORK',
+    'ETIMEDOUT',
+]);
+
+export class AuthRequestError extends Error {
+    readonly stage: AuthRequestStage;
+    readonly code: string | undefined;
+    readonly status: number | undefined;
+    readonly attempts: number;
+    readonly transient: boolean;
+
+    constructor(options: {
+        stage: AuthRequestStage;
+        code?: string;
+        status?: number;
+        attempts: number;
+        transient: boolean;
+        reason?: 'request' | 'protocol';
+        cause?: unknown;
+    }) {
+        super(`Authentication ${options.stage} ${options.reason ?? 'request'} failed`, {
+            cause: options.cause,
+        });
+        this.name = 'AuthRequestError';
+        this.stage = options.stage;
+        this.code = options.code;
+        this.status = options.status;
+        this.attempts = options.attempts;
+        this.transient = options.transient;
+    }
+}
+
+function abortError(): Error {
+    const error = new Error('Authentication cancelled');
+    error.name = 'AbortError';
+    return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+        throw abortError();
+    }
+}
+
+function sleepWithSignal(delayMs: number, signal?: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, delayMs);
+        const onAbort = () => {
+            clearTimeout(timeout);
+            signal?.removeEventListener('abort', onAbort);
+            reject(abortError());
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+function authErrorMetadata(error: unknown): {
+    code: string | undefined;
+    status: number | undefined;
+    retryAfter: string | undefined;
+    transient: boolean;
+} {
+    if (!axios.isAxiosError(error)) {
+        return { code: undefined, status: undefined, retryAfter: undefined, transient: false };
+    }
+    const status = error.response?.status;
+    const code = typeof error.code === 'string' ? error.code : undefined;
+    const rawRetryAfter = error.response?.headers?.['retry-after'];
+    const retryAfter = typeof rawRetryAfter === 'string' ? rawRetryAfter : undefined;
+    return {
+        code,
+        status,
+        retryAfter,
+        transient: TRANSIENT_AUTH_CODES.has(code ?? '')
+            || status === 408
+            || status === 429
+            || (status !== undefined && status >= 500),
+    };
+}
+
+function retryAfterMs(value: string | undefined, now = Date.now()): number | undefined {
+    if (!value) {
+        return undefined;
+    }
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+        return Math.min(seconds * 1_000, AUTH_MAX_RETRY_DELAY_MS);
+    }
+    const date = Date.parse(value);
+    if (Number.isNaN(date)) {
+        return undefined;
+    }
+    return Math.min(Math.max(date - now, 0), AUTH_MAX_RETRY_DELAY_MS);
+}
+
+export async function runAuthRequestWithRetry<T>(
+    stage: AuthRequestStage,
+    request: () => Promise<T>,
+    options: AuthRetryOptions = {},
+): Promise<T> {
+    const maxAttempts = options.maxAttempts ?? AUTH_MAX_ATTEMPTS;
+    const random = options.random ?? Math.random;
+    const sleep = options.sleep ?? (delayMs => sleepWithSignal(delayMs, options.signal));
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        throwIfAborted(options.signal);
+        try {
+            return await request();
+        } catch (error) {
+            throwIfAborted(options.signal);
+            const metadata = authErrorMetadata(error);
+            if (!metadata.transient || attempt === maxAttempts) {
+                throw new AuthRequestError({
+                    stage,
+                    code: metadata.code,
+                    status: metadata.status,
+                    attempts: attempt,
+                    transient: metadata.transient,
+                    cause: error,
+                });
+            }
+            const exponentialCeiling = Math.min(250 * (2 ** (attempt - 1)), AUTH_MAX_RETRY_DELAY_MS);
+            const delayMs = retryAfterMs(metadata.retryAfter)
+                ?? Math.floor(Math.max(0, Math.min(random(), 1)) * exponentialCeiling);
+            options.onRetry?.({
+                stage,
+                code: metadata.code,
+                status: metadata.status,
+                attempt,
+                delayMs,
+            });
+            await sleep(delayMs);
+            throwIfAborted(options.signal);
+        }
+    }
+
+    throw new AuthRequestError({ stage, attempts: maxAttempts, transient: true });
+}
+
+function parseAuthStatus(value: unknown): AuthStatusResponse {
+    if (
+        typeof value === 'object'
+        && value !== null
+        && 'status' in value
+        && (value.status === 'not_found' || value.status === 'pending' || value.status === 'authorized')
+        && 'supportsV2' in value
+        && typeof value.supportsV2 === 'boolean'
+    ) {
+        return value as AuthStatusResponse;
+    }
+    throw new AuthRequestError({
+        stage: 'status',
+        attempts: 1,
+        transient: false,
+        reason: 'protocol',
+    });
+}
+
+function parseAuthClaim(value: unknown): AuthClaimResponse {
+    if (
+        typeof value === 'object'
+        && value !== null
+        && 'state' in value
+        && value.state === 'authorized'
+        && 'token' in value
+        && typeof value.token === 'string'
+        && 'response' in value
+        && typeof value.response === 'string'
+    ) {
+        return value as AuthClaimResponse;
+    }
+    throw new AuthRequestError({
+        stage: 'claim',
+        attempts: 1,
+        transient: false,
+        reason: 'protocol',
+    });
+}
+
+export async function pollAuthRequest(options: {
+    status: () => Promise<unknown>;
+    claim: () => Promise<unknown>;
+    sleep?: (delayMs: number) => Promise<void>;
+    random?: () => number;
+    signal?: AbortSignal;
+    onPending?: () => void;
+    onRetry?: (event: AuthRetryEvent) => void;
+}): Promise<AuthClaimResponse> {
+    const sleep = options.sleep ?? (delayMs => sleepWithSignal(delayMs, options.signal));
+    await sleep(AUTH_POLL_INTERVAL_MS);
+    throwIfAborted(options.signal);
+
+    while (true) {
+        const status = parseAuthStatus(await runAuthRequestWithRetry('status', options.status, {
+            sleep,
+            random: options.random,
+            signal: options.signal,
+            onRetry: options.onRetry,
+        }));
+        if (status.status === 'not_found') {
+            throw new AuthRequestError({
+                stage: 'status',
+                attempts: 1,
+                transient: false,
+                reason: 'protocol',
+            });
+        }
+        if (status.status === 'authorized') {
+            return parseAuthClaim(await runAuthRequestWithRetry('claim', options.claim, {
+                sleep,
+                random: options.random,
+                signal: options.signal,
+                onRetry: options.onRetry,
+            }));
+        }
+        options.onPending?.();
+        await sleep(AUTH_POLL_INTERVAL_MS);
+        throwIfAborted(options.signal);
+    }
+}
+
+function logAuthRetry(event: AuthRetryEvent): void {
+    logger.debug('[AUTH] Retrying authentication request', event);
+}
+
+function logAuthFailure(error: unknown): void {
+    if (error instanceof AuthRequestError) {
+        logger.debug('[AUTH] Authentication request failed', {
+            stage: error.stage,
+            code: error.code,
+            status: error.status,
+            attempts: error.attempts,
+            transient: error.transient,
+        });
+        return;
+    }
+    logger.debug('[AUTH] Authentication failed without request metadata');
+}
 
 export async function doAuth(): Promise<Credentials | null> {
     console.clear();
@@ -29,25 +307,20 @@ export async function doAuth(): Promise<Credentials | null> {
     const keypair = tweetnacl.box.keyPair.fromSecretKey(secret);
 
     // Create a new authentication request
+    const publicKey = encodeBase64(keypair.publicKey);
     try {
-        if (process.env.DEBUG) {
-            console.log(`[AUTH DEBUG] Sending auth request to: ${configuration.serverUrl}/v1/auth/request`);
-        }
-        await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
-            publicKey: encodeBase64(keypair.publicKey),
-            supportsV2: true
-        }, {
-            headers: {
-                'X-Happy-Client': `cli/${configuration.currentCliVersion}`
-            }
-        });
-        if (process.env.DEBUG) {
-            console.log(`[AUTH DEBUG] Auth request sent successfully`);
-        }
+        await runAuthRequestWithRetry('create', async () => {
+            await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
+                publicKey,
+                supportsV2: true,
+            }, {
+                headers: {
+                    'X-Happy-Client': `cli/${configuration.currentCliVersion}`,
+                },
+            });
+        }, { onRetry: logAuthRetry });
     } catch (error) {
-        if (process.env.DEBUG) {
-            console.log(`[AUTH DEBUG] Failed to send auth request:`, error);
-        }
+        logAuthFailure(error);
         console.log('Failed to create authentication request, please try again later.');
         return null;
     }
@@ -144,11 +417,13 @@ async function doWebAuth(keypair: tweetnacl.BoxKeyPair): Promise<Credentials | n
 async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Credentials | null> {
     process.stdout.write('Waiting for authentication');
     let dots = 0;
-    let cancelled = false;
+    const abortController = new AbortController();
+    const publicKey = encodeBase64(keypair.publicKey);
 
     // Handle Ctrl-C during waiting
     const handleInterrupt = () => {
-        cancelled = true;
+        process.off('SIGINT', handleInterrupt);
+        abortController.abort();
         console.log('\n\nAuthentication cancelled.');
         process.exit(0);
     };
@@ -156,80 +431,95 @@ async function waitForAuthentication(keypair: tweetnacl.BoxKeyPair): Promise<Cre
     process.on('SIGINT', handleInterrupt);
 
     try {
-        while (!cancelled) {
-            try {
-                const response = await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
-                    publicKey: encodeBase64(keypair.publicKey),
-                    supportsV2: true
+        const response = await pollAuthRequest({
+            signal: abortController.signal,
+            onRetry: logAuthRetry,
+            status: async () => {
+                const result = await axios.get(`${configuration.serverUrl}/v1/auth/request/status`, {
+                    params: { publicKey },
+                    headers: {
+                        'X-Happy-Client': `cli/${configuration.currentCliVersion}`,
+                    },
+                    signal: abortController.signal,
+                });
+                return result.data;
+            },
+            claim: async () => {
+                const result = await axios.post(`${configuration.serverUrl}/v1/auth/request`, {
+                    publicKey,
+                    supportsV2: true,
                 }, {
                     headers: {
-                        'X-Happy-Client': `cli/${configuration.currentCliVersion}`
-                    }
+                        'X-Happy-Client': `cli/${configuration.currentCliVersion}`,
+                    },
+                    signal: abortController.signal,
                 });
-                if (response.data.state === 'authorized') {
-                    let token = response.data.token as string;
-                    let r = decodeBase64(response.data.response);
-                    let decrypted = decryptWithEphemeralKey(r, keypair.secretKey);
-                    if (decrypted) {
-                        if (decrypted.length === 32) {
-                            const credentials = {
-                                secret: decrypted,
-                                token: token
-                            }
-                            await writeCredentialsLegacy(credentials);
-                            console.log('\n\n✓ Authentication successful\n');
-                            return {
-                                encryption: {
-                                    type: 'legacy',
-                                    secret: decrypted
-                                },
-                                token: token,
-                                serverOrigin: configuration.serverUrl,
-                            };
-                        } else {
-                            if (decrypted[0] === 0) {
-                                const credentials = {
-                                    publicKey: decrypted.slice(1, 33),
-                                    machineKey: randomBytes(32),
-                                    token: token
-                                }
-                                await writeCredentialsDataKey(credentials);
-                                console.log('\n\n✓ Authentication successful\n');
-                                return {
-                                    encryption: {
-                                        type: 'dataKey',
-                                        publicKey: credentials.publicKey,
-                                        machineKey: credentials.machineKey
-                                    },
-                                    token: token,
-                                    serverOrigin: configuration.serverUrl,
-                                };
-                            } else {
-                                console.log('\n\nFailed to decrypt response. Please try again.');
-                                return null;
-                            }
-                        }
-                    } else {
-                        console.log('\n\nFailed to decrypt response. Please try again.');
-                        return null;
-                    }
-                }
-            } catch (error) {
-                console.log('\n\nFailed to check authentication status. Please try again.');
-                return null;
-            }
+                return result.data;
+            },
+            onPending: () => {
+                process.stdout.write('\rWaiting for authentication' + '.'.repeat((dots % 3) + 1) + '   ');
+                dots += 1;
+            },
+        });
 
-            // Animate waiting dots
-            process.stdout.write('\rWaiting for authentication' + '.'.repeat((dots % 3) + 1) + '   ');
-            dots++;
-
-            await delay(1000);
+        let encryptedResponse: Uint8Array;
+        try {
+            encryptedResponse = decodeBase64(response.response);
+        } catch {
+            console.log('\n\nFailed to decrypt response. Please try again.');
+            return null;
         }
+        const decrypted = decryptWithEphemeralKey(encryptedResponse, keypair.secretKey);
+        if (!decrypted) {
+            console.log('\n\nFailed to decrypt response. Please try again.');
+            return null;
+        }
+        if (decrypted.length === 32) {
+            const credentials = {
+                secret: decrypted,
+                token: response.token,
+            };
+            await writeCredentialsLegacy(credentials);
+            console.log('\n\n✓ Authentication successful\n');
+            return {
+                encryption: {
+                    type: 'legacy',
+                    secret: decrypted,
+                },
+                token: response.token,
+                serverOrigin: configuration.serverUrl,
+            };
+        }
+        if (decrypted.length >= 33 && decrypted[0] === 0) {
+            const credentials = {
+                publicKey: decrypted.slice(1, 33),
+                machineKey: randomBytes(32),
+                token: response.token,
+            };
+            await writeCredentialsDataKey(credentials);
+            console.log('\n\n✓ Authentication successful\n');
+            return {
+                encryption: {
+                    type: 'dataKey',
+                    publicKey: credentials.publicKey,
+                    machineKey: credentials.machineKey,
+                },
+                token: response.token,
+                serverOrigin: configuration.serverUrl,
+            };
+        }
+        console.log('\n\nFailed to decrypt response. Please try again.');
+        return null;
+    } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+            return null;
+        }
+        logAuthFailure(error);
+        console.log('\n\nFailed to check authentication status. Please try again.');
+        return null;
     } finally {
         process.off('SIGINT', handleInterrupt);
     }
-
-    return null;
 }
 
 export function decryptWithEphemeralKey(encryptedBundle: Uint8Array, recipientSecretKey: Uint8Array): Uint8Array | null {
