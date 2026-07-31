@@ -1,0 +1,202 @@
+name: Build official Codex source
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: Stable Codex release version
+        value: ${{ jobs.build.outputs.version }}
+      tag:
+        description: Stable Codex release tag
+        value: ${{ jobs.build.outputs.tag }}
+      commit:
+        description: Peeled immutable Codex source commit
+        value: ${{ jobs.build.outputs.commit }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-codex-source-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Latest stable Linux x86_64 app-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit: ${{ steps.release.outputs.commit }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Checkout Happy
+        uses: actions/checkout@v7
+
+      - name: Resolve latest stable Codex release to a commit
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_JSON="$(gh api repos/openai/codex/releases/latest)"
+          test "$(jq -r '.draft' <<< "$RELEASE_JSON")" = false
+          test "$(jq -r '.prerelease' <<< "$RELEASE_JSON")" = false
+          TAG="$(jq -r '.tag_name' <<< "$RELEASE_JSON")"
+          if [[ ! "$TAG" =~ ^rust-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Unexpected stable Codex release tag: $TAG" >&2
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}"
+          node - "$VERSION" <<'NODE'
+          const version = process.argv[2].split('.').map(Number);
+          const minimum = [0, 145, 0];
+          const supported = version.some((part, index) => (
+            part > minimum[index]
+            && version.slice(0, index).every((value, prior) => value === minimum[prior])
+          )) || version.every((part, index) => part === minimum[index]);
+          if (!supported) {
+            throw new Error(`Latest stable Codex ${process.argv[2]} is below 0.145.0`);
+          }
+          NODE
+
+          REF_JSON="$(gh api "repos/openai/codex/git/ref/tags/$TAG")"
+          OBJECT_TYPE="$(jq -r '.object.type' <<< "$REF_JSON")"
+          OBJECT_SHA="$(jq -r '.object.sha' <<< "$REF_JSON")"
+          for _ in 1 2 3 4; do
+            if test "$OBJECT_TYPE" = commit; then
+              break
+            fi
+            if test "$OBJECT_TYPE" != tag; then
+              echo "Codex release tag resolves to unsupported object type: $OBJECT_TYPE" >&2
+              exit 1
+            fi
+            TAG_JSON="$(gh api "repos/openai/codex/git/tags/$OBJECT_SHA")"
+            OBJECT_TYPE="$(jq -r '.object.type' <<< "$TAG_JSON")"
+            OBJECT_SHA="$(jq -r '.object.sha' <<< "$TAG_JSON")"
+          done
+          test "$OBJECT_TYPE" = commit
+          test "${#OBJECT_SHA}" = 40
+
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$OBJECT_SHA" >> "$GITHUB_OUTPUT"
+          printf 'Resolved official Codex %s (%s)\n' "$TAG" "$OBJECT_SHA"
+
+      - name: Checkout exact OpenAI Codex source
+        uses: actions/checkout@v7
+        with:
+          repository: openai/codex
+          ref: ${{ steps.release.outputs.commit }}
+          path: .ci/openai-codex
+          fetch-depth: 1
+
+      - name: Verify checked-out source and resolve Rust toolchain
+        id: rust
+        run: |
+          set -euo pipefail
+          test "$(git -C .ci/openai-codex rev-parse HEAD)" = "${{ steps.release.outputs.commit }}"
+          TOOLCHAIN="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' .ci/openai-codex/codex-rs/rust-toolchain.toml)"
+          if [[ ! "$TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected Codex Rust toolchain: $TOOLCHAIN" >&2
+            exit 1
+          fi
+          printf 'toolchain=%s\n' "$TOOLCHAIN" >> "$GITHUB_OUTPUT"
+
+      - name: Install source-declared Rust toolchain
+        working-directory: .ci/openai-codex/codex-rs
+        run: |
+          rustup toolchain install "${{ steps.rust.outputs.toolchain }}" --profile minimal
+          rustup override set "${{ steps.rust.outputs.toolchain }}"
+
+      - name: Install official Linux build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends binutils pkg-config libcap-dev
+
+      - name: Configure official rusty_v8 artifacts
+        id: v8
+        run: |
+          set -euo pipefail
+          SOURCE_ROOT="$GITHUB_WORKSPACE/.ci/openai-codex"
+          TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+          VERSION="$(python3 "$SOURCE_ROOT/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+          if [[ ! "$TARGET" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            echo "Unexpected Rust host target: $TARGET" >&2
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected rusty_v8 version: $VERSION" >&2
+            exit 1
+          fi
+          RELEASE_TAG="rusty-v8-v${VERSION}"
+          BASE_URL="https://github.com/openai/codex/releases/download/${RELEASE_TAG}"
+          BINDING_DIR="$RUNNER_TEMP/rusty_v8"
+          ARCHIVE_PATH="$BINDING_DIR/librusty_v8_release_${TARGET}.a.gz"
+          BINDING_PATH="$BINDING_DIR/src_binding_release_${TARGET}.rs"
+          CHECKSUMS_PATH="$BINDING_DIR/rusty_v8_release_${TARGET}.sha256"
+          mkdir -p "$BINDING_DIR"
+          curl -fsSL "$BASE_URL/$(basename "$ARCHIVE_PATH")" -o "$ARCHIVE_PATH"
+          curl -fsSL "$BASE_URL/$(basename "$BINDING_PATH")" -o "$BINDING_PATH"
+          curl -fsSL "$BASE_URL/$(basename "$CHECKSUMS_PATH")" -o "$CHECKSUMS_PATH"
+          test "$(wc -l < "$CHECKSUMS_PATH")" -eq 2
+          (cd "$BINDING_DIR" && sha256sum -c "$CHECKSUMS_PATH")
+          printf 'RUSTY_V8_ARCHIVE=%s\n' "$ARCHIVE_PATH" >> "$GITHUB_ENV"
+          printf 'RUSTY_V8_SRC_BINDING_PATH=%s\n' "$BINDING_PATH" >> "$GITHUB_ENV"
+          printf 'target=%s\n' "$TARGET" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache official Codex Cargo downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: official-codex-cargo-home-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
+          restore-keys: |
+            official-codex-cargo-home-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache exact official Codex target
+        uses: actions/cache@v5
+        with:
+          path: |
+            .ci/openai-codex/codex-rs/target
+          key: official-codex-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.commit }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
+
+      - name: Build official codex app-server binary
+        working-directory: .ci/openai-codex/codex-rs
+        run: cargo build --locked --release -p codex-cli --bin codex
+
+      - name: Verify binary and write provenance
+        run: |
+          set -euo pipefail
+          ARTIFACT_ROOT="$RUNNER_TEMP/official-codex-linux-x64"
+          mkdir -p "$ARTIFACT_ROOT/bin"
+          install -m 0755 \
+            .ci/openai-codex/codex-rs/target/release/codex \
+            "$ARTIFACT_ROOT/bin/codex"
+          test "$(timeout 15s "$ARTIFACT_ROOT/bin/codex" --version)" = \
+            "codex-cli ${{ steps.release.outputs.version }}"
+          jq -n \
+            --arg repository "https://github.com/openai/codex" \
+            --arg tag "${{ steps.release.outputs.tag }}" \
+            --arg version "${{ steps.release.outputs.version }}" \
+            --arg commit "${{ steps.release.outputs.commit }}" \
+            --arg rustToolchain "${{ steps.rust.outputs.toolchain }}" \
+            --arg target "${{ steps.v8.outputs.target }}" \
+            --arg rustyV8Version "${{ steps.v8.outputs.version }}" \
+            '{schemaVersion: 1, repository: $repository, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version}' \
+            > "$ARTIFACT_ROOT/source.json"
+
+      - name: Upload official Codex binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-codex-linux-x64
+          path: ${{ runner.temp }}/official-codex-linux-x64
+          if-no-files-found: error
+          retention-days: 7
