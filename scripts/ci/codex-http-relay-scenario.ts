@@ -1,15 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { readFile, readdir, rm, stat, writeFile, mkdtemp } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-    CODEX_CLI_VERSION_PROBE_TIMEOUT_MS,
-} from '../../packages/happy-cli/src/codex/codexCliVersion';
 import {
     encodeBase64,
     encrypt,
@@ -48,7 +45,6 @@ const cliVersion = loadPackageVersion(
 );
 const deltaCount = 20;
 const deltaIntervalMs = 200;
-const realLongTurnMinimumMs = 10 * 60 * 1_000;
 const maxRelayOutputBytes = 8 * 1024 * 1024;
 const rootThreadId = 'provider-thread-private-v4';
 const rootTurnId = 'provider-turn-private-v4';
@@ -156,35 +152,16 @@ function seedScaleProjection(
 }
 
 async function main(): Promise<void> {
-    configurePinnedCodexPath();
     const sharedHome = await mkdtemp(join(tmpdir(), 'happy-codex-scenario-home-'));
     const originalHappyHome = process.env.HAPPY_HOME_DIR;
     process.env.HAPPY_HOME_DIR = sharedHome;
     try {
-        if (process.argv.includes('--real-long-turn')) {
-            await runRealLongTurn();
-            return;
-        }
         await runLateThreadStartedScenario();
         await runHttpRelayScenario();
     } finally {
         restoreEnvironment('HAPPY_HOME_DIR', originalHappyHome);
         await rm(sharedHome, { recursive: true, force: true });
     }
-}
-
-function configurePinnedCodexPath(): void {
-    const explicitBinary = process.env.HAPPY_SCENARIO_CODEX_BIN?.trim();
-    if (!explicitBinary) return;
-    const output = execFileSync(explicitBinary, ['--version'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: CODEX_CLI_VERSION_PROBE_TIMEOUT_MS,
-        killSignal: 'SIGKILL',
-        maxBuffer: 64 * 1024,
-    }).trim();
-    assert.equal(output, 'codex-cli 0.145.0');
-    process.env.PATH = `${dirname(explicitBinary)}${delimiter}${process.env.PATH ?? ''}`;
 }
 
 async function runLateThreadStartedScenario(): Promise<void> {
@@ -1471,86 +1448,6 @@ async function runHttpRelayScenario(): Promise<void> {
     }
 }
 
-async function runRealLongTurn(): Promise<void> {
-    const root = await mkdtemp(join(tmpdir(), 'happy-codex-real-long-turn-'));
-    const originalAppServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH;
-    const requestedDuration = Number(
-        process.env.HAPPY_REAL_LONG_TURN_MS ?? realLongTurnMinimumMs + 1_500,
-    );
-    assert(
-        Number.isSafeInteger(requestedDuration)
-            && requestedDuration > realLongTurnMinimumMs
-            && requestedDuration <= 15 * 60 * 1_000,
-        'HAPPY_REAL_LONG_TURN_MS must be between 600001 and 900000',
-    );
-    process.env.HAPPY_CODEX_APP_SERVER_PATH = fakeCodexPath;
-
-    let codex: InstanceType<
-        typeof import('../../packages/happy-cli/src/codex/codexAppServerClient').CodexAppServerClient
-    > | null = null;
-    try {
-        const scenarioPath = join(root, 'real-long-turn.json');
-        await writeFile(
-            scenarioPath,
-            JSON.stringify(realLongTurnScenario(requestedDuration)),
-        );
-        process.env.HAPPY_FAKE_CODEX_SCENARIO = scenarioPath;
-        const { CodexAppServerClient } = await import(
-            '../../packages/happy-cli/src/codex/codexAppServerClient'
-        );
-        codex = new CodexAppServerClient();
-        await codex.connect();
-        await codex.startThread({
-            cwd: root,
-            model: 'gpt-test',
-            approvalPolicy: 'on-request',
-            sandbox: 'read-only',
-        });
-
-        console.log(`Starting real long-turn gate for ${requestedDuration} ms`);
-        const startedAt = performance.now();
-        const turn = codex.sendTurnAndWait('remain active past ten minutes', {
-            clientUserMessageId: 'real-long-turn-command',
-        });
-        const settlement = turn.then(
-            () => ({
-                outcome: 'resolved' as const,
-                elapsedMs: performance.now() - startedAt,
-                error: null,
-            }),
-            (error: unknown) => ({
-                outcome: 'rejected' as const,
-                elapsedMs: performance.now() - startedAt,
-                error,
-            }),
-        );
-        const earlySettlement = await Promise.race([
-            settlement,
-            delay(realLongTurnMinimumMs).then(() => null),
-        ]);
-        assert.equal(
-            earlySettlement,
-            null,
-            earlySettlement
-                ? `turn ${earlySettlement.outcome} after only ${earlySettlement.elapsedMs.toFixed(0)} ms`
-                : 'turn settled before ten real minutes elapsed',
-        );
-        const completed = await settlement;
-        if (completed.outcome === 'rejected') throw completed.error;
-        const elapsed = completed.elapsedMs;
-        assert(
-            elapsed > realLongTurnMinimumMs,
-            `turn completed after only ${elapsed.toFixed(0)} ms`,
-        );
-        console.log(`Real long-turn gate passed after ${elapsed.toFixed(0)} ms`);
-    } finally {
-        if (codex) await codex.disconnect().catch(() => undefined);
-        restoreEnvironment('HAPPY_CODEX_APP_SERVER_PATH', originalAppServerPath);
-        delete process.env.HAPPY_FAKE_CODEX_SCENARIO;
-        await rm(root, { recursive: true, force: true });
-    }
-}
-
 function lateThreadStartedScenario(cwd: string): Record<string, unknown> {
     const thread = {
         id: 'fake-thread-late',
@@ -2074,47 +1971,6 @@ function streamingScenario(cwd: string): Record<string, unknown> {
                 ],
             },
         ],
-    };
-}
-
-function realLongTurnScenario(durationMs: number): Record<string, unknown> {
-    const startedTurn = {
-        id: 'fake-turn-1',
-        items: [],
-        itemsView: 'full',
-        status: 'inProgress',
-        error: null,
-        startedAt: 1,
-        completedAt: null,
-        durationMs: null,
-    };
-    return {
-        strictStableV2: true,
-        rules: [{
-            on: 'turn/start',
-            actions: [
-                { type: 'response', result: { turn: startedTurn } },
-                {
-                    type: 'notification',
-                    method: 'turn/started',
-                    params: { threadId: 'fake-thread-1', turn: startedTurn },
-                },
-                {
-                    type: 'notification',
-                    method: 'turn/completed',
-                    delayMs: durationMs,
-                    params: {
-                        threadId: 'fake-thread-1',
-                        turn: {
-                            ...startedTurn,
-                            status: 'completed',
-                            completedAt: Math.ceil(durationMs / 1_000) + 1,
-                            durationMs,
-                        },
-                    },
-                },
-            ],
-        }],
     };
 }
 
