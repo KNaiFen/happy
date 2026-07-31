@@ -23,7 +23,7 @@ import type { ApiSessionClient } from '@/api/apiSession';
 import { getIntegrationEnv } from '@/testing/currentIntegrationEnv';
 import { PushableAsyncIterable } from '@/utils/PushableAsyncIterable';
 import { query, type QueryOptions, type SDKAssistantMessage, type SDKMessage, type SDKResultMessage, type SDKSystemMessage } from './sdk';
-import { startHappyServer } from './utils/startHappyServer';
+import { startHappyServer } from '@/modules/common/startHappyServer';
 import { systemPrompt } from './utils/systemPrompt';
 
 const MODEL_OPUS = 'claude-opus-4-1-20250805';

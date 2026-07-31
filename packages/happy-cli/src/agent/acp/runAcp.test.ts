@@ -94,11 +94,11 @@ vi.mock('@/daemon/controlClient', () => ({
   notifyDaemonSessionStarted: mocks.mockNotifyDaemonSessionStarted,
 }));
 
-vi.mock('@/claude/registerKillSessionHandler', () => ({
+vi.mock('@/modules/common/registerKillSessionHandler', () => ({
   registerKillSessionHandler: mocks.mockKillRegister,
 }));
 
-vi.mock('@/claude/utils/startHappyServer', () => ({
+vi.mock('@/modules/common/startHappyServer', () => ({
   startHappyServer: mocks.mockStartHappyServer,
 }));
 

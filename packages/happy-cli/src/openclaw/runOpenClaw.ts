@@ -25,7 +25,7 @@ import { createSessionMetadata } from '@/utils/createSessionMetadata';
 import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import { notifyDaemonSessionStarted } from '@/daemon/controlClient';
 import { encodeBase64 } from '@/api/encryption';
-import { registerKillSessionHandler } from '@/claude/registerKillSessionHandler';
+import { registerKillSessionHandler } from '@/modules/common/registerKillSessionHandler';
 import { connectionState } from '@/utils/serverConnectionErrors';
 import { OpenClawBackend } from './OpenClawBackend';
 import type { OpenClawGatewayConfig } from './openclawTypes';

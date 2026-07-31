@@ -46,7 +46,7 @@ vi.mock('@/daemon/run', () => ({
     initialMachineMetadata: {},
 }));
 
-vi.mock('@/claude/utils/startHappyServer', () => ({
+vi.mock('@/modules/common/startHappyServer', () => ({
     startHappyServer: mockStartHappyServer,
 }));
 
