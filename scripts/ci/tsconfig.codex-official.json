@@ -1,0 +1,14 @@
+{
+  "extends": "../../packages/happy-cli/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../../packages/happy-cli",
+    "declaration": false,
+    "rootDir": "../.."
+  },
+  "include": [
+    "codex-official-app-server-scenario.ts",
+    "codex-mobile-field-fixture.ts",
+    "codex-responses-fixture.ts",
+    "codex-responses-fixture.test.ts"
+  ]
+}

@@ -63,7 +63,7 @@
     "codex:protocol:generate": "node scripts/generate-codex-app-server-types.cjs",
     "codex:fake-app-server": "node scripts/fake-codex-app-server.cjs",
     "test:codex-http-relay": "tsx --tsconfig tsconfig.json ../../scripts/ci/codex-http-relay-scenario.ts",
-    "test:codex-real-long-turn": "tsx --tsconfig tsconfig.json ../../scripts/ci/codex-http-relay-scenario.ts --real-long-turn",
+    "test:codex-official-app-server": "tsx --tsconfig tsconfig.json ../../scripts/ci/codex-official-app-server-scenario.ts",
     "bundle:server": "node scripts/bundle-server.cjs",
     "bundle:server:all": "node scripts/bundle-server.cjs --all-platforms",
     "bundle:webapp": "node scripts/bundle-webapp.cjs",
