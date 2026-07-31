@@ -2,7 +2,7 @@
 
 ## 状态
 
-本地实现与提交前审查已完成，2026-07-31。等待 GitHub Actions 验证 Server Bun build、App Web export、Tauri、Prisma migration、真实 HTTP relay、十分钟 turn 和聚合门禁。
+已于 2026-07-31 完成实现、审查、发布与云端验收，并同步到 `origin/main`。本计划归档，不再作为活动工作上下文。
 
 ## 已确认边界
 
@@ -52,6 +52,15 @@
 - 真实 HTTP 链路覆盖 archive/resume、快速 MCP 先于官方 user item、重启、丢 invalidation、snapshot 410、approval、child、10,000 entity 和 20 个 5 Hz delta，p95 `243.7 ms`。
 - 按项目约束未在本地运行 Cargo/Tauri；Server runtime Bun build、Web export、Tauri 和十分钟 turn 由云端 CI 完成。
 
+## 云端验证
+
+- 实现提交为 `c8076e31`，先由分支完整 CI `30625996440` 验证，再以普通 push 同步到 `origin/main`；未使用 force push。
+- 主分支 monorepo CI `30626753483` 全部通过，覆盖 Wire、Agent、CLI、Server、App、Prisma migration、Server Bun runtime build、App Web export、Tauri `fmt/check/test --locked`、Codex stable-v2 schema drift、真实 HTTP relay、真实十分钟 turn、production Critical audit 和聚合门禁。
+- Android API 36 现场 E2E `30626753504` 全部通过：独立 New Architecture x86_64 APK、真实 relay、Machine 鉴权、Codex `0.145.0` stable-v2、首条命令/回复、进程恢复和 canonical v4 断言均成功。
+- CLI release `30626753479`、Android release `30626753529` 和 Debian 13 amd64 relay release `30626753485` 全部成功。
+- CLI artifact `happy-1.4.10.tgz` 已下载并验证版本、Wire 依赖、macOS ARM64 `rg`/`difftastic` 归档及 SHA-256 `e8ed74d927eeeefea65a80dbd05fafb926bccc1920e42ec75abd3e909e2ef3fa`。
+- Relay artifact `happy-relay-server-1.1.31-debian13-amd64.tar.gz` 已下载，并通过随附 SHA-256 校验；Android artifact `happy-app-1.11.17-android-arm64-v8a-no-ota` 已由工作流校验并保留在 GitHub，不默认下载到本地。
+
 ## 发布
 
-预期从当前版本推进 CLI `1.4.10`、App `1.11.17`、Server `1.1.31`、Wire `0.1.4`。若任一版本在实施期间已经运行过发行工作流，则继续递增 patch，不复用版本。
+已发布并验收 CLI `1.4.10`、App `1.11.17`、Server `1.1.31`、Wire `0.1.4`。这些版本已经运行发行工作流，后续修复必须继续递增 patch，不得复用。
