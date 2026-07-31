@@ -1,7 +1,7 @@
 /* ─────────────────────────────────────────────────────────────────────────
- * Agent host — main-process side of the Claude Agent SDK worker.
+ * Agent host — main-process side of the Codex worker.
  *
- * Owns one node:worker_threads Worker that runs the SDK. Tracks each
+ * Owns one node:worker_threads Worker that runs Codex. Tracks each
  * active session's originating renderer so events route back to the right
  * window via webContents.send.
  *

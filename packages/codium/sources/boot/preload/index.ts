@@ -52,12 +52,11 @@ export type ProjectWorktreeResult =
     | { kind: 'plain-fallback'; reason: string }
     | { kind: 'error'; message: string }
 
-/* ─────── Agent (worker-backed Claude Agent SDK) ─────── */
+/* ─────── Agent (worker-backed Codex process) ─────── */
 
 export type {
     AgentEffort,
     AgentEvent,
-    AgentPermissionMode,
     AgentStartOptions,
 } from '../../shared/agent-protocol'
 
@@ -65,7 +64,6 @@ const agent = {
     start: (args: {
         sessionId: string
         prompt: string
-        resume: boolean
         options: import('../../shared/agent-protocol').AgentStartOptions
     }) => ipcRenderer.send('agent:start', { kind: 'start', ...args }),
     send: (sessionId: string, text: string) =>

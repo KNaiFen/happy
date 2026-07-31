@@ -351,7 +351,7 @@ const mutation = {
     ciphertext: "encrypted-v1",
 };
 
-async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.10"): Promise<Fastify> {
+async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.11"): Promise<Fastify> {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
@@ -393,12 +393,12 @@ describe("v4SessionRoutes", () => {
     });
 
     it("accepts only coordinated CLI and App versions on v4 data routes", async () => {
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.10")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("android/1.11.17")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.11")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("android/1.11.18")).toEqual({ compatible: true });
         expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.9")).toEqual({
             compatible: false,
             clientType: "happy-cli",
-            minimumVersion: "1.4.10",
+            minimumVersion: "1.4.11",
         });
         expect(getSyncV4ClientCompatibility("test/9.0.0")).toEqual({
             compatible: false,
@@ -420,7 +420,7 @@ describe("v4SessionRoutes", () => {
         expect(response.json()).toEqual({
             error: "syncV4UpgradeRequired",
             clientType: "happy-app",
-            minimumVersion: "1.11.17",
+            minimumVersion: "1.11.18",
         });
         expect(operationMetricMock).toHaveBeenCalledWith({
             operation: "changes",
@@ -691,8 +691,8 @@ describe("v4SessionRoutes", () => {
             codex: {
                 enabled: false,
                 protocolVersion: 4,
-                minimumHappyCliVersion: "1.4.10",
-                minimumHappyAppVersion: "1.11.17",
+                minimumHappyCliVersion: "1.4.11",
+                minimumHappyAppVersion: "1.11.18",
                 minimumCodexCliVersion: "0.145.0",
             },
         });

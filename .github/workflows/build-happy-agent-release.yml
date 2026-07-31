@@ -1,0 +1,148 @@
+name: Build happy-agent package on version bump
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/happy-agent/package.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: happy-agent-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout version history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect happy-agent version bump
+        id: version
+        run: node scripts/ci/detect-package-version-change.cjs packages/happy-agent/package.json "${{ github.event.before }}"
+
+  ci:
+    name: Validate happy-agent source
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Typecheck happy-agent
+        run: pnpm --filter happy-agent typecheck
+
+      - name: Typecheck packed-agent smoke fixture
+        run: node node_modules/typescript/bin/tsc --project scripts/ci/tsconfig.happy-agent-package-smoke.json
+
+      - name: Test happy-agent source
+        run: pnpm --filter happy-agent test
+
+  build:
+    needs: [version, ci]
+    if: needs.version.outputs.changed == 'true' && needs.ci.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build package dependencies
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Build happy-agent
+        run: pnpm --filter happy-agent build
+
+      - name: Pack installable npm archives
+        run: |
+          mkdir -p artifacts
+          pnpm --filter @slopus/happy-wire pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+          pnpm --filter happy-agent pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+
+      - name: Verify archive metadata and source commit
+        run: |
+          set -euo pipefail
+          ARCHIVE="artifacts/happy-agent-${VERSION}.tgz"
+          CONTENTS="$RUNNER_TEMP/happy-agent-archive.txt"
+          test -f "$ARCHIVE"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          tar -xOf "$ARCHIVE" package/package.json > "$RUNNER_TEMP/happy-agent-package.json"
+          node - "$RUNNER_TEMP/happy-agent-package.json" "$VERSION" <<'NODE'
+          const fs = require('node:fs');
+          const [file, expectedVersion] = process.argv.slice(2);
+          const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (pkg.name !== 'happy-agent') throw new Error(`Unexpected package name: ${pkg.name}`);
+          if (pkg.version !== expectedVersion) throw new Error(`Version mismatch: ${pkg.version}`);
+          if (pkg.bin?.['happy-agent'] !== './bin/happy-agent.mjs') throw new Error('Missing happy-agent binary');
+          if (pkg.scripts?.release || pkg.devDependencies?.['release-it']) throw new Error('Local release-it path remains');
+          for (const forbidden of ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/claude-code', '@anthropic-ai/sdk']) {
+            if (pkg.dependencies?.[forbidden]) throw new Error(`Forbidden dependency: ${forbidden}`);
+          }
+          NODE
+          tar -tzf "$ARCHIVE" > "$CONTENTS"
+          grep -Fxq package/bin/happy-agent.mjs "$CONTENTS"
+          grep -Fxq package/dist/index.mjs "$CONTENTS"
+          sha256sum "$ARCHIVE"
+
+      - name: Install and exercise the packed CLI
+        run: |
+          set -euo pipefail
+          ARCHIVE="$GITHUB_WORKSPACE/artifacts/happy-agent-${VERSION}.tgz"
+          WIRE_ARCHIVE="$(find "$GITHUB_WORKSPACE/artifacts" -maxdepth 1 -name 'slopus-happy-wire-*.tgz' -print -quit)"
+          INSTALL_ROOT="$RUNNER_TEMP/happy-agent-installed"
+          test -n "$WIRE_ARCHIVE"
+          npm install --ignore-scripts --prefix "$INSTALL_ROOT" "$WIRE_ARCHIVE" "$ARCHIVE"
+          npm ls --prefix "$INSTALL_ROOT" happy-agent @slopus/happy-wire
+          pnpm --filter happy-agent exec tsx ../../scripts/ci/happy-agent-package-smoke.ts \
+            "$INSTALL_ROOT/node_modules/happy-agent/bin/happy-agent.mjs"
+
+      - name: Upload happy-agent package
+        uses: actions/upload-artifact@v4
+        with:
+          name: happy-agent-${{ env.VERSION }}
+          path: artifacts/happy-agent-${{ env.VERSION }}.tgz
+          if-no-files-found: error
+          retention-days: 30

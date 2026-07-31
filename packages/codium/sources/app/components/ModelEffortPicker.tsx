@@ -45,7 +45,7 @@ export function ModelEffortPicker() {
                         {currentModel.label}
                     </span>
                     <span className="composer-footer__btn-text composer-footer__btn-text--muted">
-                        {currentModel.engine === 'codex' ? 'CLI' : currentEffort.label}
+                        {currentEffort.label}
                     </span>
                     <ChevronDown />
                 </button>

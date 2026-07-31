@@ -97,14 +97,42 @@ jobs:
 
       - name: Verify npm archive
         run: |
+          set -euo pipefail
           ARCHIVE="artifacts/happy-${VERSION}.tgz"
           CONTENTS="$RUNNER_TEMP/happy-cli-archive.txt"
           test -f "$ARCHIVE"
-          test "$(tar -xOf "$ARCHIVE" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")" = "$VERSION"
+          tar -xOf "$ARCHIVE" package/package.json > "$RUNNER_TEMP/happy-cli-package.json"
+          node - "$RUNNER_TEMP/happy-cli-package.json" "$VERSION" <<'NODE'
+          const fs = require('node:fs');
+          const [file, expectedVersion] = process.argv.slice(2);
+          const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (pkg.name !== 'happy') throw new Error(`Unexpected package name: ${pkg.name}`);
+          if (pkg.version !== expectedVersion) throw new Error(`Version mismatch: ${pkg.version}`);
+          if (pkg.bin?.happy !== './bin/happy.mjs') throw new Error('Missing happy binary');
+          for (const forbidden of ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/claude-code', '@anthropic-ai/sdk']) {
+            if (pkg.dependencies?.[forbidden]) throw new Error(`Forbidden dependency: ${forbidden}`);
+          }
+          NODE
           tar -tzf "$ARCHIVE" > "$CONTENTS"
           grep -Fxq package/tools/archives/difftastic-arm64-darwin.tar.gz "$CONTENTS"
           grep -Fxq package/tools/archives/ripgrep-arm64-darwin.tar.gz "$CONTENTS"
           sha256sum "$ARCHIVE"
+
+      - name: Install and smoke test npm archive
+        run: |
+          set -euo pipefail
+          ARCHIVE="$GITHUB_WORKSPACE/artifacts/happy-${VERSION}.tgz"
+          INSTALL_ROOT="$RUNNER_TEMP/happy-cli-installed"
+          npm install --ignore-scripts --prefix "$INSTALL_ROOT" "$ARCHIVE"
+          BIN="$INSTALL_ROOT/node_modules/happy/bin/happy.mjs"
+          test "$(node --no-warnings --no-deprecation "$BIN" --version)" = "happy version: $VERSION"
+          node --no-warnings --no-deprecation "$BIN" --help | grep -Fq 'Start Codex'
+          set +e
+          node --no-warnings --no-deprecation "$BIN" claude >"$RUNNER_TEMP/happy-removed-command.out" 2>"$RUNNER_TEMP/happy-removed-command.err"
+          STATUS=$?
+          set -e
+          test "$STATUS" -ne 0
+          grep -Fq 'removed command is no longer supported' "$RUNNER_TEMP/happy-removed-command.err"
 
       - name: Upload CLI package
         uses: actions/upload-artifact@v4

@@ -8,7 +8,7 @@
  * For agent-specific backends, use the factories in src/agent/factories/:
  * - createGeminiBackend() - Gemini CLI with GeminiTransport
  * - createCodexBackend() - Codex CLI with CodexTransport
- * - createClaudeBackend() - Claude CLI with ClaudeTransport
+ * - provider-specific ACP factories - dedicated CLI transports
  *
  * @module createAcpBackend
  */

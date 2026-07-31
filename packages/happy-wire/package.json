@@ -1,6 +1,6 @@
 {
   "name": "@slopus/happy-wire",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Shared message wire types and Zod schemas for Happy clients and services",
   "author": "Kirill Dubovitskiy",
   "license": "MIT",

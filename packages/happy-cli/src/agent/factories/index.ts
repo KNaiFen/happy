@@ -17,5 +17,4 @@ export {
 
 // Future factories:
 // export { createCodexBackend, registerCodexAgent, type CodexBackendOptions } from './codex';
-// export { createClaudeBackend, registerClaudeAgent, type ClaudeBackendOptions } from './claude';
 // export { createOpenCodeBackend, registerOpenCodeAgent, type OpenCodeBackendOptions } from './opencode';

@@ -69,8 +69,8 @@ export const AGY_MODELS = [
 ] as const;
 
 /**
- * Default agy model. A Gemini model on purpose: this backend exists as a fallback
- * for when Claude Code is rate-limited, so we should not default onto a Claude model.
+ * Default agy model. Keep a Gemini default so an external model label does not
+ * become the implicit selection for this provider.
  */
 export const DEFAULT_AGY_MODEL = 'Gemini 3.1 Pro (High)';
 

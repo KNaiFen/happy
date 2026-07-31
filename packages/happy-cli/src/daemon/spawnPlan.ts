@@ -11,7 +11,7 @@ function resolveDaemonSpawnAgent(agent: SpawnSessionOptions['agent']): DaemonSpa
     if (agent === undefined || agent === 'codex') return 'codex';
     if (agent === 'gemini' || agent === 'openclaw' || agent === 'agy') return agent;
     if (agent === 'claude') {
-        throw new Error('Claude support has been removed. Choose Codex or another supported agent.');
+        throw new Error('This removed agent is no longer supported. Choose Codex or another supported agent.');
     }
     throw new Error(`Unsupported agent type: '${String(agent)}'. Please update your CLI to the latest version.`);
 }

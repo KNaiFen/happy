@@ -227,7 +227,7 @@ class Logger {
         console.error('[DEV MODE ONLY THROWING] Failed to append to log file:', appendError)
         throw appendError
       }
-      // In production, fail silently to avoid disturbing Claude session
+      // In production, fail silently to avoid disturbing an active session.
     }
   }
 }

@@ -4,9 +4,9 @@ import { v4 as uuid } from 'uuid'
 export type ChatRole = 'user' | 'assistant'
 
 export interface ChatToolCall {
-    /** SDK content block index — stable across deltas within a turn. */
+    /** Provider content block index — stable across deltas within a turn. */
     index: number
-    /** Anthropic tool_use id; matches the future tool_result.toolUseId. */
+    /** Provider tool-use id; matches the future tool result. */
     id: string
     name: string
     /** Raw JSON args, accumulated as input_json_delta lands. May be a
@@ -39,13 +39,8 @@ export interface Chat {
     messages: ChatMessage[]
     /** Which model id was used for the most recent assistant turn (for display). */
     modelId?: string
-    /** Caller-generated UUID that doubles as the agent SDK's session id.
-     *  Persisted across turns so follow-ups resume the same session. */
+    /** Caller-generated UUID used to route worker events for this chat. */
     sessionId: string
-    /** True once we've sent a `start` for this session in this process.
-     *  Subsequent turns use `send`; restarts after process death use
-     *  `start` with `resume: true`. */
-    sessionStarted?: boolean
     status: 'idle' | 'streaming' | 'error'
     error?: string
     createdAt: number
@@ -162,8 +157,7 @@ export const updateChatAtom = atom(
     }
 )
 
-/** Drop a chat. The Agent SDK's session jsonl on disk is left alone — if
- *  we ever re-create a chat with the same sessionId it'd resume there. */
+/** Drop a chat. Active worker state is transient and is stopped by the runner. */
 export const deleteChatAtom = atom(
     null,
     (_get, set, chatId: string) => {

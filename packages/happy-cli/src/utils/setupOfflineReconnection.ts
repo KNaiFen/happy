@@ -119,7 +119,7 @@ export function setupOfflineReconnection(opts: SetupOfflineReconnectionOptions):
                 return realSession;
             },
             onNotify: (msg) => {
-                // Log to console - this matches Claude's behavior
+                // Log to console so terminal users see reconnection state.
                 console.log(msg);
             }
         });

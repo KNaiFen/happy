@@ -16,7 +16,6 @@ import type { RawSession, RawMessage } from './api';
 vi.mock('axios', () => {
     const fn = {
         get: vi.fn(),
-        post: vi.fn(),
         delete: vi.fn(),
     };
     return {
@@ -37,7 +36,6 @@ import { HAPPY_AGENT_CLIENT_HEADER } from './clientVersion';
 import {
     listSessions,
     listActiveSessions,
-    createSession,
     deleteSession,
     getSessionMessages,
     resolveSessionEncryption,
@@ -51,7 +49,6 @@ const authHeader = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockedAxios = axios as any as {
     get: ReturnType<typeof vi.fn>;
-    post: ReturnType<typeof vi.fn>;
     delete: ReturnType<typeof vi.fn>;
 };
 
@@ -333,94 +330,6 @@ describe('api', () => {
             expect(sessions).toHaveLength(1);
             expect(sessions[0].id).toBe('active-1');
             expect(sessions[0].metadata).toEqual(metadata);
-        });
-    });
-
-    describe('createSession', () => {
-        it('creates a session with encrypted metadata and key', async () => {
-            const metadata = { path: '/new/project', host: 'laptop' };
-
-            // The createSession function generates a sessionKey, encrypts it, and sends it.
-            // The server echoes back the session. We need to capture the sent data
-            // and return it as if the server stored it.
-            mockedAxios.post.mockImplementation(async (_url: string, body?: unknown) => {
-                const reqBody = body as {
-                    tag: string;
-                    metadata: string;
-                    dataEncryptionKey: string;
-                };
-
-                return {
-                    data: {
-                        session: {
-                            id: 'new-session-id',
-                            seq: 1,
-                            createdAt: Date.now(),
-                            updatedAt: Date.now(),
-                            active: true,
-                            activeAt: Date.now(),
-                            metadata: reqBody.metadata,
-                            metadataVersion: 1,
-                            agentState: null,
-                            agentStateVersion: 0,
-                            dataEncryptionKey: reqBody.dataEncryptionKey,
-                        },
-                    },
-                };
-            });
-
-            const result = await createSession(config, creds, {
-                tag: 'my-project',
-                metadata,
-            });
-
-            expect(result.id).toBe('new-session-id');
-            expect(result.metadata).toEqual(metadata);
-            expect(result.sessionKey).toBeInstanceOf(Uint8Array);
-            expect(result.sessionKey.length).toBe(32);
-            expect(result.encryption.variant).toBe('dataKey');
-
-            // Verify the POST was called with correct args
-            expect(mockedAxios.post).toHaveBeenCalledWith(
-                'https://test-server.example.com/v1/sessions',
-                expect.objectContaining({
-                    tag: 'my-project',
-                    metadata: expect.any(String),
-                    dataEncryptionKey: expect.any(String),
-                }),
-                { headers: authHeader },
-            );
-        });
-
-        it('returns existing session when tag already exists', async () => {
-            const existingMetadata = { path: '/existing' };
-            const { raw } = makeRawSessionWithDataKey(creds, existingMetadata, null, {
-                id: 'existing-session',
-            });
-
-            mockedAxios.post.mockResolvedValueOnce({
-                data: { session: raw },
-            });
-
-            const result = await createSession(config, creds, {
-                tag: 'existing-tag',
-                metadata: existingMetadata,
-            });
-
-            expect(result.id).toBe('existing-session');
-            // Note: the returned sessionKey is the one generated locally,
-            // but the decrypted metadata comes from the server's existing session
-            expect(result.metadata).toEqual(existingMetadata);
-        });
-
-        it('throws on server error during create', async () => {
-            const { AxiosError } = await import('axios');
-            const err = new (AxiosError as any)('Server Error', { response: { status: 500 } });
-            mockedAxios.post.mockRejectedValueOnce(err);
-
-            await expect(
-                createSession(config, creds, { tag: 'test', metadata: {} }),
-            ).rejects.toThrow('Server error (500)');
         });
     });
 

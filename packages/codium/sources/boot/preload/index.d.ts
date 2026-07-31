@@ -84,7 +84,6 @@ export type HappyApi = {
 export type {
     AgentEffort,
     AgentEvent,
-    AgentPermissionMode,
     AgentStartOptions,
 } from '../../shared/agent-protocol'
 
@@ -92,7 +91,6 @@ export type AgentApi = {
     start(args: {
         sessionId: string
         prompt: string
-        resume: boolean
         options: import('../../shared/agent-protocol').AgentStartOptions
     }): void
     send(sessionId: string, text: string): void

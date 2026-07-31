@@ -559,7 +559,7 @@ export function buildMachineStatusEphemeral(machineId: string, online: boolean):
 }
 
 /**
- * Session-level lifecycle event (Claude finished, needs permission, asks question).
+ * Session-level lifecycle event (finished, needs permission, asks question).
  * Emitted alongside the mobile push so other clients (e.g. web) can surface a
  * tab-title counter or inline indicator without parsing every encrypted message.
  */

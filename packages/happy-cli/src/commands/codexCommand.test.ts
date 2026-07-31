@@ -147,14 +147,14 @@ describe('handleCodexCommand', () => {
   })
 
   it.each(['--chrome', '--no-chrome', '--claude-env', '--js-runtime', '--settings'])(
-    'rejects removed Claude option %s before authentication',
+    'rejects removed provider option %s before authentication',
     async (flag) => {
-      await expect(handleCodexCommand([flag])).rejects.toThrow('Claude-only option')
+      await expect(handleCodexCommand([flag])).rejects.toThrow('removed legacy-provider option')
       expect(mocks.mockAuthAndSetupMachineIfNeeded).not.toHaveBeenCalled()
     },
   )
 
-  it('rejects unknown options and Claude-only permission modes', async () => {
+  it('rejects unknown options and unsupported permission modes', async () => {
     await expect(handleCodexCommand(['--unknown'])).rejects.toThrow('Unknown Codex option')
     await expect(handleCodexCommand(['--permission-mode', 'bypassPermissions']))
       .rejects.toThrow('Unsupported Codex permission mode')

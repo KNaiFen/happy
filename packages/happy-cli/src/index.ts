@@ -609,7 +609,7 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
     return;
   } else {
     if (args[0] === 'claude') {
-      console.error(chalk.red('Error: Claude support has been removed. Run `happy` or `happy codex` to start Codex.'))
+      console.error(chalk.red('Error: This removed command is no longer supported. Run `happy` or `happy codex` to start Codex.'))
       process.exit(1)
     }
     try {

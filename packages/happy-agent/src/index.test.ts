@@ -5,14 +5,16 @@ import { fileURLToPath } from 'url';
 import packageJson from '../package.json';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const binPath = resolve(__dirname, '..', 'bin', 'happy-agent.mjs');
+const sourceEntrypoint = resolve(__dirname, 'index.ts');
+const tsxEntrypoint = resolve(__dirname, '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 function runCli(...args: string[]): { stdout: string; stderr: string; exitCode: number } {
     try {
         const stdout = execFileSync(process.execPath, [
             '--no-warnings',
             '--no-deprecation',
-            binPath,
+            tsxEntrypoint,
+            sourceEntrypoint,
             ...args,
         ], { encoding: 'utf-8', env: { ...process.env, HAPPY_HOME_DIR: '/tmp/nonexistent-happy-test' } });
         return { stdout, stderr: '', exitCode: 0 };

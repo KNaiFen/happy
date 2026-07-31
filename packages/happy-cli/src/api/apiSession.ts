@@ -845,7 +845,7 @@ export class ApiSessionClient extends EventEmitter {
 
     /**
      * Send a generic agent message to the session using ACP (Agent Communication Protocol) format.
-     * Works for retained non-Claude agents and normalizes their output to ACP.
+     * Works for retained ACP agents and normalizes their output to ACP.
      * 
      * @param provider - The agent provider sending the message.
      * @param body - The message payload (type: 'message' | 'reasoning' | 'tool-call' | 'tool-result')

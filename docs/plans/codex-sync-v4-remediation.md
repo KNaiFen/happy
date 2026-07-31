@@ -8,12 +8,32 @@
 
 实施进度：
 
-- [ ] 建立 Codex 默认、参数传递和负向路由防回归门禁。
-- [ ] 提取 CLI/provider-neutral 共享模块，解除保留 Agent 对 `claude/` 的依赖。
-- [ ] 完成认证状态机、MCP startup、App 投影和新会话配置修复。
-- [ ] 完成 Claude 主动能力删除及 Server/Wire 协调升级。
-- [ ] 补齐 happy-agent、Codium、发布形态和真实链路云端门禁。
+- [x] 建立 Codex 默认、参数传递和负向路由防回归门禁。
+- [x] 提取 CLI/provider-neutral 共享模块，解除保留 Agent 对 `claude/` 的依赖。
+- [x] 完成认证状态机、MCP startup、App 投影和新会话配置修复。
+- [x] 完成 Claude 主动能力删除及 Server/Wire 协调升级。
+- [x] 补齐 happy-agent、Codium、发布形态和真实链路云端门禁。
 - [ ] 推进协调版本，完成本地源码验证、云端 CI、发布产物与主分支同步。
+
+### 2026-08-01 实施记录
+
+- 已完成：CLI 认证 GET 轮询与有限退避、MCP startup canonical 过滤、App
+  draft v2/Default Agent 解析、Machine 目录入口、Codex/Claude session 分类与最终
+  操作门禁；对应实现分别由 `2d41239`、`d37c055f`、`379a2a9`、`6b11ea6d`
+  及其后续协调提交承载。
+- 已完成：CLI、App、Server、Wire、happy-agent 与 Codium 的主动 Claude 能力删除；
+  保留 sandbox runtime、Gemini、OpenClaw、Agy、generic ACP 与 v3 基础设施。
+- 已完成：Codium 更新为 `@openai/codex 0.146.0`，新增 macOS 云端真实 `codex exec`
+  Responses fixture 生命周期门禁；happy-agent 与 CLI release workflow 现在都会安装
+  生成的 tgz 做 smoke，happy-agent 额外验证 HTTP + Socket.IO 加密 spawn RPC。
+- 修正：happy-agent 旧单测曾经调用残留 `dist`，会掩盖源码与发布物差异；现在本地
+  单测通过 `tsx src/index.ts` 直接运行源码，云端 release workflow 单独运行已打包
+  的 `dist`。同时删除了无入口但能创建无 flavor session 的 `createSession` API。
+- 修正：Codium 的 one-shot child 在只发出 `error` 而没有 `close` 时曾会永久等待；
+  现在 error/close 共用幂等收尾。renderer 也只在 worker `closed` 后恢复 idle，避免
+  在 `turn_done -> closed` 的短窗口将下一条消息发到旧 one-shot process。
+- 待完成：在同一协调版本上完成云端构建、真实 app-server/Codium runtime、tgz 与
+  Android workflow 验收，随后同步 `main`。
 
 当前发布基线：
 

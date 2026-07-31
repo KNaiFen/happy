@@ -11,6 +11,27 @@ rewind、授权、连接或配置 Claude；所有未指定 Agent 的新操作使
 保持 Codex stable-v2、Sync v4、sandbox、MCP、审批、子线程、历史恢复和发布链路
 完整可用。
 
+### 2026-08-01 实施记录
+
+本计划的代码删除与本地源码验证已完成，云端验收与发布仍待执行：
+
+- CLI 的裸入口和 daemon omitted-agent 路径已显式选择 Codex；旧命令、旧 agent 与
+  旧 provider 参数均在认证或 spawn 前确定性拒绝。
+- App 已移除 Claude 创建、OAuth、历史 projection 与错误 fallback；空/未知/Claude
+  metadata 不会被升级成 Codex v4，也不会进入可操作会话列表。
+- Server 拒绝新的 Anthropic credential 接入；Wire、App 和 CLI 删除 Claude session
+  主动字段，旧未知加密键只会忽略而不会重新发布。
+- happy-agent 只保留 Codex、Gemini、OpenClaw、Agy；无 `create` 命令或内部
+  `createSession` API，避免制造无 flavor session。其本地 CLI 测试直接运行源码，
+  release workflow 则安装 tgz 并完成加密 HTTP + Socket.IO spawn 场景。
+- Codium 删除 Claude SDK worker 与 Anthropic plugin，保留 Codex one-shot runner；
+  云端 macOS 门禁将以 `@openai/codex 0.146.0` 实际运行工具 follow-up 与最终输出。
+  runner 在 spawn error/close 与 renderer turn-close 的竞态均有独立回归覆盖。
+- `.agents` 外的五个本地 Claude-first 指令文件已按用户授权删除，未纳入 Git。
+
+待完成：版本 `CLI 1.4.11`、`App 1.11.18`、`Server 1.1.32`、`Wire 0.1.5`、
+`happy-agent 0.1.1` 与 `Codium 0.0.2` 的云端门禁、产物与 `main` 同步。
+
 ## 范围定义
 
 “移除 Claude 兼容”包括：

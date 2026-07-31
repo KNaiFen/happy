@@ -2,7 +2,7 @@
  * AgentMessage - Universal message types for agent communication
  *
  * This module defines the message types that flow between:
- * - Agent backends (Gemini, Codex, Claude, etc.)
+ * - Agent backends (Gemini, Codex, and others)
  * - Happy CLI
  * - Mobile app (via Happy server)
  *

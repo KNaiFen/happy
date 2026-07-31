@@ -33,7 +33,8 @@ import { resolveSessionEncryption } from './api';
 import { formatSessionTable, formatSessionStatus, formatMessageHistory, formatJson } from './output';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const binPath = resolve(__dirname, '..', 'bin', 'happy-agent.mjs');
+const sourceEntrypoint = resolve(__dirname, 'index.ts');
+const tsxEntrypoint = resolve(__dirname, '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 // --- CLI runner ---
 
@@ -42,7 +43,8 @@ function runCli(...args: string[]): { stdout: string; stderr: string; exitCode: 
         const stdout = execFileSync(process.execPath, [
             '--no-warnings',
             '--no-deprecation',
-            binPath,
+            tsxEntrypoint,
+            sourceEntrypoint,
             ...args,
         ], { encoding: 'utf-8', env: { ...process.env, HAPPY_HOME_DIR: '/tmp/nonexistent-happy-acceptance' } });
         return { stdout, stderr: '', exitCode: 0 };
@@ -251,11 +253,6 @@ describe('Smoke: --json flag on applicable commands', () => {
         expect(stdout).toContain('--json');
     });
 
-    it('create --json is documented in help', () => {
-        const { stdout } = runCli('create', '--help');
-        expect(stdout).toContain('--json');
-    });
-
     it('send --json is documented in help', () => {
         const { stdout } = runCli('send', '--help');
         expect(stdout).toContain('--json');
@@ -283,7 +280,6 @@ describe('Smoke: Error handling', () => {
             const commands = [
                 ['list'],
                 ['status', 'fake-id'],
-                ['create', '--tag', 'test'],
                 ['send', 'fake-id', 'hello'],
                 ['history', 'fake-id'],
                 ['stop', 'fake-id'],

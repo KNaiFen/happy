@@ -1,0 +1,12 @@
+{
+  "extends": "../../packages/happy-agent/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "rootDir": "../..",
+    "noEmit": true
+  },
+  "include": [
+    "happy-agent-package-smoke.ts",
+    "../../packages/happy-agent/src/encryption.ts"
+  ]
+}

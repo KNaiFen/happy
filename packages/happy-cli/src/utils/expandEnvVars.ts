@@ -5,7 +5,7 @@ import { logger } from '@/ui/logger';
  *
  * CONTEXT:
  * Profiles can use ${VAR} syntax to reference daemon's environment:
- * Example: { ANTHROPIC_AUTH_TOKEN: "${Z_AI_AUTH_TOKEN}" }
+ * Example: { PROVIDER_AUTH_TOKEN: "${Z_AI_AUTH_TOKEN}" }
  *
  * When daemon spawns sessions:
  * - Tmux mode: Shell automatically expands ${VAR}
@@ -20,10 +20,10 @@ import { logger } from '@/ui/logger';
  * @example
  * ```typescript
  * const daemon_env = { Z_AI_AUTH_TOKEN: "sk-real-key" };
- * const profile_vars = { ANTHROPIC_AUTH_TOKEN: "${Z_AI_AUTH_TOKEN}" };
+ * const profileVars = { PROVIDER_AUTH_TOKEN: "${Z_AI_AUTH_TOKEN}" };
  *
- * const expanded = expandEnvironmentVariables(profile_vars, daemon_env);
- * // Result: { ANTHROPIC_AUTH_TOKEN: "sk-real-key" }
+ * const expanded = expandEnvironmentVariables(profileVars, daemonEnv);
+ * // Result: { PROVIDER_AUTH_TOKEN: "sk-real-key" }
  * ```
  */
 export function expandEnvironmentVariables(
@@ -37,7 +37,7 @@ export function expandEnvironmentVariables(
         // Replace all ${VAR} and ${VAR:-default} references with actual values from sourceEnv
         const expandedValue = value.replace(/\$\{([^}]+)\}/g, (match, expr) => {
             // Support bash parameter expansion: ${VAR:-default}
-            // Example: ${Z_AI_BASE_URL:-https://api.z.ai/api/anthropic}
+            // Example: ${Z_AI_BASE_URL:-https://provider.example/api}
             const colonDashIndex = expr.indexOf(':-');
             let varName: string;
             let defaultValue: string | undefined;

@@ -514,7 +514,7 @@ export async function runAcp(opts: {
   permissionHandler = new GenericAcpPermissionHandler(session, opts.agentName);
   // Drop any permission requests left in agent state from a previous CLI
   // process that died while a tool prompt was open — see the matching
-  // call in claudeRemoteLauncher for the full rationale.
+  // reset in every provider launcher for the same recovery behavior.
   permissionHandler.reset('Previous CLI process exited before responding');
   const sessionManager = new AcpSessionManager();
   const messageQueue = new MessageQueue2<AcpSwitchMode>((mode) => hashObject(mode));

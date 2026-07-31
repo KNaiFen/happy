@@ -8,7 +8,7 @@ import type { ReasoningEffort } from '@/codex/protocol'
 import { configuration } from '@/configuration'
 
 const CODEX_PERMISSION_MODES = new Set<PermissionMode>(['default', 'read-only', 'safe-yolo', 'yolo'])
-const REMOVED_CLAUDE_FLAGS = new Set([
+const REMOVED_LEGACY_FLAGS = new Set([
   '--chrome',
   '--no-chrome',
   '--claude-env',
@@ -79,8 +79,8 @@ export function parseCodexCommandArgs(args: string[]): ParsedCodexCommand {
       showHelp = true
     } else if (arg === '--version' || arg === '-v') {
       showVersion = true
-    } else if (REMOVED_CLAUDE_FLAGS.has(arg)) {
-      throw new Error(`${arg} was a Claude-only option and is no longer supported.`)
+    } else if (REMOVED_LEGACY_FLAGS.has(arg)) {
+      throw new Error(`${arg} is a removed legacy-provider option and is no longer supported.`)
     } else {
       throw new Error(`Unknown Codex option: ${arg}`)
     }

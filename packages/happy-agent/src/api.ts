@@ -5,13 +5,9 @@ import { HAPPY_AGENT_CLIENT_HEADER } from './clientVersion';
 import type { Credentials } from './credentials';
 import {
     decodeBase64,
-    encodeBase64,
     decryptBoxBundle,
     decryptWithDataKey,
     decryptLegacy,
-    encryptWithDataKey,
-    libsodiumEncryptForPublicKey,
-    getRandomBytes,
 } from './encryption';
 
 // --- Types ---
@@ -259,45 +255,6 @@ export async function listActiveSessions(
     }
 
     return data.sessions.map(raw => decryptSession(raw, creds));
-}
-
-export async function createSession(
-    config: Config,
-    creds: Credentials,
-    opts: { tag: string; metadata: unknown },
-): Promise<DecryptedSession & { sessionKey: Uint8Array }> {
-    // Generate random 32-byte per-session AES key
-    const sessionKey = getRandomBytes(32);
-
-    // Encrypt session key with content public key, prepend version byte
-    const encryptedKey = libsodiumEncryptForPublicKey(sessionKey, creds.contentKeyPair.publicKey);
-    const withVersion = new Uint8Array(1 + encryptedKey.length);
-    withVersion[0] = 0x00; // version byte
-    withVersion.set(encryptedKey, 1);
-    const dataEncryptionKeyBase64 = encodeBase64(withVersion);
-
-    // Encrypt metadata with the session key
-    const encryptedMetadata = encryptWithDataKey(opts.metadata, sessionKey);
-    const metadataBase64 = encodeBase64(encryptedMetadata);
-
-    let data: { session: RawSession };
-    try {
-        const resp = await axios.post(
-            `${config.serverUrl}/v1/sessions`,
-            {
-                tag: opts.tag,
-                metadata: metadataBase64,
-                dataEncryptionKey: dataEncryptionKeyBase64,
-            },
-            { headers: authHeaders(creds) },
-        );
-        data = resp.data as { session: RawSession };
-    } catch (err) {
-        handleApiError(err, 'creating session');
-    }
-
-    const decrypted = decryptSession(data.session, creds);
-    return { ...decrypted, sessionKey: decrypted.encryption.key };
 }
 
 export async function deleteSession(

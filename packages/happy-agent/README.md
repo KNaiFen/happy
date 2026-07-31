@@ -6,7 +6,7 @@ Unlike `happy-cli` which both runs and controls agents, `happy-agent` only contr
 
 ## Installation
 
-From the monorepo:
+From the monorepo during development:
 
 ```bash
 yarn workspace happy-agent build
@@ -89,19 +89,6 @@ happy-agent status <session-id>
 happy-agent status <session-id> --json
 ```
 
-### Create a session
-
-```bash
-# Create a new session with a tag
-happy-agent create --tag my-project
-
-# Specify a working directory
-happy-agent create --tag my-project --path /home/user/project
-
-# Output as JSON
-happy-agent create --tag my-project --json
-```
-
 ### Send a message
 
 ```bash
@@ -171,19 +158,11 @@ All machine and session data is end-to-end encrypted. New records use AES-256-GC
 
 ## Publishing to npm
 
-Maintainers can publish a new version:
-
-```bash
-yarn release               # From repo root: choose library to release
-# or directly:
-yarn workspace happy-agent release
-```
-
-This flow:
-- runs tests/build checks via `prepublishOnly`
-- creates a release commit and `happy-agent-vX.Y.Z` tag
-- creates a GitHub release with generated notes
-- publishes `happy-agent` to npm
+Version bumps on `main` trigger the GitHub Actions package workflow. It runs
+source checks, builds and packs the archive, installs that archive into a clean
+directory, then exercises a real HTTP and Socket.IO machine-RPC exchange with
+the default `codex` agent. The workflow uploads one installable `.tgz` artifact;
+registry publishing remains a separate, explicitly authorized operation.
 
 ## License
 

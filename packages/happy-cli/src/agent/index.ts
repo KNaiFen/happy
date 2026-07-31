@@ -2,7 +2,7 @@
  * Agent Module - Universal agent backend abstraction
  *
  * This module provides the core abstraction layer for different AI agents
- * (Claude, Codex, Gemini, OpenCode, etc.) that can be controlled through
+ * (Codex, Gemini, OpenCode, and others) that can be controlled through
  * the Happy CLI and mobile app.
  */
 
@@ -41,4 +41,3 @@ export function initializeAgents(): void {
   const { registerGeminiAgent } = require('./factories/gemini');
   registerGeminiAgent();
 }
-

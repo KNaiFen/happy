@@ -1,4 +1,4 @@
-export type AgentEngine = 'codex' | 'claude'
+export type AgentEngine = 'codex'
 
 export interface AgentModel {
     id: string
@@ -16,27 +16,6 @@ export const AGENT_MODELS: AgentModel[] = [
         label: 'Codex',
         group: 'OpenAI',
         description: 'Bundled Codex CLI default model.',
-    },
-    {
-        id: 'claude-default',
-        engine: 'claude',
-        label: 'Claude',
-        group: 'Anthropic',
-        description: 'Bundled Claude Agent SDK default model.',
-    },
-    {
-        id: 'claude-sonnet',
-        engine: 'claude',
-        label: 'Sonnet',
-        group: 'Anthropic',
-        model: 'sonnet',
-    },
-    {
-        id: 'claude-opus',
-        engine: 'claude',
-        label: 'Opus',
-        group: 'Anthropic',
-        model: 'opus',
     },
 ]
 

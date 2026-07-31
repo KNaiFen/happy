@@ -5,6 +5,7 @@ on:
     paths:
       - "packages/happy-wire/**"
       - "packages/happy-agent/**"
+      - "packages/codium/**"
       - "packages/happy-server/**"
       - "packages/happy-cli/**"
       - "packages/happy-app/**"
@@ -17,6 +18,7 @@ on:
     paths:
       - "packages/happy-wire/**"
       - "packages/happy-agent/**"
+      - "packages/codium/**"
       - "packages/happy-server/**"
       - "packages/happy-cli/**"
       - "packages/happy-app/**"
@@ -93,6 +95,68 @@ jobs:
 
       - name: Test and build Agent
         run: pnpm --filter happy-agent test
+
+  codium:
+    name: Codium typecheck, test, and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck Codium
+        run: pnpm --filter codium typecheck
+
+      - name: Test Codium source
+        run: pnpm --filter codium test
+
+      - name: Build Codium production bundle
+        run: pnpm --filter codium build
+
+  codium_codex_runtime:
+    name: Codium bundled Codex runtime lifecycle
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck Codium runtime source
+        run: pnpm --filter codium typecheck
+
+      - name: Typecheck Codium runtime fixture
+        run: node node_modules/typescript/bin/tsc --project scripts/ci/tsconfig.codium-codex-runtime-smoke.json
+
+      - name: Exercise packaged Codex binary through Responses fixture
+        run: pnpm --filter codium exec tsx ../../scripts/ci/codium-codex-runtime-smoke.ts
 
   server:
     name: Server typecheck, test, and build
@@ -461,12 +525,30 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level=critical
 
+  claude_provider_boundary:
+    name: Claude provider removal boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Reject removed provider imports and active protocol fields
+        run: node scripts/ci/assert-no-claude-provider.cjs
+
   ci-gate:
     name: Required CI gate
     if: always()
     needs:
       - wire
       - agent
+      - codium
+      - codium_codex_runtime
       - server
       - cli
       - app
@@ -477,12 +559,15 @@ jobs:
       - codex_transport_scenarios
       - codex_official_app_server
       - dependency-audit
+      - claude_provider_boundary
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
         env:
           WIRE_RESULT: ${{ needs.wire.result }}
           AGENT_RESULT: ${{ needs.agent.result }}
+          CODIUM_RESULT: ${{ needs.codium.result }}
+          CODIUM_RUNTIME_RESULT: ${{ needs.codium_codex_runtime.result }}
           SERVER_RESULT: ${{ needs.server.result }}
           CLI_RESULT: ${{ needs.cli.result }}
           APP_RESULT: ${{ needs.app.result }}
@@ -493,9 +578,12 @@ jobs:
           SCENARIOS_RESULT: ${{ needs.codex_transport_scenarios.result }}
           OFFICIAL_APP_SERVER_RESULT: ${{ needs.codex_official_app_server.result }}
           AUDIT_RESULT: ${{ needs.dependency-audit.result }}
+          CLAUDE_BOUNDARY_RESULT: ${{ needs.claude_provider_boundary.result }}
         run: |
           test "$WIRE_RESULT" = success
           test "$AGENT_RESULT" = success
+          test "$CODIUM_RESULT" = success
+          test "$CODIUM_RUNTIME_RESULT" = success
           test "$SERVER_RESULT" = success
           test "$CLI_RESULT" = success
           test "$APP_RESULT" = success
@@ -506,3 +594,4 @@ jobs:
           test "$SCENARIOS_RESULT" = success
           test "$OFFICIAL_APP_SERVER_RESULT" = success
           test "$AUDIT_RESULT" = success
+          test "$CLAUDE_BOUNDARY_RESULT" = success

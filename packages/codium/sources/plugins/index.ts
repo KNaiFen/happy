@@ -1,20 +1,15 @@
-import { anthropicPlugin } from './anthropic'
 import { codexPlugin } from './codex'
 import { happyPlugin } from './happy'
 import { registerPlugin } from './host'
 
 export type {
     AuthState,
-    Capability,
-    LLMInferenceCapability,
-    ModelDescriptor,
     Plugin,
     PluginCategory,
 } from './types'
 export {
     pluginHost,
     pluginsAtom,
-    useInferenceModels,
     usePlugin,
     usePlugins,
 } from './host'
@@ -29,7 +24,6 @@ export async function bootPlugins(): Promise<void> {
     if (booted) return
     booted = true
     await Promise.all([
-        registerPlugin(anthropicPlugin),
         registerPlugin(codexPlugin),
         registerPlugin(happyPlugin),
     ])

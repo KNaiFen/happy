@@ -408,7 +408,7 @@ export function sessionRoutes(app: Fastify) {
         });
     });
 
-    // Legacy v1 shutdown fallback. Claude v3 clients depend on this endpoint
+    // Legacy v1 shutdown fallback. Retained v3 clients depend on this endpoint
     // remaining a transient active=false update rather than a tombstone.
     app.post('/v1/sessions/:sessionId/archive', {
         schema: {

@@ -1,0 +1,14 @@
+{
+  "extends": "../../packages/codium/tsconfig.node.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "rootDir": "../..",
+    "noEmit": true,
+    "types": ["node", "electron-vite/node"]
+  },
+  "include": [
+    "codium-codex-runtime-smoke.ts",
+    "codex-responses-fixture.ts",
+    "../../packages/codium/sources/boot/main/agent-worker/codex-cli.ts"
+  ]
+}

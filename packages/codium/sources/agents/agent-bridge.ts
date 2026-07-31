@@ -13,7 +13,6 @@ export interface AgentSession {
 export interface OpenSessionArgs {
     sessionId: string
     prompt: string
-    resume: boolean
     options: AgentStartOptions
     onEvent(ev: AgentEvent): void
     onClosed?: () => void
@@ -33,7 +32,6 @@ export function openAgentSession(args: OpenSessionArgs): AgentSession {
     window.agent.start({
         sessionId: args.sessionId,
         prompt: args.prompt,
-        resume: args.resume,
         options: args.options,
     })
 

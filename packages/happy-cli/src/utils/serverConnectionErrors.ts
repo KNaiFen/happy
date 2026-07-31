@@ -2,10 +2,10 @@
  * Offline reconnection utility for graceful server disconnection handling.
  *
  * Provides a backend-agnostic reconnection mechanism with exponential backoff
- * that works for both Claude and Codex (and future backends).
+ * that works for Codex and future backends.
  *
  * ## Requirements Satisfied
- * - REQ-1: Claude/Codex keeps working when server unreachable
+ * - REQ-1: Active provider sessions keep working when server is unreachable
  * - REQ-3: Exponential backoff reconnection attempts
  * - REQ-4: Hot reconnection without PTY exit
  * - REQ-7: Notify user when server becomes available
@@ -113,7 +113,7 @@ export interface OfflineReconnectionHandle<TSession> {
 
 /**
  * Starts background reconnection with exponential backoff.
- * Backend-agnostic: works for Claude, Codex, or any future backend.
+ * Backend-agnostic: works for Codex or any future backend.
  *
  * ## Retry Behavior
  * - **Retries are UNLIMITED** - will keep trying for hours/days/weeks

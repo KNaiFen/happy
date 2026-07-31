@@ -1,10 +1,5 @@
 import { happyClient } from '@/happy/client'
-import type {
-    AuthState,
-    Capability,
-    Plugin,
-    PluginContext,
-} from '../types'
+import type { AuthState, Plugin, PluginContext } from '../types'
 import type { HappyStateSnapshot } from '@/shared/happy-protocol'
 
 function mapAuth(state: HappyStateSnapshot): AuthState {
@@ -30,7 +25,6 @@ class HappyPlugin implements Plugin {
     accent = '#2563eb'
 
     private auth: AuthState = { status: 'connecting' }
-    private capabilities: Capability[] = []
     private unsubscribe: (() => void) | null = null
 
     async activate(ctx: PluginContext) {
@@ -42,7 +36,7 @@ class HappyPlugin implements Plugin {
         })
     }
 
-    async connect(_credential: string, ctx: PluginContext): Promise<AuthState> {
+    async connect(ctx: PluginContext): Promise<AuthState> {
         this.auth = { status: 'connecting' }
         ctx.onAuthChanged()
         const next = await happyClient.startLinkDevice()
@@ -58,8 +52,6 @@ class HappyPlugin implements Plugin {
     }
 
     getAuthState(): AuthState { return this.auth }
-    getCapabilities(): readonly Capability[] { return this.capabilities }
-
     dispose(): void {
         this.unsubscribe?.()
         this.unsubscribe = null

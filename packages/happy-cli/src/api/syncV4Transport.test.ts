@@ -119,7 +119,7 @@ describe('AxiosSyncV4Transport diagnostics', () => {
         const transport = new AxiosSyncV4Transport(
             'http://relay.example.test',
             'bearer-secret',
-            'cli-coding-session/1.4.10',
+            'cli-coding-session/1.4.11',
             'machine-1',
         );
 

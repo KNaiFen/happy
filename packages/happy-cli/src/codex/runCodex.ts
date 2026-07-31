@@ -846,7 +846,7 @@ export async function runCodex(opts: {
     // IMPORTANT: There are two different operations:
     // 1. Abort (handleAbort): Stops the current inference/task but keeps the session alive
     //    - Used by the 'abort' RPC from mobile app
-    //    - Similar to Claude Code's abort behavior
+    //    - Keeps the session available after the active turn is interrupted
     //    - Allows continuing with new prompts after aborting
     // 2. Kill (handleKillSession): Terminates the entire process
     //    - Used by the 'killSession' RPC
@@ -857,7 +857,7 @@ export async function runCodex(opts: {
     // Turn cancellation uses client.interruptTurn() — no AbortController hack needed.
     /**
      * Handles aborting the current task/inference without exiting the process.
-     * This is the equivalent of Claude Code's abort - it stops what's currently
+     * This stops the active inference without terminating the whole session. It
      * happening but keeps the session alive for new prompts.
      */
     async function handleAbort() {
@@ -989,7 +989,7 @@ export async function runCodex(opts: {
     permissionHandler = new CodexPermissionHandler(session);
     // Drop any permission requests left in agent state from a previous CLI
     // process that died while a tool prompt was open — see the matching
-    // call in claudeRemoteLauncher for the full rationale.
+    // reset in every provider launcher for the same recovery behavior.
     permissionHandler.reset('Previous CLI process exited before responding');
     reasoningProcessor = new ReasoningProcessor((message) => {
         legacyOutput.projectEnvelopes(() => ({

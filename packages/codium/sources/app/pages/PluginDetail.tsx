@@ -6,14 +6,6 @@ import { happyClient, useHappyState } from '@/happy/client'
 import { pluginHost, usePlugin } from '@/plugins'
 import './Plugins.css'
 
-const CRED_PROMPT: Record<string, { label: string; placeholder: string; help: string }> = {
-    anthropic: {
-        label: 'Anthropic API key',
-        placeholder: 'sk-ant-…',
-        help: 'Create one at console.anthropic.com → Settings → API keys.',
-    },
-}
-
 /** Plugins whose connect() call doesn't take a credential string — they
  *  drive their own auth flow (e.g. OAuth via Codex CLI). */
 const OAUTH_PLUGINS: Record<string, { buttonLabel: string; help: string }> = {
@@ -27,7 +19,6 @@ export function PluginDetailPage() {
     const { id = '' } = useParams<{ id: string }>()
     const plugin = usePlugin(id)
     const navigate = useNavigate()
-    const [credential, setCredential] = useState('')
     const [busy, setBusy] = useState(false)
 
     if (!plugin) {
@@ -41,18 +32,12 @@ export function PluginDetailPage() {
 
     const auth = plugin.getAuthState()
     const oauthPrompt = OAUTH_PLUGINS[plugin.id]
-    const credPrompt = !oauthPrompt
-        ? CRED_PROMPT[plugin.id] ?? { label: 'Credential', placeholder: '', help: 'Plugin-specific credential.' }
-        : null
-
     const onConnect = async () => {
         setBusy(true)
         try {
-            // OAuth plugins ignore the credential string; we still pass empty.
-            await pluginHost.connect(plugin.id, oauthPrompt ? '' : credential)
+            await pluginHost.connect(plugin.id)
         } finally {
             setBusy(false)
-            setCredential('')
         }
     }
     const onDisconnect = async () => {
@@ -135,57 +120,8 @@ export function PluginDetailPage() {
                                 </button>
                             </div>
                         </div>
-                    ) : credPrompt ? (
-                        <div className="plugin-detail__row plugin-detail__row--column">
-                            <label className="plugin-detail__label">{credPrompt.label}</label>
-                            <input
-                                type="password"
-                                className="plugin-detail__input"
-                                placeholder={credPrompt.placeholder}
-                                value={credential}
-                                onChange={(e) => setCredential(e.target.value)}
-                                autoComplete="off"
-                                spellCheck={false}
-                            />
-                            <small className="plugin-detail__help">{credPrompt.help}</small>
-                            {auth.status === 'error' && (
-                                <small className="plugin-detail__help plugin-detail__help--bad">
-                                    {auth.message}
-                                </small>
-                            )}
-                            <div className="plugin-detail__actions">
-                                <button
-                                    type="button"
-                                    className="plugins-page__action plugins-page__action--primary"
-                                    onClick={onConnect}
-                                    disabled={busy || credential.trim().length === 0}
-                                >
-                                    {busy || auth.status === 'connecting' ? 'Connecting…' : 'Connect'}
-                                </button>
-                            </div>
-                        </div>
                     ) : null}
                 </section>
-
-                {plugin.getCapabilities().some((c) => c.type === 'llm-inference') && (
-                    <section className="plugin-detail__section">
-                        <h3 className="plugins-section__heading">Models</h3>
-                        <ul className="plugin-detail__models">
-                            {plugin.getCapabilities()
-                                .flatMap((c) => (c.type === 'llm-inference' ? c.models : []))
-                                .map((m) => (
-                                    <li key={m.id} className="plugin-detail__model">
-                                        <span className="plugin-detail__model-label">{m.label}</span>
-                                        {m.description && (
-                                            <span className="plugin-detail__model-description">
-                                                {m.description}
-                                            </span>
-                                        )}
-                                    </li>
-                                ))}
-                        </ul>
-                    </section>
-                )}
             </div>
         </Page>
     )

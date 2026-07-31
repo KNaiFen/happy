@@ -17,16 +17,11 @@ import type { AgentEffort, AgentEvent } from '../../shared/agent-protocol'
 /* ─────────────────────────────────────────────────────────────────────────
  * Chat runner
  *
- * One worker-hosted Agent SDK session per chat. The chat's stable
- * `sessionId` is also the SDK's session id, so:
- *   - first turn: start with resume:false
- *   - subsequent turns this process:  send()
- *   - first turn after a process restart: start with resume:true
- *
- * Each SDK assistant message becomes its own chat row. State (currentMsgId,
+ * One worker-hosted Codex process per turn. Each assistant message becomes
+ * its own chat row. State (currentMsgId,
  * per-message buffers) lives for the lifetime of the hook, NOT per-turn —
- * the Agent SDK session has a single event listener that needs to keep
- * working as the user sends follow-ups.
+ * the worker event listener needs to keep writing to the correct chat rows
+ * as the user starts follow-up turns.
  * ──────────────────────────────────────────────────────────────────────── */
 
 export interface RunArgs {
@@ -35,7 +30,6 @@ export interface RunArgs {
     prompt: string
     modelId: string
     effort?: EffortLevel
-    systemPrompt?: string
     cwd?: string
 }
 
@@ -50,7 +44,7 @@ interface MsgBuf {
     thinking: string
     tools: ChatToolCall[]
     /** True once any stream delta has filled this buffer. The
-     *  authoritative full assistant SDKMessage is then ignored — the
+     *  authoritative full assistant snapshot is then ignored — the
      *  streamed content already has everything (and matching them by
      *  index can cause text duplication). On replay (no deltas), we
      *  fall back to the full message. */
@@ -62,6 +56,7 @@ interface RunState {
     currentMsgId: string
     bufsByMsg: Map<string, MsgBuf>
     messageOrder: string[]
+    terminal: { status: 'idle' | 'error'; error?: string } | null
 }
 
 function newBuf(): MsgBuf {
@@ -111,11 +106,13 @@ export function useChatRunner() {
                     currentMsgId: placeholderId,
                     bufsByMsg: new Map([[placeholderId, newBuf()]]),
                     messageOrder: [placeholderId],
+                    terminal: null,
                 }
             } else {
                 stateRef.current.currentMsgId = placeholderId
                 stateRef.current.bufsByMsg.set(placeholderId, newBuf())
                 stateRef.current.messageOrder.push(placeholderId)
+                stateRef.current.terminal = null
             }
             const state = stateRef.current
             const onEvent = (ev: AgentEvent) => handleEvent(ev, state, store)
@@ -128,20 +125,25 @@ export function useChatRunner() {
             sessionRef.current = openAgentSession({
                 sessionId: chat.sessionId,
                 prompt: args.prompt,
-                resume: chat.sessionStarted === true,
                 options: {
                     engine: selectedModel.engine,
                     ...(selectedModel.model ? { model: selectedModel.model } : {}),
                     ...(args.effort ? { effort: EFFORT_MAP[args.effort] } : {}),
-                    ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
                     ...(args.cwd ? { cwd: args.cwd } : {}),
                 },
                 onEvent,
                 onClosed: () => {
                     sessionRef.current = null
+                    const terminal = state.terminal ?? {
+                        status: 'error' as const,
+                        error: 'Codex turn closed without a result.',
+                    }
+                    store.set(updateChatAtom, {
+                        chatId: args.chatId,
+                        patch: terminal,
+                    })
                 },
             })
-            store.set(updateChatAtom, { chatId: args.chatId, patch: { sessionStarted: true } })
         },
         [store],
     )
@@ -228,8 +230,8 @@ function handleEvent(ev: AgentEvent, state: RunState, store: ReturnType<typeof u
     }
 
     if (ev.type === 'assistant_complete') {
-        // Authoritative snapshot. Only apply when streaming didn't fire
-        // (resume / replay) — otherwise the streamed content already has
+        // Authoritative snapshot. Only apply when streaming didn't fire —
+        // otherwise the streamed content already has
         // everything and re-applying duplicates it. Tool inputs always get
         // the parsed authoritative version.
         const buf = bufFor(state, state.currentMsgId)
@@ -290,12 +292,9 @@ function handleEvent(ev: AgentEvent, state: RunState, store: ReturnType<typeof u
                 ...(ev.subtype === 'error' ? { error: ev.error ?? 'Turn errored' } : {}),
             },
         })
-        store.set(updateChatAtom, {
-            chatId: state.chatId,
-            patch: ev.subtype === 'error'
-                ? { status: 'error', error: ev.error ?? 'Turn errored' }
-                : { status: 'idle' },
-        })
+        state.terminal = ev.subtype === 'error'
+            ? { status: 'error', error: ev.error ?? 'Turn errored' }
+            : { status: 'idle' }
         return
     }
 
@@ -305,10 +304,7 @@ function handleEvent(ev: AgentEvent, state: RunState, store: ReturnType<typeof u
             messageId: state.currentMsgId,
             patch: { finished: true, error: ev.message },
         })
-        store.set(updateChatAtom, {
-            chatId: state.chatId,
-            patch: { status: 'error', error: ev.message },
-        })
+        state.terminal = { status: 'error', error: ev.message }
         return
     }
 }
