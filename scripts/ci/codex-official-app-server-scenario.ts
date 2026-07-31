@@ -48,6 +48,9 @@ async function main(): Promise<void> {
         let agentText = '';
         let reasoningSummary = '';
         let commandOutput = '';
+        let commandFinalOutput = '';
+        let commandStatus: string | null = null;
+        let commandExitCode: number | null = null;
         let resolveTurnCompleted!: () => void;
         const turnCompleted = new Promise<void>((resolve) => {
             resolveTurnCompleted = resolve;
@@ -66,7 +69,16 @@ async function main(): Promise<void> {
                 notification.method === 'item/started'
                 || notification.method === 'item/completed'
             ) {
-                itemTypes.add(notification.params.item.type);
+                const { item } = notification.params;
+                itemTypes.add(item.type);
+                if (
+                    notification.method === 'item/completed'
+                    && item.type === 'commandExecution'
+                ) {
+                    commandFinalOutput = item.aggregatedOutput ?? '';
+                    commandStatus = item.status;
+                    commandExitCode = item.exitCode;
+                }
             } else if (notification.method === 'item/agentMessage/delta') {
                 agentText += notification.params.delta;
             } else if (notification.method === 'item/reasoning/summaryTextDelta') {
@@ -82,9 +94,28 @@ async function main(): Promise<void> {
             approvalPolicy: 'never',
             sandbox: 'read-only',
         });
-        let turnResult: { aborted: boolean };
+
+        const reportDiagnostics = (): void => {
+            const provider = fixture!.snapshot();
+            console.error(
+                [
+                    'Official lifecycle diagnostics:',
+                    `requests=${provider.requestCount}`,
+                    `toolOutput=${provider.toolOutputObserved}`,
+                    `methods=${notificationOrder.join(',')}`,
+                    `droppedMethods=${droppedNotificationOrderEntries}`,
+                    `commandDeltaBytes=${Buffer.byteLength(commandOutput, 'utf8')}`,
+                    `commandFinalBytes=${Buffer.byteLength(commandFinalOutput, 'utf8')}`,
+                    `commandStatus=${commandStatus ?? 'missing'}`,
+                    `commandExitCode=${commandExitCode ?? 'missing'}`,
+                    `reasoningBytes=${Buffer.byteLength(reasoningSummary, 'utf8')}`,
+                    `agentBytes=${Buffer.byteLength(agentText, 'utf8')}`,
+                ].join(' '),
+            );
+        };
+
         try {
-            [turnResult] = await withTimeout(
+            const [turnResult] = await withTimeout(
                 Promise.all([
                     codex.sendTurnAndWait('exercise the official app-server lifecycle', {
                         clientUserMessageId: 'official-app-server-command',
@@ -94,38 +125,61 @@ async function main(): Promise<void> {
                 90_000,
                 'official app-server command settlement and turn/completed',
             );
-        } catch (error) {
-            const provider = fixture.snapshot();
-            console.error(
-                `Official lifecycle diagnostics: requests=${provider.requestCount} toolOutput=${provider.toolOutputObserved} methods=${notificationOrder.join(',')} droppedMethods=${droppedNotificationOrderEntries}`,
+            assert.equal(
+                turnResult.aborted,
+                false,
+                'official Codex unexpectedly aborted the turn',
             );
+
+            const provider = fixture.snapshot();
+            assert(
+                provider.requestCount >= 2,
+                'official Codex did not perform the tool follow-up request',
+            );
+            assert(
+                provider.toolOutputObserved,
+                'official Codex did not return function_call_output to the provider',
+            );
+            for (const method of [
+                'turn/started',
+                'item/started',
+                'item/commandExecution/outputDelta',
+                'item/reasoning/summaryTextDelta',
+                'item/agentMessage/delta',
+                'item/completed',
+                'turn/completed',
+            ]) {
+                assert(notificationMethods.has(method), `official app-server omitted ${method}`);
+            }
+            for (const itemType of ['commandExecution', 'reasoning', 'agentMessage']) {
+                assert(
+                    itemTypes.has(itemType),
+                    `official app-server omitted ${itemType} item lifecycle`,
+                );
+            }
+            assert(
+                commandOutput.includes(OFFICIAL_CODEX_TOOL_SENTINEL),
+                'official shell command stream omitted the tool sentinel',
+            );
+            assert(
+                commandFinalOutput.includes(OFFICIAL_CODEX_TOOL_SENTINEL),
+                'official shell command final output omitted the tool sentinel',
+            );
+            assert.equal(commandStatus, 'completed', 'official shell command did not complete');
+            assert.equal(
+                commandExitCode,
+                0,
+                'official shell command returned a non-zero exit code',
+            );
+            assert(reasoningSummary.includes('official app-server tool round trip'));
+            assert.equal(agentText, OFFICIAL_CODEX_RESPONSE_SENTINEL);
+            console.log(
+                `Official Codex app-server lifecycle passed: version=${officialVersion} requests=${provider.requestCount} tool=ok reasoning=ok stream=ok completion=ok`,
+            );
+        } catch (error) {
+            reportDiagnostics();
             throw error;
         }
-        assert.equal(turnResult.aborted, false, 'official Codex unexpectedly aborted the turn');
-
-        const provider = fixture.snapshot();
-        assert(provider.requestCount >= 2, 'official Codex did not perform the tool follow-up request');
-        assert(provider.toolOutputObserved, 'official Codex did not return function_call_output to the provider');
-        for (const method of [
-            'turn/started',
-            'item/started',
-            'item/commandExecution/outputDelta',
-            'item/reasoning/summaryTextDelta',
-            'item/agentMessage/delta',
-            'item/completed',
-            'turn/completed',
-        ]) {
-            assert(notificationMethods.has(method), `official app-server omitted ${method}`);
-        }
-        for (const itemType of ['commandExecution', 'reasoning', 'agentMessage']) {
-            assert(itemTypes.has(itemType), `official app-server omitted ${itemType} item lifecycle`);
-        }
-        assert(commandOutput.includes(OFFICIAL_CODEX_TOOL_SENTINEL));
-        assert(reasoningSummary.includes('official app-server tool round trip'));
-        assert.equal(agentText, OFFICIAL_CODEX_RESPONSE_SENTINEL);
-        console.log(
-            `Official Codex app-server lifecycle passed: version=${officialVersion} requests=${provider.requestCount} tool=ok reasoning=ok stream=ok completion=ok`,
-        );
     } finally {
         if (codex) await codex.disconnect().catch(() => undefined);
         await fixture?.close().catch(() => undefined);

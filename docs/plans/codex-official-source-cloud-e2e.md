@@ -25,8 +25,8 @@
    - 校验版本不低于 `0.145.0`，解析 annotated tag 到 commit。
    - checkout `openai/codex` 的精确 commit。
    - 从源码的 Rust toolchain 文件读取 toolchain，并使用 Cargo cache。官方 Release 的 Cargo 构建不带 `--locked`，且当前稳定标签的锁文件在 Linux 上需要补充解析；因此先按官方语义运行依赖解析，校验工作树只能改动 `codex-rs/Cargo.lock`，记录源码锁与解析后锁的 SHA-256，再以解析后的锁执行 `cargo build --locked`。
-   - target cache 以不可变源码 commit 和解析后锁为键。命中时必须先执行缓存二进制的精确版本校验，校验通过才跳过 Cargo；缺失、损坏或版本不符时删除候选二进制并重新从源码编译。首轮 run `30636131220` 冷编译耗时 40 分 12 秒且已成功保存该精确缓存。
-   - 构建 `codex-rs` 中的 `codex-cli`/`codex` release 二进制。
+   - target cache 以 bundle schema、不可变源码 commit 和解析后锁为键。命中时必须校验 runtime marker、二进制精确版本和 bundled bwrap 摘要，校验通过才跳过 Cargo；缺失、损坏或版本不符时从缓存依赖增量重建。首轮 run `30636131220` 冷编译耗时 40 分 12 秒且已成功保存基础 target。
+   - 按官方 Linux primary bundle 顺序先构建并 strip `bwrap`，将其 SHA-256 通过 `CODEX_BWRAP_SHA256` 编入后续 `codex` 构建，再构建并 strip `codex` 与 `codex-code-mode-host`。产物保持官方相对布局 `codex`、`codex-code-mode-host`、`codex-resources/bwrap`；单独一个 `codex` 不构成可执行只读 sandbox 的真实 release runtime。
    - 校验 `codex --version` 与解析出的 Release 一致。
    - 上传二进制和不含敏感信息的来源元数据，供同一 workflow 的测试 job 下载。
 2. monorepo CI 和 Android field E2E 各自在云端消费该构建产物；本地不构建官方 Codex。
@@ -110,4 +110,5 @@
 - [x] 采用“官方解析语义 + 双锁文件指纹 + 解析后 locked 编译”修复云端源码构建；run `30636131220` 从官方 `0.146.0` 标签成功产出并校验二进制。
 - [x] 修复首次真实生命周期运行暴露的 `thread/status/changed: idle` 与稍后 `turn/completed` 之间的测试竞态；门禁现在独立等待两条边界并保留有界、无明文的方法顺序诊断。
 - [x] 让精确 target cache 命中时复用已校验的源码构建二进制，避免每条工作流重复执行 40 分钟冷编译。
+- [x] 修复 run `30640510094` 暴露的单文件伪 bundle：补齐官方 bundled bwrap/摘要和 code-mode host，并要求真实 shell command 的流式与最终输出、退出码全部成功。
 - [ ] monorepo required gate 与手动 Android field E2E 全绿后归档本计划。

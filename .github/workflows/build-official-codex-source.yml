@@ -196,41 +196,84 @@ jobs:
         with:
           path: |
             .ci/openai-codex/codex-rs/target
-          key: official-codex-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.commit }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
+          key: official-codex-runtime-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.commit }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
+          restore-keys: |
+            official-codex-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.commit }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
 
       - name: Verify cached official Codex binary
         id: cached_binary
         run: |
           set -euo pipefail
-          CANDIDATE="$GITHUB_WORKSPACE/.ci/openai-codex/codex-rs/target/release/codex"
+          RELEASE_DIR="$GITHUB_WORKSPACE/.ci/openai-codex/codex-rs/target/release"
+          CANDIDATE="$RELEASE_DIR/codex"
+          CODE_MODE_HOST="$RELEASE_DIR/codex-code-mode-host"
+          BWRAP="$RELEASE_DIR/bwrap"
+          MARKER="$RELEASE_DIR/.happy-official-runtime.json"
           if test "${{ steps.target_cache.outputs.cache-hit }}" = true \
             && test -x "$CANDIDATE" \
-            && test "$(timeout 15s "$CANDIDATE" --version)" = "codex-cli ${{ steps.release.outputs.version }}"; then
+            && test -x "$CODE_MODE_HOST" \
+            && test -x "$BWRAP" \
+            && test -f "$MARKER" \
+            && test "$(timeout 15s "$CANDIDATE" --version)" = "codex-cli ${{ steps.release.outputs.version }}" \
+            && test "$(jq -r '.schemaVersion' "$MARKER")" = 2 \
+            && test "$(jq -r '.commit' "$MARKER")" = "${{ steps.release.outputs.commit }}" \
+            && test "$(jq -r '.resolvedCargoLockSha256' "$MARKER")" = "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
+            && test "$(jq -r '.bwrapSha256' "$MARKER")" = "$(sha256sum "$BWRAP" | cut -d' ' -f1)"; then
             printf 'usable=true\n' >> "$GITHUB_OUTPUT"
-            printf 'Using exact verified official Codex target cache.\n'
+            printf 'Using exact verified official Codex runtime bundle cache.\n'
           else
-            rm -f "$CANDIDATE"
+            rm -f "$CANDIDATE" "$CODE_MODE_HOST" "$BWRAP" "$MARKER"
             printf 'usable=false\n' >> "$GITHUB_OUTPUT"
-            printf 'Exact verified official Codex target cache unavailable; compiling from source.\n'
+            printf 'Exact verified official Codex runtime bundle cache unavailable; compiling from source.\n'
           fi
 
-      - name: Build official codex app-server binary
+      - name: Build official codex app-server runtime bundle
         if: steps.cached_binary.outputs.usable != 'true'
         working-directory: .ci/openai-codex/codex-rs
-        run: cargo build --locked --release -p codex-cli --bin codex
+        run: |
+          set -euo pipefail
+          RELEASE_DIR="$PWD/target/release"
+          cargo build --locked --release --bin bwrap
+          strip --strip-debug --strip-unneeded "$RELEASE_DIR/bwrap"
+          BWRAP_SHA256="$(sha256sum "$RELEASE_DIR/bwrap" | cut -d' ' -f1)"
+          export CODEX_BWRAP_SHA256="$BWRAP_SHA256"
+          cargo build --locked --release \
+            --bin codex \
+            --bin codex-code-mode-host
+          strip --strip-debug --strip-unneeded \
+            "$RELEASE_DIR/codex" \
+            "$RELEASE_DIR/codex-code-mode-host"
+          jq -n \
+            --arg commit "${{ steps.release.outputs.commit }}" \
+            --arg resolvedCargoLockSha256 "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
+            --arg bwrapSha256 "$BWRAP_SHA256" \
+            '{schemaVersion: 2, commit: $commit, resolvedCargoLockSha256: $resolvedCargoLockSha256, bwrapSha256: $bwrapSha256}' \
+            > "$RELEASE_DIR/.happy-official-runtime.json"
 
       - name: Verify binary and write provenance
         run: |
           set -euo pipefail
           ARTIFACT_ROOT="$RUNNER_TEMP/official-codex-linux-x64"
-          mkdir -p "$ARTIFACT_ROOT/bin"
+          RELEASE_DIR="$GITHUB_WORKSPACE/.ci/openai-codex/codex-rs/target/release"
+          MARKER="$RELEASE_DIR/.happy-official-runtime.json"
+          mkdir -p "$ARTIFACT_ROOT/bin/codex-resources"
           install -m 0755 \
-            .ci/openai-codex/codex-rs/target/release/codex \
+            "$RELEASE_DIR/codex" \
             "$ARTIFACT_ROOT/bin/codex"
+          install -m 0755 \
+            "$RELEASE_DIR/codex-code-mode-host" \
+            "$ARTIFACT_ROOT/bin/codex-code-mode-host"
+          install -m 0755 \
+            "$RELEASE_DIR/bwrap" \
+            "$ARTIFACT_ROOT/bin/codex-resources/bwrap"
           install -m 0644 "$RUNNER_TEMP/Cargo.lock.source" "$ARTIFACT_ROOT/Cargo.lock.source"
           install -m 0644 "$RUNNER_TEMP/Cargo.lock.resolved" "$ARTIFACT_ROOT/Cargo.lock.resolved"
           test "$(timeout 15s "$ARTIFACT_ROOT/bin/codex" --version)" = \
             "codex-cli ${{ steps.release.outputs.version }}"
+          test "$(jq -r '.schemaVersion' "$MARKER")" = 2
+          test "$(jq -r '.bwrapSha256' "$MARKER")" = \
+            "$(sha256sum "$ARTIFACT_ROOT/bin/codex-resources/bwrap" | cut -d' ' -f1)"
+          BWRAP_SHA256="$(jq -r '.bwrapSha256' "$MARKER")"
           jq -n \
             --arg repository "https://github.com/openai/codex" \
             --arg tag "${{ steps.release.outputs.tag }}" \
@@ -241,7 +284,8 @@ jobs:
             --arg rustyV8Version "${{ steps.v8.outputs.version }}" \
             --arg sourceCargoLockSha256 "${{ steps.cargo_lock.outputs.source_sha256 }}" \
             --arg resolvedCargoLockSha256 "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
-            '{schemaVersion: 2, repository: $repository, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version, sourceCargoLockSha256: $sourceCargoLockSha256, resolvedCargoLockSha256: $resolvedCargoLockSha256}' \
+            --arg bwrapSha256 "$BWRAP_SHA256" \
+            '{schemaVersion: 3, runtimeBundleVersion: 2, repository: $repository, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version, sourceCargoLockSha256: $sourceCargoLockSha256, resolvedCargoLockSha256: $resolvedCargoLockSha256, bwrapSha256: $bwrapSha256}' \
             > "$ARTIFACT_ROOT/source.json"
 
       - name: Upload official Codex binary
