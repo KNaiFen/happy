@@ -114,4 +114,4 @@
 - [x] 修复 run `30640510094` 暴露的单文件伪 bundle：补齐官方 bundled bwrap/摘要和 code-mode host，并要求真实 shell command 的流式与最终输出、退出码全部成功。
 - [x] 修复 run `30642025606` 暴露的 hosted runner user namespace 限制：按官方 Codex CI 配置 AppArmor/sysctl，使完整 bundle 的默认 bubblewrap 沙箱实际执行命令，不降级到 deprecated Landlock。
 - [x] 修复 Android run `30646021694` 暴露的 viewport 假阴性：后端 round-trip 与回复已完成时，长工具卡会把用户消息顶出当前画面；首轮和恢复 flow 改为双向滚动定位真实历史项。
-- [ ] monorepo required gate 与手动 Android field E2E 全绿后归档本计划。
+- [x] monorepo run `30648329751` 与 Android field run `30648339539` 全绿，本计划已归档。
