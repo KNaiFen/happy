@@ -179,28 +179,7 @@ describe('Smoke: CLI command surface', () => {
         });
     });
 
-    describe('4. create command', () => {
-        it('shows help with --tag, --path, --json', () => {
-            const { stdout } = runCli('create', '--help');
-            expect(stdout).toContain('--tag');
-            expect(stdout).toContain('--path');
-            expect(stdout).toContain('--json');
-        });
-
-        it('requires --tag option', () => {
-            const { stderr, exitCode } = runCli('create');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('--tag');
-        });
-
-        it('fails with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('create', '--tag', 'test');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
-
-    describe('5. send command', () => {
+    describe('4. send command', () => {
         it('shows help with session-id, message, --yolo, --wait, --json', () => {
             const { stdout } = runCli('send', '--help');
             expect(stdout).toContain('session-id');
@@ -217,7 +196,7 @@ describe('Smoke: CLI command surface', () => {
         });
     });
 
-    describe('6. history command', () => {
+    describe('5. history command', () => {
         it('shows help with session-id, --limit, --json', () => {
             const { stdout } = runCli('history', '--help');
             expect(stdout).toContain('session-id');
@@ -232,7 +211,7 @@ describe('Smoke: CLI command surface', () => {
         });
     });
 
-    describe('7. stop command', () => {
+    describe('6. stop command', () => {
         it('shows help with session-id', () => {
             const { stdout } = runCli('stop', '--help');
             expect(stdout).toContain('session-id');
@@ -245,7 +224,7 @@ describe('Smoke: CLI command surface', () => {
         });
     });
 
-    describe('8. wait command', () => {
+    describe('7. wait command', () => {
         it('shows help with session-id and --timeout', () => {
             const { stdout } = runCli('wait', '--help');
             expect(stdout).toContain('session-id');

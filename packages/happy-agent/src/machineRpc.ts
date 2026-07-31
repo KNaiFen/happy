@@ -3,7 +3,7 @@ import type { Config } from './config';
 import type { DecryptedMachine } from './api';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from './encryption';
 
-export type SupportedAgent = 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
+export type SupportedAgent = 'codex' | 'gemini' | 'openclaw' | 'agy';
 
 export type SpawnMachineSessionResult =
     | { type: 'success'; sessionId: string }
@@ -63,7 +63,7 @@ export async function spawnSessionOnMachine(
     options: {
         directory: string;
         approvedNewDirectoryCreation?: boolean;
-        agent?: SupportedAgent;
+        agent: SupportedAgent;
         providerToken?: string;
     },
 ): Promise<SpawnMachineSessionResult> {

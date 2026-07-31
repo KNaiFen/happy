@@ -33,6 +33,7 @@ vi.mock('axios', () => {
 });
 
 import axios from 'axios';
+import { HAPPY_AGENT_CLIENT_HEADER } from './clientVersion';
 import {
     listSessions,
     listActiveSessions,
@@ -44,7 +45,7 @@ import {
 
 const authHeader = {
     Authorization: 'Bearer test-jwt-token',
-    'X-Happy-Client': 'cli-control-plane/0.1.0',
+    'X-Happy-Client': HAPPY_AGENT_CLIENT_HEADER,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { execFileSync, execSync } from 'child_process';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import packageJson from '../package.json';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binPath = resolve(__dirname, '..', 'bin', 'happy-agent.mjs');
@@ -34,7 +35,7 @@ describe('happy-agent CLI', () => {
 
     it('should display version', () => {
         const { stdout } = runCli('--version');
-        expect(stdout.trim()).toBe('0.1.0');
+        expect(stdout.trim()).toBe(packageJson.version);
     });
 
     it('should list all expected commands in help', () => {
@@ -45,7 +46,7 @@ describe('happy-agent CLI', () => {
         expect(stdout).toContain('status');
         expect(stdout).toContain('spawn');
         expect(stdout).toContain('resume');
-        expect(stdout).toContain('create');
+        expect(stdout).not.toContain('  create ');
         expect(stdout).toContain('send');
         expect(stdout).toContain('history');
         expect(stdout).toContain('stop');
@@ -96,28 +97,6 @@ describe('happy-agent CLI', () => {
         });
     });
 
-    describe('create command', () => {
-        it('should show create help with --tag, --path, and --json options', () => {
-            const { stdout } = runCli('create', '--help');
-            expect(stdout).toContain('Create a new session');
-            expect(stdout).toContain('--tag');
-            expect(stdout).toContain('--path');
-            expect(stdout).toContain('--json');
-        });
-
-        it('should require --tag option', () => {
-            const { stderr, exitCode } = runCli('create');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('--tag');
-        });
-
-        it('should fail with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('create', '--tag', 'my-tag');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
-
     describe('spawn command', () => {
         it('should show spawn help with machine, path, agent, and json options', () => {
             const { stdout } = runCli('spawn', '--help');
@@ -125,6 +104,8 @@ describe('happy-agent CLI', () => {
             expect(stdout).toContain('--machine');
             expect(stdout).toContain('--path');
             expect(stdout).toContain('--agent');
+            expect(stdout).toContain('codex, gemini, openclaw, agy');
+            expect(stdout).not.toContain('claude');
             expect(stdout).toContain('--json');
         });
 
@@ -133,6 +114,13 @@ describe('happy-agent CLI', () => {
             expect(exitCode).not.toBe(0);
             expect(stderr).toContain('happy-agent auth login');
         });
+    });
+
+    it('rejects an explicit removed Claude agent before authentication', () => {
+        const { stderr, exitCode } = runCli('spawn', '--machine', 'fake-machine', '--agent', 'claude');
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain('--agent must be one of: codex, gemini, openclaw, agy');
+        expect(stderr).not.toContain('happy-agent auth login');
     });
 
     describe('resume command', () => {

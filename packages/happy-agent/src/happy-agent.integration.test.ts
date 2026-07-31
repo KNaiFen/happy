@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeBase64, encodeBase64, libsodiumEncryptForPublicKey } from './encryption';
+import { HAPPY_AGENT_CLIENT_HEADER } from './clientVersion';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageDir = resolve(__dirname, '..');
@@ -213,7 +214,7 @@ async function approveAgentLogin(
         headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
-            'X-Happy-Client': 'cli-control-plane/0.1.0',
+            'X-Happy-Client': HAPPY_AGENT_CLIENT_HEADER,
         },
         body: JSON.stringify({
             publicKey: publicKeyBase64,
@@ -495,7 +496,7 @@ describe('happy-agent integration', { timeout: 180_000 }, () => {
 
         expect(status.id).toBe(sessionId);
         expect(status.metadata?.path).toBe(testProjectDir);
-        expect(status.metadata?.flavor).toBe('claude');
+        expect(status.metadata?.flavor).toBe('codex');
 
         const daemonState = readDaemonState(integrationEnvDir);
         expect(daemonState?.httpPort).toBeTruthy();
@@ -655,7 +656,7 @@ describe('happy-agent integration', { timeout: 180_000 }, () => {
 
         const sourceStatus = await waitForSessionStatus<{
             id: string;
-            metadata?: { path?: string; flavor?: string; claudeSessionId?: string; codexThreadId?: string };
+            metadata?: { path?: string; flavor?: string; codexThreadId?: string };
         }>(
             sourceSessionId,
             agentEnv,

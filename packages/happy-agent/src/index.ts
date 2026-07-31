@@ -1,22 +1,23 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from './config';
 import type { Config } from './config';
 import { requireCredentials } from './credentials';
 import type { Credentials } from './credentials';
 import { authLogin, authLogout, authStatus } from './auth';
-import { listSessions, listActiveSessions, createSession, getSessionMessages, listMachines } from './api';
+import { listSessions, listActiveSessions, getSessionMessages, listMachines } from './api';
 import type { DecryptedMachine, DecryptedSession } from './api';
 import { resumeSessionOnMachine, spawnSessionOnMachine, type SupportedAgent } from './machineRpc';
 import { SessionClient } from './session';
 import { formatMachineTable, formatSessionTable, formatSessionStatus, formatMessageHistory, formatJson } from './output';
+import { filterSupportedAgentSessions } from './sessionClassification';
+import { HAPPY_AGENT_VERSION } from './clientVersion';
 
 // --- Helpers ---
 
-const SUPPORTED_AGENTS: SupportedAgent[] = ['claude', 'codex', 'gemini', 'openclaw', 'agy'];
+const SUPPORTED_AGENTS: SupportedAgent[] = ['codex', 'gemini', 'openclaw', 'agy'];
 
 function resolveByPrefix<T extends { id: string }>(items: T[], value: string, label: string): T {
     if (!value || value.trim().length === 0) {
@@ -33,7 +34,7 @@ function resolveByPrefix<T extends { id: string }>(items: T[], value: string, la
 }
 
 async function resolveSession(config: Config, creds: Credentials, sessionId: string): Promise<DecryptedSession> {
-    const sessions = await listSessions(config, creds);
+    const sessions = filterSupportedAgentSessions(await listSessions(config, creds));
     return resolveByPrefix(sessions, sessionId, 'Session ID');
 }
 
@@ -119,7 +120,7 @@ const program = new Command();
 program
     .name('happy-agent')
     .description('CLI client for controlling Happy Coder agents remotely')
-    .version('0.1.0');
+    .version(HAPPY_AGENT_VERSION);
 
 program
     .command('auth')
@@ -168,9 +169,9 @@ program
     .action(async (opts: { active?: boolean; json?: boolean }) => {
         const config = loadConfig();
         const creds = requireCredentials(config);
-        const sessions = opts.active
+        const sessions = filterSupportedAgentSessions(opts.active
             ? await listActiveSessions(config, creds)
-            : await listSessions(config, creds);
+            : await listSessions(config, creds));
         if (opts.json) {
             console.log(formatJson(sessions));
         } else {
@@ -255,17 +256,18 @@ program
         const creds = requireCredentials(config);
         const machine = await resolveMachine(config, creds, opts.machine);
         const directory = resolveRemotePath(opts.path, machine);
+        const agent = opts.agent ?? 'codex';
 
         const result = await spawnSessionOnMachine(config, machine, creds.token, {
             directory,
             approvedNewDirectoryCreation: opts.createDir,
-            agent: opts.agent,
+            agent,
         });
 
         const payload = {
             machineId: machine.id,
             directory,
-            agent: opts.agent ?? null,
+            agent,
             ...result,
         };
 
@@ -285,7 +287,7 @@ program
                     `- Machine ID: \`${machine.id}\``,
                     `- Session ID: \`${result.sessionId}\``,
                     `- Path: ${directory}`,
-                    `- Agent: ${opts.agent ?? 'default'}`,
+                    `- Agent: ${agent}`,
                 ].join('\n'));
                 break;
             case 'requestToApproveDirectoryCreation':
@@ -337,35 +339,6 @@ program
                 throw new Error(`Resume unexpectedly requested directory creation for '${result.directory}'. Resume should reuse the saved path.`);
             case 'error':
                 throw new Error(result.errorMessage);
-        }
-    });
-
-program
-    .command('create')
-    .description('Create a new session')
-    .requiredOption('--tag <tag>', 'Session tag')
-    .option('--path <path>', 'Working directory path')
-    .option('--json', 'Output as JSON')
-    .action(async (opts: { tag: string; path?: string; json?: boolean }) => {
-        const config = loadConfig();
-        const creds = requireCredentials(config);
-        const metadata = {
-            tag: opts.tag,
-            path: opts.path ?? process.cwd(),
-            host: hostname(),
-        };
-        const session = await createSession(config, creds, {
-            tag: opts.tag,
-            metadata,
-        });
-        if (opts.json) {
-            console.log(formatJson(session));
-        } else {
-            console.log([
-                '## Session Created',
-                '',
-                `- Session ID: \`${session.id}\``,
-            ].join('\n'));
         }
     });
 

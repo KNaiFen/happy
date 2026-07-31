@@ -6,6 +6,7 @@ import tweetnacl from 'tweetnacl';
 import { encodeBase64, getRandomBytes, libsodiumEncryptForPublicKey } from './encryption';
 import { readCredentials, writeCredentials } from './credentials';
 import type { Config } from './config';
+import { HAPPY_AGENT_CLIENT_HEADER } from './clientVersion';
 
 // Mock axios
 vi.mock('axios', () => {
@@ -114,7 +115,7 @@ describe('auth', () => {
             expect(mockedAxiosPost).toHaveBeenCalledWith(
                 'https://test-server.example.com/v1/auth/account/request',
                 expect.objectContaining({ publicKey: expect.any(String) }),
-                { headers: { 'X-Happy-Client': 'cli-control-plane/0.1.0' } },
+                { headers: { 'X-Happy-Client': HAPPY_AGENT_CLIENT_HEADER } },
             );
         });
 

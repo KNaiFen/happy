@@ -4,6 +4,7 @@ import qrcode from 'qrcode-terminal';
 import { encodeBase64, encodeBase64Url, decodeBase64, decryptBoxBundle, getRandomBytes } from './encryption';
 import { writeCredentials, clearCredentials, readCredentials } from './credentials';
 import type { Config } from './config';
+import { HAPPY_AGENT_CLIENT_HEADER } from './clientVersion';
 
 const POLL_INTERVAL_MS = 1000;
 const AUTH_TIMEOUT_MS = 120_000; // 2 minutes
@@ -25,7 +26,7 @@ export async function authLogin(config: Config): Promise<void> {
         await axios.post(`${config.serverUrl}/v1/auth/account/request`, {
             publicKey: publicKeyBase64,
         }, {
-            headers: { 'X-Happy-Client': 'cli-control-plane/0.1.0' },
+            headers: { 'X-Happy-Client': HAPPY_AGENT_CLIENT_HEADER },
         });
     } catch (err) {
         if (err instanceof AxiosError) {
@@ -57,7 +58,7 @@ export async function authLogin(config: Config): Promise<void> {
             const resp = await axios.post(`${config.serverUrl}/v1/auth/account/request`, {
                 publicKey: publicKeyBase64,
             }, {
-                headers: { 'X-Happy-Client': 'cli-control-plane/0.1.0' },
+            headers: { 'X-Happy-Client': HAPPY_AGENT_CLIENT_HEADER },
             });
             result = resp.data as AuthRequestResponse;
         } catch (err) {
