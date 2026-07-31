@@ -29,7 +29,7 @@
    - 按官方 Linux primary bundle 顺序先构建并 strip `bwrap`，将其 SHA-256 通过 `CODEX_BWRAP_SHA256` 编入后续 `codex` 构建，再构建并 strip `codex` 与 `codex-code-mode-host`。产物保持官方相对布局 `codex`、`codex-code-mode-host`、`codex-resources/bwrap`；单独一个 `codex` 不构成可执行只读 sandbox 的真实 release runtime。
    - 校验 `codex --version` 与解析出的 Release 一致。
    - 上传二进制和不含敏感信息的来源元数据，供同一 workflow 的测试 job 下载。
-2. monorepo CI 和 Android field E2E 各自在云端消费该构建产物；本地不构建官方 Codex。
+2. monorepo CI 和 Android field E2E 各自在云端消费该构建产物；本地不构建官方 Codex。GitHub hosted Ubuntu 默认由 AppArmor 禁止非特权 user namespace，直接运行官方 bwrap 会以 `Operation not permitted` 退出；两个消费 job 必须复用官方 Codex Linux CI 的准备步骤，启用 `kernel.unprivileged_userns_clone`，并在内核暴露对应开关时关闭 `kernel.apparmor_restrict_unprivileged_userns`，然后继续使用默认 bubblewrap 路径，不得改用 deprecated Landlock 来制造假通过。
 3. `0.145.0` stable-v2 类型漂移 job 继续安装官方已发布包并只验证最低协议基线。
 
 ## 模型协议模拟器
@@ -111,4 +111,5 @@
 - [x] 修复首次真实生命周期运行暴露的 `thread/status/changed: idle` 与稍后 `turn/completed` 之间的测试竞态；门禁现在独立等待两条边界并保留有界、无明文的方法顺序诊断。
 - [x] 让精确 target cache 命中时复用已校验的源码构建二进制，避免每条工作流重复执行 40 分钟冷编译。
 - [x] 修复 run `30640510094` 暴露的单文件伪 bundle：补齐官方 bundled bwrap/摘要和 code-mode host，并要求真实 shell command 的流式与最终输出、退出码全部成功。
+- [x] 修复 run `30642025606` 暴露的 hosted runner user namespace 限制：按官方 Codex CI 配置 AppArmor/sysctl，使完整 bundle 的默认 bubblewrap 沙箱实际执行命令，不降级到 deprecated Landlock。
 - [ ] monorepo required gate 与手动 Android field E2E 全绿后归档本计划。
