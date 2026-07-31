@@ -28,7 +28,7 @@ vi.mock('@/daemon/ensureDaemonRunning', () => ({
   ensureDaemonRunning: mocks.mockEnsureDaemonRunning,
 }))
 
-import { handleCodexCommand } from './codexCommand'
+import { handleCodexCommand, parseCodexCommandArgs } from './codexCommand'
 
 describe('handleCodexCommand', () => {
   beforeEach(() => {
@@ -129,5 +129,44 @@ describe('handleCodexCommand', () => {
       model: 'gpt-5.6-sol',
       effort: 'ultra',
     })
+  })
+
+  it('validates daemon-only compatibility flags and preserves Codex options', () => {
+    expect(parseCodexCommandArgs([
+      '--happy-starting-mode', 'remote',
+      '--started-by', 'daemon',
+      '--model', 'gpt-5.6-sol',
+      '--effort', 'max',
+      '--permission-mode', 'read-only',
+    ])).toMatchObject({
+      startedBy: 'daemon',
+      model: 'gpt-5.6-sol',
+      effort: 'max',
+      permissionMode: 'read-only',
+    })
+  })
+
+  it.each(['--chrome', '--no-chrome', '--claude-env', '--js-runtime', '--settings'])(
+    'rejects removed Claude option %s before authentication',
+    async (flag) => {
+      await expect(handleCodexCommand([flag])).rejects.toThrow('Claude-only option')
+      expect(mocks.mockAuthAndSetupMachineIfNeeded).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects unknown options and Claude-only permission modes', async () => {
+    await expect(handleCodexCommand(['--unknown'])).rejects.toThrow('Unknown Codex option')
+    await expect(handleCodexCommand(['--permission-mode', 'bypassPermissions']))
+      .rejects.toThrow('Unsupported Codex permission mode')
+    expect(mocks.mockAuthAndSetupMachineIfNeeded).not.toHaveBeenCalled()
+  })
+
+  it('shows help without authenticating or starting a daemon', async () => {
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    await handleCodexCommand(['--help'])
+    expect(consoleLog).toHaveBeenCalledWith(expect.stringContaining('happy codex [options]'))
+    expect(mocks.mockAuthAndSetupMachineIfNeeded).not.toHaveBeenCalled()
+    expect(mocks.mockEnsureDaemonRunning).not.toHaveBeenCalled()
+    consoleLog.mockRestore()
   })
 })

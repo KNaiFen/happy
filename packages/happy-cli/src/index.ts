@@ -8,12 +8,10 @@
 
 
 import chalk from 'chalk'
-import { runClaude, StartOptions } from '@/claude/runClaude'
 import { logger } from './ui/logger'
-import { readCredentials, readDaemonState, readSettings } from './persistence'
+import { readCredentials, readDaemonState } from './persistence'
 import { authAndSetupMachineIfNeeded } from './ui/auth'
 import packageJson from '../package.json'
-import { z } from 'zod'
 import { startDaemon } from './daemon/run'
 import { stopDaemon } from './daemon/controlClient'
 import { getLatestDaemonLog } from './ui/logger'
@@ -27,9 +25,6 @@ import { handleAuthCommand } from './commands/auth'
 import { handleConnectCommand } from './commands/connect'
 import { handleSandboxCommand } from './commands/sandbox'
 import { handleServerCommand } from './commands/server'
-import { claudeCliPath } from './claude/claudeLocal'
-import { execFileSync } from 'node:child_process'
-import { extractNoSandboxFlag } from './utils/sandboxFlags'
 import { handleResumeCommand } from '@/resume/handleResumeCommand'
 import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
@@ -613,177 +608,12 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
     }
     return;
   } else {
-
-    // If the first argument is claude, remove it
-    if (args.length > 0 && args[0] === 'claude') {
-      args.shift()
+    if (args[0] === 'claude') {
+      console.error(chalk.red('Error: Claude support has been removed. Run `happy` or `happy codex` to start Codex.'))
+      process.exit(1)
     }
-
-    // Parse command line arguments for main command
-    const options: StartOptions = {}
-    let showHelp = false
-    let showVersion = false
-    let chromeOverride: boolean | undefined = undefined  // Track explicit --chrome or --no-chrome
-    const unknownArgs: string[] = [] // Collect unknown args to pass through to claude
-    const parsedSandboxFlag = extractNoSandboxFlag(args)
-    options.noSandbox = parsedSandboxFlag.noSandbox
-    args.length = 0
-    args.push(...parsedSandboxFlag.args)
-
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i]
-
-      if (arg === '-h' || arg === '--help') {
-        showHelp = true
-        // Also pass through to claude
-        unknownArgs.push(arg)
-      } else if (arg === '-v' || arg === '--version') {
-        showVersion = true
-        // Also pass through to claude (will show after our version)
-        unknownArgs.push(arg)
-      } else if (arg === '--happy-starting-mode') {
-        options.startingMode = z.enum(['local', 'remote']).parse(args[++i])
-      } else if (arg === '--yolo') {
-        // Shortcut for --dangerously-skip-permissions
-        unknownArgs.push('--dangerously-skip-permissions')
-      } else if (arg === '--model') {
-        options.model = args[++i]
-      } else if (arg === '--permission-mode') {
-        options.permissionMode = args[++i] as StartOptions['permissionMode']
-      } else if (arg === '--effort') {
-        options.effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']).parse(args[++i])
-      } else if (arg === '--started-by') {
-        options.startedBy = args[++i] as 'daemon' | 'terminal'
-      } else if (arg === '--js-runtime') {
-        const runtime = args[++i]
-        if (runtime !== 'node' && runtime !== 'bun') {
-          console.error(chalk.red(`Invalid --js-runtime value: ${runtime}. Must be 'node' or 'bun'`))
-          process.exit(1)
-        }
-        options.jsRuntime = runtime
-      } else if (arg === '--claude-env') {
-        // Parse KEY=VALUE environment variable to pass to Claude
-        const envArg = args[++i]
-        if (envArg && envArg.includes('=')) {
-          const eqIndex = envArg.indexOf('=')
-          const key = envArg.substring(0, eqIndex)
-          const value = envArg.substring(eqIndex + 1)
-          options.claudeEnvVars = options.claudeEnvVars || {}
-          options.claudeEnvVars[key] = value
-        } else {
-          console.error(chalk.red(`Invalid --claude-env format: ${envArg}. Expected KEY=VALUE`))
-          process.exit(1)
-        }
-      } else if (arg === '--chrome') {
-        chromeOverride = true
-        // We'll add --chrome to claudeArgs after resolving settings default
-      } else if (arg === '--no-chrome') {
-        chromeOverride = false
-        // Happy-specific flag to disable chrome even if default is on
-      } else if (arg === '--settings') {
-        // Intercept --settings flag - Happy uses this internally for session hooks
-        const settingsValue = args[++i] // consume the value
-        console.warn(chalk.yellow(`⚠️  Warning: --settings is used internally by Happy for session tracking.`))
-        console.warn(chalk.yellow(`   Your settings file "${settingsValue}" will be ignored.`))
-        console.warn(chalk.yellow(`   To configure Claude, edit ~/.claude/settings.json instead.`))
-        // Don't pass through to claudeArgs
-      } else {
-        // Pass unknown arguments through to claude
-        unknownArgs.push(arg)
-        // Check if this arg expects a value (simplified check for common patterns)
-        if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-          unknownArgs.push(args[++i])
-        }
-      }
-    }
-
-    // Add unknown args to claudeArgs
-    if (unknownArgs.length > 0) {
-      options.claudeArgs = [...(options.claudeArgs || []), ...unknownArgs]
-    }
-
-    // Resolve Chrome mode: explicit flag > settings > false
-    const settings = await readSettings()
-    const chromeEnabled = chromeOverride ?? settings.chromeMode ?? false
-    if (chromeEnabled) {
-      options.claudeArgs = [...(options.claudeArgs || []), '--chrome']
-    }
-
-    // Show help
-    if (showHelp) {
-      console.log(`
-${chalk.bold('happy')} - Claude Code On the Go
-
-${chalk.bold('Usage:')}
-  happy [options]         Start Claude with mobile control
-  happy auth              Manage authentication
-  happy resume            Resume a previous Happy session by Happy session ID
-  happy codex             Start Codex mode
-  happy gemini            Start Gemini mode (ACP) [deprecated — use agy]
-  happy agy               Start agy (Antigravity CLI) mode
-  happy acp               Start a generic ACP-compatible agent
-  happy connect           Connect AI vendor API keys
-  happy sandbox           Configure and manage OS-level sandboxing
-  happy notify            Send push notification
-  happy daemon            Manage background service that allows
-                            to spawn new sessions away from your computer
-  happy doctor            System diagnostics & troubleshooting
-
-${chalk.bold('Examples:')}
-  happy                    Start session
-  happy resume cmmij8      Resume a previous session by Happy session ID
-  happy --yolo             Start with bypassing permissions
-                            happy sugar for --dangerously-skip-permissions
-  happy --chrome           Enable Chrome browser access for this session
-  happy --no-chrome        Disable Chrome even if default is on
-  happy --no-sandbox       Disable Happy sandbox for this session
-  happy --js-runtime bun   Use bun instead of node to spawn Claude Code
-  happy --claude-env ANTHROPIC_BASE_URL=http://127.0.0.1:3456
-                           Use a custom API endpoint (e.g., claude-code-router)
-  happy acp gemini         Start Gemini via generic ACP runner
-  happy acp -- opencode --acp
-                           Start a custom ACP command
-  happy acp opencode --verbose
-                           Print raw ACP backend/envelope events
-  happy auth login --force Authenticate
-  happy doctor             Run diagnostics
-
-${chalk.bold('Happy supports ALL Claude options!')}
-  Use any claude flag with happy as you would with claude. Our favorite:
-
-  happy --resume
-
-${chalk.gray('─'.repeat(60))}
-${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
-`)
-      
-      // Run claude --help and display its output
-      // Use execFileSync directly with claude CLI for runtime-agnostic compatibility
-      try {
-        const claudeHelp = execFileSync(claudeCliPath, ['--help'], { encoding: 'utf8', windowsHide: true })
-        console.log(claudeHelp)
-      } catch (e) {
-        console.log(chalk.yellow('Could not retrieve claude help. Make sure claude is installed.'))
-      }
-      
-      process.exit(0)
-    }
-
-    // Show version
-    if (showVersion) {
-      console.log(`happy version: ${packageJson.version}`)
-      // Don't exit - continue to pass --version to Claude Code
-    }
-
-    // Normal flow - auth and machine setup
-    const {
-      credentials
-    } = await authAndSetupMachineIfNeeded();
-    await ensureDaemonRunning()
-
-    // Start the CLI
     try {
-      await runClaude(credentials, options);
+      await handleCodexCommand(args)
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
       if (process.env.DEBUG) {
