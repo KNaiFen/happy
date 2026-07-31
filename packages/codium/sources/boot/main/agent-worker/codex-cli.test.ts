@@ -11,10 +11,13 @@ import {
 
 function createFakeChild() {
     const child = new EventEmitter() as EventEmitter & {
+        stdin: EventEmitter & { end: ReturnType<typeof vi.fn> }
         stdout: EventEmitter
         stderr: EventEmitter
         kill: ReturnType<typeof vi.fn>
     }
+    child.stdin = new EventEmitter() as EventEmitter & { end: ReturnType<typeof vi.fn> }
+    child.stdin.end = vi.fn()
     child.stdout = new EventEmitter()
     child.stderr = new EventEmitter()
     child.kill = vi.fn(() => true)
@@ -133,6 +136,8 @@ describe('launchCodexTurn', () => {
         }, harness.observer, harness.dependencies)
 
         expect(harness.child.stdout.listenerCount('data')).toBe(1)
+        expect(harness.child.stdin.listenerCount('error')).toBe(1)
+        expect(harness.child.stdin.end).toHaveBeenCalledTimes(1)
         harness.child.stdout.emit('data', Buffer.alloc(128 * 1024))
         harness.child.emit('close', 0, null)
         await handle.completed
@@ -162,6 +167,22 @@ describe('launchCodexTurn', () => {
         expect(harness.child.kill).toHaveBeenCalledWith('SIGINT')
         harness.child.emit('close', null, 'SIGINT')
         await handle.completed
+    })
+
+    it('absorbs a stdin pipe error while the child completes', async () => {
+        const harness = createHarness({ pathExists: false })
+        const handle = await launchCodexTurn(
+            { prompt: 'finish after stdin closes' },
+            harness.observer,
+            harness.dependencies,
+        )
+
+        harness.child.stdin.emit('error', new Error('stdin EPIPE'))
+        harness.child.emit('close', 0, null)
+        await handle.completed
+
+        expect(harness.observer.onTurnDone).toHaveBeenCalledWith({ subtype: 'success' })
+        expect(harness.observer.onError).not.toHaveBeenCalled()
     })
 
     it('reports bounded stderr on non-zero exit and still cleans up', async () => {

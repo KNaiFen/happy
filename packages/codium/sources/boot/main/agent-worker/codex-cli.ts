@@ -174,6 +174,10 @@ export async function launchCodexTurn(
         child.stderr.on('data', (chunk) => {
             stderr = appendBounded(stderr, String(chunk), STDERR_LIMIT_BYTES)
         })
+        child.stdin.on('error', (error) => {
+            stderr = appendBounded(stderr, errorMessage(error), STDERR_LIMIT_BYTES)
+        })
+        child.stdin.end()
 
         const completed = new Promise<void>((resolve) => {
             let finalized = false

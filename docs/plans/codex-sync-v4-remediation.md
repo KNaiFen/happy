@@ -38,8 +38,10 @@
   新旧官方布局，并把两种布局纳入单测和云端实际执行门禁。若实际 runner 超时，门禁
   只输出 request count、工具回传标记与请求类型以定位阶段，绝不输出 prompt、响应或
   工具参数。该诊断已确认超时发生在 provider 请求前；因为官方 `codex exec` 默认
-  要求 Git 工作目录，smoke 将初始化临时空仓库，不为产品 runner 增加
-  `--skip-git-repo-check`。
+  要求 Git 工作目录，smoke 初始化临时空仓库，不为产品 runner 增加
+  `--skip-git-repo-check`。随后确认真实根因是 Codium 保留了 child stdin pipe：
+  `codex exec` 会把已打开的 pipe 当作额外上下文并等待 EOF，因此 runner 必须在
+  spawn 后立即关闭 stdin。
 - 待完成：在同一协调版本上完成云端构建、真实 app-server/Codium runtime、tgz 与
   Android workflow 验收，随后同步 `main`。
 
