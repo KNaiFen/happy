@@ -566,6 +566,7 @@ export class ApiSessionClient extends EventEmitter {
                     token: this.token,
                     machineId,
                     diagnostics,
+                    onSessionArchived: () => this.emit('archived'),
                     onEntity: async (event) => {
                         assertCurrent();
                         if (!onEntity) throw new Error('Sync v4 entity handler was not initialized');

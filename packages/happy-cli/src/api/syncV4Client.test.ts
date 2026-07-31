@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     SyncV4Client,
+    SyncV4SessionArchivedError,
     SyncV4SnapshotRequiredError,
     type SyncV4AppliedEntity,
     type SyncV4Transport,
@@ -147,6 +148,30 @@ afterEach(async () => {
 });
 
 describe("SyncV4Client", () => {
+    it("stops retrying and preserves the outbox when the relay archives the session", async () => {
+        const root = await createRoot();
+        const transport = new FakeTransport();
+        transport.postMutations = async () => {
+            throw new SyncV4SessionArchivedError("session-1");
+        };
+        let archivedCount = 0;
+        const client = await SyncV4Client.create({
+            sessionId: "session-1",
+            sessionKey,
+            journalRoot: root,
+            transport,
+            onSessionArchived: () => { archivedCount += 1; },
+            onEntity: async () => undefined,
+        });
+        openClients.add(client);
+        await client.publishEntity(part("archived-outbox"));
+
+        await expect(client.flushOutboundOnce()).resolves.toBeUndefined();
+        expect(archivedCount).toBe(1);
+        await expect(client.publishEntity(part("after-archive")))
+            .rejects.toThrow("stopped");
+    });
+
     it("keeps synchronization running when the diagnostic sink fails", async () => {
         const root = await createRoot();
         const transport = new FakeTransport();

@@ -450,9 +450,10 @@ export async function runCodex(opts: {
     const reconnectAgentStateVersion = process.env.HAPPY_RECONNECT_AGENT_STATE_VERSION;
 
     let response: ApiSession | null;
+    let reconnectResponse: ApiSession | null = null;
     if (reconnectSessionId && reconnectKeyBase64 && reconnectVariant) {
         logger.debug(`[START] Reconnecting to existing session ${syncV4DiagnosticHash(reconnectSessionId)}`);
-        response = {
+        reconnectResponse = {
             id: reconnectSessionId,
             seq: parseInt(reconnectSeq || '0', 10),
             encryptionKey: decodeBase64(reconnectKeyBase64),
@@ -462,6 +463,9 @@ export async function runCodex(opts: {
             agentState: state,
             agentStateVersion: parseInt(reconnectAgentStateVersion || '0', 10),
         };
+        response = await api.unarchiveSession(reconnectSessionId)
+            ? reconnectResponse
+            : null;
     } else {
         response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
     }
@@ -473,6 +477,16 @@ export async function runCodex(opts: {
     let permissionHandler: CodexPermissionHandler;
     let reasoningProcessor!: ReasoningProcessor;
     let abortInProgress: Promise<void> | null = null;
+    let abortController = new AbortController();
+    let shouldExit = false;
+    const observeSessionArchive = (target: ApiSessionClientContract): void => {
+        target.on('archived', () => {
+            if (shouldExit) return;
+            logger.debug('[Codex] Relay archived the session; scheduling orderly shutdown');
+            shouldExit = true;
+            abortController.abort();
+        });
+    };
     const codexV4Runtime = {
         rootBinding: null as CodexV4SessionBinding | null,
         router: null as CodexV4ThreadRouter | null,
@@ -509,7 +523,15 @@ export async function runCodex(opts: {
         metadata,
         state,
         response,
+        ...(reconnectResponse && reconnectSessionId ? {
+            resumeExistingSession: async () => (
+                await api.unarchiveSession(reconnectSessionId)
+                    ? reconnectResponse
+                    : null
+            ),
+        } : {}),
         onSessionSwap: async (newSession) => {
+            observeSessionArchive(newSession);
             if (bindCodexV4Session) {
                 try {
                     await bindCodexV4Session(newSession);
@@ -531,6 +553,7 @@ export async function runCodex(opts: {
         }
     });
     session = initialSession;
+    observeSessionArchive(initialSession);
     const legacyOutput = new CodexLegacyOutput(
         () => session,
         () => shouldSuppressCodexLegacyOutput({
@@ -834,9 +857,6 @@ export async function runCodex(opts: {
 
     // AbortController is used ONLY to wake messageQueue.waitForMessages when idle.
     // Turn cancellation uses client.interruptTurn() — no AbortController hack needed.
-    let abortController = new AbortController();
-    let shouldExit = false;
-
     /**
      * Handles aborting the current task/inference without exiting the process.
      * This is the equivalent of Claude Code's abort - it stops what's currently

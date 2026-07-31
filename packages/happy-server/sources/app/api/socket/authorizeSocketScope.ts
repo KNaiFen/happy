@@ -43,7 +43,7 @@ export async function authorizeSocketScope(input: SocketScopeInput): Promise<boo
     }
     if (!input.sessionId) return false;
     const session = await db.session.findFirst({
-        where: { id: input.sessionId, accountId: input.userId },
+        where: { id: input.sessionId, accountId: input.userId, archivedAt: null },
         select: {
             originMachineId: true,
             originMachine: {

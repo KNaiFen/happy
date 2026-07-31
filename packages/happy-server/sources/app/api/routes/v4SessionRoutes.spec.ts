@@ -12,6 +12,7 @@ type SessionRecord = {
     accountId: string;
     syncV4Seq: number;
     originMachineId: string | null;
+    archivedAt: Date | null;
 };
 
 type MachineRecord = {
@@ -105,6 +106,7 @@ const {
             accountId,
             syncV4Seq: 0,
             originMachineId,
+            archivedAt: null,
         });
     };
 
@@ -121,6 +123,10 @@ const {
         const session = state.sessions.find((candidate) => (
             candidate.id === args?.where?.id
             && candidate.accountId === args?.where?.accountId
+            && (
+                args?.where?.archivedAt === undefined
+                || candidate.archivedAt === args.where.archivedAt
+            )
             && (
                 args?.where?.originMachineId === undefined
                 || candidate.originMachineId === args.where.originMachineId
@@ -145,6 +151,9 @@ const {
     const sessionUpdate = vi.fn(async (args: any) => {
         const session = state.sessions.find((candidate) => candidate.id === args?.where?.id);
         if (!session) throw new Error("Session not found");
+        if (args?.where?.archivedAt === null && session.archivedAt !== null) {
+            throw new Error("Session not found");
+        }
         session.syncV4Seq += args?.data?.syncV4Seq?.increment ?? 0;
         return selectFields(session as unknown as Record<string, unknown>, args?.select);
     });
@@ -342,7 +351,7 @@ const mutation = {
     ciphertext: "encrypted-v1",
 };
 
-async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.9"): Promise<Fastify> {
+async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.10"): Promise<Fastify> {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
@@ -384,12 +393,12 @@ describe("v4SessionRoutes", () => {
     });
 
     it("accepts only coordinated CLI and App versions on v4 data routes", async () => {
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.9")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("android/1.11.15")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.8")).toEqual({
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.10")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("android/1.11.17")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.9")).toEqual({
             compatible: false,
             clientType: "happy-cli",
-            minimumVersion: "1.4.9",
+            minimumVersion: "1.4.10",
         });
         expect(getSyncV4ClientCompatibility("test/9.0.0")).toEqual({
             compatible: false,
@@ -404,14 +413,14 @@ describe("v4SessionRoutes", () => {
             url: "/v4/sessions/session-1/changes?after_seq=0",
             headers: {
                 "x-user-id": "user-1",
-                "x-happy-client": "web/1.11.14",
+                "x-happy-client": "web/1.11.16",
             },
         });
         expect(response.statusCode).toBe(426);
         expect(response.json()).toEqual({
             error: "syncV4UpgradeRequired",
             clientType: "happy-app",
-            minimumVersion: "1.11.15",
+            minimumVersion: "1.11.17",
         });
         expect(operationMetricMock).toHaveBeenCalledWith({
             operation: "changes",
@@ -602,6 +611,38 @@ describe("v4SessionRoutes", () => {
         });
     });
 
+    it("keeps archived v4 history readable but rejects every new mutation", async () => {
+        seedSession("session-archived", "user-1");
+        app = await createApp();
+        const initial = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-archived/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [mutation] },
+        });
+        expect(initial.statusCode).toBe(200);
+        state.sessions[0].archivedAt = new Date("2026-01-02T00:00:00.000Z");
+
+        const write = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-archived/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations: [{ ...mutation, mutationId: "mutation-2", revision: 2 }] },
+        });
+        const read = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-archived/changes?after_seq=0",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(write.statusCode).toBe(409);
+        expect(write.json()).toEqual({ error: "sessionArchived" });
+        expect(read.statusCode).toBe(200);
+        expect(read.json().changes).toHaveLength(1);
+        expect(state.sessions[0].syncV4Seq).toBe(1);
+        expect(state.mutations).toHaveLength(1);
+    });
+
     it("fails open when statusCode is exposed through a hostile getter or proxy", () => {
         const throwingGetter = Object.defineProperty(new Error("private-error"), "statusCode", {
             get: () => {
@@ -650,8 +691,8 @@ describe("v4SessionRoutes", () => {
             codex: {
                 enabled: false,
                 protocolVersion: 4,
-                minimumHappyCliVersion: "1.4.9",
-                minimumHappyAppVersion: "1.11.15",
+                minimumHappyCliVersion: "1.4.10",
+                minimumHappyAppVersion: "1.11.17",
                 minimumCodexCliVersion: "0.145.0",
             },
         });

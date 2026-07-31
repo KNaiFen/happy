@@ -28,7 +28,8 @@ import { Modal } from '@/modal';
 import { voiceHooks } from '@/realtime/hooks/voiceHooks';
 import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
 import { gitStatusSync } from '@/sync/gitStatusSync';
-import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat, sessionKill, sessionArchive } from '@/sync/ops';
+import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat } from '@/sync/ops';
+import { archiveSession } from '@/sync/sessionArchiveCoordinator';
 import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { resolveCodexV4SessionCapabilities } from '@/sync/codexV4Capabilities';
@@ -210,13 +211,10 @@ export const SessionView = React.memo((props: { id: string }) => {
         });
     }, [rawSideChats]);
 
-    // Best-effort close: kill the agent, fall back to server-side archive.
+    // The relay tombstone closes the child session; CLI shutdown is best-effort.
     const archiveSideChatSession = React.useCallback((id: string) => {
         (async () => {
-            const killed = await sessionKill(id);
-            if (!killed.success) {
-                await sessionArchive(id);
-            }
+            await archiveSession(id);
             try {
                 await sync.refreshSessions();
             } catch {
@@ -826,12 +824,51 @@ export function SessionViewLoaded({
         getSuggestions(sessionId, query)
     ), [sessionId]);
 
-    const connectionStatus = React.useMemo(() => ({
-        text: sessionStatus.statusText,
-        color: sessionStatus.statusColor,
-        dotColor: sessionStatus.statusDotColor,
-        isPulsing: sessionStatus.isPulsing,
-    }), [sessionStatus.statusText, sessionStatus.statusColor, sessionStatus.statusDotColor, sessionStatus.isPulsing]);
+    const connectionStatus = React.useMemo(() => {
+        if (!isCodexV4Active) {
+            return {
+                text: sessionStatus.statusText,
+                color: sessionStatus.statusColor,
+                dotColor: sessionStatus.statusDotColor,
+                isPulsing: sessionStatus.isPulsing,
+            };
+        }
+        const runtime = codexV4Session?.runtime;
+        if (runtime?.execution.type === 'systemError') {
+            return {
+                text: t('status.error'),
+                color: '#FF3B30',
+                dotColor: '#FF3B30',
+                isPulsing: false,
+            };
+        }
+        const isConnected = session.presence === 'online'
+            && runtime?.connection === 'connected'
+            && runtime.statusUnknown !== true
+            && codexV4Session?.syncHealth?.type === 'ready';
+        return isConnected
+            ? {
+                text: t('status.online'),
+                color: '#34C759',
+                dotColor: '#34C759',
+                isPulsing: false,
+            }
+            : {
+                text: t('status.unknown'),
+                color: '#999',
+                dotColor: '#999',
+                isPulsing: false,
+            };
+    }, [
+        isCodexV4Active,
+        sessionStatus.statusText,
+        sessionStatus.statusColor,
+        sessionStatus.statusDotColor,
+        sessionStatus.isPulsing,
+        session.presence,
+        codexV4Session?.runtime,
+        codexV4Session?.syncHealth?.type,
+    ]);
 
     const usageData = React.useMemo(() => {
         if (isCodexV4Active) {

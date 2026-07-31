@@ -259,6 +259,25 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(syncV4.close).toHaveBeenCalledTimes(1);
     });
 
+    it('forwards a Sync v4 archive tombstone through the session lifecycle event', async () => {
+        const syncV4 = {
+            start: vi.fn(async () => undefined),
+            stop: vi.fn(),
+            close: vi.fn(async () => undefined),
+        } as unknown as SyncV4Client;
+        const create = vi.spyOn(SyncV4Client, 'create').mockResolvedValue(syncV4);
+        const client = new ApiSessionClient('fake-token', session);
+        const archived = vi.fn();
+        client.on('archived', archived);
+
+        await client.enableSyncV4(() => async () => undefined);
+        const options = create.mock.calls[0][0] as { onSessionArchived?: () => void };
+        options.onSessionArchived?.();
+
+        expect(archived).toHaveBeenCalledOnce();
+        await client.close();
+    });
+
     it('refuses to start Sync v4 when decrypted machine identity is unavailable', async () => {
         const create = vi.spyOn(SyncV4Client, 'create');
         const client = new ApiSessionClient('fake-token', session);

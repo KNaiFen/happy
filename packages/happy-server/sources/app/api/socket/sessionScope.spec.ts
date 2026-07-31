@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionWhereForConnection } from "./sessionScope";
+import { sessionWhereForConnection, sessionWriteWhereForConnection } from "./sessionScope";
 
 const socket = {} as never;
 
@@ -54,5 +54,32 @@ describe("sessionWhereForConnection", () => {
             },
             "session-2",
         )).toBeNull();
+    });
+
+    it("requires an unarchived session for socket writes", () => {
+        expect(sessionWriteWhereForConnection(
+            "user-1",
+            {
+                connectionType: "session-scoped",
+                socket,
+                userId: "user-1",
+                sessionId: "session-1",
+                machineId: "machine-1",
+                credentialId: "credential-1",
+            },
+            "session-1",
+        )).toEqual({
+            id: "session-1",
+            accountId: "user-1",
+            archivedAt: null,
+            originMachineId: "machine-1",
+            originMachine: {
+                is: {
+                    accountId: "user-1",
+                    credentialId: "credential-1",
+                    deletedAt: null,
+                },
+            },
+        });
     });
 });

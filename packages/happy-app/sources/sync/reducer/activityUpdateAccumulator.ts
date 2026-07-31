@@ -13,6 +13,14 @@ export class ActivityUpdateAccumulator {
     addUpdate(update: ApiEphemeralActivityUpdate): void {
         const sessionId = update.id;
         const lastState = this.lastEmittedStates.get(sessionId);
+        const pendingState = this.pendingUpdates.get(sessionId);
+        const newestState = pendingState && (!lastState || pendingState.activeAt >= lastState.activeAt)
+            ? pendingState
+            : lastState;
+
+        if (newestState && !shouldApplySessionActivity(newestState, update)) {
+            return;
+        }
 
         // Check if this is a critical timestamp update (more than half of disconnect timeout old)
         const timeSinceLastUpdate = lastState ? update.activeAt - lastState.activeAt : 0;
@@ -93,4 +101,13 @@ export class ActivityUpdateAccumulator {
         }
         this.flushPendingUpdates();
     }
+}
+
+export function shouldApplySessionActivity(
+    current: Pick<ApiEphemeralActivityUpdate, 'active' | 'activeAt'>,
+    update: Pick<ApiEphemeralActivityUpdate, 'active' | 'activeAt'>,
+): boolean {
+    if (update.activeAt < current.activeAt) return false;
+    if (update.activeAt === current.activeAt && !current.active && update.active) return false;
+    return true;
 }

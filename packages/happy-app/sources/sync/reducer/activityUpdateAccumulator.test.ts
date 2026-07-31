@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ApiEphemeralActivityUpdate } from '../apiTypes';
-import { ActivityUpdateAccumulator } from './activityUpdateAccumulator';
+import { ActivityUpdateAccumulator, shouldApplySessionActivity } from './activityUpdateAccumulator';
 
 describe('ActivityUpdateAccumulator Smart Debounce', () => {
     let mockFlushHandler: ReturnType<typeof vi.fn>;
@@ -115,6 +115,35 @@ describe('ActivityUpdateAccumulator Smart Debounce', () => {
                 new Map([['session1', update]])
             );
         });
+    });
+
+    describe('out-of-order lifecycle updates', () => {
+        it('drops a stale heartbeat after an archive event', () => {
+            const archived: ApiEphemeralActivityUpdate = {
+                type: 'activity', id: 'session1', active: false, activeAt: 2_000, thinking: false,
+            };
+            const staleHeartbeat: ApiEphemeralActivityUpdate = {
+                type: 'activity', id: 'session1', active: true, activeAt: 1_999, thinking: true,
+            };
+
+            accumulator.addUpdate(archived);
+            accumulator.addUpdate(staleHeartbeat);
+
+            expect(mockFlushHandler).toHaveBeenCalledOnce();
+            expect(mockFlushHandler).toHaveBeenCalledWith(new Map([['session1', archived]]));
+        });
+
+        it('keeps inactive state on a timestamp tie but accepts a newer unarchive', () => {
+            expect(shouldApplySessionActivity(
+                { active: false, activeAt: 2_000 },
+                { active: true, activeAt: 2_000 },
+            )).toBe(false);
+            expect(shouldApplySessionActivity(
+                { active: false, activeAt: 2_000 },
+                { active: true, activeAt: 2_001 },
+            )).toBe(true);
+        });
+
     });
 
     describe('debounced emission for timestamp-only changes', () => {

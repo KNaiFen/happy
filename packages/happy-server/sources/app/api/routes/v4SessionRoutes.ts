@@ -45,8 +45,8 @@ const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
 const JOURNAL_CLEANUP_INTERVAL = 1_024;
 const RESPONSE_FETCH_CHUNK_SIZE = 16;
 const SYNC_V4_MUTATION_BODY_LIMIT = MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH + 1024 * 1024;
-const MINIMUM_HAPPY_CLI_VERSION = "1.4.9";
-const MINIMUM_HAPPY_APP_VERSION = "1.11.15";
+const MINIMUM_HAPPY_CLI_VERSION = "1.4.10";
+const MINIMUM_HAPPY_APP_VERSION = "1.11.17";
 const MINIMUM_CODEX_CLI_VERSION = "0.145.0";
 
 type SyncV4MetricOperation =
@@ -73,6 +73,13 @@ class SyncV4SessionReadOnlyError extends Error {
     constructor() {
         super("Sync v4 session is read-only");
         this.name = "SyncV4SessionReadOnlyError";
+    }
+}
+
+class SyncV4SessionArchivedError extends Error {
+    constructor() {
+        super("Sync v4 session is archived");
+        this.name = "SyncV4SessionArchivedError";
     }
 }
 
@@ -228,6 +235,7 @@ async function findOwnedSession(
         select: {
             id: true,
             syncV4Seq: true,
+            archivedAt: true,
             originMachineId: true,
             originMachine: {
                 select: { deletedAt: true },
@@ -386,6 +394,9 @@ export function v4SessionRoutes(app: Fastify): void {
             const result = await inTx(async (tx) => {
                 const session = await findOwnedSession(tx, request, sessionId, access);
                 if (!session) return null;
+                if (session.archivedAt) {
+                    throw new SyncV4SessionArchivedError();
+                }
                 if (
                     !request.authCredentialId
                     && (
@@ -431,7 +442,7 @@ export function v4SessionRoutes(app: Fastify): void {
                         throw new Error("Sync v4 sequence space exhausted");
                     }
                     const updatedSession = await tx.session.update({
-                        where: { id: sessionId },
+                        where: { id: sessionId, archivedAt: null },
                         data: { syncV4Seq: { increment: newClassifications.length } },
                         select: { syncV4Seq: true },
                     });
@@ -614,6 +625,31 @@ export function v4SessionRoutes(app: Fastify): void {
             );
             return reply.send({ acknowledgements: result.acknowledgements });
         } catch (error) {
+            if (error instanceof SyncV4SessionArchivedError) {
+                syncV4MutationResultsCounter.inc({
+                    result: "session_archived",
+                    ...getSyncV4MetricsLabelsFromRequest(request),
+                });
+                logServerSyncV4Diagnostic(request, {
+                    level: "info",
+                    event: "ack",
+                    phase: "failed",
+                    transportOperation: "mutations",
+                    sessionHash,
+                    httpStatus: 409,
+                    errorKind: "conflict",
+                    count: requestMutationCount,
+                    durationMs: elapsedMs(startedAt),
+                });
+                observeSyncV4Operation(
+                    request,
+                    "mutations",
+                    "conflict",
+                    startedAt,
+                    requestMutationCount,
+                );
+                return reply.code(409).send({ error: "sessionArchived" });
+            }
             if (error instanceof SyncV4SessionReadOnlyError) {
                 syncV4MutationResultsCounter.inc({
                     result: "session_read_only",

@@ -26,6 +26,32 @@ const part = {
   final: false,
 };
 
+const item = {
+  schemaVersion: 1,
+  entityType: 'codex.item' as const,
+  providerId: 'thread-1\0turn-1\0item-1',
+  createdAt: 10,
+  updatedAt: 11,
+  threadId: 'thread-1',
+  turnId: 'turn-1',
+  itemId: 'item-1',
+  itemType: 'userMessage',
+  status: 'completed',
+  parentItemId: null,
+  clientId: 'command-1',
+  phase: null,
+  startedAt: 10,
+  completedAt: 11,
+  command: null,
+  cwd: null,
+  processId: null,
+  exitCode: null,
+  durationMs: null,
+  server: null,
+  tool: null,
+  arguments: null,
+};
+
 describe('Codex Sync v4 entity schemas', () => {
   it('keeps official goal progress in the recoverable thread projection', () => {
     expect(CodexThreadGoalV4Schema.parse({
@@ -41,6 +67,12 @@ describe('Codex Sync v4 entity schemas', () => {
 
   it('accepts official reasoning summaries as ordered parts', () => {
     expect(CodexEntityV4Schema.parse(part)).toEqual(part);
+  });
+
+  it('accepts stable item event order while remaining compatible with older entities', () => {
+    expect(CodexEntityV4Schema.parse({ ...item, eventSequence: 7 }))
+      .toMatchObject({ eventSequence: 7 });
+    expect(CodexEntityV4Schema.parse(item)).toEqual(item);
   });
 
   it('does not define a raw reasoning part type', () => {

@@ -482,6 +482,118 @@ async function runHttpRelayScenario(): Promise<void> {
             };
         };
 
+        const runArchiveRoundTrip = async (): Promise<void> => {
+            const archiveSessionKey = randomBytes(32);
+            const archiveSessionId = await createSession(
+                baseUrl,
+                token,
+                machineState.id,
+                archiveSessionKey,
+                {
+                    tag: `codex-archive-roundtrip-${Date.now()}`,
+                    threadId: 'archive-thread',
+                },
+            );
+            const journalRoot = join(root, 'archive-roundtrip-cli-journal');
+            let archivedCount = 0;
+            let archiveCli: Awaited<ReturnType<typeof SyncV4Client.create>> | null = null;
+            let archiveApp: ScenarioAppRuntime | null = null;
+            const createArchiveCli = async () => SyncV4Client.create({
+                sessionId: archiveSessionId,
+                sessionKey: archiveSessionKey,
+                journalRoot,
+                serverUrl: baseUrl,
+                token,
+                machineId: machineState.id,
+                pollIntervalMs: 25,
+                onEntity: async () => undefined,
+                onSessionArchived: () => { archivedCount += 1; },
+            });
+            try {
+                archiveCli = await createArchiveCli();
+                await archiveCli.start();
+                await archiveCli.publishEntity(CodexEntityV4Schema.parse({
+                    schemaVersion: 1,
+                    entityType: 'codex.runtime',
+                    providerId: 'archive-thread\0runtime',
+                    createdAt: 1,
+                    updatedAt: 1,
+                    threadId: 'archive-thread',
+                    connection: 'connected',
+                    execution: { type: 'idle' },
+                    statusUnknown: false,
+                    protocolVersion: 'v2',
+                    codexCliVersion: '0.145.0',
+                    syncState: 'ready',
+                    pendingApprovalCount: 0,
+                    pendingUserInputCount: 0,
+                    activeSubagentCount: 0,
+                    lastError: null,
+                    lastKnownAt: 1,
+                }));
+                await archiveCli.flushOutboundOnce();
+
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    const archived = await fetch(
+                        `${baseUrl}/v4/sessions/${encodeURIComponent(archiveSessionId)}/archive`,
+                        { method: 'POST', headers: relayHeaders(appToken) },
+                    );
+                    assert.equal(archived.status, 200, `archive attempt ${attempt + 1} failed`);
+                }
+
+                await archiveCli.publishEntity(CodexEntityV4Schema.parse({
+                    schemaVersion: 1,
+                    entityType: 'codex.commandResult',
+                    providerId: 'archive-pending-command-result',
+                    createdAt: 2,
+                    updatedAt: 2,
+                    commandId: 'archive-pending-command',
+                    threadId: 'archive-thread',
+                    turnId: null,
+                    status: 'succeeded',
+                    providerRequestId: null,
+                    result: { deliveredAfterResume: true },
+                    error: null,
+                }));
+                await archiveCli.flushOutboundOnce();
+                await waitUntil(() => archivedCount === 1, 5_000, 'CLI archive tombstone');
+                await archiveCli.close();
+                archiveCli = null;
+
+                const unarchived = await fetch(
+                    `${baseUrl}/v4/sessions/${encodeURIComponent(archiveSessionId)}/unarchive`,
+                    {
+                        method: 'POST',
+                        headers: {
+                            ...relayHeaders(token),
+                            'X-Happy-Client': `cli-coding-session/${cliVersion}`,
+                        },
+                    },
+                );
+                assert.equal(unarchived.status, 200, 'terminal unarchive failed');
+
+                archiveCli = await createArchiveCli();
+                await archiveCli.start();
+                await archiveCli.flushOutboundOnce();
+                archiveApp = await createAppRuntime(
+                    archiveSessionId,
+                    archiveSessionKey,
+                    'archive-thread',
+                    new ScenarioStorage(),
+                );
+                await archiveApp.client.start();
+                await archiveApp.client.pullChangesOnce();
+                assert(Object.values(archiveApp.projection().entities['codex.commandResult']).some(
+                    (result) => result.providerId === 'archive-pending-command-result',
+                ), 'archived CLI outbox was not delivered after explicit resume');
+            } finally {
+                archiveApp?.client.stop();
+                await archiveCli?.close().catch(() => undefined);
+            }
+        };
+
+        await runArchiveRoundTrip();
+
         const firstCommandSessionKey = randomBytes(32);
         const firstCommandSessionId = await createSession(
             baseUrl,
@@ -589,6 +701,20 @@ async function runHttpRelayScenario(): Promise<void> {
             providerId: firstTurnId,
             turnId: firstTurnId,
         });
+        const firstCommandResult = CodexEntityV4Schema.parse({
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'field-first-command-result-private-v4',
+            createdAt: 40_000,
+            updatedAt: 40_000,
+            commandId: firstCommandId,
+            threadId: firstThreadId,
+            turnId: firstTurnId,
+            status: 'succeeded',
+            providerRequestId: null,
+            result: null,
+            error: null,
+        });
         const firstUserItem = CodexEntityV4Schema.parse({
             ...seedItem(firstThreadId, 1),
             providerId: 'field-first-user-item-private-v4',
@@ -596,6 +722,10 @@ async function runHttpRelayScenario(): Promise<void> {
             itemId: 'field-first-user-item-private-v4',
             itemType: 'userMessage',
             clientId: firstCommandId,
+            eventSequence: 0,
+            createdAt: 30_000,
+            updatedAt: 30_000,
+            startedAt: 30_000,
         });
         const firstUserPart = CodexEntityV4Schema.parse({
             ...seedPart(firstThreadId, 1),
@@ -605,14 +735,34 @@ async function runHttpRelayScenario(): Promise<void> {
             partId: 'field-first-user-part-private-v4',
             content: firstPrompt,
         });
-        const firstAgentItem = CodexEntityV4Schema.parse({
+        const firstMcpItem = CodexEntityV4Schema.parse({
             ...seedItem(firstThreadId, 2),
+            providerId: 'field-first-mcp-item-private-v4',
+            turnId: firstTurnId,
+            itemId: 'field-first-mcp-item-private-v4',
+            itemType: 'mcpToolCall',
+            eventSequence: 1,
+            createdAt: 20_000,
+            updatedAt: 20_000,
+            startedAt: 20_000,
+            completedAt: 20_001,
+            server: 'scenario',
+            tool: 'fast_lookup',
+            arguments: {},
+        });
+        const firstAgentItem = CodexEntityV4Schema.parse({
+            ...seedItem(firstThreadId, 3),
             providerId: 'field-first-agent-item-private-v4',
             turnId: firstTurnId,
             itemId: 'field-first-agent-item-private-v4',
+            eventSequence: 2,
+            createdAt: 10_000,
+            updatedAt: 10_000,
+            startedAt: 10_000,
+            completedAt: 10_001,
         });
         const firstAgentPart = CodexEntityV4Schema.parse({
-            ...seedPart(firstThreadId, 2),
+            ...seedPart(firstThreadId, 3),
             providerId: 'field-first-agent-part-private-v4',
             turnId: firstTurnId,
             itemId: 'field-first-agent-item-private-v4',
@@ -622,6 +772,16 @@ async function runHttpRelayScenario(): Promise<void> {
         for (const entity of [
             firstRuntime,
             firstTurn,
+            firstCommandResult,
+            firstMcpItem,
+        ]) {
+            await firstCommandCli.publishEntity(entity);
+        }
+        await firstCommandCli.flushOutboundOnce();
+        await firstCommandApp.client.pullChangesOnce();
+        assertFastCommandWindowOrder(firstCommandApp.projection(), firstCommandId);
+
+        for (const entity of [
             firstUserItem,
             firstUserPart,
             firstAgentItem,
@@ -637,6 +797,7 @@ async function runHttpRelayScenario(): Promise<void> {
         assert(firstCommandApp.projection().messages.some(
             (message) => message.kind === 'agent-text' && message.text === firstReply,
         ));
+        assertFastProviderOrder(firstCommandApp.projection());
 
         firstCommandApp.client.stop();
         firstCommandApp = await createAppRuntime(
@@ -649,6 +810,7 @@ async function runHttpRelayScenario(): Promise<void> {
         assert(firstCommandApp.projection().messages.some(
             (message) => message.kind === 'agent-text' && message.text === firstReply,
         ));
+        assertFastProviderOrder(firstCommandApp.projection());
         firstCommandApp.client.stop();
         firstCommandApp = null;
         await firstCommandCli.close();
@@ -1283,7 +1445,7 @@ async function runHttpRelayScenario(): Promise<void> {
         }
 
         console.log(
-            `Codex HTTP relay scenario passed: firstCommand=ok noV3Fallback=ok websocket=ok polling=ok restart=ok snapshot410=ok approval=ok child=ok trace=ok privacy=ok entities>=10000 deltas=${deltaCount} p95=${p95.toFixed(1)}ms`,
+            `Codex HTTP relay scenario passed: archiveResume=ok eventOrder=ok firstCommand=ok noV3Fallback=ok websocket=ok polling=ok restart=ok snapshot410=ok approval=ok child=ok trace=ok privacy=ok entities>=10000 deltas=${deltaCount} p95=${p95.toFixed(1)}ms`,
         );
     } finally {
         socket?.disconnect();
@@ -2423,6 +2585,29 @@ function commandStatus(
 ): string | null {
     return Object.values(projection.entities['codex.commandResult'])
         .find((result) => result.commandId === commandId)?.status ?? null;
+}
+
+function assertFastProviderOrder(projection: CodexV4Projection): void {
+    const messageIds = projection.messages.map((message) => message.id);
+    const userIndex = messageIds.indexOf('codex-v4:item:field-first-user-item-private-v4');
+    const mcpIndex = messageIds.indexOf('codex-v4:item:field-first-mcp-item-private-v4');
+    const replyIndex = messageIds.indexOf('codex-v4:item:field-first-agent-item-private-v4');
+    assert(userIndex >= 0 && mcpIndex >= 0 && replyIndex >= 0, 'fast provider timeline is incomplete');
+    assert(
+        replyIndex < mcpIndex && mcpIndex < userIndex,
+        `provider eventSequence order was lost: ${messageIds.join(',')}`,
+    );
+}
+
+function assertFastCommandWindowOrder(projection: CodexV4Projection, commandId: string): void {
+    const messageIds = projection.messages.map((message) => message.id);
+    const commandIndex = messageIds.indexOf(`codex-v4:command:${commandId}`);
+    const mcpIndex = messageIds.indexOf('codex-v4:item:field-first-mcp-item-private-v4');
+    assert(commandIndex >= 0 && mcpIndex >= 0, 'fast command/MCP window is incomplete');
+    assert(
+        mcpIndex < commandIndex,
+        `fast MCP appeared before its local prompt: ${messageIds.join(',')}`,
+    );
 }
 
 async function readDiagnosticRecords(path: string): Promise<SyncV4DiagnosticRecord[]> {

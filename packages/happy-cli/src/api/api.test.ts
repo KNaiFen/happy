@@ -548,6 +548,44 @@ describe('Api server error handling', () => {
         });
     });
 
+    describe('unarchiveSession', () => {
+        it('restores the original session with terminal credentials', async () => {
+            mockPost.mockResolvedValueOnce({ data: { success: true } });
+
+            await expect(api.unarchiveSession('session/original')).resolves.toBe(true);
+            expect(mockPost).toHaveBeenCalledWith(
+                'https://api.example.com/v4/sessions/session%2Foriginal/unarchive',
+                {},
+                expect.objectContaining({
+                    headers: expect.objectContaining({
+                        Authorization: 'Bearer fake-token',
+                    }),
+                }),
+            );
+        });
+
+        it('keeps retrying the original session while the relay is offline', async () => {
+            const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+            mockPost.mockRejectedValueOnce({ code: 'ECONNREFUSED' });
+
+            await expect(api.unarchiveSession('session-1')).resolves.toBe(false);
+            expect(consoleSpy).toHaveBeenCalledWith(
+                expect.stringContaining('Session unarchive'),
+            );
+            consoleSpy.mockRestore();
+        });
+
+        it('does not hide an ownership rejection as an offline retry', async () => {
+            mockPost.mockRejectedValueOnce({
+                response: { status: 403 },
+                isAxiosError: true,
+            });
+
+            await expect(api.unarchiveSession('session-1'))
+                .rejects.toThrow('Failed to unarchive session (403)');
+        });
+    });
+
     describe('getOrCreateMachine', () => {
         it('returns pending instead of inventing a registered machine when the relay is unreachable', async () => {
             connectionState.reset();

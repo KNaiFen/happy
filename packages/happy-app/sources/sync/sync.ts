@@ -18,7 +18,8 @@ import { ApiEphemeralUpdateSchema, ApiMessage, ApiUpdateContainerSchema } from '
 import type { ApiEphemeralActivityUpdate } from './apiTypes';
 import { Session, Machine } from './storageTypes';
 import { InvalidateSync } from '@/utils/sync';
-import { ActivityUpdateAccumulator } from './reducer/activityUpdateAccumulator';
+import { ActivityUpdateAccumulator, shouldApplySessionActivity } from './reducer/activityUpdateAccumulator';
+import { isSessionArchivePending } from './sessionArchiveState';
 import { randomUUID } from 'expo-crypto';
 import * as Notifications from 'expo-notifications';
 import { syncCurrentPushToken } from './pushRegistration';
@@ -2889,7 +2890,8 @@ class Sync {
 
         for (const [sessionId, update] of updates) {
             const session = storage.getState().sessions[sessionId];
-            if (session) {
+            const archiveBlocksHeartbeat = update.active && isSessionArchivePending(sessionId);
+            if (session && !archiveBlocksHeartbeat && shouldApplySessionActivity(session, update)) {
                 sessions.push({
                     ...session,
                     active: update.active,

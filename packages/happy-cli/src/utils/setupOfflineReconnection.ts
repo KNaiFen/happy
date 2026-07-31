@@ -31,6 +31,8 @@ export interface SetupOfflineReconnectionOptions {
     state: AgentState;
     /** Initial API response (null if server unreachable) */
     response: Session | null;
+    /** Reconnect an existing session instead of creating one from its tag. */
+    resumeExistingSession?: () => Promise<Session | null>;
     /**
      * Callback invoked when session is swapped after reconnection.
      * Use this to update the session reference in the calling code.
@@ -94,11 +96,13 @@ export function setupOfflineReconnection(opts: SetupOfflineReconnectionOptions):
         reconnectionHandle = startOfflineReconnection<ApiSessionClientContract>({
             serverUrl: configuration.serverUrl,
             onReconnected: async () => {
-                const resp = await api.getOrCreateSession({
-                    tag: sessionTag,
-                    metadata: session.getMetadata() ?? metadata,
-                    state: session.getAgentState() ?? state,
-                });
+                const resp = opts.resumeExistingSession
+                    ? await opts.resumeExistingSession()
+                    : await api.getOrCreateSession({
+                        tag: sessionTag,
+                        metadata: session.getMetadata() ?? metadata,
+                        state: session.getAgentState() ?? state,
+                    });
                 if (!resp) throw new Error('Server unavailable');
                 const realSession = api.sessionSyncClient(resp);
                 try {

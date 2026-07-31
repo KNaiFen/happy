@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const syncV4Migration = "20260728123500_add_codex_sync_v4";
 const terminalCredentialMigration = "20260730123000_bind_terminal_credentials_to_machines";
+const archiveTombstoneMigration = "20260731143000_add_session_archive_tombstone";
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = join(serverRoot, "prisma", "schema.prisma");
 const migrationsPath = join(serverRoot, "prisma", "migrations");
@@ -286,6 +287,41 @@ function assertTerminalCredentialSchema({ expectHistoricalBackfill }) {
     `);
 }
 
+function assertArchiveTombstoneSchema({ expectExistingUnarchived }) {
+    const historicalCheck = expectExistingUnarchived
+        ? `
+            IF NOT EXISTS (
+                SELECT 1 FROM "Session"
+                WHERE "id" = 'migration-pre-archive-session'
+                  AND "archivedAt" IS NULL
+            ) THEN
+                RAISE EXCEPTION 'existing Session was not preserved as unarchived';
+            END IF;
+        `
+        : "";
+
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'Session'
+                  AND column_name = 'archivedAt'
+                  AND is_nullable = 'YES'
+            ) THEN
+                RAISE EXCEPTION 'Session archivedAt tombstone is missing or not nullable';
+            END IF;
+            ${historicalCheck}
+        END
+        $$;
+
+        UPDATE "Session"
+        SET "archivedAt" = CURRENT_TIMESTAMP
+        WHERE "id" = 'migration-pre-archive-session';
+    `);
+}
+
 function createMigrationTreeBefore(tempRoot, migrationName) {
     const tempPrismaPath = join(tempRoot, "prisma");
     const tempMigrationsPath = join(tempPrismaPath, "migrations");
@@ -312,6 +348,7 @@ deploy(schemaPath);
 assertNoSchemaDrift();
 assertSyncV4Schema({ expectMigratedSession: false });
 assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
+assertArchiveTombstoneSchema({ expectExistingUnarchived: false });
 
 const tempRoot = mkdtempSync(join(tmpdir(), "happy-sync-v4-migration-"));
 try {
@@ -338,6 +375,7 @@ try {
     assertNoSchemaDrift();
     assertSyncV4Schema({ expectMigratedSession: true });
     assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
+    assertArchiveTombstoneSchema({ expectExistingUnarchived: false });
 
     console.log("Verifying terminal credential migration from the R8 PostgreSQL schema...");
     resetPublicSchema();
@@ -442,6 +480,32 @@ try {
     assertNoSchemaDrift();
     assertSyncV4Schema({ expectMigratedSession: false });
     assertTerminalCredentialSchema({ expectHistoricalBackfill: true });
+    assertArchiveTombstoneSchema({ expectExistingUnarchived: false });
+
+    console.log("Verifying session archive tombstone migration from the previous PostgreSQL schema...");
+    resetPublicSchema();
+    const preArchiveSchemaPath = createMigrationTreeBefore(
+        join(tempRoot, "pre-session-archive"),
+        archiveTombstoneMigration,
+    );
+    deploy(preArchiveSchemaPath);
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        INSERT INTO "Account" ("id", "publicKey", "updatedAt")
+        VALUES ('migration-pre-archive-account', 'migration-pre-archive-key', CURRENT_TIMESTAMP);
+        INSERT INTO "Session" ("id", "tag", "accountId", "metadata", "updatedAt")
+        VALUES (
+            'migration-pre-archive-session',
+            'migration-pre-archive-tag',
+            'migration-pre-archive-account',
+            '{}',
+            CURRENT_TIMESTAMP
+        );
+    `);
+    deploy(schemaPath);
+    assertNoSchemaDrift();
+    assertSyncV4Schema({ expectMigratedSession: false });
+    assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
+    assertArchiveTombstoneSchema({ expectExistingUnarchived: true });
 } finally {
     rmSync(tempRoot, { recursive: true, force: true });
 }

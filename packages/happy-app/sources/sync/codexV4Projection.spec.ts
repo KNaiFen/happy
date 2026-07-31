@@ -155,6 +155,106 @@ describe('Codex v4 projection', () => {
         });
     });
 
+    it('orders provider events by their stable turn sequence instead of skewed timestamps', () => {
+        const userItem: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'user-item',
+            itemId: 'user-item',
+            itemType: 'userMessage',
+            clientId: 'command-1',
+            eventSequence: 0,
+            createdAt: 100,
+            updatedAt: 100,
+            startedAt: 100,
+        };
+        const userPart: CodexPartEntityV4 = {
+            ...part('hello'),
+            providerId: 'user-part',
+            partId: 'user-part',
+            itemId: 'user-item',
+            createdAt: 100,
+            updatedAt: 100,
+        };
+        const mcpItem: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'mcp-item',
+            itemId: 'mcp-item',
+            itemType: 'mcpToolCall',
+            eventSequence: 1,
+            createdAt: 90,
+            updatedAt: 90,
+            startedAt: 90,
+            server: 'test',
+            tool: 'lookup',
+        };
+
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: turn, revision: 1, op: 'upsert' },
+            { entity: userItem, revision: 1, op: 'upsert' },
+            { entity: userPart, revision: 1, op: 'upsert' },
+            { entity: mcpItem, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages.map((message) => message.id)).toEqual([
+            'codex-v4:item:mcp-item',
+            'codex-v4:item:user-item',
+        ]);
+    });
+
+    it('keeps a fast provider tool after the local prompt before the user item arrives', () => {
+        const command: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-fast',
+            createdAt: 300,
+            updatedAt: 300,
+            commandId: 'command-fast',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'turn.start',
+            payload: { displayText: 'hello', text: 'hello' },
+            clientUserMessageId: 'command-fast',
+            replacesCommandId: null,
+        };
+        const result: CodexCommandResultEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'command-result-fast',
+            createdAt: 301,
+            updatedAt: 301,
+            commandId: 'command-fast',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            status: 'succeeded',
+            providerRequestId: null,
+            result: null,
+            error: null,
+        };
+        const fastTool: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'fast-tool',
+            itemId: 'fast-tool',
+            itemType: 'mcpToolCall',
+            eventSequence: 1,
+            createdAt: 100,
+            updatedAt: 100,
+            startedAt: 100,
+            server: 'test',
+            tool: 'lookup',
+        };
+
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: command, revision: 1, op: 'upsert' },
+            { entity: fastTool, revision: 1, op: 'upsert' },
+            { entity: result, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages.map((message) => message.id)).toEqual([
+            'codex-v4:item:fast-tool',
+            'codex-v4:command:command-fast',
+        ]);
+    });
+
     it('preserves unrelated message identity when one streaming part advances', () => {
         const secondItem = {
             ...item,

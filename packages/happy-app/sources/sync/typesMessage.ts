@@ -1,6 +1,12 @@
 import { AgentEvent } from "./typesRaw";
 import { MessageMeta } from "./typesMessageMeta";
 
+export type CodexMessageOrder = {
+    codexThreadId?: string;
+    codexTurnId?: string;
+    codexEventSequence?: number;
+};
+
 export type ToolCall = {
     name: string;
     state: 'running' | 'completed' | 'error';
@@ -41,7 +47,7 @@ export type UserTextMessage = {
      * the rewind point when duplicating/forking Codex threads.
      */
     codexItemId?: string;
-}
+} & CodexMessageOrder;
 
 export type ModeSwitchMessage = {
     kind: 'agent-event';
@@ -49,7 +55,7 @@ export type ModeSwitchMessage = {
     createdAt: number;
     event: AgentEvent;
     meta?: MessageMeta;
-}
+} & CodexMessageOrder;
 
 export type AgentTextMessage = {
     kind: 'agent-text';
@@ -59,7 +65,7 @@ export type AgentTextMessage = {
     text: string;
     isThinking?: boolean;
     meta?: MessageMeta;
-}
+} & CodexMessageOrder;
 
 export type ToolCallMessage = {
     kind: 'tool-call';
@@ -69,6 +75,6 @@ export type ToolCallMessage = {
     tool: ToolCall;
     children: Message[];
     meta?: MessageMeta;
-}
+} & CodexMessageOrder;
 
 export type Message = UserTextMessage | AgentTextMessage | ToolCallMessage | ModeSwitchMessage;

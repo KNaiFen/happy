@@ -108,6 +108,9 @@ function binding(sessionId: string, initialMigrationState?: SyncV4MigrationJourn
     let orphanSequence = 0;
     const pendingCodexNotifications: SyncV4PendingCodexNotification[] = [];
     const codexThreadRoutes = new Map<string, SyncV4CodexThreadRoute>();
+    const persistCodexThreadRoute = vi.fn(async (route: SyncV4CodexThreadRoute) => {
+        codexThreadRoutes.set(route.threadId, route);
+    });
     const value = {
         sessionId,
         sessionKey: new Uint8Array(32),
@@ -135,9 +138,7 @@ function binding(sessionId: string, initialMigrationState?: SyncV4MigrationJourn
                 const index = pendingCodexNotifications.findIndex((entry) => entry.notificationId === notificationId);
                 if (index >= 0) pendingCodexNotifications.splice(index, 1);
             }),
-            persistCodexThreadRoute: vi.fn(async (route: SyncV4CodexThreadRoute) => {
-                codexThreadRoutes.set(route.threadId, route);
-            }),
+            persistCodexThreadRoute,
         },
         commandProcessor: {},
         requestBroker,
@@ -152,6 +153,7 @@ function binding(sessionId: string, initialMigrationState?: SyncV4MigrationJourn
         close,
         pendingCodexNotifications,
         codexThreadRoutes,
+        persistCodexThreadRoute,
     };
 }
 
@@ -190,6 +192,139 @@ function thread(id: string, parentThreadId: string | null, status: Thread['statu
 }
 
 describe('CodexV4ThreadRouter', () => {
+    it('journals a root notification that arrives before registration and replays it once', async () => {
+        const root = binding('happy-root');
+        const onError = vi.fn();
+        const snapshot = thread('thread-root', null);
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => snapshot,
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+            onError,
+        });
+        const started = {
+            method: 'thread/started',
+            params: { thread: snapshot },
+        } as ServerNotification;
+
+        router.handleNotification(started);
+        await router.flush();
+        expect(root.pendingCodexNotifications).toHaveLength(1);
+        expect(root.mapper.notifications).toEqual([]);
+        expect(onError).not.toHaveBeenCalled();
+
+        await router.registerRootThread('thread-root');
+        await router.flush();
+        expect(root.pendingCodexNotifications).toEqual([]);
+        expect(root.mapper.notifications).toEqual([started]);
+        expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('journals notifications while root route durability is pending', async () => {
+        const root = binding('happy-root');
+        const snapshot = thread('thread-root', null);
+        let persistStarted!: () => void;
+        let releasePersist!: () => void;
+        const startedPersisting = new Promise<void>((resolve) => { persistStarted = resolve; });
+        const persistGate = new Promise<void>((resolve) => { releasePersist = resolve; });
+        root.persistCodexThreadRoute.mockImplementationOnce(async (route) => {
+            persistStarted();
+            await persistGate;
+            root.codexThreadRoutes.set(route.threadId, route);
+        });
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => snapshot,
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+            routeRegistrationWaitMs: 100,
+        });
+        const registration = router.registerRootThread('thread-root');
+        await startedPersisting;
+        const started = {
+            method: 'thread/started',
+            params: { thread: snapshot },
+        } as ServerNotification;
+        router.handleNotification(started);
+        await router.flush();
+        expect(root.pendingCodexNotifications).toHaveLength(1);
+        expect(root.mapper.notifications).toEqual([]);
+
+        const request = router.handleRequest({
+            requestId: 'request-during-persist',
+            method: 'item/tool/requestUserInput',
+            params: { threadId: 'thread-root' },
+        });
+        await Promise.resolve();
+        expect(root.requestBroker.handle).not.toHaveBeenCalled();
+
+        releasePersist();
+        await registration;
+        await expect(request).resolves.toMatchObject({ response: { decision: 'accept' } });
+        await router.flush();
+        expect(root.pendingCodexNotifications).toEqual([]);
+        expect(root.mapper.notifications).toEqual([started]);
+    });
+
+    it('rolls back a provisional root route and preserves notifications after persistence fails', async () => {
+        const root = binding('happy-root');
+        const snapshot = thread('thread-root', null);
+        root.persistCodexThreadRoute.mockRejectedValueOnce(new Error('journal unavailable'));
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => snapshot,
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+        });
+
+        await expect(router.registerRootThread('thread-root')).rejects.toThrow('journal unavailable');
+        router.handleNotification({
+            method: 'thread/started',
+            params: { thread: snapshot },
+        } as ServerNotification);
+        await router.flush();
+        expect(root.mapper.notifications).toEqual([]);
+        expect(root.pendingCodexNotifications).toHaveLength(1);
+
+        await router.registerRootThread('thread-root');
+        await router.flush();
+        expect(root.pendingCodexNotifications).toEqual([]);
+        expect(root.mapper.notifications).toHaveLength(1);
+    });
+
+    it('restores an existing root active turn when a route update cannot be persisted', async () => {
+        const root = binding('happy-root');
+        root.codexThreadRoutes.set('thread-root', {
+            threadId: 'thread-root',
+            kind: 'root',
+            parentThreadId: null,
+            parentTurnId: null,
+            delegationItemId: null,
+            depth: 0,
+            activeTurnId: 'turn-active',
+        });
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-root', null),
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+        });
+        root.persistCodexThreadRoute.mockRejectedValueOnce(new Error('journal unavailable'));
+
+        await expect(router.registerRootThread('thread-root', 'command-1'))
+            .rejects.toThrow('journal unavailable');
+
+        const state = router as unknown as {
+            activeTurnByThread: Map<string, string>;
+        };
+        expect(state.activeTurnByThread.get('thread-root')).toBe('turn-active');
+    });
+
     it('updates and flushes the root binding before any thread route exists', async () => {
         const root = binding('happy-root');
         const router = new CodexV4ThreadRouter({

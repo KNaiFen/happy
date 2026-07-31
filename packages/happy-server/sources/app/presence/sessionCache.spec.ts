@@ -7,8 +7,8 @@ const {
 } = vi.hoisted(() => {
     const dbMock = {
         session: {
-            findUnique: vi.fn(),
-            update: vi.fn(),
+            findFirst: vi.fn(),
+            updateMany: vi.fn(),
         },
         machine: {
             findFirst: vi.fn(),
@@ -17,8 +17,8 @@ const {
     };
     const counterIncMock = vi.fn();
     const resetMocks = () => {
-        dbMock.session.findUnique.mockReset();
-        dbMock.session.update.mockReset();
+        dbMock.session.findFirst.mockReset();
+        dbMock.session.updateMany.mockReset();
         dbMock.machine.findFirst.mockReset();
         dbMock.machine.updateMany.mockReset();
         counterIncMock.mockReset();
@@ -92,6 +92,59 @@ describe("ActivityCache machine heartbeats", () => {
         });
         expect(activityCache.queueMachineUpdate("machine-deleted", Date.now())).toBe(false);
         expect(dbMock.machine.updateMany).not.toHaveBeenCalled();
+
+        activityCache.shutdown();
+    });
+
+    it("persists a session heartbeat only while the archive tombstone is absent", async () => {
+        const now = Date.parse("2026-01-01T00:00:00.000Z");
+        vi.setSystemTime(now);
+        dbMock.session.findFirst.mockResolvedValue({
+            id: "session-1",
+            accountId: "user-1",
+            lastActiveAt: new Date(now - 60_000),
+        });
+        dbMock.session.updateMany.mockResolvedValue({ count: 0 });
+
+        const { activityCache } = await import("./sessionCache");
+
+        await expect(activityCache.isSessionValid("session-1", "user-1")).resolves.toBe(true);
+        expect(activityCache.queueSessionUpdate("session-1", now)).toBe(true);
+        await vi.advanceTimersByTimeAsync(5000);
+
+        expect(dbMock.session.findFirst).toHaveBeenCalledWith({
+            where: {
+                id: "session-1",
+                accountId: "user-1",
+                archivedAt: null,
+            },
+        });
+        expect(dbMock.session.updateMany).toHaveBeenCalledWith({
+            where: {
+                id: "session-1",
+                archivedAt: null,
+                OR: [
+                    { originMachineId: null },
+                    { originMachine: { deletedAt: null } },
+                ],
+            },
+            data: {
+                lastActiveAt: new Date(now),
+                active: true,
+            },
+        });
+
+        activityCache.shutdown();
+    });
+
+    it("does not cache an archived session", async () => {
+        dbMock.session.findFirst.mockResolvedValue(null);
+
+        const { activityCache } = await import("./sessionCache");
+
+        await expect(activityCache.isSessionValid("session-archived", "user-1")).resolves.toBe(false);
+        expect(activityCache.queueSessionUpdate("session-archived", Date.now())).toBe(false);
+        expect(dbMock.session.updateMany).not.toHaveBeenCalled();
 
         activityCache.shutdown();
     });

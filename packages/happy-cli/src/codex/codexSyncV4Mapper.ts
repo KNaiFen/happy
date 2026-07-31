@@ -126,6 +126,8 @@ export class CodexSyncV4Mapper {
     private readonly finalizedStreams = new Map<string, true>();
     private readonly migrationBarriers = new Map<string, BufferedNotification[]>();
     private readonly activeTurnByThread = new Map<string, string>();
+    private readonly nextItemEventSequenceByTurn = new Map<string, number>();
+    private readonly initialUserItemSequencedTurns = new Set<string>();
     private readonly unknownNotificationMethods = new Map<string, number>();
     private readonly unknownStableVariants = new Map<string, number>();
     private readonly threadStatusTransitions = new Map<string, number>();
@@ -1007,6 +1009,8 @@ export class CodexSyncV4Mapper {
             turnId,
             itemId: stableItem.id,
             itemType: stableItem.type,
+            eventSequence: previous?.eventSequence
+                ?? this.allocateItemEventSequence(threadId, turnId, stableItem.type),
             status: wasCompleted && phase === 'started' ? previous.status : incomingStatus,
             parentItemId: stringOrNull(raw.parentItemId),
             clientId: stringOrNull(raw.clientId),
@@ -1397,6 +1401,7 @@ export class CodexSyncV4Mapper {
             turnId,
             itemId,
             itemType,
+            eventSequence: this.allocateItemEventSequence(threadId, turnId, itemType),
             status: 'inProgress',
             parentItemId: null,
             clientId: null,
@@ -1415,6 +1420,23 @@ export class CodexSyncV4Mapper {
         await this.publisher.publishEntity(item);
         this.items.set(key, item);
         return item;
+    }
+
+    private allocateItemEventSequence(threadId: string, turnId: string, itemType: string): number {
+        const key = turnKey(threadId, turnId);
+        if (
+            itemType.toLowerCase() === 'usermessage'
+            && !this.initialUserItemSequencedTurns.has(key)
+        ) {
+            this.initialUserItemSequencedTurns.add(key);
+            if (!this.nextItemEventSequenceByTurn.has(key)) {
+                this.nextItemEventSequenceByTurn.set(key, 1);
+            }
+            return 0;
+        }
+        const next = this.nextItemEventSequenceByTurn.get(key) ?? 1;
+        this.nextItemEventSequenceByTurn.set(key, next + 1);
+        return next;
     }
 
     private runtimeFor(

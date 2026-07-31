@@ -10,7 +10,7 @@ vi.mock('axios', () => ({
     default: axiosMock,
 }));
 
-import { AxiosSyncV4Transport } from './syncV4Client';
+import { AxiosSyncV4Transport, SyncV4SessionArchivedError } from './syncV4Client';
 
 const mutation = {
     mutationId: 'mutation-1',
@@ -105,5 +105,28 @@ describe('AxiosSyncV4Transport diagnostics', () => {
             .rejects.toMatchObject({ name: 'SyncV4ProtocolError' });
         await expect(transport.getChanges('session-1', 0, 100, 'a'.repeat(32)))
             .rejects.toMatchObject({ name: 'SyncV4ProtocolError' });
+    });
+
+    it('maps an authenticated archive tombstone to a terminal transport error', async () => {
+        axiosMock.isAxiosError.mockReturnValueOnce(true);
+        axiosMock.post.mockRejectedValueOnce({
+            response: {
+                status: 409,
+                data: { error: 'sessionArchived' },
+                headers: { 'x-happy-sync-trace': 'a'.repeat(32) },
+            },
+        });
+        const transport = new AxiosSyncV4Transport(
+            'http://relay.example.test',
+            'bearer-secret',
+            'cli-coding-session/1.4.10',
+            'machine-1',
+        );
+
+        await expect(transport.postMutations(
+            'session-archived',
+            [mutation],
+            'a'.repeat(32),
+        )).rejects.toBeInstanceOf(SyncV4SessionArchivedError);
     });
 });

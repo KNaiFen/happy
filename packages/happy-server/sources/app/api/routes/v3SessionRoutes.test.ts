@@ -10,6 +10,7 @@ type SessionRecord = {
     originMachineId: string | null;
     originCredentialId: string | null;
     machineDeletedAt: Date | null;
+    archivedAt: Date | null;
 };
 
 type MessageRecord = {
@@ -54,6 +55,7 @@ const {
             originMachineId: input.originMachineId ?? null,
             originCredentialId: input.originCredentialId ?? null,
             machineDeletedAt: input.machineDeletedAt ?? null,
+            archivedAt: input.archivedAt ?? null,
         });
         if (!state.accountSeqById.has(input.accountId)) {
             state.accountSeqById.set(input.accountId, 0);
@@ -396,6 +398,39 @@ describe("v3SessionRoutes", () => {
             headers: { "x-user-id": "user-1" }
         });
         expect(response.statusCode).toBe(400);
+    });
+
+    it("keeps archived history readable but rejects new v3 messages", async () => {
+        seedSession({
+            id: "session-archived",
+            accountId: "user-1",
+            archivedAt: new Date("2026-01-02T00:00:00.000Z"),
+        });
+        seedMessage({
+            sessionId: "session-archived",
+            seq: 1,
+            localId: "existing",
+            content: { t: "encrypted", c: "existing" },
+        });
+        app = await createApp();
+
+        const read = await app.inject({
+            method: "GET",
+            url: "/v3/sessions/session-archived/messages",
+            headers: { "x-user-id": "user-1" },
+        });
+        const write = await app.inject({
+            method: "POST",
+            url: "/v3/sessions/session-archived/messages",
+            headers: { "x-user-id": "user-1" },
+            payload: { messages: [{ content: "new", localId: "new" }] },
+        });
+
+        expect(read.statusCode).toBe(200);
+        expect(read.json().messages).toHaveLength(1);
+        expect(write.statusCode).toBe(409);
+        expect(write.json()).toEqual({ error: "sessionArchived" });
+        expect(state.messages).toHaveLength(1);
     });
 
     it("returns empty results for empty sessions and after_seq beyond latest", async () => {

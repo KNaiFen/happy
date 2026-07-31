@@ -6,6 +6,7 @@
 import { apiSocket } from './apiSocket';
 import { sync } from './sync';
 import { storage } from './storage';
+import { isCodexV4SyncEligible } from './codexV4ClientRegistry';
 import type { MachineMetadata, SessionAgentModesPatch } from './storageTypes';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
 import {
@@ -1049,13 +1050,17 @@ export async function sessionRipgrep(
 /**
  * Kill the session process immediately
  */
-export async function sessionKill(sessionId: string): Promise<SessionKillResponse> {
+export async function sessionKill(
+    sessionId: string,
+    options: { timeoutMs?: number } = {},
+): Promise<SessionKillResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
         const response = await apiSocket.sessionRPC<SessionKillResponse, {}>(
             sessionId,
             'killSession',
-            {}
+            {},
+            options,
         );
         return response;
     } catch (error) {
@@ -1067,19 +1072,30 @@ export async function sessionKill(sessionId: string): Promise<SessionKillRespons
 }
 
 /**
- * Archive a session by deactivating it on the server.
- * Use this when the CLI process is already dead and sessionKill can't reach it.
+ * Archive a session through its lifecycle protocol. Codex v4 uses a durable
+ * tombstone; legacy providers keep their existing transient v1 behavior.
  */
-export async function sessionArchive(sessionId: string): Promise<{ success: boolean; message?: string }> {
+export async function sessionArchive(sessionId: string): Promise<{ success: boolean; archivedAt?: number; message?: string }> {
     try {
-        assertCodexSessionWritable(storage.getState().sessions[sessionId]?.metadata);
-        const response = await apiSocket.request(`/v1/sessions/${sessionId}/archive`, {
+        const metadata = storage.getState().sessions[sessionId]?.metadata;
+        const archiveVersion = isCodexV4SyncEligible(metadata) ? 'v4' : 'v1';
+        const response = await apiSocket.request(`/${archiveVersion}/sessions/${encodeURIComponent(sessionId)}/archive`, {
             method: 'POST'
         });
         if (!response.ok) {
-            return { success: false, message: `Server error: ${response.status}` };
+            const payload = await response.json().catch(() => null) as { error?: unknown } | null;
+            return {
+                success: false,
+                message: typeof payload?.error === 'string'
+                    ? payload.error
+                    : `Server error: ${response.status}`,
+            };
         }
-        return { success: true };
+        const payload = await response.json().catch(() => null) as { archivedAt?: unknown } | null;
+        return {
+            success: true,
+            archivedAt: typeof payload?.archivedAt === 'number' ? payload.archivedAt : undefined,
+        };
     } catch (error) {
         return { success: false, message: error instanceof Error ? error.message : 'Unknown error' };
     }

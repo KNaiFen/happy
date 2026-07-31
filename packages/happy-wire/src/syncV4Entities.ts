@@ -130,6 +130,7 @@ export const CodexItemEntityV4Schema = z.object({
   turnId: idSchema,
   itemId: idSchema,
   itemType: z.string().min(1).max(128),
+  eventSequence: z.number().int().nonnegative().optional(),
   status: z.string().min(1).max(128).nullable(),
   parentItemId: idSchema.nullable(),
   clientId: idSchema.nullable(),

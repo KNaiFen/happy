@@ -358,6 +358,57 @@ export class ApiClient {
     }
   }
 
+  async unarchiveSession(sessionId: string): Promise<boolean> {
+    const url = `${configuration.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/unarchive`;
+    try {
+      await axios.post(
+        url,
+        {},
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json',
+            'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`,
+          },
+          timeout: 60_000,
+        },
+      );
+      logger.debug('[API] Session unarchived', {
+        sessionHash: syncV4DiagnosticHash(sessionId),
+      });
+      return true;
+    } catch (error) {
+      const status = safeAxiosStatus(error);
+      logger.debug('[API] Failed to unarchive session', {
+        sessionHash: syncV4DiagnosticHash(sessionId),
+        errorKind: classifySyncV4DiagnosticError(error),
+        httpStatus: status,
+      });
+      if (status === 401) throw new HappyRelayAuthenticationError('Session unarchive');
+      if (
+        (error && typeof error === 'object' && 'code' in error
+          && isNetworkError(typeof (error as { code?: unknown }).code === 'string'
+            ? (error as { code: string }).code
+            : undefined))
+        || (status !== undefined && status >= 500)
+      ) {
+        connectionState.fail({
+          operation: 'Session unarchive',
+          caller: 'api.unarchiveSession',
+          errorCode: status === undefined
+            ? String((error as { code?: unknown }).code ?? 'NETWORK_ERROR')
+            : String(status),
+          url,
+        });
+        return false;
+      }
+      throw new Error(
+        `Failed to unarchive session (${status ?? 'unknown'}): `
+        + `${error instanceof Error ? error.message : 'relay rejected the request'}`,
+      );
+    }
+  }
+
   /**
    * Register or update machine with the server
    * Returns the current machine state from the server with decrypted metadata and daemonState
@@ -631,20 +682,13 @@ export class ApiClient {
   }
 
   /**
-   * Mark a session as inactive on the server (active=false). Does NOT
-   * change `lifecycleState`, so the session remains visible in the app
-   * and resumable — same effect as the in-app "Archive" button hitting
-   * the /archive endpoint, but without the extra metadata.
-   *
-   * Used during graceful shutdown (Ctrl-C / SIGTERM) as a synchronous
-   * fallback for the socket-based session-end signal: even if the
-   * socket emit doesn't drain before the process exits, the HTTP
-   * response confirms the deactivate landed.
+   * Mark a legacy v3 session inactive during graceful shutdown. This endpoint
+   * intentionally does not create the Codex v4 archive tombstone.
    */
   async deactivateSession(sessionId: string): Promise<boolean> {
     try {
       const response = await axios.post(
-        `${configuration.serverUrl}/v1/sessions/${sessionId}/archive`,
+        `${configuration.serverUrl}/v1/sessions/${encodeURIComponent(sessionId)}/archive`,
         {},
         {
           headers: {

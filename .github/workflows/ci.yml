@@ -359,6 +359,7 @@ jobs:
           pnpm --filter happy exec vitest run --project unit
           src/codex/fakeCodexAppServer.test.ts
           src/codex/codexSyncV4Mapper.test.ts
+          src/codex/codexV4ThreadRouter.test.ts
           src/api/syncV4Client.test.ts
 
       - name: Exercise relay ordering, idempotency, and snapshot recovery
@@ -371,6 +372,9 @@ jobs:
           pnpm --filter happy-app exec vitest run
           sources/sync/syncV4Client.spec.ts
           sources/sync/codexV4Projection.spec.ts
+          sources/sync/codexV4Activity.spec.ts
+          sources/sync/sessionArchiveCoordinator.spec.ts
+          sources/hooks/useGroupedMessages.test.ts
 
   codex_long_turn:
     name: Codex real ten-minute turn

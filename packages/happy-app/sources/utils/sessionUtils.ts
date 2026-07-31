@@ -26,6 +26,9 @@ export function useSessionStatus(session: Session): SessionStatus {
         : !!(session.agentState?.requests && Object.keys(session.agentState.requests).length > 0);
 
     const vibingMessage = React.useMemo(() => {
+        if (session.codexState) {
+            return `${t('sessionInfo.thinking').toLowerCase()}…`;
+        }
         return vibingMessages[Math.floor(Math.random() * vibingMessages.length)].toLowerCase() + '…';
     }, [isOnline, hasPermissions, session.codexState?.execution.type, session.thinking]);
 

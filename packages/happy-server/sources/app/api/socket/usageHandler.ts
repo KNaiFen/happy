@@ -4,7 +4,7 @@ import { db } from "@/storage/db";
 import { buildUsageEphemeral, eventRouter } from "@/app/events/eventRouter";
 import { log } from "@/utils/log";
 import type { ClientConnection } from "@/app/events/eventRouter";
-import { sessionWhereForConnection } from "./sessionScope";
+import { sessionWriteWhereForConnection } from "./sessionScope";
 import { diagnosticHash } from "@/utils/diagnosticHash";
 
 export function usageHandler(
@@ -52,7 +52,7 @@ export function usageHandler(
                 try {
                     // If sessionId provided, verify it belongs to the user
                     if (sessionId) {
-                        const accessWhere = sessionWhereForConnection(
+                        const accessWhere = sessionWriteWhereForConnection(
                             userId,
                             connection,
                             sessionId,

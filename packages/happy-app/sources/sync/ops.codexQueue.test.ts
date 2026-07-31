@@ -38,6 +38,7 @@ describe('Codex queued message ops', () => {
         sessionRPC.mockResolvedValue({ ok: true });
         machineRPC.mockReset();
         request.mockReset();
+        request.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
         getState.mockReturnValue({ sessions: {} });
         isCodexV4Eligible.mockReset();
         isCodexV4Eligible.mockReturnValue(false);
@@ -69,7 +70,7 @@ describe('Codex queued message ops', () => {
         );
     });
 
-    it('rejects every write operation for a provider-created child before legacy RPC fallback', async () => {
+    it('rejects content writes but allows archive for a provider-created child', async () => {
         getState.mockReturnValue({
             sessions: {
                 'session-child': {
@@ -77,6 +78,7 @@ describe('Codex queued message ops', () => {
                         path: '/workspace',
                         host: 'host',
                         flavor: 'codex',
+                        codexSyncVersion: 4,
                         codexReadOnly: true,
                     },
                 },
@@ -104,10 +106,7 @@ describe('Codex queued message ops', () => {
             success: false,
             message: expect.stringContaining('read-only'),
         });
-        await expect(sessionArchive('session-child')).resolves.toMatchObject({
-            success: false,
-            message: expect.stringContaining('read-only'),
-        });
+        await expect(sessionArchive('session-child')).resolves.toMatchObject({ success: true });
         await expect(sessionDelete('session-child')).resolves.toMatchObject({
             success: false,
             message: expect.stringContaining('read-only'),
@@ -121,7 +120,38 @@ describe('Codex queued message ops', () => {
         });
         expect(sessionRPC).not.toHaveBeenCalled();
         expect(machineRPC).not.toHaveBeenCalled();
-        expect(request).not.toHaveBeenCalled();
+        expect(request).toHaveBeenCalledWith(
+            '/v4/sessions/session-child/archive',
+            { method: 'POST' },
+        );
+    });
+
+    it('keeps non-Codex-v4 archive traffic on the legacy v1 lifecycle route', async () => {
+        getState.mockReturnValue({
+            sessions: {
+                'session-claude': {
+                    metadata: { flavor: 'claude' },
+                },
+                'session-codex-v3': {
+                    metadata: { flavor: 'codex' },
+                },
+            },
+        });
+        const { sessionArchive } = await import('./ops');
+
+        await expect(sessionArchive('session-claude')).resolves.toMatchObject({ success: true });
+        await expect(sessionArchive('session-codex-v3')).resolves.toMatchObject({ success: true });
+
+        expect(request).toHaveBeenNthCalledWith(
+            1,
+            '/v1/sessions/session-claude/archive',
+            { method: 'POST' },
+        );
+        expect(request).toHaveBeenNthCalledWith(
+            2,
+            '/v1/sessions/session-codex-v3/archive',
+            { method: 'POST' },
+        );
     });
 
     it('resolves a repeated provider request id only on the metadata-owned thread', async () => {

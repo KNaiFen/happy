@@ -2,7 +2,8 @@ import * as React from 'react';
 import { useHappyAction } from '@/hooks/useHappyAction';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
-import { machineResumeSession, sessionArchive, sessionKill, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
+import { machineResumeSession, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
+import { archiveSession as archiveSessionAuthoritatively } from '@/sync/sessionArchiveCoordinator';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useIsSessionMachineDeleted, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
 import { Machine, Session } from '@/sync/storageTypes';
@@ -222,18 +223,15 @@ export function useSessionQuickActions(
     });
 
     const [archivingSession, performArchive] = useHappyAction(async () => {
-        if (machineDeleted) {
-            await sessionArchive(session.id);
-            onAfterArchive?.();
-            return;
-        }
-        await maybeCleanupWorktree(session.id, session.metadata?.path, session.metadata?.machineId);
-
-        // Try to kill the CLI process; if it's already dead, force-archive via server
-        const killResult = await sessionKill(session.id);
-        if (!killResult.success) {
-            await sessionArchive(session.id);
-        }
+        await archiveSessionAuthoritatively(session.id, {
+            ...(!machineDeleted ? {
+                beforeStop: () => maybeCleanupWorktree(
+                    session.id,
+                    session.metadata?.path,
+                    session.metadata?.machineId,
+                ),
+            } : {}),
+        });
         onAfterArchive?.();
     });
 

@@ -161,9 +161,10 @@ export function v3SessionRoutes(app: Fastify) {
         const txResult = await inTx(async (tx) => {
             const session = await tx.session.findFirst({
                 where: accessWhere,
-                select: { id: true },
+                select: { id: true, archivedAt: true },
             });
             if (!session) return null;
+            if (session.archivedAt) return { kind: 'archived' as const };
 
             const localIds = uniqueMessages.map((message) => message.localId);
             const existing = await tx.sessionMessage.findMany({
@@ -218,12 +219,16 @@ export function v3SessionRoutes(app: Fastify) {
             const responseMessages = [...existing, ...createdMessages].sort((a, b) => a.seq - b.seq);
 
             return {
+                kind: 'ok' as const,
                 responseMessages,
                 createdMessages
             };
         });
         if (!txResult) {
             return reply.code(404).send({ error: 'Session not found' });
+        }
+        if (txResult.kind === 'archived') {
+            return reply.code(409).send({ error: 'sessionArchived' });
         }
 
         for (const message of txResult.createdMessages) {

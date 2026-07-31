@@ -150,4 +150,40 @@ describe('setupOfflineReconnection', () => {
             state: expect.objectContaining({ controlledByUser: true }),
         });
     });
+
+    it('resumes the original archived session instead of creating a replacement', async () => {
+        let onReconnected!: () => Promise<ApiSessionClient>;
+        mocks.startOfflineReconnection.mockImplementation((options) => {
+            onReconnected = options.onReconnected;
+            return {
+                cancel: vi.fn(),
+                getSession: () => null,
+                isReconnected: () => false,
+            };
+        });
+        const realSession = {
+            close: vi.fn(async () => {}),
+        } as unknown as ApiSessionClient;
+        const response = { id: 'session-original' };
+        const api = {
+            getOrCreateSession: vi.fn(),
+            sessionSyncClient: vi.fn(() => realSession),
+        };
+        const resumeExistingSession = vi.fn(async () => response);
+
+        setupOfflineReconnection({
+            api: api as never,
+            sessionTag: 'must-not-be-created',
+            metadata: {} as never,
+            state: {} as never,
+            response: null,
+            resumeExistingSession: resumeExistingSession as never,
+            onSessionSwap: async () => undefined,
+        });
+        await expect(onReconnected()).resolves.toBe(realSession);
+
+        expect(resumeExistingSession).toHaveBeenCalledOnce();
+        expect(api.getOrCreateSession).not.toHaveBeenCalled();
+        expect(api.sessionSyncClient).toHaveBeenCalledWith(response);
+    });
 });

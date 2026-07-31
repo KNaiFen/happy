@@ -9,6 +9,7 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { sessionDelete } from "@/app/session/sessionDelete";
 import { inTx } from "@/storage/inTx";
+import { activityCache } from "@/app/presence/sessionCache";
 import {
     buildSessionAccessWhere,
     sessionAccessIdentityFromRequest,
@@ -313,6 +314,9 @@ export function sessionRoutes(app: Fastify) {
             if (credentialId && !session.originMachineId) {
                 return { kind: 'machine-conflict' as const };
             }
+            if (session.archivedAt) {
+                return { kind: 'archived' as const };
+            }
             return { kind: 'existing' as const, session };
         });
 
@@ -321,6 +325,9 @@ export function sessionRoutes(app: Fastify) {
         }
         if (result.kind === 'machine-conflict') {
             return reply.code(409).send({ error: 'Session belongs to another machine' });
+        }
+        if (result.kind === 'archived') {
+            return reply.code(409).send({ error: 'sessionArchived' });
         }
         if (result.kind === 'existing') {
             log({
@@ -401,8 +408,60 @@ export function sessionRoutes(app: Fastify) {
         });
     });
 
-    // Archive session (force deactivate)
+    // Legacy v1 shutdown fallback. Claude v3 clients depend on this endpoint
+    // remaining a transient active=false update rather than a tombstone.
     app.post('/v1/sessions/:sessionId/archive', {
+        schema: {
+            params: z.object({
+                sessionId: z.string()
+            })
+        },
+        preHandler: app.authenticate
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+        const inactiveAt = new Date();
+        const result = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: accessWhere,
+                select: { archivedAt: true },
+            });
+            if (!session) return null;
+            if (session.archivedAt) return { changed: false };
+            const updated = await tx.session.updateMany({
+                where: { ...accessWhere, archivedAt: null },
+                data: { active: false, lastActiveAt: inactiveAt },
+            });
+            return { changed: updated.count > 0 };
+        });
+        if (!result) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+        if (result.changed) {
+            activityCache.invalidateSessions([sessionId]);
+            eventRouter.emitEphemeral({
+                userId,
+                payload: buildSessionActivityEphemeral(
+                    sessionId,
+                    false,
+                    inactiveAt.getTime(),
+                    false,
+                ),
+                recipientFilter: { type: 'user-scoped-only' },
+            });
+        }
+        return reply.send({ success: true });
+    });
+
+    // Codex v4 archive is an authoritative, persistent lifecycle tombstone.
+    app.post('/v4/sessions/:sessionId/archive', {
         schema: {
             params: z.object({
                 sessionId: z.string()
@@ -420,24 +479,112 @@ export function sessionRoutes(app: Fastify) {
         if (!accessWhere) {
             return reply.code(403).send({ error: 'Machine is not authorized' });
         }
-        const result = await db.session.updateMany({
-            where: accessWhere,
-            data: { active: false, lastActiveAt: new Date() }
+        const result = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: accessWhere,
+                select: { archivedAt: true },
+            });
+            if (!session) return null;
+            if (session.archivedAt) {
+                return { archivedAt: session.archivedAt, alreadyArchived: true };
+            }
+            const archivedAt = new Date();
+            const updated = await tx.session.updateMany({
+                where: { ...accessWhere, archivedAt: null },
+                data: { archivedAt, active: false, lastActiveAt: archivedAt },
+            });
+            if (updated.count === 0) {
+                throw new Error('Session archive transaction lost ownership');
+            }
+            return { archivedAt, alreadyArchived: false };
         });
 
-        if (result.count === 0) {
+        if (!result) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
+        activityCache.invalidateSessions([sessionId]);
+
         // Notify all clients about the session deactivation
-        const sessionActivity = buildSessionActivityEphemeral(sessionId, false, Date.now(), false);
+        const sessionActivity = buildSessionActivityEphemeral(
+            sessionId,
+            false,
+            result.archivedAt.getTime(),
+            false,
+        );
         eventRouter.emitEphemeral({
             userId,
             payload: sessionActivity,
             recipientFilter: { type: 'user-scoped-only' }
         });
 
-        return reply.send({ success: true });
+        return reply.send({
+            success: true,
+            archivedAt: result.archivedAt.getTime(),
+            alreadyArchived: result.alreadyArchived,
+        });
+    });
+
+    app.post('/v4/sessions/:sessionId/unarchive', {
+        schema: {
+            params: z.object({
+                sessionId: z.string()
+            })
+        },
+        preHandler: app.authenticate
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        if (!request.authCredentialId || !request.authMachineId) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+
+        const result = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: accessWhere,
+                select: { archivedAt: true, lastActiveAt: true },
+            });
+            if (!session) return null;
+            const alreadyUnarchived = session.archivedAt === null;
+            const activeAt = new Date(Math.max(
+                Date.now(),
+                session.lastActiveAt.getTime() + 1,
+                (session.archivedAt?.getTime() ?? 0) + 1,
+            ));
+            const updated = await tx.session.updateMany({
+                where: accessWhere,
+                data: { archivedAt: null, active: true, lastActiveAt: activeAt },
+            });
+            if (updated.count === 0) {
+                throw new Error('Session unarchive transaction lost ownership');
+            }
+            return { alreadyUnarchived, activeAt };
+        });
+        if (!result) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+
+        activityCache.invalidateSessions([sessionId]);
+        const sessionActivity = buildSessionActivityEphemeral(sessionId, true, result.activeAt.getTime(), false);
+        eventRouter.emitEphemeral({
+            userId,
+            payload: sessionActivity,
+            recipientFilter: { type: 'user-scoped-only' }
+        });
+
+        return reply.send({
+            success: true,
+            activeAt: result.activeAt.getTime(),
+            alreadyUnarchived: result.alreadyUnarchived,
+        });
     });
 
     // Delete session

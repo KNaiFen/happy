@@ -1,7 +1,7 @@
 import * as React from 'react';
-import { useSession, useSessionMessages, useSetting } from "@/sync/storage";
+import { useCodexV4Session, useSession, useSessionMessages, useSetting } from "@/sync/storage";
 import { sync } from '@/sync/sync';
-import { ActivityIndicator, AppState, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, View } from 'react-native';
+import { ActivityIndicator, AppState, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, Text, View } from 'react-native';
 import { useCallback } from 'react';
 import { useHeaderHeight } from '@/utils/responsive';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,8 +15,18 @@ import { Octicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { resolveControlMode } from '@/sync/controlHandoff';
 import { usesControlledSessionUi } from '@/sync/rig';
+import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
+import { resolveCodexV4Activity } from '@/sync/codexV4Activity';
+import { t } from '@/text';
 
 const SCROLL_THRESHOLD = 300;
+
+type CodexActivityDisplayItem = {
+    type: 'codex-activity';
+    id: string;
+};
+
+type ChatListDisplayItem = DisplayItem | CodexActivityDisplayItem;
 
 export const ChatList = React.memo((props: {
     session: Session;
@@ -97,6 +107,7 @@ const ChatListInternal = React.memo((props: {
         viewportHeight: 0,
     });
     const session = useSession(props.sessionId);
+    const codexV4Session = useCodexV4Session(props.sessionId);
     const controlMode = resolveControlMode(usesControlledSessionUi(session?.metadata) ? session?.agentState?.controlledByUser : false);
     const previousControlModeRef = React.useRef(controlMode);
 
@@ -127,6 +138,16 @@ const ChatListInternal = React.memo((props: {
         [collapseCurrentTurn],
     );
     const displayItems = useGroupedMessages(props.messages, groupToolCalls, groupingOptions);
+    const codexActivity = React.useMemo(() => (
+        isCodexV4SyncActive(props.metadata, codexV4Session)
+            ? resolveCodexV4Activity(codexV4Session)
+            : null
+    ), [props.metadata, codexV4Session]);
+    const listItems = React.useMemo<ChatListDisplayItem[]>(() => (
+        codexActivity
+            ? [{ type: 'codex-activity', id: codexActivity.id }, ...displayItems]
+            : displayItems
+    ), [codexActivity, displayItems]);
 
     // Tracks which groups are explicitly collapsed. Groups start collapsed;
     // pending approval groups are the only ones we auto-expand.
@@ -243,7 +264,7 @@ const ChatListInternal = React.memo((props: {
         });
     }, []);
 
-    const keyExtractor = useCallback((item: DisplayItem) => item.id, []);
+    const keyExtractor = useCallback((item: ChatListDisplayItem) => item.id, []);
 
     const updateHeaderBackdropVisibility = useCallback(() => {
         if (!props.onHeaderBackdropVisibilityChange || !props.headerOverlayHeight) {
@@ -267,7 +288,10 @@ const ChatListInternal = React.memo((props: {
         }
     }, [props.onHeaderBackdropVisibilityChange]);
 
-    const renderItem = useCallback(({ item }: { item: DisplayItem }) => {
+    const renderItem = useCallback(({ item }: { item: ChatListDisplayItem }) => {
+        if (item.type === 'codex-activity') {
+            return <CodexActivityLine />;
+        }
         if (item.type === 'tool-group') {
             return (
                 <ToolGroupView
@@ -352,7 +376,7 @@ const ChatListInternal = React.memo((props: {
             <FlatList
                 key={`${props.sessionId}:${handoffListRevision}`}
                 ref={flatListRef}
-                data={displayItems}
+                data={listItems}
                 inverted={true}
                 keyExtractor={keyExtractor}
                 maintainVisibleContentPosition={{
@@ -412,11 +436,33 @@ const ChatListInternal = React.memo((props: {
     )
 });
 
+const CodexActivityLine = React.memo(() => {
+    const { theme } = useUnistyles();
+    return (
+        <View style={styles.codexActivityRow} accessibilityRole="progressbar">
+            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+            <Text style={styles.codexActivityText}>{`${t('sessionInfo.thinking')}...`}</Text>
+        </View>
+    );
+});
+
 function isCollapsibleDisplayItem(item: DisplayItem): item is ToolGroupItem | Extract<DisplayItem, { type: 'agent-work-group' }> {
     return item.type === 'tool-group' || item.type === 'agent-work-group';
 }
 
 const styles = StyleSheet.create((theme) => ({
+    codexActivityRow: {
+        height: 36,
+        paddingHorizontal: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    codexActivityText: {
+        color: theme.colors.textSecondary,
+        fontSize: 14,
+        lineHeight: 20,
+    },
     scrollButtonContainer: {
         position: 'absolute',
         left: 0,

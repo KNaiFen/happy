@@ -93,6 +93,13 @@ export class SyncV4SnapshotRequiredError extends Error {
     }
 }
 
+export class SyncV4SessionArchivedError extends Error {
+    constructor(readonly sessionId: string) {
+        super("Sync v4 session is archived");
+        this.name = "SyncV4SessionArchivedError";
+    }
+}
+
 class SyncV4ProtocolError extends Error {
     constructor(message: string) {
         super(message);
@@ -106,6 +113,15 @@ function diagnosticErrorKind(
 ): ReturnType<typeof classifySyncV4DiagnosticError> {
     const classified = classifySyncV4DiagnosticError(error);
     return classified === "unknown" ? fallback : classified;
+}
+
+function isSessionArchivedResponse(value: unknown): boolean {
+    return Boolean(
+        value
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && (value as Record<string, unknown>).error === "sessionArchived",
+    );
 }
 
 export class AxiosSyncV4Transport implements SyncV4Transport {
@@ -122,13 +138,25 @@ export class AxiosSyncV4Transport implements SyncV4Transport {
         traceId?: string,
     ): Promise<SyncMutationBatchResponseV4> {
         const body = SyncMutationBatchV4Schema.parse({ mutations });
-        const response = await axios.post(
-            `${this.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/mutations`,
-            body,
-            { headers: this.headers(traceId), timeout: 60_000 },
-        );
-        validateAxiosTraceEcho(response, traceId);
-        return SyncMutationBatchResponseV4Schema.parse(response.data);
+        try {
+            const response = await axios.post(
+                `${this.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/mutations`,
+                body,
+                { headers: this.headers(traceId), timeout: 60_000 },
+            );
+            validateAxiosTraceEcho(response, traceId);
+            return SyncMutationBatchResponseV4Schema.parse(response.data);
+        } catch (error) {
+            if (
+                axios.isAxiosError(error)
+                && error.response?.status === 409
+                && isSessionArchivedResponse(error.response.data)
+            ) {
+                validateAxiosTraceEcho(error.response, traceId);
+                throw new SyncV4SessionArchivedError(sessionId);
+            }
+            throw error;
+        }
     }
 
     async getChanges(
@@ -213,6 +241,7 @@ interface SyncV4ClientOptions {
     diagnostics?: SyncV4DiagnosticSink;
     generateTraceId?: () => string;
     transportSecurity?: SyncV4DiagnosticTransportSecurity;
+    onSessionArchived?: () => void;
 }
 
 export class SyncV4Client {
@@ -244,6 +273,7 @@ export class SyncV4Client {
                 diagnosticSessionId,
                 options.generateTraceId ?? createSyncV4TraceId,
                 options.transportSecurity ?? syncV4TransportSecurity(serverUrl),
+                options.onSessionArchived ?? null,
             );
         } catch (error) {
             await journal.close();
@@ -273,6 +303,7 @@ export class SyncV4Client {
         private readonly diagnosticSessionId: string,
         private readonly generateTraceId: () => string,
         private readonly transportSecurity: SyncV4DiagnosticTransportSecurity,
+        private readonly onSessionArchived: (() => void) | null,
     ) {
         this.sendSync = new InvalidateSync(() => this.flushOutboundForGeneration(
             this.lifecycleGeneration,
@@ -641,6 +672,15 @@ export class SyncV4Client {
                         durationMs: elapsedMs(startedAt),
                         errorKind: classifySyncV4DiagnosticError(error),
                     });
+                    if (error instanceof SyncV4SessionArchivedError) {
+                        this.stop();
+                        try {
+                            this.onSessionArchived?.();
+                        } catch {
+                            // Lifecycle notification must not turn an archive tombstone into a retry loop.
+                        }
+                        return;
+                    }
                     throw error;
                 }
                 if (!this.isCurrentGeneration(generation)) return;

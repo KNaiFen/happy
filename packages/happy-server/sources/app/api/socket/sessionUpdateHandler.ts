@@ -7,7 +7,7 @@ import { AsyncLock } from "@/utils/lock";
 import { log } from "@/utils/log";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { Socket } from "socket.io";
-import { sessionWhereForConnection } from "./sessionScope";
+import { sessionWriteWhereForConnection } from "./sessionScope";
 import { diagnosticHash } from "@/utils/diagnosticHash";
 import { inTx } from "@/storage/inTx";
 
@@ -24,7 +24,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 }
                 return;
             }
-            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            const accessWhere = sessionWriteWhereForConnection(userId, connection, sid);
             if (!accessWhere) {
                 callback?.({ result: 'error' });
                 return;
@@ -91,7 +91,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 }
                 return;
             }
-            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            const accessWhere = sessionWriteWhereForConnection(userId, connection, sid);
             if (!accessWhere) {
                 callback?.({ result: 'error' });
                 return;
@@ -171,7 +171,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             }
 
             const { sid, thinking } = data;
-            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            const accessWhere = sessionWriteWhereForConnection(userId, connection, sid);
             if (!accessWhere) return;
             const session = await db.session.findFirst({
                 where: accessWhere,
@@ -213,7 +213,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 ) {
                     return;
                 }
-                const accessWhere = sessionWhereForConnection(userId, connection, sid);
+                const accessWhere = sessionWriteWhereForConnection(userId, connection, sid);
                 if (!accessWhere) return;
 
                 log({
@@ -295,7 +295,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             if (t < Date.now() - 1000 * 60 * 10) { // Ignore if time is in the past 10 minutes
                 return;
             }
-            const accessWhere = sessionWhereForConnection(userId, connection, sid);
+            const accessWhere = sessionWriteWhereForConnection(userId, connection, sid);
             if (!accessWhere) return;
 
             // Update last active at

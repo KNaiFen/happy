@@ -160,6 +160,58 @@ describe('useGroupedMessages', () => {
         ]);
     });
 
+    it('does not attach a tool from another Codex turn to the newest reply', () => {
+        const newestReply: Message = {
+            kind: 'agent-text',
+            id: 'new-reply',
+            localId: null,
+            createdAt: 10,
+            text: 'new reply',
+            codexThreadId: 'thread-1',
+            codexTurnId: 'turn-new',
+            codexEventSequence: 2,
+        };
+        const olderTool: ToolCallMessage = {
+            ...toolMessage('old-tool', 11),
+            codexThreadId: 'thread-1',
+            codexTurnId: 'turn-old',
+            codexEventSequence: 1,
+        };
+        const newestUser: Message = {
+            kind: 'user-text',
+            id: 'new-user',
+            localId: null,
+            createdAt: 9,
+            text: 'new prompt',
+            codexThreadId: 'thread-1',
+            codexTurnId: 'turn-new',
+            codexEventSequence: 0,
+        };
+        const olderUser: Message = {
+            kind: 'user-text',
+            id: 'old-user',
+            localId: null,
+            createdAt: 8,
+            text: 'old prompt',
+            codexThreadId: 'thread-1',
+            codexTurnId: 'turn-old',
+            codexEventSequence: 0,
+        };
+
+        const items = groupMessagesForDisplay(
+            [newestReply, olderTool, newestUser, olderUser],
+            true,
+        );
+
+        expect(items.find((entry) => entry.type === 'agent-work-group')).toBeUndefined();
+        expect(items.map((entry) => entry.id)).toEqual([
+            'new-reply',
+            'old-tool',
+            'new-user',
+            'old-user',
+        ]);
+    });
+
     it('does not mark completed agent work as running when a hidden tool is stale', () => {
         const messages: Message[] = [
             {

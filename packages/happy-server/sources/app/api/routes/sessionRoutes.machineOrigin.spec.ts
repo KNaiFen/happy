@@ -7,6 +7,8 @@ const {
     state,
     dbMock,
     emitUpdateMock,
+    emitEphemeralMock,
+    invalidateSessionsMock,
     resetState,
     row,
 } = vi.hoisted(() => {
@@ -34,7 +36,8 @@ const {
         agentStateVersion: data.agentStateVersion ?? 0,
         dataEncryptionKey: data.dataEncryptionKey ?? null,
         active: true,
-        lastActiveAt: now,
+        archivedAt: data.archivedAt ?? null,
+        lastActiveAt: data.lastActiveAt ?? now,
         createdAt: now,
         updatedAt: now,
         originMachineId: data.originMachineId ?? null,
@@ -64,6 +67,13 @@ const {
                 });
                 return state.existingSession;
             }),
+            updateMany: vi.fn(async (args: any) => {
+                const session = state.existingSession;
+                if (!session || (args.where?.id && args.where.id !== session.id)) return { count: 0 };
+                if (args.where?.archivedAt === null && session.archivedAt !== null) return { count: 0 };
+                Object.assign(session, args.data);
+                return { count: 1 };
+            }),
         },
         sessionMessage: {
             findMany: vi.fn(async () => []),
@@ -73,6 +83,8 @@ const {
         state,
         dbMock,
         emitUpdateMock: vi.fn(),
+        emitEphemeralMock: vi.fn(),
+        invalidateSessionsMock: vi.fn(),
         resetState,
         row,
     };
@@ -89,7 +101,7 @@ vi.mock("@/app/events/eventRouter", async (importOriginal) => {
         ...actual,
         eventRouter: {
             emitUpdate: emitUpdateMock,
-            emitEphemeral: vi.fn(),
+            emitEphemeral: emitEphemeralMock,
         },
     };
 });
@@ -97,6 +109,9 @@ vi.mock("@/app/session/sessionDelete", () => ({
     sessionDelete: vi.fn(async () => true),
 }));
 vi.mock("@/utils/log", () => ({ log: vi.fn() }));
+vi.mock("@/app/presence/sessionCache", () => ({
+    activityCache: { invalidateSessions: invalidateSessionsMock },
+}));
 
 import { sessionRoutes } from "./sessionRoutes";
 
@@ -288,5 +303,118 @@ describe("sessionRoutes terminal machine origin", () => {
             originMachineId: "machine-1",
             machineDeletedAt: new Date("2026-01-02T00:00:00.000Z").getTime(),
         });
+    });
+
+    it("archives idempotently and invalidates queued activity", async () => {
+        app = await createApp();
+        state.existingSession = row({ id: "session-1", originMachineId: "machine-1" });
+
+        const first = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/archive",
+            headers: { "x-user-id": "user-1" },
+        });
+        const archivedAt = state.existingSession.archivedAt as Date;
+        const second = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/archive",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(first.statusCode).toBe(200);
+        expect(first.json()).toEqual({
+            success: true,
+            archivedAt: archivedAt.getTime(),
+            alreadyArchived: false,
+        });
+        expect(second.json()).toEqual({
+            success: true,
+            archivedAt: archivedAt.getTime(),
+            alreadyArchived: true,
+        });
+        expect(state.existingSession.active).toBe(false);
+        expect(invalidateSessionsMock).toHaveBeenCalledTimes(2);
+        expect(emitEphemeralMock).toHaveBeenCalledTimes(2);
+        expect(emitEphemeralMock.mock.calls.map(([event]) => event.payload)).toEqual([
+            expect.objectContaining({ active: false, activeAt: archivedAt.getTime() }),
+            expect.objectContaining({ active: false, activeAt: archivedAt.getTime() }),
+        ]);
+    });
+
+    it("keeps the legacy v1 shutdown endpoint transient for Claude v3", async () => {
+        app = await createApp();
+        state.existingSession = row({ id: "session-1", originMachineId: "machine-1" });
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/sessions/session-1/archive",
+            headers: terminalHeaders,
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ success: true });
+        expect(state.existingSession.active).toBe(false);
+        expect(state.existingSession.archivedAt).toBeNull();
+        expect(invalidateSessionsMock).toHaveBeenCalledWith(["session-1"]);
+    });
+
+    it("allows only the original terminal machine to unarchive", async () => {
+        app = await createApp();
+        const archivedAt = new Date(Date.now() + 10_000);
+        state.existingSession = row({
+            id: "session-1",
+            originMachineId: "machine-1",
+            archivedAt,
+            lastActiveAt: archivedAt,
+        });
+
+        const accountAttempt = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/unarchive",
+            headers: { "x-user-id": "user-1" },
+        });
+        const terminalAttempt = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/unarchive",
+            headers: terminalHeaders,
+        });
+
+        expect(accountAttempt.statusCode).toBe(403);
+        expect(terminalAttempt.statusCode).toBe(200);
+        expect(terminalAttempt.json()).toMatchObject({
+            success: true,
+            alreadyUnarchived: false,
+        });
+        expect(terminalAttempt.json().activeAt).toBe(archivedAt.getTime() + 1);
+        expect(state.existingSession.archivedAt).toBeNull();
+        expect(state.existingSession.active).toBe(true);
+        expect(state.existingSession.lastActiveAt.getTime()).toBe(archivedAt.getTime() + 1);
+        expect(invalidateSessionsMock).toHaveBeenCalledWith(["session-1"]);
+        expect(emitEphemeralMock).toHaveBeenLastCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ active: true, activeAt: archivedAt.getTime() + 1 }),
+        }));
+    });
+
+    it("does not load an archived tag as a new terminal session", async () => {
+        app = await createApp();
+        state.existingSession = row({
+            id: "session-1",
+            originMachineId: "machine-1",
+            archivedAt: new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/sessions",
+            headers: terminalHeaders,
+            payload: {
+                tag: "tag-1",
+                metadata: "encrypted-metadata",
+                machineId: "machine-1",
+            },
+        });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toEqual({ error: "sessionArchived" });
     });
 });

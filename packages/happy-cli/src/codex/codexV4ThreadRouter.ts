@@ -114,6 +114,7 @@ export class CodexV4ThreadRouter {
     private readonly orphanRetryAttempts = new Map<string, number>();
     private readonly orphanRetryTimers = new Map<string, NodeJS.Timeout>();
     private readonly routeRegistrationWaiters = new Map<string, Set<RouteRegistrationWaiter>>();
+    private readonly provisionalRoutesByThread = new Set<string>();
     private readonly routeLock = new AsyncLock();
     private closed = false;
     private closePromise: Promise<void> | null = null;
@@ -246,6 +247,14 @@ export class CodexV4ThreadRouter {
         if (!threadId) return;
         const task = async () => {
             const canonical = canonicalOrphanNotification(notification);
+            if (this.provisionalRoutesByThread.has(threadId)) {
+                if (!canonical) return;
+                await this.persistOrphan(threadId, canonical);
+                if (!this.provisionalRoutesByThread.has(threadId)) {
+                    await this.drainPendingNotificationsAwaitingRegistration(threadId);
+                }
+                return;
+            }
             if (
                 !this.bindingsByThread.has(threadId)
                 || this.threadsWithPendingOrphans.has(threadId)
@@ -253,7 +262,7 @@ export class CodexV4ThreadRouter {
                 if (!canonical) return;
                 await this.persistOrphan(threadId, canonical);
                 if (!this.orphanRetryTimers.has(threadId)) {
-                    await this.drainPendingNotifications(threadId);
+                    await this.drainPendingNotificationsAwaitingRegistration(threadId);
                 }
                 return;
             }
@@ -375,6 +384,7 @@ export class CodexV4ThreadRouter {
         }
         this.bindingsByThread.clear();
         this.activeTurnByThread.clear();
+        this.provisionalRoutesByThread.clear();
         if (firstError !== null) throw firstError;
     }
 
@@ -546,6 +556,9 @@ export class CodexV4ThreadRouter {
     }
 
     private async bindingForThread(threadId: string): Promise<CodexV4SessionBinding> {
+        if (this.provisionalRoutesByThread.has(threadId)) {
+            throw new CodexRouteAwaitingRegistrationError(threadId);
+        }
         const existing = this.bindingsByThread.get(threadId);
         if (existing) return existing;
         const snapshot = await this.options.readThread(threadId);
@@ -886,6 +899,15 @@ export class CodexV4ThreadRouter {
         }
     }
 
+    private async drainPendingNotificationsAwaitingRegistration(threadId: string): Promise<void> {
+        try {
+            await this.drainPendingNotifications(threadId);
+        } catch (error) {
+            if (error instanceof CodexRouteAwaitingRegistrationError) return;
+            throw error;
+        }
+    }
+
     private async persistOrphan(
         threadId: string,
         notification: ServerNotification,
@@ -978,8 +1000,17 @@ export class CodexV4ThreadRouter {
                 };
             if (sameRoute(current, resolved)) return current;
         }
-        await this.options.rootBinding.syncClient.persistCodexThreadRoute(resolved);
         this.restoreRoute(resolved);
+        this.provisionalRoutesByThread.add(resolved.threadId);
+        try {
+            await this.options.rootBinding.syncClient.persistCodexThreadRoute(resolved);
+        } catch (error) {
+            this.removeRouteFromMemory(resolved);
+            if (current) this.restoreRoute(current);
+            throw error;
+        } finally {
+            this.provisionalRoutesByThread.delete(resolved.threadId);
+        }
         this.resolveRouteRegistrationWaiters(resolved.threadId);
         return resolved;
     }
@@ -995,6 +1026,11 @@ export class CodexV4ThreadRouter {
             this.removeRecoverableChild(previous.parentThreadId, previous.threadId);
         }
         this.routesByThread.set(route.threadId, route);
+        if (route.activeTurnId) {
+            this.activeTurnByThread.set(route.threadId, route.activeTurnId);
+        } else {
+            this.activeTurnByThread.delete(route.threadId);
+        }
         if (isRootOwnedRoute(route)) {
             this.bindingsByThread.set(route.threadId, this.options.rootBinding);
             this.lineagesByChild.delete(route.threadId);
@@ -1016,11 +1052,6 @@ export class CodexV4ThreadRouter {
             children.add(route.threadId);
             this.recoverableChildrenByParent.set(parentThreadId, children);
         }
-        if (route.activeTurnId) {
-            this.activeTurnByThread.set(route.threadId, route.activeTurnId);
-        } else {
-            this.activeTurnByThread.delete(route.threadId);
-        }
     }
 
     private removeRecoverableChild(parentThreadId: string, childThreadId: string): void {
@@ -1028,6 +1059,21 @@ export class CodexV4ThreadRouter {
         if (!children) return;
         children.delete(childThreadId);
         if (children.size === 0) this.recoverableChildrenByParent.delete(parentThreadId);
+    }
+
+    private removeRouteFromMemory(route: SyncV4CodexThreadRoute): void {
+        if (!isRootOwnedRoute(route) && route.parentThreadId) {
+            this.removeRecoverableChild(route.parentThreadId, route.threadId);
+        }
+        this.routesByThread.delete(route.threadId);
+        this.lineagesByChild.delete(route.threadId);
+        this.activeTurnByThread.delete(route.threadId);
+        if (
+            isRootOwnedRoute(route)
+            && this.bindingsByThread.get(route.threadId) === this.options.rootBinding
+        ) {
+            this.bindingsByThread.delete(route.threadId);
+        }
     }
 
     private now(): number {
@@ -1043,7 +1089,10 @@ export class CodexV4ThreadRouter {
 
     private async waitForRouteRegistration(threadId: string): Promise<void> {
         if (this.closed) throw new Error('Codex v4 thread router is closed');
-        if (this.routesByThread.has(threadId)) return;
+        if (
+            this.routesByThread.has(threadId)
+            && !this.provisionalRoutesByThread.has(threadId)
+        ) return;
         const waitMs = Math.max(
             0,
             Math.trunc(
@@ -1064,7 +1113,10 @@ export class CodexV4ThreadRouter {
             const waiters = this.routeRegistrationWaiters.get(threadId) ?? new Set();
             waiters.add(waiter);
             this.routeRegistrationWaiters.set(threadId, waiters);
-            if (this.routesByThread.has(threadId)) {
+            if (
+                this.routesByThread.has(threadId)
+                && !this.provisionalRoutesByThread.has(threadId)
+            ) {
                 this.resolveRouteRegistrationWaiters(threadId);
             }
         });

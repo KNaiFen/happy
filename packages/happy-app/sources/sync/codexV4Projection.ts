@@ -485,6 +485,10 @@ function collectAffectedOwners(
             return;
         case 'codex.item': {
             affected.items.add(entity.providerId);
+            for (const providerId of indexes.getGroup(
+                'requestProviderIdsByItem',
+                itemKey(entity.threadId, entity.turnId, entity.itemId),
+            )) affected.requests.add(providerId);
             if (entity.itemType.toLowerCase() === 'usermessage' && entity.clientId) {
                 for (const providerId of indexes.getGroup(
                     'commandProviderIdsByClientId',
@@ -517,6 +521,13 @@ function collectAffectedOwners(
             return;
         case 'codex.commandResult':
             affected.commandResults.add(entity.providerId);
+            {
+                const commandProviderId = indexes.getDirect(
+                    'commandProviderIdByCommandId',
+                    entity.commandId,
+                );
+                if (commandProviderId) affected.commands.add(commandProviderId);
+            }
             return;
         case 'codex.relation': {
             if (entity.parentTurnId === null || entity.delegationItemId === null) return;
@@ -754,7 +765,13 @@ function projectAffectedMessages(
         affectedMessageIds.add(requestMessageId(providerId));
         const request = entities['codex.request'][providerId];
         if (request && entityAffectsSelectedThread(request, selectedThreadId)) {
-            projected.push(projectRequestMessage(request));
+            const parentItemProviderId = request.turnId !== null && request.itemId !== null
+                ? indexes.itemProviderIdByKey[itemKey(request.threadId, request.turnId, request.itemId)]
+                : undefined;
+            projected.push(projectRequestMessage(
+                request,
+                parentItemProviderId ? entities['codex.item'][parentItemProviderId] : undefined,
+            ));
         }
     }
 
@@ -769,7 +786,12 @@ function projectAffectedMessages(
         const isReplaced = (indexes.replacementCommandProviderIdsByCommandId[
             command.commandId
         ]?.length ?? 0) > 0;
-        const message = projectCommand(command, hasProviderItem || isReplaced);
+        const commandResult = newestEntity(
+            (indexes.commandResultProviderIdsByCommandId[command.commandId] ?? [])
+                .map((id) => entities['codex.commandResult'][id])
+                .filter((entry): entry is CodexCommandResultEntityV4 => Boolean(entry)),
+        );
+        const message = projectCommand(command, commandResult ?? undefined, hasProviderItem || isReplaced);
         if (message) projected.push(message);
     }
 
@@ -809,20 +831,45 @@ function projectAllMessages(
     );
 }
 
-function projectCommand(command: CodexCommandEntityV4, hidden: boolean): Message | null {
+function projectCommand(
+    command: CodexCommandEntityV4,
+    result: CodexCommandResultEntityV4 | undefined,
+    hidden: boolean,
+): Message | null {
     if (hidden) return null;
     const displayText = jsonObject(command.payload).displayText;
     if (typeof displayText !== 'string' || displayText.length === 0) return null;
+    const threadId = result?.threadId ?? command.threadId;
+    const turnId = result?.turnId ?? command.expectedTurnId;
+    const initialTurnOrder = command.command === 'turn.start' && threadId && turnId
+        ? {
+            codexThreadId: threadId,
+            codexTurnId: turnId,
+            codexEventSequence: 0,
+        }
+        : {};
     return {
         kind: 'user-text',
         id: commandMessageId(command.providerId),
         localId: command.clientUserMessageId,
         createdAt: command.createdAt,
         text: displayText,
+        ...initialTurnOrder,
     };
 }
 
 function compareMessages(left: Message, right: Message): number {
+    if (
+        left.codexThreadId !== undefined
+        && left.codexThreadId === right.codexThreadId
+        && left.codexTurnId !== undefined
+        && left.codexTurnId === right.codexTurnId
+        && left.codexEventSequence !== undefined
+        && right.codexEventSequence !== undefined
+    ) {
+        const eventOrder = right.codexEventSequence - left.codexEventSequence;
+        if (eventOrder !== 0) return eventOrder;
+    }
     return right.createdAt - left.createdAt || right.id.localeCompare(left.id);
 }
 
@@ -908,6 +955,7 @@ function projectItem(
     const itemType = item.itemType.toLowerCase();
     const createdAt = item.startedAt ?? item.createdAt;
     const text = contentForKinds(parts, ['text', 'userInput']);
+    const order = projectItemOrder(item);
 
     if (itemType === 'usermessage') {
         if (!text) return null;
@@ -918,6 +966,7 @@ function projectItem(
             createdAt,
             text,
             codexItemId: item.itemId,
+            ...order,
         };
     }
 
@@ -929,6 +978,7 @@ function projectItem(
             localId: null,
             createdAt,
             text,
+            ...order,
         };
     }
 
@@ -940,7 +990,16 @@ function projectItem(
         createdAt,
         tool,
         children: [],
+        ...order,
     } : null;
+}
+
+function projectItemOrder(item: CodexItemEntityV4) {
+    return {
+        codexThreadId: item.threadId,
+        codexTurnId: item.turnId,
+        ...(item.eventSequence === undefined ? {} : { codexEventSequence: item.eventSequence }),
+    };
 }
 
 function projectTool(
@@ -1054,7 +1113,10 @@ function projectPermission(request: CodexRequestEntityV4 | undefined): ToolCall[
     };
 }
 
-function projectRequestMessage(request: CodexRequestEntityV4): ToolCallMessage {
+function projectRequestMessage(
+    request: CodexRequestEntityV4,
+    parentItem: CodexItemEntityV4 | undefined,
+): ToolCallMessage {
     const isUserInput = request.requestType === 'toolUserInput';
     const name = isUserInput
         ? 'AskUserQuestion'
@@ -1089,6 +1151,7 @@ function projectRequestMessage(request: CodexRequestEntityV4): ToolCallMessage {
             description: request.title,
             permission: projectPermission(request),
         },
+        ...(parentItem ? projectItemOrder(parentItem) : {}),
     };
 }
 

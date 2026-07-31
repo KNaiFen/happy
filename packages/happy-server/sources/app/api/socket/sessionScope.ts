@@ -28,3 +28,12 @@ export function sessionWhereForConnection(
             : connection.machineId,
     }, { id: sessionId });
 }
+
+export function sessionWriteWhereForConnection(
+    userId: string,
+    connection: ClientConnection,
+    sessionId: string,
+): Prisma.SessionWhereInput | null {
+    const accessWhere = sessionWhereForConnection(userId, connection, sessionId);
+    return accessWhere ? { ...accessWhere, archivedAt: null } : null;
+}

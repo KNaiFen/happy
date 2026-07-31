@@ -161,6 +161,164 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('CodexSyncV4Mapper', () => {
+    it('orders live items by provider notification order instead of event timestamps', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        const userMessage: ThreadItem = {
+            type: 'userMessage',
+            id: 'user-fast',
+            clientId: 'command-fast',
+            content: [{ type: 'text', text: 'hello', text_elements: [] }],
+        };
+        const mcpCall: ThreadItem = {
+            type: 'mcpToolCall',
+            id: 'mcp-fast',
+            server: 'filesystem',
+            tool: 'read_file',
+            status: 'inProgress',
+            arguments: { path: '/workspace/README.md' },
+            appContext: null,
+            pluginId: null,
+            result: null,
+            error: null,
+            durationMs: null,
+        };
+
+        mapper.handleNotification(notification({
+            method: 'item/completed',
+            params: {
+                threadId: 'thread-fast',
+                turnId: 'turn-fast',
+                item: userMessage,
+                completedAtMs: 300,
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'item/started',
+            params: {
+                threadId: 'thread-fast',
+                turnId: 'turn-fast',
+                item: mcpCall,
+                startedAtMs: 100,
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'item/completed',
+            params: {
+                threadId: 'thread-fast',
+                turnId: 'turn-fast',
+                item: { ...mcpCall, status: 'completed', durationMs: 2 },
+                completedAtMs: 400,
+            },
+        }));
+        await mapper.flush();
+
+        const items = publisher.latest('codex.item');
+        expect(items.find((item) => item.itemId === 'user-fast')?.eventSequence).toBe(0);
+        expect(items.find((item) => item.itemId === 'mcp-fast')?.eventSequence).toBe(1);
+        await mapper.close();
+    });
+
+    it('reserves the initial user position when a fast tool notification arrives first', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        const mcpCall: ThreadItem = {
+            type: 'mcpToolCall',
+            id: 'mcp-before-user',
+            server: 'filesystem',
+            tool: 'read_file',
+            status: 'inProgress',
+            arguments: {},
+            appContext: null,
+            pluginId: null,
+            result: null,
+            error: null,
+            durationMs: null,
+        };
+
+        mapper.handleNotification(notification({
+            method: 'item/started',
+            params: {
+                threadId: 'thread-fast-first',
+                turnId: 'turn-fast-first',
+                item: mcpCall,
+                startedAtMs: 100,
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'item/completed',
+            params: {
+                threadId: 'thread-fast-first',
+                turnId: 'turn-fast-first',
+                item: {
+                    type: 'userMessage',
+                    id: 'user-after-tool-notification',
+                    clientId: 'command-fast-first',
+                    content: [{ type: 'text', text: 'hello', text_elements: [] }],
+                },
+                completedAtMs: 200,
+            },
+        }));
+        await mapper.flush();
+
+        const items = publisher.latest('codex.item');
+        expect(items.find((item) => item.itemId === 'user-after-tool-notification')?.eventSequence).toBe(0);
+        expect(items.find((item) => item.itemId === 'mcp-before-user')?.eventSequence).toBe(1);
+        await mapper.close();
+    });
+
+    it('rebuilds snapshot item order and appends later live items without reordering', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        mapper.importThread(thread('thread-snapshot-order', [turn('turn-order', 'completed', [
+            {
+                type: 'userMessage',
+                id: 'snapshot-user',
+                clientId: 'snapshot-command',
+                content: [{ type: 'text', text: 'hello', text_elements: [] }],
+            },
+            {
+                type: 'mcpToolCall',
+                id: 'snapshot-mcp',
+                server: 'filesystem',
+                tool: 'read_file',
+                status: 'completed',
+                arguments: {},
+                appContext: null,
+                pluginId: null,
+                result: null,
+                error: null,
+                durationMs: 1,
+            },
+        ])]));
+        mapper.handleNotification(notification({
+            method: 'item/started',
+            params: {
+                threadId: 'thread-snapshot-order',
+                turnId: 'turn-order',
+                item: {
+                    type: 'agentMessage',
+                    id: 'live-answer',
+                    text: 'done',
+                    phase: null,
+                    memoryCitation: null,
+                },
+                startedAtMs: 1,
+            },
+        }));
+        await mapper.flush();
+
+        const sequenceByItem = new Map(
+            publisher.latest('codex.item').map((item) => [item.itemId, item.eventSequence]),
+        );
+        expect(sequenceByItem).toEqual(new Map([
+            ['snapshot-user', 0],
+            ['snapshot-mcp', 1],
+            ['live-answer', 2],
+        ]));
+        await mapper.close();
+    });
+
     it('converges file-change requests and items across either arrival order without cross-thread patch reuse', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, {

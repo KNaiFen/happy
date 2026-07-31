@@ -191,12 +191,25 @@ export function groupToolCallsForDisplay(
 }
 
 function getTurnAssignments(messages: Message[]): number[] {
-    // Newest-first → turn 0 is the current assistant turn.
+    // Newest-first means the first distinct provider/fallback turn is current.
+    // Codex timestamps may be skewed, so canonical provider turn IDs take
+    // precedence over inferring ownership from user-message boundaries.
     const turnOf = new Array<number>(messages.length);
-    let turn = 0;
+    const turnByKey = new Map<string, number>();
+    let nextTurn = 0;
+    let fallbackTurn = 0;
     for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        const key = message.codexThreadId && message.codexTurnId
+            ? `codex:${JSON.stringify([message.codexThreadId, message.codexTurnId])}`
+            : `fallback:${fallbackTurn}`;
+        let turn = turnByKey.get(key);
+        if (turn === undefined) {
+            turn = nextTurn++;
+            turnByKey.set(key, turn);
+        }
         turnOf[i] = turn;
-        if (messages[i].kind === 'user-text') turn++;
+        if (message.kind === 'user-text') fallbackTurn++;
     }
     return turnOf;
 }

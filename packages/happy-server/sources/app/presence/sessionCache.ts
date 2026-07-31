@@ -62,8 +62,8 @@ class ActivityCache {
         
         // Cache miss - check database
         try {
-            const session = await db.session.findUnique({
-                where: { id: sessionId, accountId: userId }
+            const session = await db.session.findFirst({
+                where: { id: sessionId, accountId: userId, archivedAt: null }
             });
             
             if (session) {
@@ -213,6 +213,7 @@ class ActivityCache {
                     db.session.updateMany({
                         where: {
                             id: update.id,
+                            archivedAt: null,
                             OR: [
                                 { originMachineId: null },
                                 { originMachine: { deletedAt: null } },
