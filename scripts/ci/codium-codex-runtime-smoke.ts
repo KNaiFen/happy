@@ -9,6 +9,7 @@ import {
     OFFICIAL_CODEX_TOOL_SENTINEL,
     startCodexResponsesFixture,
     writeCodexResponsesConfig,
+    type CodexResponsesFixtureSnapshot,
 } from './codex-responses-fixture';
 import {
     launchCodexTurn,
@@ -60,7 +61,14 @@ async function main(): Promise<void> {
             await withTimeout(turn.completed, 90_000, 'Codium bundled Codex one-shot turn');
         } catch (error) {
             turn.stop();
-            await turn.completed.catch(() => undefined);
+            reportTimeoutDiagnostics(fixture.snapshot());
+            await withTimeout(
+                turn.completed,
+                10_000,
+                'Codium bundled Codex turn termination',
+            ).catch((terminationError) => {
+                console.error(`Codium Codex termination diagnostic: ${errorMessage(terminationError)}`);
+            });
             throw error;
         }
 
@@ -79,6 +87,19 @@ async function main(): Promise<void> {
         else process.env.PATH = originalPath;
         await rm(root, { recursive: true, force: true });
     }
+}
+
+function reportTimeoutDiagnostics(snapshot: CodexResponsesFixtureSnapshot): void {
+    const shapes = snapshot.requestShapes
+        .map(({ contentEncoding, inputTypes }) => `${contentEncoding}:${inputTypes.join(',') || 'none'}`)
+        .join('|') || 'none';
+    console.error(
+        `Codium Codex timeout diagnostics: requests=${snapshot.requestCount}; tool_output=${snapshot.toolOutputObserved}; input_shapes=${shapes}`,
+    );
+}
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
 }
 
 async function withTimeout(promise: Promise<void>, timeoutMs: number, label: string): Promise<void> {

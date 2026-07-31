@@ -29,7 +29,8 @@ rewind、授权、连接或配置 Claude；所有未指定 Agent 的新操作使
   runner 在 spawn error/close 与 renderer turn-close 的竞态均有独立回归覆盖。
 - 首轮 macOS 门禁还暴露出官方 `0.146.0` 平台包的 `bin/codex`、`codex-path` 布局；
   runner 将以存在性检测同时支持该布局和旧版 `codex/codex`、`path` 布局，不能因
-  npm 包内部重排而回退或失去 Codex 执行能力。
+  npm 包内部重排而回退或失去 Codex 执行能力。其超时诊断只允许输出协议阶段元数据，
+  不允许在 CI 日志泄露 prompt、响应或工具参数。
 - `.agents` 外的五个本地 Claude-first 指令文件已按用户授权删除，未纳入 Git。
 
 待完成：版本 `CLI 1.4.11`、`App 1.11.18`、`Server 1.1.32`、`Wire 0.1.5`、

@@ -35,7 +35,9 @@
 - 修正：首轮 macOS Codium runtime gate 发现 `@openai/codex 0.146.0` 的平台包把
   可执行文件和 `rg` 分别移动到 `vendor/<triple>/bin/codex` 与 `codex-path`；
   resolver 不能再假定旧版 `codex/codex` 与 `path` 布局。实现已按文件存在性选择
-  新旧官方布局，并把两种布局纳入单测和云端实际执行门禁。
+  新旧官方布局，并把两种布局纳入单测和云端实际执行门禁。若实际 runner 超时，门禁
+  只输出 request count、工具回传标记与请求类型以定位阶段，绝不输出 prompt、响应或
+  工具参数。
 - 待完成：在同一协调版本上完成云端构建、真实 app-server/Codium runtime、tgz 与
   Android workflow 验收，随后同步 `main`。
 
