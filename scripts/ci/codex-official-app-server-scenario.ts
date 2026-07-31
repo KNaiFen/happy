@@ -42,12 +42,26 @@ async function main(): Promise<void> {
         );
         codex = new CodexAppServerClient();
         const notificationMethods = new Set<string>();
+        const notificationOrder: string[] = [];
+        let droppedNotificationOrderEntries = 0;
         const itemTypes = new Set<string>();
         let agentText = '';
         let reasoningSummary = '';
         let commandOutput = '';
+        let resolveTurnCompleted!: () => void;
+        const turnCompleted = new Promise<void>((resolve) => {
+            resolveTurnCompleted = resolve;
+        });
         codex.setStableNotificationHandler((notification) => {
             notificationMethods.add(notification.method);
+            if (notificationOrder.length < 256) {
+                notificationOrder.push(notification.method);
+            } else {
+                droppedNotificationOrderEntries += 1;
+            }
+            if (notification.method === 'turn/completed') {
+                resolveTurnCompleted();
+            }
             if (
                 notification.method === 'item/started'
                 || notification.method === 'item/completed'
@@ -68,13 +82,26 @@ async function main(): Promise<void> {
             approvalPolicy: 'never',
             sandbox: 'read-only',
         });
-        await withTimeout(
-            codex.sendTurnAndWait('exercise the official app-server lifecycle', {
-                clientUserMessageId: 'official-app-server-command',
-            }),
-            90_000,
-            'official app-server turn lifecycle',
-        );
+        let turnResult: { aborted: boolean };
+        try {
+            [turnResult] = await withTimeout(
+                Promise.all([
+                    codex.sendTurnAndWait('exercise the official app-server lifecycle', {
+                        clientUserMessageId: 'official-app-server-command',
+                    }),
+                    turnCompleted,
+                ]),
+                90_000,
+                'official app-server command settlement and turn/completed',
+            );
+        } catch (error) {
+            const provider = fixture.snapshot();
+            console.error(
+                `Official lifecycle diagnostics: requests=${provider.requestCount} toolOutput=${provider.toolOutputObserved} methods=${notificationOrder.join(',')} droppedMethods=${droppedNotificationOrderEntries}`,
+            );
+            throw error;
+        }
+        assert.equal(turnResult.aborted, false, 'official Codex unexpectedly aborted the turn');
 
         const provider = fixture.snapshot();
         assert(provider.requestCount >= 2, 'official Codex did not perform the tool follow-up request');

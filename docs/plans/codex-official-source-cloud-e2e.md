@@ -48,6 +48,7 @@
 - 启动源码构建的官方 `codex app-server`。
 - 启动模拟 Responses provider，发送真实 `turn/start`。
 - 在短时间内验证 thread/turn/item started、流式文本、阶段切换、最终文本和 `turn/completed`。
+- 同时等待 Happy 命令结算与独立观察到的官方 `turn/completed`。官方 `0.146.0` 会先发送权威 `thread/status/changed: idle`、再发送 `turn/completed`，因此不得在前者结算命令后立即断言后者已经进入通知 handler。
 - 验证 Happy 不因普通传输状态变化把 active 误判为 idle。
 - 长时间无事件的语义用虚拟时钟覆盖，不占用十分钟真实 runner 时间。
 
@@ -105,5 +106,6 @@
 - [x] 用独立的官方 app-server 短生命周期门禁替换 fake 十分钟等待；两小时无假结束继续由虚拟时钟单测覆盖。
 - [x] Android field fixture 改为官方 app-server 全链路，并补充 provider/tool/provenance 诊断。
 - [x] 提交并推送分支；首次云端运行确认官方标签源码、Rust toolchain、Linux 依赖与 `rusty_v8` 均可取得，并暴露标签锁文件无法直接使用 `--locked` 的真实构建差异。
-- [ ] 采用“官方解析语义 + 双锁文件指纹 + 解析后 locked 编译”修复云端源码构建，再继续处理真实协议运行错误。
+- [x] 采用“官方解析语义 + 双锁文件指纹 + 解析后 locked 编译”修复云端源码构建；run `30636131220` 从官方 `0.146.0` 标签成功产出并校验二进制。
+- [x] 修复首次真实生命周期运行暴露的 `thread/status/changed: idle` 与稍后 `turn/completed` 之间的测试竞态；门禁现在独立等待两条边界并保留有界、无明文的方法顺序诊断。
 - [ ] monorepo required gate 与手动 Android field E2E 全绿后归档本计划。
