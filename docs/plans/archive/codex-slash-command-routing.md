@@ -1,12 +1,13 @@
 # Codex Slash-Command Routing
 
-> Historical plan. Its CLI-only scope, bounded compact timeout, deprecated
-> compact-completion fallback, and single-package release assumptions are
-> superseded by `docs/decisions/ADR-001-codex-sync-v4.md`.
+> Deprecated historical plan. Happy now routes the complete supported Codex control surface
+> through stable-v2 RPC plus Sync v4 command entities. Do not implement this document's
+> CLI-only router, bounded compact timeout, deprecated completion fallback, or single-package
+> release assumptions. `docs/decisions/ADR-001-codex-sync-v4.md` is authoritative.
 
 ## Status
 
-Proposed (deferred)
+Deprecated (2026-08-01)
 
 ## Date
 

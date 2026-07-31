@@ -266,7 +266,7 @@ by the CLI command ownership boundary.
 This ADR supersedes the architectural and release-scope assumptions in:
 
 - `docs/plans/codex-app-server-migration.md`; and
-- `docs/plans/codex-slash-command-routing.md`.
+- `docs/plans/archive/codex-slash-command-routing.md` (deprecated historical plan).
 
 Those files remain as historical implementation plans. Where they conflict
 with this ADR, this ADR is authoritative.
