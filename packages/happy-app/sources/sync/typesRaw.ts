@@ -7,7 +7,7 @@ import { MessageMetaSchema, MessageMeta } from './typesMessageMeta';
 // Raw types
 //
 
-// Usage data type from Claude API
+// Provider-neutral usage data projected by v3 session envelopes.
 const usageDataSchema = z.object({
     input_tokens: z.number(),
     cache_creation_input_tokens: z.number().optional(),
@@ -111,10 +111,6 @@ const sessionEnvelopeSchema = z.object({
     subagent: z.string().refine((value) => isCuid(value), {
         message: 'subagent must be a cuid2 value',
     }).optional(),
-    // Underlying agent-protocol message id (Claude's `uuid` in the JSONL)
-    // — used as the rewind point for fork / duplicate. Optional for back-
-    // compat with envelopes emitted before this field was wired through.
-    claudeUuid: z.string().min(1).optional(),
     // Codex app-server item id for precise thread rollback points.
     codexItemId: z.string().min(1).optional(),
     // Optional model usage from the source agent message. The reducer uses it
@@ -139,160 +135,10 @@ const sessionEnvelopeSchema = z.object({
 });
 type SessionEnvelope = z.infer<typeof sessionEnvelopeSchema>;
 
-const rawTextContentSchema = z.object({
-    type: z.literal('text'),
-    text: z.string(),
-}).passthrough();  // ROBUST: Accept unknown fields for future API compatibility
-export type RawTextContent = z.infer<typeof rawTextContentSchema>;
-
-const rawToolUseContentSchema = z.object({
-    type: z.literal('tool_use'),
-    id: z.string(),
-    name: z.string(),
-    input: z.any(),
-}).passthrough();  // ROBUST: Accept unknown fields preserved by transform
-export type RawToolUseContent = z.infer<typeof rawToolUseContentSchema>;
-
-const rawToolResultContentSchema = z.object({
-    type: z.literal('tool_result'),
-    tool_use_id: z.string(),
-    content: z.union([z.array(z.object({ type: z.literal('text'), text: z.string() })), z.string()]),
-    is_error: z.boolean().optional(),
-    permissions: z.object({
-        date: z.number(),
-        result: z.enum(['approved', 'denied']),
-        mode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'read-only', 'safe-yolo', 'yolo']).optional(),
-        allowedTools: z.array(z.string()).optional(),
-        decision: z.enum(['approved', 'approved_for_session', 'denied', 'abort']).optional(),
-    }).optional(),
-}).passthrough();  // ROBUST: Accept unknown fields for future API compatibility
-export type RawToolResultContent = z.infer<typeof rawToolResultContentSchema>;
-
-/**
- * Extended thinking content from Claude API
- * Contains model's reasoning process before generating the final response
- * Uses .passthrough() to preserve signature and other unknown fields
- */
-const rawThinkingContentSchema = z.object({
-    type: z.literal('thinking'),
-    thinking: z.string(),
-}).passthrough();  // ROBUST: Accept signature and future fields
-export type RawThinkingContent = z.infer<typeof rawThinkingContentSchema>;
-
-// ============================================================================
-// WOLOG: Type-Safe Content Normalization via Zod Transform
-// ============================================================================
-// Accepts both hyphenated (Codex/Gemini) and underscore (Claude) formats
-// Transforms all to canonical underscore format during validation
-// Full type safety - no `unknown` types
-// Source: Part D of the Expo Mobile Testing & Package Manager Agnostic System plan
-// ============================================================================
-
-/**
- * Hyphenated tool-call format from Codex/Gemini agents
- * Transforms to canonical tool_use format during validation
- * Uses .passthrough() to preserve unknown fields for future API compatibility
- */
-const rawHyphenatedToolCallSchema = z.object({
-    type: z.literal('tool-call'),
-    callId: z.string(),
-    id: z.string().optional(), // Some messages have both
-    name: z.string(),
-    input: z.any(),
-}).passthrough();  // ROBUST: Accept and preserve unknown fields
-type RawHyphenatedToolCall = z.infer<typeof rawHyphenatedToolCallSchema>;
-
-/**
- * Hyphenated tool-call-result format from Codex/Gemini agents
- * Transforms to canonical tool_result format during validation
- * Uses .passthrough() to preserve unknown fields for future API compatibility
- */
-const rawHyphenatedToolResultSchema = z.object({
-    type: z.literal('tool-call-result'),
-    callId: z.string(),
-    tool_use_id: z.string().optional(), // Some messages have both
-    output: z.any(),
-    content: z.any().optional(), // Some messages have both
-    is_error: z.boolean().optional(),
-}).passthrough();  // ROBUST: Accept and preserve unknown fields
-type RawHyphenatedToolResult = z.infer<typeof rawHyphenatedToolResultSchema>;
-
-/**
- * Input schema accepting ALL formats (both hyphenated and canonical)
- * Including Claude's extended thinking content type
- */
-const rawAgentContentInputSchema = z.discriminatedUnion('type', [
-    rawTextContentSchema,           // type: 'text' (canonical)
-    rawToolUseContentSchema,        // type: 'tool_use' (canonical)
-    rawToolResultContentSchema,     // type: 'tool_result' (canonical)
-    rawThinkingContentSchema,       // type: 'thinking' (canonical)
-    rawHyphenatedToolCallSchema,    // type: 'tool-call' (hyphenated)
-    rawHyphenatedToolResultSchema,  // type: 'tool-call-result' (hyphenated)
-]);
-type RawAgentContentInput = z.infer<typeof rawAgentContentInputSchema>;
-
-/**
- * Type-safe transform: Hyphenated tool-call → Canonical tool_use
- * ROBUST: Unknown fields preserved via object spread and .passthrough()
- */
-function normalizeToToolUse(input: RawHyphenatedToolCall) {
-    // Spread preserves all fields from input (passthrough fields included)
-    return {
-        ...input,
-        type: 'tool_use' as const,
-        id: input.callId,  // Codex uses callId, canonical uses id
-    };
-}
-
-/**
- * Type-safe transform: Hyphenated tool-call-result → Canonical tool_result
- * ROBUST: Unknown fields preserved via object spread and .passthrough()
- */
-function normalizeToToolResult(input: RawHyphenatedToolResult) {
-    // Spread preserves all fields from input (passthrough fields included)
-    return {
-        ...input,
-        type: 'tool_result' as const,
-        tool_use_id: input.callId,  // Codex uses callId, canonical uses tool_use_id
-        content: input.output ?? input.content ?? '',  // Codex uses output, canonical uses content
-        is_error: input.is_error ?? false,
-    };
-}
-
-/**
- * Schema that accepts both hyphenated and canonical formats.
- * Normalization happens via .preprocess() at root level to avoid Zod v4 "unmergable intersection" issue.
- * See: https://github.com/colinhacks/zod/discussions/2100
- *
- * Accepts: 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'tool-call' | 'tool-call-result'
- * All types validated by their respective schemas with .passthrough() for unknown fields
- */
-const rawAgentContentSchema = z.union([
-    rawTextContentSchema,
-    rawToolUseContentSchema,
-    rawToolResultContentSchema,
-    rawThinkingContentSchema,
-    rawHyphenatedToolCallSchema,
-    rawHyphenatedToolResultSchema,
-]);
-export type RawAgentContent = z.infer<typeof rawAgentContentSchema>;
-
 const rawAgentRecordSchema = z.discriminatedUnion('type', [z.object({
     type: z.literal('output'),
-    data: z.intersection(z.discriminatedUnion('type', [
-        z.object({ type: z.literal('system') }),
-        z.object({ type: z.literal('result'), result: z.string().nullish(), subtype: z.string().nullish(), is_error: z.boolean().nullish() }),
-        z.object({ type: z.literal('summary'), summary: z.string() }),
-        z.object({ type: z.literal('assistant'), message: z.object({ role: z.literal('assistant'), model: z.string(), content: z.array(rawAgentContentSchema), usage: usageDataSchema.optional() }), parent_tool_use_id: z.string().nullable().optional() }),
-        z.object({ type: z.literal('user'), message: z.object({ role: z.literal('user'), content: z.union([z.string(), z.array(rawAgentContentSchema)]) }), parent_tool_use_id: z.string().nullable().optional(), toolUseResult: z.any().nullable().optional() }),
-    ]), z.object({
-        isSidechain: z.boolean().nullish(),
-        isCompactSummary: z.boolean().nullish(),
-        isMeta: z.boolean().nullish(),
-        uuid: z.string().nullish(),
-        parentUuid: z.string().nullish(),
-    }).passthrough()),  // ROBUST: Accept CLI metadata fields (userType, cwd, sessionId, version, gitBranch, slug, requestId, timestamp)
-}), z.object({
+    data: z.unknown(),
+}).passthrough(), z.object({
     type: z.literal('event'),
     id: z.string(),
     data: agentEventSchema
@@ -321,7 +167,7 @@ const rawAgentRecordSchema = z.discriminatedUnion('type', [z.object({
 }), z.object({
     // ACP (Agent Communication Protocol) - unified format for all agent providers
     type: z.literal('acp'),
-    provider: z.enum(['gemini', 'codex', 'claude', 'opencode']),
+    provider: z.enum(['gemini', 'codex', 'opencode']),
     data: z.discriminatedUnion('type', [
         // Core message types
         z.object({ type: z.literal('reasoning'), message: z.string() }),
@@ -389,31 +235,6 @@ const rawAgentRecordSchema = z.discriminatedUnion('type', [z.object({
  */
 function preprocessMessageContent(data: any): any {
     if (!data || typeof data !== 'object') return data;
-
-    // Helper: normalize a single content item
-    const normalizeContent = (item: any): any => {
-        if (!item || typeof item !== 'object') return item;
-
-        if (item.type === 'tool-call') {
-            return normalizeToToolUse(item);
-        }
-        if (item.type === 'tool-call-result') {
-            return normalizeToToolResult(item);
-        }
-        return item;
-    };
-
-    // Normalize assistant message content
-    if (data.role === 'agent' && data.content?.type === 'output' && data.content?.data?.message?.content) {
-        if (Array.isArray(data.content.data.message.content)) {
-            data.content.data.message.content = data.content.data.message.content.map(normalizeContent);
-        }
-    }
-
-    // Normalize user message content
-    if (data.role === 'agent' && data.content?.type === 'output' && data.content?.data?.type === 'user' && Array.isArray(data.content.data.message?.content)) {
-        data.content.data.message.content = data.content.data.message.content.map(normalizeContent);
-    }
 
     // Accept new session wrapper shape and normalize to canonical wrapped shape.
     // New shape:
@@ -534,12 +355,6 @@ export type NormalizedMessage = ({
     isSidechain: boolean,
     meta?: MessageMeta,
     usage?: UsageData,
-    /**
-     * Underlying Claude `uuid` for this message — used as the rewind point
-     * for the session fork / duplicate flow. Optional because some message
-     * sources (legacy events, server-emitted control messages) have none.
-     */
-    claudeUuid?: string,
     codexItemId?: string,
 };
 
@@ -630,7 +445,6 @@ function normalizeSessionEnvelope(
                     text: visibleText
                 },
                 meta,
-                claudeUuid: envelope.claudeUuid,
                 codexItemId: envelope.codexItemId,
             } satisfies NormalizedMessage;
         }
@@ -655,7 +469,6 @@ function normalizeSessionEnvelope(
                 }
             ],
             meta,
-            claudeUuid: envelope.claudeUuid,
             codexItemId: envelope.codexItemId,
             usage: envelope.usage,
         } satisfies NormalizedMessage;
@@ -793,160 +606,7 @@ export function normalizeRawMessage(id: string, localId: string | null, createdA
     }
     if (raw.role === 'agent') {
         if (raw.content.type === 'output') {
-
-            // Skip Meta messages
-            if (raw.content.data.isMeta) {
-                return null;
-            }
-
-            // Skip compact summary messages
-            if (raw.content.data.isCompactSummary) {
-                return null;
-            }
-
-            // Handle Result messages (e.g. slash command errors like "Unknown skill: mcp")
-            if (raw.content.data.type === 'result') {
-                const resultText = raw.content.data.result;
-                if (resultText) {
-                    return {
-                        id,
-                        localId,
-                        createdAt,
-                        role: 'agent',
-                        content: [{
-                            type: 'text' as const,
-                            text: resultText,
-                            uuid: raw.content.data.uuid ?? id,
-                            parentUUID: raw.content.data.parentUuid ?? null,
-                        }],
-                        isSidechain: false,
-                        meta: raw.meta,
-                    } satisfies NormalizedMessage;
-                }
-                return null;
-            }
-
-            // Handle Assistant messages (including sidechains)
-            if (raw.content.data.type === 'assistant') {
-                if (!raw.content.data.uuid) {
-                    return null;
-                }
-                let content: NormalizedAgentContent[] = [];
-                for (let c of raw.content.data.message.content) {
-                    if (c.type === 'text') {
-                        content.push({
-                            ...c,  // WOLOG: Preserve all fields including unknown ones
-                            uuid: raw.content.data.uuid,
-                            parentUUID: raw.content.data.parentUuid ?? null
-                        } as NormalizedAgentContent);
-                    } else if (c.type === 'thinking') {
-                        content.push({
-                            ...c,  // WOLOG: Preserve all fields including unknown ones (signature, etc.)
-                            uuid: raw.content.data.uuid,
-                            parentUUID: raw.content.data.parentUuid ?? null
-                        } as NormalizedAgentContent);
-                    } else if (c.type === 'tool_use') {
-                        let description: string | null = null;
-                        if (typeof c.input === 'object' && c.input !== null && 'description' in c.input && typeof c.input.description === 'string') {
-                            description = c.input.description;
-                        }
-                        content.push({
-                            ...c,  // WOLOG: Preserve all fields including unknown ones
-                            type: 'tool-call',
-                            description,
-                            uuid: raw.content.data.uuid,
-                            parentUUID: raw.content.data.parentUuid ?? null
-                        } as NormalizedAgentContent);
-                    }
-                }
-                return {
-                    id,
-                    localId,
-                    createdAt,
-                    role: 'agent',
-                    isSidechain: raw.content.data.isSidechain ?? false,
-                    content,
-                    meta: raw.meta,
-                    usage: raw.content.data.message.usage
-                };
-            } else if (raw.content.data.type === 'user') {
-                if (!raw.content.data.uuid) {
-                    return null;
-                }
-
-                // Handle sidechain user messages
-                if (raw.content.data.isSidechain && raw.content.data.message && typeof raw.content.data.message.content === 'string') {
-                    // Return as a special agent message with sidechain content
-                    return {
-                        id,
-                        localId,
-                        createdAt,
-                        role: 'agent',
-                        isSidechain: true,
-                        content: [{
-                            type: 'sidechain',
-                            uuid: raw.content.data.uuid,
-                            prompt: raw.content.data.message.content
-                        }]
-                    };
-                }
-
-                // Handle regular user messages
-                if (raw.content.data.message && typeof raw.content.data.message.content === 'string') {
-                    return {
-                        id,
-                        localId,
-                        createdAt,
-                        role: 'user',
-                        isSidechain: false,
-                        content: {
-                            type: 'text',
-                            text: raw.content.data.message.content
-                        },
-                        claudeUuid: raw.content.data.uuid,
-                    };
-                }
-
-                // Handle tool results
-                let content: NormalizedAgentContent[] = [];
-                if (typeof raw.content.data.message.content === 'string') {
-                    content.push({
-                        type: 'text',
-                        text: raw.content.data.message.content,
-                        uuid: raw.content.data.uuid,
-                        parentUUID: raw.content.data.parentUuid ?? null
-                    });
-                } else {
-                    for (let c of raw.content.data.message.content) {
-                        if (c.type === 'tool_result') {
-                            content.push({
-                                ...c,  // WOLOG: Preserve all fields including unknown ones
-                                type: 'tool-result',
-                                content: raw.content.data.toolUseResult ? raw.content.data.toolUseResult : (typeof c.content === 'string' ? c.content : c.content?.[0]?.text ?? ''),
-                                is_error: c.is_error || false,
-                                uuid: raw.content.data.uuid,
-                                parentUUID: raw.content.data.parentUuid ?? null,
-                                permissions: c.permissions ? {
-                                    date: c.permissions.date,
-                                    result: c.permissions.result,
-                                    mode: c.permissions.mode,
-                                    allowedTools: c.permissions.allowedTools,
-                                    decision: c.permissions.decision
-                                } : undefined
-                            } as NormalizedAgentContent);
-                        }
-                    }
-                }
-                return {
-                    id,
-                    localId,
-                    createdAt,
-                    role: 'agent',
-                    isSidechain: raw.content.data.isSidechain ?? false,
-                    content,
-                    meta: raw.meta
-                };
-            }
+            return null;
         }
         if (raw.content.type === 'event') {
             return {

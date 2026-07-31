@@ -356,8 +356,7 @@ export async function startDaemon(): Promise<void> {
         logger.debug(`[DAEMON RUN] Environment variable keys (before expansion) (${Object.keys(extraEnv).length}): ${Object.keys(extraEnv).join(', ')}`);
 
         // Expand ${VAR} references from the sanitized daemon environment.
-        // This ensures variable substitution works in both tmux and non-tmux modes
-        // Example: ANTHROPIC_AUTH_TOKEN="${Z_AI_AUTH_TOKEN}" → ANTHROPIC_AUTH_TOKEN="sk-real-key"
+        // This ensures variable substitution works in both tmux and non-tmux modes.
         extraEnv = expandEnvironmentVariables(extraEnv, ambientEnvironment);
         logger.debug(`[DAEMON RUN] After variable expansion: ${Object.keys(extraEnv).join(', ')}`);
 
@@ -425,7 +424,7 @@ export async function startDaemon(): Promise<void> {
 
           // Spawn in tmux with environment variables.
           // IMPORTANT: Pass the complete safe environment (ambient + extraEnv) because:
-          // 1. tmux sessions need daemon's expanded auth variables (e.g., ANTHROPIC_AUTH_TOKEN)
+          // 1. tmux sessions need daemon's expanded auth variables
           // 2. regular spawning uses the same clean environment
           // 3. tmux needs explicit -e values, and the command unsets omitted
           //    session variables that could otherwise survive in its server environment
@@ -641,11 +640,10 @@ export async function startDaemon(): Promise<void> {
           return { type: 'error', errorMessage: `Session ${happySessionId} has no stored encryption data. It was likely started before this feature was available. Restart the daemon and start a new session to enable resume.` };
         }
 
-        // Webhook metadata may be stale (missing claudeSessionId/codexThreadId set after startup).
-        // Fetch fresh metadata from server if needed.
+        // Webhook metadata may predate the Codex thread identifier. Fetch a
+        // fresh snapshot before trying to resume it.
         let metadata = tracked.happySessionMetadataFromLocalWebhook;
-        const needsFetch = (!metadata.claudeSessionId && (!metadata.flavor || metadata.flavor === 'claude'))
-          || (!metadata.codexThreadId && metadata.flavor === 'codex');
+        const needsFetch = metadata.flavor === 'codex' && !metadata.codexThreadId;
         if (needsFetch) {
           logger.debug(`[DAEMON RUN] Session ${happySessionId} missing agent session ID in webhook metadata, fetching from server`);
           const serverMetadata = await fetchServerSessionMetadata(happySessionId, tracked.encryption.encryptionKey, tracked.encryption.encryptionVariant);
@@ -657,16 +655,13 @@ export async function startDaemon(): Promise<void> {
 
         const launch = buildResumeLaunch(
           { id: happySessionId, active: true, metadata },
-          { startedBy: 'daemon', claudeStartingMode: 'remote' },
+          { startedBy: 'daemon' },
         );
 
         if (options?.model) {
           launch.args.push('--model', options.model);
         }
-        // Same as spawnSession: for claude, ambient 'default' must not
-        // override the CLI default; for codex, 'default' is a concrete
-        // ask-first mode and must be forwarded.
-        if (options?.permissionMode && (metadata.flavor === 'codex' || options.permissionMode !== 'default')) {
+        if (options?.permissionMode) {
           launch.args.push('--permission-mode', options.permissionMode);
         }
 

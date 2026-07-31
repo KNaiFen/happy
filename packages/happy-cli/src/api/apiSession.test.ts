@@ -365,7 +365,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
             }
         });
 
-        client.sendCodexMessage({ type: 'delta', text: 'hello' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'hello' });
 
         await waitForCheck(() => {
             expect(mockAxiosPost).toHaveBeenCalledTimes(1);
@@ -385,8 +385,9 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(decrypted).toEqual({
             role: 'agent',
             content: {
-                type: 'codex',
-                data: { type: 'delta', text: 'hello' }
+                type: 'acp',
+                provider: 'codex',
+                data: { type: 'message', message: 'hello' }
             },
             meta: {
                 sentFrom: 'cli'
@@ -416,13 +417,13 @@ describe('ApiSessionClient v3 messages API migration', () => {
                 }
             });
 
-        client.sendCodexMessage({ type: 'first' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'first' });
         await waitForCheck(() => {
             expect(mockAxiosPost).toHaveBeenCalledTimes(1);
         });
 
-        client.sendCodexMessage({ type: 'second' });
-        client.sendCodexMessage({ type: 'third' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'second' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'third' });
 
         resolveFirstPost({
             data: {
@@ -455,7 +456,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
                 }
             });
 
-        client.sendCodexMessage({ type: 'retry-me' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'retry-me' });
 
         await waitForCheck(() => {
             expect(mockAxiosPost).toHaveBeenCalledTimes(2);
@@ -466,160 +467,6 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(secondPayload).toEqual(firstPayload);
         expect((client as any).pendingOutbox).toHaveLength(0);
         expect((client as any).lastSeq).toBe(1);
-    });
-
-    it('sends claude user text as modern session envelope', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }]
-            }
-        });
-
-        client.sendClaudeSessionMessage({
-            type: 'user',
-            message: { content: 'hi there' },
-            isSidechain: false,
-            isMeta: false
-        } as any);
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        const payload = mockAxiosPost.mock.calls[0][1];
-        expect(payload.messages).toHaveLength(1);
-
-        const sessionUser = decrypt(
-            session.encryptionKey,
-            session.encryptionVariant,
-            decodeBase64(payload.messages[0].content)
-        );
-        expect(sessionUser).toMatchObject({
-            role: 'session',
-            content: {
-                role: 'user',
-                ev: {
-                    t: 'text',
-                    text: 'hi there'
-                }
-            },
-            meta: {
-                sentFrom: 'cli'
-            }
-        });
-        expect(typeof (sessionUser as any).content.time).toBe('number');
-    });
-
-    it('uploads local Claude transcript image blocks and sends file before user text', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const pngBytes = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x01, 0x02, 0x03]);
-
-        mockAxiosPost.mockImplementation(async (url: string, payload: any) => {
-            if (url.endsWith('/attachments/request-upload')) {
-                expect(payload).toMatchObject({
-                    filename: 'claude-image-1.png',
-                });
-                expect(payload.size).toBeGreaterThan(pngBytes.length);
-                return {
-                    data: {
-                        ref: 'sessions/test-session-id/attachments/image.enc',
-                        uploadUrl: 'https://server.test/v1/sessions/test-session-id/attachments/image.enc',
-                        method: 'PUT',
-                    },
-                };
-            }
-
-            return {
-                data: {
-                    messages: payload.messages.map((_message: unknown, index: number) => ({
-                        id: `msg-${index + 1}`,
-                        seq: index + 1,
-                        localId: `local-${index + 1}`,
-                        createdAt: 1,
-                        updatedAt: 1,
-                    })),
-                },
-            };
-        });
-        mockAxiosPut.mockResolvedValueOnce({ data: { ok: true } });
-
-        await client.sendClaudeSessionMessageFromLocalTranscript({
-            type: 'user',
-            uuid: 'u-image-1',
-            isSidechain: false,
-            isMeta: false,
-            message: {
-                role: 'user',
-                content: [
-                    { type: 'text', text: 'please inspect this' },
-                    {
-                        type: 'image',
-                        source: {
-                            type: 'base64',
-                            media_type: 'image/png',
-                            data: Buffer.from(pngBytes).toString('base64'),
-                        },
-                    },
-                ],
-            },
-        } as any);
-
-        await waitForCheck(() => {
-            expect(mockAxiosPut).toHaveBeenCalledTimes(1);
-            expect(mockAxiosPost.mock.calls.some(([url]) => url === 'https://server.test/v3/sessions/test-session-id/messages')).toBe(true);
-        });
-
-        const uploadBody = mockAxiosPut.mock.calls[0][1];
-        const blobKey = await client.getBlobKey();
-        expect(decryptBlob(new Uint8Array(uploadBody), blobKey)).toEqual(pngBytes);
-
-        const messagesPost = mockAxiosPost.mock.calls.find(([url]) => {
-            return url === 'https://server.test/v3/sessions/test-session-id/messages';
-        });
-        expect(messagesPost).toBeDefined();
-        const sentMessages = messagesPost![1].messages;
-        expect(sentMessages).toHaveLength(2);
-
-        const decrypted = sentMessages.map((message: { content: string }) => {
-            return decrypt(
-                session.encryptionKey,
-                session.encryptionVariant,
-                decodeBase64(message.content),
-            );
-        });
-
-        expect(decrypted[0]).toMatchObject({
-            role: 'session',
-            content: {
-                role: 'user',
-                claudeUuid: 'u-image-1',
-                ev: {
-                    t: 'file',
-                    ref: 'sessions/test-session-id/attachments/image.enc',
-                    name: 'claude-image-1.png',
-                    size: pngBytes.length,
-                    mimeType: 'image/png',
-                },
-            },
-            meta: {
-                sentFrom: 'cli',
-            },
-        });
-        expect(decrypted[1]).toMatchObject({
-            role: 'session',
-            content: {
-                role: 'user',
-                claudeUuid: 'u-image-1',
-                ev: {
-                    t: 'text',
-                    text: 'please inspect this',
-                },
-            },
-            meta: {
-                sentFrom: 'cli',
-            },
-        });
     });
 
     it('uploads local Codex image files with codex item ids', async () => {
@@ -1216,13 +1063,6 @@ describe('ApiSessionClient v3 messages API migration', () => {
             },
         };
         client.updateAgentState((state) => state);
-        client.sendUsageData({
-            input_tokens: 1,
-            output_tokens: 2,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-        }, 'model-name-secret');
-
         const debugOutput = JSON.stringify([
             ...vi.mocked(logger.debug).mock.calls,
             ...vi.mocked(logger.debugLargeJson).mock.calls,
@@ -1236,7 +1076,6 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(debugOutput).not.toContain('hostile-error-getter-secret');
         expect(debugOutput).not.toContain('agent-state-prompt-secret');
         expect(debugOutput).not.toContain('tool-secret');
-        expect(debugOutput).not.toContain('model-name-secret');
         expect(logger.debugLargeJson).not.toHaveBeenCalled();
         await client.close();
     });
@@ -1347,7 +1186,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
             }
         });
 
-        client.sendCodexMessage({ type: 'older' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'older' });
         await waitForCheck(() => {
             expect(mockAxiosPost).toHaveBeenCalledTimes(1);
         });
@@ -1359,7 +1198,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
             }
         });
 
-        client.sendCodexMessage({ type: 'newer' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'newer' });
         await waitForCheck(() => {
             expect(mockAxiosPost).toHaveBeenCalledTimes(2);
         });
@@ -1374,7 +1213,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
             data: {}
         });
 
-        client.sendCodexMessage({ type: 'no-messages-field' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'no-messages-field' });
         await waitForCheck(() => {
             expect(mockAxiosPost).toHaveBeenCalledTimes(1);
         });
@@ -1421,7 +1260,7 @@ describe('ApiSessionClient v3 messages API migration', () => {
             role: 'user',
             content: { type: 'text', text: 'after-close' }
         })));
-        client.sendCodexMessage({ type: 'after-close-send' });
+        client.sendAgentMessage('codex', { type: 'message', message: 'after-close-send' });
 
         await new Promise((resolve) => setTimeout(resolve, 20));
 

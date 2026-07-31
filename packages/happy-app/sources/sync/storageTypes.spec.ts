@@ -103,10 +103,10 @@ describe('AgentGoalStatusSchema', () => {
     it('accepts active goal state with source identity and capabilities', () => {
         const goal = AgentGoalStatusSchema.parse({
             status: 'active',
-            source: 'claude',
+            source: 'codex',
             text: 'finish the current task',
             observedAt: 1710000000000,
-            sourceSessionId: 'claude-session-1',
+            sourceSessionId: 'codex-thread-1',
             sourceRevision: 7,
             capabilities: {
                 clear: true,
@@ -142,7 +142,7 @@ describe('AgentGoalStatusSchema', () => {
 
         expect(AgentGoalStatusSchema.parse({
             status: 'unavailable',
-            source: 'claude',
+            source: 'codex',
             observedAt: 1710000000000,
             reason: 'unsupported',
         })).toMatchObject({ status: 'unavailable', reason: 'unsupported' });
@@ -151,17 +151,17 @@ describe('AgentGoalStatusSchema', () => {
     it('rejects active state without non-empty text', () => {
         expect(() => AgentGoalStatusSchema.parse({
             status: 'active',
-            source: 'claude',
+            source: 'codex',
             text: '   ',
             observedAt: 1710000000000,
-            sourceSessionId: 'claude-session-1',
+            sourceSessionId: 'codex-thread-1',
         })).toThrow();
     });
 
     it('rejects active state without source identity', () => {
         expect(() => AgentGoalStatusSchema.parse({
             status: 'active',
-            source: 'claude',
+            source: 'codex',
             text: 'finish the task',
             observedAt: 1710000000000,
         })).toThrow();
@@ -170,10 +170,10 @@ describe('AgentGoalStatusSchema', () => {
     it('rejects malformed capabilities and progress payloads', () => {
         expect(() => AgentGoalStatusSchema.parse({
             status: 'active',
-            source: 'claude',
+            source: 'codex',
             text: 'finish the task',
             observedAt: 1710000000000,
-            sourceSessionId: 'claude-session-1',
+            sourceSessionId: 'codex-thread-1',
             capabilities: { clear: 'yes' },
         })).toThrow();
 
@@ -194,7 +194,7 @@ describe('AgentGoalStatusSchema', () => {
     it('rejects empty source identity values', () => {
         expect(() => AgentGoalStatusSchema.parse({
             status: 'active',
-            source: 'claude',
+            source: 'codex',
             text: 'finish the task',
             observedAt: 1710000000000,
             sourceSessionId: '   ',
@@ -211,10 +211,10 @@ describe('AgentGoalStatusSchema', () => {
     it('rejects invalid observation timestamps', () => {
         expect(() => AgentGoalStatusSchema.parse({
             status: 'active',
-            source: 'claude',
+            source: 'codex',
             text: 'finish the task',
             observedAt: -1,
-            sourceSessionId: 'claude-session-1',
+            sourceSessionId: 'codex-thread-1',
         })).toThrow();
     });
 

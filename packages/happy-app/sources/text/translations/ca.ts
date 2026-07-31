@@ -121,7 +121,7 @@ export const ca: TranslationStructure = {
         developer: 'Desenvolupador',
         developerTools: 'Eines de desenvolupador',
         about: 'Quant a',
-        aboutFooter: 'Happy Coder és un client mòbil de Codex i Claude Code. Tot està xifrat punt a punt i el teu compte es guarda només al teu dispositiu. No està afiliat amb Anthropic.',
+        aboutFooter: 'Happy Coder és un client mòbil de Codex. Tot està xifrat punt a punt i el teu compte es guarda només al teu dispositiu.',
         whatsNew: 'Novetats',
         whatsNewSubtitle: 'Mira les últimes actualitzacions i millores',
         reportIssue: 'Informa d\'un problema',
@@ -134,7 +134,6 @@ export const ca: TranslationStructure = {
         scanQrCodeToAuthenticate: 'Escaneja el codi QR per autenticar-te',
         githubConnected: ({ login }: { login: string }) => `Connectat com a @${login}`,
         connectGithubAccount: 'Connecta el teu compte de GitHub',
-        claudeAuthSuccess: 'Connexió amb Claude realitzada amb èxit',
         exchangingTokens: 'Intercanviant tokens...',
         usage: 'Ús',
         usageSubtitle: "Veure l'ús de l'API i costos",
@@ -338,7 +337,6 @@ export const ca: TranslationStructure = {
         forkErrorMissingUuid: 'El punt de retrocés escollit ja no existeix a la sessió origen — prova a bifurcar sense truncar.',
         forkErrorMissingMetadata: 'Falten metadades de la sessió necessàries per bifurcar.',
         forkErrorGeneric: 'No s\'ha pogut bifurcar la sessió.',
-        forkClaudeOnly: 'La bifurcació només està disponible per a sessions de Claude.',
     },
 
     commandPalette: {
@@ -383,12 +381,9 @@ export const ca: TranslationStructure = {
         happySessionIdCopied: 'ID de la sessió de Happy copiat al porta-retalls',
         failedToCopySessionId: 'Ha fallat copiar l\'ID de la sessió de Happy',
         happySessionId: 'ID de la sessió de Happy',
-        claudeCodeSessionId: 'ID de la sessió de Claude Code',
-        claudeCodeSessionIdCopied: 'ID de la sessió de Claude Code copiat al porta-retalls',
         codexThreadId: 'ID del fil de Codex',
         codexThreadIdCopied: 'ID del fil de Codex copiat al porta-retalls',
         aiProvider: 'Proveïdor d\'IA',
-        failedToCopyClaudeCodeSessionId: 'Ha fallat copiar l\'ID de la sessió de Claude Code',
         failedToCopyCodexThreadId: 'Ha fallat copiar l\'ID del fil de Codex',
         metadataCopied: 'Metadades copiades al porta-retalls',
         failedToCopyMetadata: 'Ha fallat copiar les metadades',
@@ -407,7 +402,7 @@ export const ca: TranslationStructure = {
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
         resumeSessionMissingMachine: 'This session is missing its machine metadata, so it cannot be resumed.',
-        resumeSessionMissingBackendId: 'This session does not have a resumable Claude or Codex identifier.',
+        resumeSessionMissingCodexThread: 'Aquesta sessió no té cap fil de Codex que es pugui reprendre.',
         resumeSessionUnexpectedDirectoryPrompt: 'Resume cannot create directories. Start the session manually from its original path.',
         killSessionSubtitle: 'Finalitzar immediatament la sessió',
         archiveSessionSubtitle: 'Arxiva aquesta sessió i atura-la',
@@ -481,7 +476,6 @@ export const ca: TranslationStructure = {
             badgePlanMode: 'Mode de planificació',
         },
         agent: {
-            claude: 'Claude',
             codex: 'Codex',
             gemini: 'Gemini',
             openclaw: 'OpenClaw',
@@ -705,7 +699,7 @@ export const ca: TranslationStructure = {
         },
         // Bring your own agent
         byoTitle: 'Porta el teu propi agent',
-        byoDescription: 'Utilitza el teu propi agent d\'ElevenLabs en lloc del predeterminat de Happy. No cal subscripció — connecta directament amb el teu propi compte d\'ElevenLabs. El teu agent ha de definir dues eines de client: messageClaudeCode (envia text a l\'agent de codi) i processPermissionRequest (permet o denega l\'ús d\'eines). Rep el context de la sessió a través de la variable dinàmica {{initialConversationContext}}.',
+        byoDescription: 'Utilitza el teu propi agent d\'ElevenLabs en lloc del predeterminat de Happy. No cal subscripció — connecta directament amb el teu propi compte d\'ElevenLabs. El teu agent ha de definir dues eines de client: sendMessageToSession (envia text a l\'agent de codi) i processPermissionRequest (permet o denega l\'ús d\'eines). Rep el context de la sessió a través de la variable dinàmica {{initialConversationContext}}.',
         customAgentId: 'ElevenLabs Agent ID',
         customAgentIdNotSet: 'No configurat',
         customAgentIdDescription: 'Introdueix el teu ElevenLabs Agent ID. Deixa-ho buit per utilitzar el predeterminat de Happy.',
@@ -713,7 +707,7 @@ export const ca: TranslationStructure = {
         bypassToken: 'Connexió directa',
         bypassTokenSubtitle: 'Omet el servidor de Happy, connecta directament a ElevenLabs',
         promptGuideTitle: 'Guia de prompt de l\'agent',
-        promptGuideDescription: 'El teu agent d\'ElevenLabs necessita:\n\n• Eina: messageClaudeCode — paràmetre: message (string). Envia un missatge a la sessió de codi activa.\n• Eina: processPermissionRequest — paràmetre: decision ("allow" o "deny"). Aprova o denega un permís d\'eina pendent.\n• Variable dinàmica: {{initialConversationContext}} — rep l\'historial i el context de la sessió en iniciar.\n\nL\'agent actua com a pont de veu entre l\'usuari i els agents de codi. Ha de ser concís, respondre només quan se li parla i informar quan un agent de codi acaba la feina.',
+        promptGuideDescription: 'El teu agent d\'ElevenLabs necessita:\n\n• Eina: sendMessageToSession — paràmetre: message (string). Envia un missatge a la sessió de codi activa.\n• Eina: processPermissionRequest — paràmetre: decision ("allow" o "deny"). Aprova o denega un permís d\'eina pendent.\n• Variable dinàmica: {{initialConversationContext}} — rep l\'historial i el context de la sessió en iniciar.\n\nL\'agent actua com a pont de veu entre l\'usuari i els agents de codi. Ha de ser concís, respondre només quan se li parla i informar quan un agent de codi acaba la feina.',
         usageTitle: 'Ús (últims 30 dies)',
         usageFooter: 'Temps de veu utilitzat en els últims 30 dies. Nivell gratuït: 20 min. Subscrit: 5 hores. Màx. 100 converses al mes.',
         usageLabel: 'Temps de veu',
@@ -850,7 +844,7 @@ export const ca: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Client mòbil de Codex i Claude Code',
+        title: 'Client mòbil de Codex',
         subtitle: 'Xifrat punt a punt i el teu compte s\'emmagatzema només al teu dispositiu.',
         createAccount: 'Crea un compte',
         linkOrRestoreAccount: 'Enllaça o restaura un compte',
@@ -923,13 +917,13 @@ export const ca: TranslationStructure = {
         }
     },
 
-    claude: {
-        // Claude permission dialog buttons
+    agentPermissions: {
+        // Botons de permisos v3 compartits entre proveïdors
         permissions: {
             yesAllowAllEdits: 'Sí, permet totes les edicions durant aquesta sessió',
             yesAllowEverything: 'Sí, permet-ho tot durant aquesta sessió',
             yesForTool: 'Sí, no tornis a preguntar per aquesta eina',
-            noTellClaude: 'No, proporciona comentaris',
+            noProvideFeedback: 'No, proporciona comentaris',
         }
     },
 

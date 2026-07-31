@@ -69,7 +69,6 @@ interface AgentInputProps {
         dotColor: string;
         isPulsing?: boolean;
         cliStatus?: {
-            claude: boolean | null;
             codex: boolean | null;
             gemini?: boolean | null;
         };
@@ -90,7 +89,7 @@ interface AgentInputProps {
     sessionStatusModelLabel?: string | null;
     sessionStatusEffortLabel?: string | null;
     onFileViewerPress?: () => void;
-    agentType?: 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
+    agentType?: 'codex' | 'gemini' | 'openclaw' | 'agy';
     onAgentClick?: () => void;
     machineName?: string | null;
     onMachineClick?: () => void;
@@ -494,22 +493,6 @@ const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRow
                         </View>
                         {p.connectionStatus.cliStatus && (
                             <>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.claude ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        {p.connectionStatus.cliStatus.claude ? '✓' : '✗'}
-                                    </Text>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.claude ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        claude
-                                    </Text>
-                                </View>
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                                     <Text style={{
                                         fontSize: 11,
@@ -1250,13 +1233,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     fontWeight: '600',
                                     ...Typography.default('semiBold'),
                                 }}>
-                                    {props.agentType === 'claude'
-                                        ? t('agentInput.agent.claude')
-                                        : props.agentType === 'codex'
+                                    {props.agentType === 'codex'
                                             ? t('agentInput.agent.codex')
                                             : props.agentType === 'openclaw'
                                                 ? t('agentInput.agent.openclaw')
-                                                : t('agentInput.agent.gemini')}
+                                                : props.agentType === 'agy'
+                                                    ? 'Agy'
+                                                    : t('agentInput.agent.gemini')}
                                 </Text>
                             </Pressable>
                         )}

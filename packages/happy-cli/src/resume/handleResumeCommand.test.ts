@@ -147,24 +147,20 @@ describe('buildResumeLaunch', () => {
         });
     });
 
-    it('builds a Claude resume command', () => {
-        expect(buildResumeLaunch({
+    it('rejects removed session flavors', () => {
+        expect(() => buildResumeLaunch({
             id: 'session-2',
             active: false,
             metadata: {
                 path: '/tmp/repo',
                 flavor: 'claude',
-                claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
                 host: 'localhost',
                 homeDir: '/tmp',
                 happyHomeDir: '/tmp/.happy',
                 happyLibDir: '/tmp/happy',
                 happyToolsDir: '/tmp/happy/tools',
             },
-        })).toEqual({
-            cwd: '/tmp/repo',
-            args: ['claude', '--resume', '93a9705e-bc6a-406d-8dce-8acc014dedbd'],
-        });
+        })).toThrow('Happy session session-2 uses unsupported flavor "claude".');
     });
 
     it('rejects unsupported flavors', () => {
@@ -240,15 +236,15 @@ describe('handleResumeCommand', () => {
         expect((thrown as Error).message).not.toContain('happy-agent auth login');
     });
 
-    it('falls back to legacy account credentials only when agent.key is already present', async () => {
+    it('falls back to legacy account credentials for a Codex session when agent.key is present', async () => {
         mocks.mockHasLocalHappyAgentAuth.mockReturnValue(true);
         mocks.mockResolveHappySession.mockResolvedValue({
             id: 'legacy-session',
             active: false,
             metadata: {
                 path: '/tmp/repo',
-                flavor: 'claude',
-                claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
+                flavor: 'codex',
+                codexThreadId: '019ccca5-726b-7c61-b914-16de27dfab6e',
                 host: 'localhost',
                 homeDir: '/tmp',
                 happyHomeDir: '/tmp/.happy',
@@ -263,7 +259,7 @@ describe('handleResumeCommand', () => {
         await handleResumeCommand(['legacy-session']);
 
         expect(mocks.mockResolveHappySession).toHaveBeenCalledWith('legacy-session');
-        expect(spawnHappyCLI).toHaveBeenCalledWith(['claude', '--resume', '93a9705e-bc6a-406d-8dce-8acc014dedbd'], expect.objectContaining({
+        expect(spawnHappyCLI).toHaveBeenCalledWith(['codex', '--resume', '019ccca5-726b-7c61-b914-16de27dfab6e'], expect.objectContaining({
             cwd: '/tmp/repo',
             env: expect.any(Object),
             stdio: 'inherit',

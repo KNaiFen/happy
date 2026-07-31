@@ -136,7 +136,7 @@ export const en: TranslationStructure = {
         developer: 'Developer',
         developerTools: 'Developer Tools',
         about: 'About',
-        aboutFooter: 'Happy Coder is a Codex and Claude Code mobile client. It\'s fully end-to-end encrypted and your account is stored only on your device. Not affiliated with Anthropic.',
+        aboutFooter: 'Happy Coder is a Codex mobile client. It\'s fully end-to-end encrypted and your account is stored only on your device.',
         whatsNew: 'What\'s New',
         whatsNewSubtitle: 'See the latest updates and improvements',
         reportIssue: 'Report an Issue',
@@ -149,7 +149,6 @@ export const en: TranslationStructure = {
         scanQrCodeToAuthenticate: 'Scan QR code to authenticate',
         githubConnected: ({ login }: { login: string }) => `Connected as @${login}`,
         connectGithubAccount: 'Connect your GitHub account',
-        claudeAuthSuccess: 'Successfully connected to Claude',
         exchangingTokens: 'Exchanging tokens...',
         usage: 'Usage',
         usageSubtitle: 'View your API usage and costs',
@@ -352,7 +351,6 @@ export const en: TranslationStructure = {
         forkErrorMissingUuid: 'The chosen rewind point is no longer present in the source session — try forking without truncation.',
         forkErrorMissingMetadata: 'Missing session metadata required to fork.',
         forkErrorGeneric: 'Failed to fork the session.',
-        forkClaudeOnly: 'Fork is currently only supported for Claude sessions.',
     },
 
     commandPalette: {
@@ -397,12 +395,9 @@ export const en: TranslationStructure = {
         happySessionIdCopied: 'Happy Session ID copied to clipboard',
         failedToCopySessionId: 'Failed to copy Happy Session ID',
         happySessionId: 'Happy Session ID',
-        claudeCodeSessionId: 'Claude Code Session ID',
-        claudeCodeSessionIdCopied: 'Claude Code Session ID copied to clipboard',
         codexThreadId: 'Codex Thread ID',
         codexThreadIdCopied: 'Codex Thread ID copied to clipboard',
         aiProvider: 'AI Provider',
-        failedToCopyClaudeCodeSessionId: 'Failed to copy Claude Code Session ID',
         failedToCopyCodexThreadId: 'Failed to copy Codex Thread ID',
         metadataCopied: 'Session metadata copied to clipboard',
         failedToCopyMetadata: 'Failed to copy session metadata',
@@ -421,7 +416,7 @@ export const en: TranslationStructure = {
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
         resumeSessionMissingMachine: 'This session is missing its machine metadata, so it cannot be resumed.',
-        resumeSessionMissingBackendId: 'This session does not have a resumable Claude or Codex identifier.',
+        resumeSessionMissingCodexThread: 'This session does not have a resumable Codex thread.',
         resumeSessionUnexpectedDirectoryPrompt: 'Resume cannot create directories. Start the session manually from its original path.',
         killSessionSubtitle: 'Immediately terminate the session',
         archiveSessionSubtitle: 'Archive this session and stop it',
@@ -495,7 +490,6 @@ export const en: TranslationStructure = {
             badgePlanMode: 'plan mode',
         },
         agent: {
-            claude: 'Claude',
             codex: 'Codex',
             gemini: 'Gemini',
             openclaw: 'OpenClaw',
@@ -719,7 +713,7 @@ export const en: TranslationStructure = {
         },
         // Bring your own agent
         byoTitle: 'Bring Your Own Agent',
-        byoDescription: 'Use your own ElevenLabs agent instead of the Happy default. No subscription required — connect directly with your own ElevenLabs account. Your agent must define two client tools: messageClaudeCode (sends text to the coding agent) and processPermissionRequest (allows or denies tool use). It receives session context via the {{initialConversationContext}} dynamic variable.',
+        byoDescription: 'Use your own ElevenLabs agent instead of the Happy default. No subscription required — connect directly with your own ElevenLabs account. Your agent must define two client tools: sendMessageToSession (sends text to the coding agent) and processPermissionRequest (allows or denies tool use). It receives session context via the {{initialConversationContext}} dynamic variable.',
         customAgentId: 'ElevenLabs Agent ID',
         customAgentIdNotSet: 'Not configured',
         customAgentIdDescription: 'Enter your ElevenLabs agent ID. Leave empty to use the Happy default.',
@@ -727,7 +721,7 @@ export const en: TranslationStructure = {
         bypassToken: 'Direct Connection',
         bypassTokenSubtitle: 'Skip Happy server, connect straight to ElevenLabs',
         promptGuideTitle: 'Agent Prompt Guide',
-        promptGuideDescription: 'Your ElevenLabs agent needs:\n\n• Tool: messageClaudeCode — parameter: message (string). Sends a message to the active coding session.\n• Tool: processPermissionRequest — parameter: decision ("allow" or "deny"). Approves or denies a pending tool permission.\n• Dynamic variable: {{initialConversationContext}} — receives session history and context on start.\n\nThe agent acts as a voice bridge between the user and coding agents. It should be concise, only respond when addressed, and report when a coding agent finishes work.',
+        promptGuideDescription: 'Your ElevenLabs agent needs:\n\n• Tool: sendMessageToSession — parameter: message (string). Sends a message to the active coding session.\n• Tool: processPermissionRequest — parameter: decision ("allow" or "deny"). Approves or denies a pending tool permission.\n• Dynamic variable: {{initialConversationContext}} — receives session history and context on start.\n\nThe agent acts as a voice bridge between the user and coding agents. It should be concise, only respond when addressed, and report when a coding agent finishes work.',
         usageTitle: 'Usage (Last 30 Days)',
         usageFooter: 'Voice time used in the last 30 days. Free tier: 20 min. Subscribed: 5 hours. Max 100 conversations per month.',
         usageLabel: 'Voice Time',
@@ -864,7 +858,7 @@ export const en: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Codex and Claude Code mobile client',
+        title: 'Codex mobile client',
         subtitle: 'End-to-end encrypted and your account is stored only on your device.',
         createAccount: 'Create account',
         linkOrRestoreAccount: 'Link or restore account',
@@ -937,13 +931,13 @@ export const en: TranslationStructure = {
         }
     },
 
-    claude: {
-        // Claude permission dialog buttons
+    agentPermissions: {
+        // Provider-neutral v3 permission dialog buttons
         permissions: {
             yesAllowAllEdits: 'Yes, allow all edits during this session',
             yesAllowEverything: 'Yes, allow everything during this session',
             yesForTool: "Yes, don't ask again for this tool",
-            noTellClaude: 'No, and provide feedback',
+            noProvideFeedback: 'No, and provide feedback',
         }
     },
 

@@ -33,6 +33,7 @@ import { archiveSession } from '@/sync/sessionArchiveCoordinator';
 import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { resolveCodexV4SessionCapabilities } from '@/sync/codexV4Capabilities';
+import { isSupportedExistingSession } from '@/sync/sessionFlavor';
 import { useSession } from '@/sync/storage';
 import { getSessionForkSource } from '@/utils/sessionFork';
 import { useHappyAction } from '@/hooks/useHappyAction';
@@ -420,7 +421,7 @@ export const SessionView = React.memo((props: { id: string }) => {
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <ActivityIndicator size="small" color={theme.colors.textSecondary} />
                     </View>
-                ) : !session ? (
+                ) : !session || !isSupportedExistingSession(session.metadata) ? (
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <Ionicons name="trash-outline" size={48} color={theme.colors.textSecondary} />
                         <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, fontWeight: '600' }}>{t('errors.sessionDeleted')}</Text>
@@ -905,7 +906,6 @@ export function SessionViewLoaded({
         codexV4Session,
         session.agentState?.agentGoalStatus,
         session.presence,
-        session.metadata?.claudeSessionId,
         session.metadata?.codexThreadId,
     ]);
     const [goalActionInFlight, setGoalActionInFlight] = React.useState<AgentGoalAction | null>(null);

@@ -13,7 +13,6 @@ function sessionWith(overrides: Partial<Session>): Session {
         metadata: {
             path: '/tmp/project',
             host: 'local',
-            claudeSessionId: 'claude-session-1',
             codexThreadId: 'codex-thread-1',
         },
         metadataVersion: 1,
@@ -29,15 +28,15 @@ function sessionWith(overrides: Partial<Session>): Session {
 }
 
 describe('resolveVisibleAgentGoalStatus', () => {
-    it('returns an active goal for the current Claude session identity', () => {
+    it('returns an active goal for the current Codex thread identity', () => {
         const visible = resolveVisibleAgentGoalStatus(sessionWith({
             agentState: {
                 agentGoalStatus: {
                     status: 'active',
-                    source: 'claude',
+                    source: 'codex',
                     text: 'finish the branch',
                     observedAt: 11_000,
-                    sourceSessionId: 'claude-session-1',
+                    sourceSessionId: 'codex-thread-1',
                     capabilities: { clear: true },
                 },
             },
@@ -70,7 +69,7 @@ describe('resolveVisibleAgentGoalStatus', () => {
             agentState: {
                 agentGoalStatus: {
                     status: 'inactive',
-                    source: 'claude',
+                    source: 'codex',
                     observedAt: 11_000,
                     reason: 'completed',
                 },
@@ -95,10 +94,10 @@ describe('resolveVisibleAgentGoalStatus', () => {
             agentState: {
                 agentGoalStatus: {
                     status: 'active',
-                    source: 'claude',
+                    source: 'codex',
                     text: 'finish the branch',
                     observedAt: 11_000,
-                    sourceSessionId: 'claude-session-1',
+                    sourceSessionId: 'codex-thread-1',
                 },
             },
         }));
@@ -112,10 +111,10 @@ describe('resolveVisibleAgentGoalStatus', () => {
             agentState: {
                 agentGoalStatus: {
                     status: 'active',
-                    source: 'claude',
+                    source: 'codex',
                     text: 'current goal',
                     observedAt: 19_999,
-                    sourceSessionId: 'claude-session-1',
+                    sourceSessionId: 'codex-thread-1',
                 },
             },
         }));
@@ -148,10 +147,10 @@ describe('resolveVisibleAgentGoalStatus', () => {
             agentState: {
                 agentGoalStatus: {
                     status: 'active',
-                    source: 'claude',
+                    source: 'codex',
                     text: 'unverifiable goal',
                     observedAt: 11_000,
-                    sourceSessionId: 'claude-session-1',
+                    sourceSessionId: 'codex-thread-1',
                 },
             },
         }));
@@ -164,7 +163,7 @@ describe('resolveVisibleAgentGoalStatus', () => {
             agentState: {
                 agentGoalStatus: {
                     status: 'active',
-                    source: 'claude',
+                    source: 'codex',
                     text: 'blank identity goal',
                     observedAt: 11_000,
                     sourceSessionId: '',

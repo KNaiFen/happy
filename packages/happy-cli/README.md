@@ -14,16 +14,16 @@ npm install -g happy
 
 ## Usage
 
-### Claude Code (default)
+### Codex (default)
 
 ```bash
 happy
 # or
-happy claude
+happy codex
 ```
 
 This will:
-1. Start a Claude Code session
+1. Start a Codex session through the official app-server protocol
 2. Display a QR code to connect from your mobile device or browser
 3. Allow real-time session control — all communication is end-to-end encrypted
 4. Start new sessions directly from your phone or web while your computer is online
@@ -31,7 +31,6 @@ This will:
 ### More agents
 
 ```
-happy codex
 happy agy        # Antigravity CLI (Gemini's successor)
 happy gemini     # deprecated — use `happy agy`
 happy openclaw
@@ -74,7 +73,7 @@ fi
 
 The first interactive shell after a reboot triggers the start; subsequent shells short-circuit because the daemon is already running.
 
-> **macOS users:** prefer this shell-init approach over a `launchd` LaunchAgent. A LaunchAgent runs in an agent domain that is **detached from your GUI/Aqua login session**, which means the bundled `claude-agent-sdk` cannot reach the macOS keychain and silently fails authentication ("Failed to authenticate. API Error: 401 terminated", `duration_api_ms: 0`). If you must use launchd, your wrapper has to read the OAuth access token from `~/.claude/.credentials.json` and export it as `CLAUDE_CODE_OAUTH_TOKEN` before exec'ing the daemon — and you'll need to handle token rotation yourself.
+> **macOS users:** prefer this shell-init approach over a `launchd` LaunchAgent. A LaunchAgent may not inherit the same shell PATH, `CODEX_HOME`, or interactive login state as your terminal.
 
 ## Authentication
 
@@ -89,7 +88,6 @@ To connect third-party agent APIs:
 
 ```bash
 happy connect gemini
-happy connect claude
 happy connect codex
 happy connect status
 ```
@@ -98,8 +96,8 @@ happy connect status
 
 | Command | Description |
 |---------|-------------|
-| `happy` | Start Claude Code session (default) |
-| `happy codex` | Start Codex mode |
+| `happy` | Start Codex mode (default) |
+| `happy codex` | Start Codex mode explicitly |
 | `happy agy` | Start agy (Antigravity CLI) session |
 | `happy gemini` | Start Gemini CLI session (**deprecated** — use `happy agy`) |
 | `happy openclaw` | Start OpenClaw session |
@@ -144,8 +142,7 @@ yarn workspace happy cli --help
 ## Requirements
 
 - Node.js >= 20.0.0
-- For Claude: `claude` CLI installed & logged in
-- For Codex: `codex` CLI installed & logged in
+- For Codex: `codex` CLI 0.145.0 or newer installed and logged in
 - For agy: install the Antigravity CLI (`agy`) and log in
 - For Gemini (**deprecated** — use agy): `npm install -g @google/gemini-cli` + `happy connect gemini`
 

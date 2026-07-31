@@ -18,11 +18,9 @@ function resolvePaths(paths: string[], sessionPath: string): string[] {
 
 function getSharedAgentStatePaths(sessionPath: string): string[] {
     const codexHome = process.env.CODEX_HOME || '~/.codex';
-    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || '~/.claude';
 
     return [
         expandPath(codexHome, sessionPath),
-        expandPath(claudeConfigDir, sessionPath),
     ];
 }
 

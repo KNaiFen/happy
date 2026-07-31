@@ -660,7 +660,7 @@ export const storage = create<StorageState>()((set, get) => {
                                 const toolName = request.tool;
                                 // console.log('[REALTIME DEBUG] Sending permission notification for:', toolName);
                                 voiceSession.sendTextMessage(
-                                    `Claude is requesting permission to use the ${toolName} tool`
+                                    `The coding agent is requesting permission to use the ${toolName} tool`
                                 );
                             }
                         }

@@ -534,10 +534,10 @@ describe('printOfflineWarning', () => {
     it('should deduplicate repeated calls', () => {
         const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-        printOfflineWarning('Claude');
+        printOfflineWarning('Codex');
         const callCountAfterFirst = consoleSpy.mock.calls.length;
 
-        printOfflineWarning('Claude'); // Second call should be deduplicated
+        printOfflineWarning('Codex'); // Second call should be deduplicated
         const callCountAfterSecond = consoleSpy.mock.calls.length;
 
         // Should not print again (same call count)

@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { AgentDefaultOverridesSchema } from './agentDefaults';
+import { AgentDefaultOverridesSchema, sanitizeAgentDefaultOverrides } from './agentDefaults';
 import { DEFAULT_USER_MESSAGE_BUBBLE_COLOR } from '../utils/userMessageBubbleColor';
 
 //
@@ -58,13 +58,11 @@ export const SettingsSchema = z.object({
     // Dismissed CLI warning banners (supports both per-machine and global dismissal)
     dismissedCLIWarnings: z.object({
         perMachine: z.record(z.string(), z.object({
-            claude: z.boolean().optional(),
             codex: z.boolean().optional(),
             gemini: z.boolean().optional(),
             openclaw: z.boolean().optional(),
         })).default({}),
         global: z.object({
-            claude: z.boolean().optional(),
             codex: z.boolean().optional(),
             gemini: z.boolean().optional(),
             openclaw: z.boolean().optional(),
@@ -164,7 +162,9 @@ export function settingsParse(settings: unknown): Settings {
     // Remove known fields from unknownFields to preserve only the unknown ones
     Object.keys(parsed.data).forEach(key => delete unknownFields[key]);
 
-    return { ...settingsDefaults, ...parsed.data, ...unknownFields };
+    const result = { ...settingsDefaults, ...parsed.data, ...unknownFields };
+    result.agentDefaultOverrides = sanitizeAgentDefaultOverrides(result.agentDefaultOverrides);
+    return result;
 }
 
 //
@@ -188,8 +188,22 @@ export function applySettings(settings: Settings, delta: Partial<Settings>): Set
 
 export function settingsToSyncPayload(settings: Settings): Partial<Settings> {
     const result: Partial<Settings> = { ...settings };
+    result.dismissedCLIWarnings = {
+        perMachine: Object.fromEntries(Object.entries(settings.dismissedCLIWarnings.perMachine).map(
+            ([machineId, warning]) => [machineId, {
+                codex: warning.codex,
+                gemini: warning.gemini,
+                openclaw: warning.openclaw,
+            }],
+        )),
+        global: {
+            codex: settings.dismissedCLIWarnings.global.codex,
+            gemini: settings.dismissedCLIWarnings.global.gemini,
+            openclaw: settings.dismissedCLIWarnings.global.openclaw,
+        },
+    };
     const compactAgentOverrides = Object.fromEntries(
-        Object.entries(settings.agentDefaultOverrides ?? {}).filter(([, value]) => (
+        Object.entries(sanitizeAgentDefaultOverrides(settings.agentDefaultOverrides)).filter(([, value]) => (
             value && typeof value === 'object' && Object.keys(value).length > 0
         )),
     ) as Settings['agentDefaultOverrides'];

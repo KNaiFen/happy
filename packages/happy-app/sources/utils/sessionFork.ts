@@ -1,13 +1,5 @@
 import type { Session } from '@/sync/storageTypes';
 
-export type ClaudeForkSource = {
-    kind: 'claude';
-    sessionId: string;
-    machineId: string;
-    directory: string;
-    claudeSessionId: string;
-};
-
 export type CodexForkSource = {
     kind: 'codex';
     sessionId: string;
@@ -16,7 +8,7 @@ export type CodexForkSource = {
     codexThreadId: string;
 };
 
-export type ForkSource = ClaudeForkSource | CodexForkSource;
+export type ForkSource = CodexForkSource;
 
 function nonEmpty(value: unknown): value is string {
     return typeof value === 'string' && value.trim().length > 0;
@@ -29,32 +21,19 @@ export function getSessionForkSource(session: Session): ForkSource | null {
         return null;
     }
 
-    if (session.metadata?.flavor === 'codex') {
-        if (session.metadata.codexReadOnly === true) {
-            return null;
-        }
-        const codexThreadId = session.metadata?.codexThreadId;
-        if (!nonEmpty(codexThreadId)) {
-            return null;
-        }
-        return {
-            kind: 'codex',
-            sessionId: session.id,
-            machineId,
-            directory,
-            codexThreadId,
-        };
-    }
-
-    const claudeSessionId = session.metadata?.claudeSessionId;
-    if (!nonEmpty(claudeSessionId)) {
+    if (session.metadata?.flavor !== 'codex' || session.metadata.codexSyncVersion !== 4) {
         return null;
     }
+    if (session.metadata.codexReadOnly === true) {
+        return null;
+    }
+    const codexThreadId = session.metadata?.codexThreadId;
+    if (!nonEmpty(codexThreadId)) return null;
     return {
-        kind: 'claude',
+        kind: 'codex',
         sessionId: session.id,
         machineId,
         directory,
-        claudeSessionId,
+        codexThreadId,
     };
 }

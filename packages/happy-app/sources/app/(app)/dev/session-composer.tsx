@@ -37,15 +37,13 @@ import {
 
 // Agent icon assets
 const agentIcons = {
-    claude: require('@/assets/images/icon-claude.png'),
     codex: require('@/assets/images/icon-gpt.png'),
     openclaw: require('@/assets/images/icon-openclaw.png'),
     gemini: require('@/assets/images/icon-gemini.png'),
 };
 
-type AgentKey = 'claude' | 'codex' | 'openclaw' | 'gemini';
+type AgentKey = 'codex' | 'openclaw' | 'gemini';
 const AGENTS: { key: AgentKey; label: string }[] = [
-    { key: 'claude', label: 'claude code' },
     { key: 'codex', label: 'codex' },
     { key: 'openclaw', label: 'openclaw' },
     { key: 'gemini', label: 'gemini' },
@@ -81,7 +79,7 @@ const WORKTREE_FIXED_ITEMS: PickerItem[] = [
 
 type PickerType = 'machine' | 'path' | 'worktree';
 
-// Permission mode colors & icons matching Claude Code CLI
+// Permission mode colors and icons used by the session composer.
 type PermissionStyle = { color: string; icon: 'play-forward' | 'pause' };
 
 const COMPOSER_INPUT_VERTICAL_PADDING = Platform.OS === 'web' ? 10 : 8;
@@ -274,7 +272,7 @@ function SessionComposerDemo() {
     const headerHeight = useHeaderHeight();
 
     const [prompt, setPrompt] = React.useState('');
-    const [selectedAgent, setSelectedAgent] = React.useState<AgentKey>('claude');
+    const [selectedAgent, setSelectedAgent] = React.useState<AgentKey>('codex');
     const [permissionIndex, setPermissionIndex] = React.useState(0);
     const [modelIndex, setModelIndex] = React.useState(0);
     const [effortIndex, setEffortIndex] = React.useState(0);

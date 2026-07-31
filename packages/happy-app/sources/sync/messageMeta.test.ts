@@ -48,21 +48,21 @@ describe('resolveMessageModeMeta', () => {
             permissionMode: null,
             modelMode: null,
             effortLevel: null,
-            metadata: { flavor: 'claude' },
+            metadata: { flavor: 'codex', codexSyncVersion: 4 },
         } as any, {
             agentDefaultOverrides: {
-                claude: {
-                    permissionMode: 'bypassPermissions',
-                    modelMode: 'opus',
-                    effortLevel: 'medium',
+                codex: {
+                    permissionMode: 'yolo',
+                    modelMode: 'gpt-5.6-sol',
+                    effortLevel: 'max',
                 },
             },
         } as any);
 
         expect(meta).toEqual({
-            permissionMode: 'bypassPermissions',
-            model: 'opus',
-            effort: 'medium',
+            permissionMode: 'yolo',
+            model: 'gpt-5.6-sol',
+            effort: 'max',
         });
     });
 
@@ -94,7 +94,7 @@ describe('resolveMessageModeMeta', () => {
             permissionMode: null,
             modelMode: 'default',
             effortLevel: null,
-            metadata: { flavor: 'claude' },
+            metadata: { flavor: 'codex', codexSyncVersion: 4 },
         } as any);
 
         expect(meta).toEqual({ model: null });

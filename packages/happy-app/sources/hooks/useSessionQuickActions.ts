@@ -45,6 +45,8 @@ type ResumeAvailability = {
 function getResumeAvailability(session: Session, machine: Machine | null | undefined, isConnected: boolean): ResumeAvailability {
     if (
         session.metadata?.codexReadOnly === true
+        || session.metadata?.flavor !== 'codex'
+        || session.metadata?.codexSyncVersion !== 4
         || isRigMetadata(session.metadata)
         || session.metadata?.capabilities?.resume === false
     ) {
@@ -75,9 +77,9 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
         };
     }
 
-    const hasBackendResumeId = Boolean(session.metadata?.claudeSessionId || session.metadata?.codexThreadId);
+    const hasBackendResumeId = Boolean(session.metadata?.codexThreadId);
     if (!hasBackendResumeId) {
-        const message = t('sessionInfo.resumeSessionMissingBackendId');
+        const message = t('sessionInfo.resumeSessionMissingCodexThread');
         return {
             canResume: false,
             canShowResume: true,
@@ -146,7 +148,6 @@ export function useSessionQuickActions(
         session.metadata?.flavor,
         session.metadata?.machineId,
         session.metadata?.path,
-        session.metadata?.claudeSessionId,
         session.metadata?.codexThreadId,
         session.metadata?.codexReadOnly,
     ]);
@@ -243,9 +244,7 @@ export function useSessionQuickActions(
         performResume();
     }, [performResume]);
 
-    // Fork the session (no truncation) — copies the on-disk Claude JSONL
-    // and spawns a fresh Happy session on the same machine. Works for
-    // both active and inactive sessions; the source row stays untouched.
+    // Fork the Codex thread without truncation. The source row stays untouched.
     const [forking, performFork] = useHappyAction(async () => {
         if (!canFork) {
             throw new HappyError(t('session.forkErrorMissingMetadata'), false);

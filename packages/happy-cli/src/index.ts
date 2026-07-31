@@ -601,7 +601,7 @@ ${chalk.bold('Usage:')}
   If you want to kill all happy related processes run 
   ${chalk.cyan('happy doctor clean')}
 
-${chalk.bold('Note:')} The daemon runs in the background and manages Claude sessions.
+${chalk.bold('Note:')} The daemon runs in the background and manages Codex sessions.
 
 ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor clean')}
 `)

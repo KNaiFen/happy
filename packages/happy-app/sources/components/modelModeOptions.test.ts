@@ -5,8 +5,6 @@ import {
     getAvailableModelsForMachine,
     getAvailablePermissionModes,
     getCodexModelModes,
-    getClaudeModelModes,
-    getClaudePermissionModes,
     getDefaultEffortKey,
     getDefaultModelKey,
     getDefaultPermissionModeKey,
@@ -46,12 +44,6 @@ describe('modelModeOptions', () => {
         }]);
     });
 
-    it('builds claude permission fallbacks with translated names', () => {
-        const modes = getClaudePermissionModes(translate);
-        expect(modes.map((mode) => mode.key)).toEqual(['default', 'plan', 'dontAsk', 'acceptEdits', 'bypassPermissions']);
-        expect(modes[0].name).toBe('tr:agentInput.permissionMode.default');
-    });
-
     it('builds codex model fallbacks', () => {
         const models = getCodexModelModes();
         expect(models.map((model) => model.key)).toEqual([
@@ -71,27 +63,7 @@ describe('modelModeOptions', () => {
         expect(models[1].name).toBe('gpt-5.6 sol');
     });
 
-    it('builds claude model fallbacks with fable 5', () => {
-        const models = getClaudeModelModes();
-        expect(models.map((model) => model.key)).toEqual([
-            'default',
-            'claude-opus-5',
-            'opus',
-            'fable',
-            'sonnet',
-            'haiku',
-        ]);
-        expect(models.find((model) => model.key === 'fable')).toEqual({
-            key: 'fable',
-            name: 'fable 5',
-            description: null,
-        });
-    });
-
     it('uses code defaults for agent defaults', () => {
-        expect(getDefaultPermissionModeKey('claude')).toBe('bypassPermissions');
-        expect(getDefaultModelKey('claude')).toBe('opus');
-        expect(getDefaultEffortKey('claude')).toBe('medium');
         expect(getDefaultPermissionModeKey('codex')).toBe('yolo');
         expect(getDefaultModelKey('codex')).toBe('gpt-5.5');
         expect(getDefaultEffortKey('codex')).toBe('medium');

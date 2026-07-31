@@ -120,20 +120,12 @@ export interface SpawnSessionOptions {
     directory: string;
     sessionId?: string;
     approvedNewDirectoryCreation?: boolean;
-    agent?: 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
+    agent?: 'codex' | 'gemini' | 'openclaw' | 'agy';
     permissionMode?: string;
     modelMode?: string;
     effortLevel?: string;
     environmentVariables?: Record<string, string>;
     token?: string;
-    /**
-     * If set, the daemon spawns the agent with `--resume <id>` so the new
-     * Happy session continues from an existing Claude conversation file.
-     * Used by the session fork / duplicate flow: the fork RPC produces a
-     * new Claude JSONL on disk, the spawn RPC then attaches a fresh Happy
-     * session to it.
-     */
-    resumeClaudeSessionId?: string;
     /**
      * If set, the daemon spawns Codex with `--resume <id>` so a fresh Happy
      * session attaches to a forked Codex app-server thread.

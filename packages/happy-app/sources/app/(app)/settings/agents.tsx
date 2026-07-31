@@ -39,7 +39,6 @@ type FieldConfig = {
 };
 
 const agentLabels: Record<AgentKey, string> = {
-    claude: 'Claude Code',
     codex: 'Codex',
     gemini: 'Gemini',
     openclaw: 'OpenClaw',

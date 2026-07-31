@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-    machines: [] as Array<{ id: string; online: boolean; metadata?: { homeDir?: string } }>,
+    machines: [] as Array<{
+        id: string;
+        online: boolean;
+        metadata?: { homeDir?: string; agentCapabilities?: { codex?: object } };
+    }>,
     defaultOverrides: {},
     draft: null as any,
     navigateToSession: vi.fn(),
@@ -105,6 +109,7 @@ function createDraft(overrides: Record<string, unknown> = {}) {
         worktreeKey: null,
         setInput: vi.fn(),
         setAttachments: vi.fn(),
+        resetModeOverrides: vi.fn(),
         ...overrides,
     };
 }
@@ -142,6 +147,7 @@ describe('useStartSessionFromDraft', () => {
         expect(mocks.refreshSessions).toHaveBeenCalledOnce();
         expect(mocks.draft.setInput).toHaveBeenCalledWith('');
         expect(mocks.draft.setAttachments).toHaveBeenCalledWith([]);
+        expect(mocks.draft.resetModeOverrides).toHaveBeenCalledOnce();
         expect(mocks.navigateToSession).toHaveBeenCalledWith('session-1');
         expect(mocks.sendMessage).toHaveBeenCalledWith(
             'session-1',
@@ -217,6 +223,7 @@ describe('useStartSessionFromDraft', () => {
             { key: 'medium', name: 'Medium' },
             { key: 'max', name: 'Max' },
         ];
+        mocks.machines[0].metadata!.agentCapabilities = { codex: {} };
         mocks.draft = createDraft({ modelMode: 'gpt-5.6-luna', effortLevel: 'ultra' });
 
         const { startSession } = useStartSessionFromDraft();

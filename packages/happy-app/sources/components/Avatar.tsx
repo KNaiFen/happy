@@ -20,7 +20,6 @@ interface AvatarProps {
 }
 
 const flavorIcons = {
-    claude: require('@/assets/images/icon-claude.png'),
     codex: require('@/assets/images/icon-gpt.png'),
     gemini: require('@/assets/images/icon-gemini.png'),
     openclaw: require('@/assets/images/icon-openclaw.png'),
@@ -76,14 +75,13 @@ export const Avatar = React.memo((props: AvatarProps) => {
 
         // Add flavor icon overlay if enabled
         if (showFlavorIcons && (flavor || clientId === 'rig')) {
-            const effectiveFlavor = clientId === 'rig' ? 'rig' : (flavor || 'claude');
-            const flavorIcon = flavorIcons[effectiveFlavor as keyof typeof flavorIcons] || flavorIcons.claude;
+            const effectiveFlavor = clientId === 'rig' ? 'rig' : flavor;
+            const flavorIcon = effectiveFlavor ? flavorIcons[effectiveFlavor as keyof typeof flavorIcons] : undefined;
+            if (!flavorIcon) return imageElement;
             const circleSize = Math.round(size * 0.35);
             const iconSize = effectiveFlavor === 'codex'
                 ? Math.round(size * 0.25)
-                : effectiveFlavor === 'claude'
-                    ? Math.round(size * 0.28)
-                    : Math.round(size * 0.35);
+                : Math.round(size * 0.35);
 
             return (
                 <View style={[styles.container, { width: size, height: size }]}>
@@ -120,19 +118,16 @@ export const Avatar = React.memo((props: AvatarProps) => {
     }
 
     // Determine flavor icon for generated avatars
-    const effectiveFlavor = clientId === 'rig' ? 'rig' : (flavor || 'claude');
-    const flavorIcon = flavorIcons[effectiveFlavor as keyof typeof flavorIcons] || flavorIcons.claude;
+    const effectiveFlavor = clientId === 'rig' ? 'rig' : flavor;
+    const flavorIcon = effectiveFlavor ? flavorIcons[effectiveFlavor as keyof typeof flavorIcons] : undefined;
     // Make icons smaller while keeping same circle size
-    // Claude slightly bigger than codex
     const circleSize = Math.round(size * 0.35);
     const iconSize = effectiveFlavor === 'codex'
         ? Math.round(size * 0.25)
-        : effectiveFlavor === 'claude'
-            ? Math.round(size * 0.28)
-            : Math.round(size * 0.35);
+        : Math.round(size * 0.35);
 
     // Only wrap in container if showing flavor icons and flavor was provided
-    if (showFlavorIcons && (flavor !== null || clientId === 'rig')) {
+    if (showFlavorIcons && flavorIcon) {
         return (
             <View style={[styles.container, { width: size, height: size }]}>
                 <AvatarComponent {...avatarProps} size={size} />

@@ -24,7 +24,7 @@ describe('createOfflineSessionStub', () => {
         expect(session.sessionId).toBe('offline-codex-session');
         expect(() => session.onFileEvent(onFileEvent)).not.toThrow();
         expect(() => session.onUserMessage(onUserMessage)).not.toThrow();
-        expect(() => session.sendCodexMessage({ type: 'agent_message', message: 'offline' })).not.toThrow();
+        expect(() => session.sendAgentMessage('codex', { type: 'message', message: 'offline' })).not.toThrow();
         expect(() => session.keepAlive(true, 'local')).not.toThrow();
         expect(() => session.rpcHandlerManager.registerHandler('permission', async () => undefined))
             .not.toThrow();
@@ -76,7 +76,7 @@ describe('createOfflineSessionStub', () => {
         const onFileEvent = vi.fn();
         const onArchived = vi.fn();
         const onMessageOnce = vi.fn();
-        const sendCodexMessage = vi.spyOn(target, 'sendCodexMessage');
+        const sendAgentMessage = vi.spyOn(target, 'sendAgentMessage');
         const sendSessionEvent = vi.spyOn(target, 'sendSessionEvent');
         const targetOnUserMessage = vi.spyOn(target, 'onUserMessage');
         const targetOnFileEvent = vi.spyOn(target, 'onFileEvent');
@@ -86,7 +86,7 @@ describe('createOfflineSessionStub', () => {
         source.on('archived', onArchived);
         source.once('message', onMessageOnce);
         source.rpcHandlerManager.registerHandler('permission', async () => undefined);
-        source.sendCodexMessage({ sequence: 1 });
+        source.sendAgentMessage('codex', { type: 'message', message: 'sequence-1' });
         source.sendSessionEvent({ type: 'message', message: 'sequence-2' });
         await Promise.resolve();
 
@@ -95,12 +95,12 @@ describe('createOfflineSessionStub', () => {
         expect(targetOnUserMessage).toHaveBeenCalledWith(onUserMessage);
         expect(targetOnFileEvent).toHaveBeenCalledWith(onFileEvent);
         expect(target.rpcHandlerManager.hasHandler('permission')).toBe(true);
-        expect(sendCodexMessage).toHaveBeenCalledWith({ sequence: 1 });
+        expect(sendAgentMessage).toHaveBeenCalledWith('codex', { type: 'message', message: 'sequence-1' });
         expect(sendSessionEvent).toHaveBeenCalledWith({
             type: 'message',
             message: 'sequence-2',
         }, undefined);
-        expect(sendCodexMessage.mock.invocationCallOrder[0]).toBeLessThan(
+        expect(sendAgentMessage.mock.invocationCallOrder[0]).toBeLessThan(
             sendSessionEvent.mock.invocationCallOrder[0],
         );
         target.emit('archived');
@@ -123,41 +123,41 @@ describe('createOfflineSessionStub', () => {
             metadataFixture(),
             {},
         );
-        const rejectedSend = vi.spyOn(rejectedTarget, 'sendCodexMessage').mockImplementation(
-            (body) => {
-                if ((body as { sequence?: number }).sequence === 2) {
+        const rejectedSend = vi.spyOn(rejectedTarget, 'sendAgentMessage').mockImplementation(
+            (_provider, body) => {
+                if ((body as { message?: string }).message === 'sequence-2') {
                     throw new Error('sensitive transport failure');
                 }
             },
         );
-        const acceptedSend = vi.spyOn(acceptedTarget, 'sendCodexMessage');
-        source.sendCodexMessage({ sequence: 1 });
-        source.sendCodexMessage({ sequence: 2 });
-        source.sendCodexMessage({ sequence: 3 });
+        const acceptedSend = vi.spyOn(acceptedTarget, 'sendAgentMessage');
+        source.sendAgentMessage('codex', { type: 'message', message: 'sequence-1' });
+        source.sendAgentMessage('codex', { type: 'message', message: 'sequence-2' });
+        source.sendAgentMessage('codex', { type: 'message', message: 'sequence-3' });
 
         await expect(source.attach(rejectedTarget)).rejects.toThrow(
             'Deferred offline session output could not be replayed',
         );
         expect(rejectedSend).toHaveBeenCalledTimes(2);
-        expect(rejectedSend).toHaveBeenNthCalledWith(1, { sequence: 1 });
-        expect(rejectedSend).toHaveBeenNthCalledWith(2, { sequence: 2 });
+        expect(rejectedSend).toHaveBeenNthCalledWith(1, 'codex', { type: 'message', message: 'sequence-1' });
+        expect(rejectedSend).toHaveBeenNthCalledWith(2, 'codex', { type: 'message', message: 'sequence-2' });
 
         await expect(source.attach(acceptedTarget)).resolves.toBeUndefined();
 
         expect(acceptedSend).toHaveBeenCalledTimes(2);
-        expect(acceptedSend).toHaveBeenNthCalledWith(1, { sequence: 2 });
-        expect(acceptedSend).toHaveBeenNthCalledWith(2, { sequence: 3 });
+        expect(acceptedSend).toHaveBeenNthCalledWith(1, 'codex', { type: 'message', message: 'sequence-2' });
+        expect(acceptedSend).toHaveBeenNthCalledWith(2, 'codex', { type: 'message', message: 'sequence-3' });
     });
 
     it('drains a large FIFO without changing its order', async () => {
         const source = createOfflineSessionStub('source-large', metadataFixture(), {});
         const target = createOfflineSessionStub('target-large', metadataFixture(), {});
         const acceptedSequences: number[] = [];
-        vi.spyOn(target, 'sendCodexMessage').mockImplementation((body) => {
-            acceptedSequences.push((body as { sequence: number }).sequence);
+        vi.spyOn(target, 'sendAgentMessage').mockImplementation((_provider, body) => {
+            acceptedSequences.push(Number((body as { message: string }).message));
         });
         for (let sequence = 0; sequence < 10_000; sequence += 1) {
-            source.sendCodexMessage({ sequence });
+            source.sendAgentMessage('codex', { type: 'message', message: String(sequence) });
         }
 
         await source.attach(target);
@@ -171,19 +171,19 @@ describe('createOfflineSessionStub', () => {
     it('keeps a background send rejection for an explicit flush retry', async () => {
         const source = createOfflineSessionStub('source-background', metadataFixture(), {});
         const target = createOfflineSessionStub('target-background', metadataFixture(), {});
-        const send = vi.spyOn(target, 'sendCodexMessage')
+        const send = vi.spyOn(target, 'sendAgentMessage')
             .mockImplementationOnce(() => {
                 throw new Error('sensitive transport failure');
             })
             .mockImplementation(() => undefined);
         await source.attach(target);
 
-        expect(() => source.sendCodexMessage({ sequence: 1 })).not.toThrow();
+        expect(() => source.sendAgentMessage('codex', { type: 'message', message: 'sequence-1' })).not.toThrow();
         await new Promise(resolve => setTimeout(resolve, 0));
         await expect(source.flush()).resolves.toBeUndefined();
 
         expect(send).toHaveBeenCalledTimes(2);
-        expect(send).toHaveBeenNthCalledWith(1, { sequence: 1 });
-        expect(send).toHaveBeenNthCalledWith(2, { sequence: 1 });
+        expect(send).toHaveBeenNthCalledWith(1, 'codex', { type: 'message', message: 'sequence-1' });
+        expect(send).toHaveBeenNthCalledWith(2, 'codex', { type: 'message', message: 'sequence-1' });
     });
 });

@@ -4,7 +4,6 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 
 export interface CLIAvailability {
-  claude: boolean;
   codex: boolean;
   gemini: boolean;
   openclaw: boolean;
@@ -35,7 +34,6 @@ function commandExists(command: string): boolean {
 }
 
 function detectPosix(): CLIAvailability {
-  const claude = commandExists('claude');
   const codex = commandExists('codex');
   const gemini = commandExists('gemini');
   const agy = commandExists('agy');
@@ -46,7 +44,7 @@ function detectPosix(): CLIAvailability {
   const openclawEnv = !!process.env.OPENCLAW_GATEWAY_URL;
   const openclaw = openclawCommand || openclawConfig || openclawEnv;
 
-  return { claude, codex, gemini, openclaw, agy, detectedAt: Date.now() };
+  return { codex, gemini, openclaw, agy, detectedAt: Date.now() };
 }
 
 function detectWindows(): CLIAvailability {
@@ -59,7 +57,6 @@ function detectWindows(): CLIAvailability {
     }
   };
 
-  const claude = checkCommand('claude');
   const codex = checkCommand('codex');
   const gemini = checkCommand('gemini');
   const agy = checkCommand('agy');
@@ -70,5 +67,5 @@ function detectWindows(): CLIAvailability {
   const openclawEnv = !!process.env.OPENCLAW_GATEWAY_URL;
   const openclaw = openclawCommand || openclawConfig || openclawEnv;
 
-  return { claude, codex, gemini, openclaw, agy, detectedAt: Date.now() };
+  return { codex, gemini, openclaw, agy, detectedAt: Date.now() };
 }

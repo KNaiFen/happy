@@ -3,22 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { getSessionForkSource } from './sessionFork';
 
 describe('getSessionForkSource', () => {
-    it('returns a Claude fork source when the session has a Claude session id', () => {
+    it('does not expose a fork source for a removed provider session', () => {
         expect(getSessionForkSource({
             id: 'happy-claude',
             metadata: {
                 flavor: 'claude',
                 machineId: 'machine-1',
                 path: '/tmp/project',
-                claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
             },
-        } as any)).toEqual({
-            kind: 'claude',
-            sessionId: 'happy-claude',
-            machineId: 'machine-1',
-            directory: '/tmp/project',
-            claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
-        });
+        } as any)).toBeNull();
     });
 
     it('returns a Codex fork source when the session has a Codex thread id', () => {
@@ -29,6 +22,7 @@ describe('getSessionForkSource', () => {
                 machineId: 'machine-1',
                 path: '/tmp/project',
                 codexThreadId: '019ccca5-726b-7c61-b914-16de27dfab6e',
+                codexSyncVersion: 4,
             },
         } as any)).toEqual({
             kind: 'codex',
@@ -46,6 +40,7 @@ describe('getSessionForkSource', () => {
                 flavor: 'codex',
                 machineId: 'machine-1',
                 path: '/tmp/project',
+                codexSyncVersion: 4,
             },
         } as any)).toBeNull();
     });
@@ -58,6 +53,7 @@ describe('getSessionForkSource', () => {
                 machineId: 'machine-1',
                 path: '/tmp/project',
                 codexThreadId: 'thread-child',
+                codexSyncVersion: 4,
                 codexReadOnly: true,
             },
         } as any)).toBeNull();

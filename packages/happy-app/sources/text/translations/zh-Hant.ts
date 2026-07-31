@@ -122,7 +122,7 @@ export const zhHant: TranslationStructure = {
         developer: '開發者',
         developerTools: '開發者工具',
         about: '關於',
-        aboutFooter: 'Happy Coder 是一個 Codex 和 Claude Code 行動用戶端。它採用端對端加密，您的帳戶僅儲存在本機裝置上。與 Anthropic 無關聯。',
+        aboutFooter: 'Happy Coder 是一個 Codex 行動用戶端。它採用端對端加密，您的帳戶僅儲存在本機裝置上。',
         whatsNew: '更新日誌',
         whatsNewSubtitle: '查看最新更新和改進',
         reportIssue: '回報問題',
@@ -135,7 +135,6 @@ export const zhHant: TranslationStructure = {
         scanQrCodeToAuthenticate: '掃描 QR Code 進行驗證',
         githubConnected: ({ login }: { login: string }) => `已連結為 @${login}`,
         connectGithubAccount: '連結您的 GitHub 帳戶',
-        claudeAuthSuccess: '成功連結到 Claude',
         exchangingTokens: '正在交換權杖...',
         usage: '使用情況',
         usageSubtitle: '查看 API 使用情況和費用',
@@ -338,7 +337,6 @@ export const zhHant: TranslationStructure = {
         forkErrorMissingUuid: '選定的回退點已不存在於來源會話中 — 請嘗試不截斷地分叉。',
         forkErrorMissingMetadata: '缺少分叉所需的會話元資料。',
         forkErrorGeneric: '分叉會話失敗。',
-        forkClaudeOnly: '目前僅支援 Claude 會話的分叉。',
     },
 
     commandPalette: {
@@ -383,12 +381,9 @@ export const zhHant: TranslationStructure = {
         happySessionIdCopied: 'Happy 工作階段 ID 已複製到剪貼簿',
         failedToCopySessionId: '複製 Happy 工作階段 ID 失敗',
         happySessionId: 'Happy 工作階段 ID',
-        claudeCodeSessionId: 'Claude Code 工作階段 ID',
-        claudeCodeSessionIdCopied: 'Claude Code 工作階段 ID 已複製到剪貼簿',
         codexThreadId: 'Codex 執行緒 ID',
         codexThreadIdCopied: 'Codex 執行緒 ID 已複製到剪貼簿',
         aiProvider: 'AI 提供者',
-        failedToCopyClaudeCodeSessionId: '複製 Claude Code 工作階段 ID 失敗',
         failedToCopyCodexThreadId: '複製 Codex 執行緒 ID 失敗',
         metadataCopied: '中繼資料已複製到剪貼簿',
         failedToCopyMetadata: '複製中繼資料失敗',
@@ -407,7 +402,7 @@ export const zhHant: TranslationStructure = {
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
         resumeSessionMissingMachine: 'This session is missing its machine metadata, so it cannot be resumed.',
-        resumeSessionMissingBackendId: 'This session does not have a resumable Claude or Codex identifier.',
+        resumeSessionMissingCodexThread: '此工作階段沒有可恢復的 Codex 執行緒。',
         resumeSessionUnexpectedDirectoryPrompt: 'Resume cannot create directories. Start the session manually from its original path.',
         killSessionSubtitle: '立即終止工作階段',
         archiveSessionSubtitle: '封存此工作階段並停止它',
@@ -481,7 +476,6 @@ export const zhHant: TranslationStructure = {
             badgePlanMode: '計畫模式',
         },
         agent: {
-            claude: 'Claude',
             codex: 'Codex',
             gemini: 'Gemini',
             openclaw: 'OpenClaw',
@@ -705,7 +699,7 @@ export const zhHant: TranslationStructure = {
         },
         // Bring your own agent
         byoTitle: '使用自己的代理',
-        byoDescription: '使用您自己的 ElevenLabs 代理取代 Happy 預設代理。無需訂閱 — 直接使用您自己的 ElevenLabs 帳戶連線。您的代理必須定義兩個用戶端工具：messageClaudeCode（向編碼代理傳送文字）和 processPermissionRequest（允許或拒絕工具使用）。透過 {{initialConversationContext}} 動態變數接收工作階段上下文。',
+        byoDescription: '使用您自己的 ElevenLabs 代理取代 Happy 預設代理。無需訂閱 — 直接使用您自己的 ElevenLabs 帳戶連線。您的代理必須定義兩個用戶端工具：sendMessageToSession（向編碼代理傳送文字）和 processPermissionRequest（允許或拒絕工具使用）。透過 {{initialConversationContext}} 動態變數接收工作階段上下文。',
         customAgentId: 'ElevenLabs Agent ID',
         customAgentIdNotSet: '未設定',
         customAgentIdDescription: '輸入您的 ElevenLabs Agent ID。留空則使用 Happy 預設代理。',
@@ -713,7 +707,7 @@ export const zhHant: TranslationStructure = {
         bypassToken: '直接連線',
         bypassTokenSubtitle: '跳過 Happy 伺服器，直接連線到 ElevenLabs',
         promptGuideTitle: '代理提示詞指南',
-        promptGuideDescription: '您的 ElevenLabs 代理需要：\n\n• 工具：messageClaudeCode — 參數：message (string)。向活躍的編碼工作階段傳送訊息。\n• 工具：processPermissionRequest — 參數：decision ("allow" 或 "deny")。核准或拒絕待處理的工具權限。\n• 動態變數：{{initialConversationContext}} — 啟動時接收工作階段歷史和上下文。\n\n代理充當使用者和編碼代理之間的語音橋梁。它應該簡潔，僅在被呼叫時回應，並在編碼代理完成工作時進行報告。',
+        promptGuideDescription: '您的 ElevenLabs 代理需要：\n\n• 工具：sendMessageToSession — 參數：message (string)。向活躍的編碼工作階段傳送訊息。\n• 工具：processPermissionRequest — 參數：decision ("allow" 或 "deny")。核准或拒絕待處理的工具權限。\n• 動態變數：{{initialConversationContext}} — 啟動時接收工作階段歷史和上下文。\n\n代理充當使用者和編碼代理之間的語音橋梁。它應該簡潔，僅在被呼叫時回應，並在編碼代理完成工作時進行報告。',
         usageTitle: '使用量（過去 30 天）',
         usageFooter: '過去 30 天使用的語音時間。免費方案: 20 分鐘。訂閱用戶: 5 小時。每月最多 100 次對話。',
         usageLabel: '語音時間',
@@ -850,7 +844,7 @@ export const zhHant: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Codex 和 Claude Code 行動用戶端',
+        title: 'Codex 行動用戶端',
         subtitle: '端對端加密，您的帳戶僅儲存在您的裝置上。',
         createAccount: '建立帳戶',
         linkOrRestoreAccount: '連結或恢復帳戶',
@@ -923,13 +917,13 @@ export const zhHant: TranslationStructure = {
         }
     },
 
-    claude: {
-        // Claude permission dialog buttons
+    agentPermissions: {
+        // 通用 v3 權限對話框按鈕
         permissions: {
             yesAllowAllEdits: '是，允許本次工作階段的所有編輯',
             yesAllowEverything: '是，允許本次工作階段的所有操作',
             yesForTool: '是，不再詢問此工具',
-            noTellClaude: '否，並告訴 Claude 該如何不同地操作',
+            noProvideFeedback: '否，並提供回饋',
         }
     },
 

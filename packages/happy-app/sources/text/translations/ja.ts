@@ -123,7 +123,7 @@ export const ja: TranslationStructure = {
         developer: '開発者',
         developerTools: '開発者ツール',
         about: 'このアプリについて',
-        aboutFooter: 'Happy CoderはCodexとClaude Codeのモバイルクライアントです。完全なエンドツーエンド暗号化を採用し、アカウントはデバイスにのみ保存されます。Anthropicとは提携していません。',
+        aboutFooter: 'Happy CoderはCodexのモバイルクライアントです。完全なエンドツーエンド暗号化を採用し、アカウントはデバイスにのみ保存されます。',
         whatsNew: '新機能',
         whatsNewSubtitle: '最新のアップデートと改善を確認',
         reportIssue: '問題を報告',
@@ -136,7 +136,6 @@ export const ja: TranslationStructure = {
         scanQrCodeToAuthenticate: 'QRコードをスキャンして認証',
         githubConnected: ({ login }: { login: string }) => `@${login}として接続中`,
         connectGithubAccount: 'GitHubアカウントを接続',
-        claudeAuthSuccess: 'Claudeへの接続に成功しました',
         exchangingTokens: 'トークンを交換中...',
         usage: '使用状況',
         usageSubtitle: 'API使用量とコストを確認',
@@ -339,7 +338,6 @@ export const ja: TranslationStructure = {
         forkErrorMissingUuid: '選んだ巻き戻しポイントがソースセッションに存在しません — 切り詰めなしのフォークをお試しください。',
         forkErrorMissingMetadata: 'フォークに必要なセッションのメタデータがありません。',
         forkErrorGeneric: 'セッションのフォークに失敗しました。',
-        forkClaudeOnly: 'フォークは現在 Claude セッションのみ対応しています。',
     },
 
     commandPalette: {
@@ -384,12 +382,9 @@ export const ja: TranslationStructure = {
         happySessionIdCopied: 'Happy Session IDがクリップボードにコピーされました',
         failedToCopySessionId: 'Happy Session IDのコピーに失敗しました',
         happySessionId: 'Happy Session ID',
-        claudeCodeSessionId: 'Claude Code Session ID',
-        claudeCodeSessionIdCopied: 'Claude Code Session IDがクリップボードにコピーされました',
         codexThreadId: 'Codex Thread ID',
         codexThreadIdCopied: 'Codex Thread IDがクリップボードにコピーされました',
         aiProvider: 'AIプロバイダー',
-        failedToCopyClaudeCodeSessionId: 'Claude Code Session IDのコピーに失敗しました',
         failedToCopyCodexThreadId: 'Codex Thread IDのコピーに失敗しました',
         metadataCopied: 'メタデータがクリップボードにコピーされました',
         failedToCopyMetadata: 'メタデータのコピーに失敗しました',
@@ -408,7 +403,7 @@ export const ja: TranslationStructure = {
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
         resumeSessionMissingMachine: 'This session is missing its machine metadata, so it cannot be resumed.',
-        resumeSessionMissingBackendId: 'This session does not have a resumable Claude or Codex identifier.',
+        resumeSessionMissingCodexThread: 'このセッションには再開可能な Codex スレッドがありません。',
         resumeSessionUnexpectedDirectoryPrompt: 'Resume cannot create directories. Start the session manually from its original path.',
         killSessionSubtitle: 'セッションを即座に終了',
         archiveSessionSubtitle: 'このセッションをアーカイブして停止',
@@ -482,7 +477,6 @@ export const ja: TranslationStructure = {
             badgePlanMode: 'プランモード',
         },
         agent: {
-            claude: 'Claude',
             codex: 'Codex',
             gemini: 'Gemini',
             openclaw: 'OpenClaw',
@@ -706,7 +700,7 @@ export const ja: TranslationStructure = {
         },
         // Bring your own agent
         byoTitle: '自分のエージェントを使う',
-        byoDescription: 'Happy のデフォルトの代わりに、独自の ElevenLabs エージェントを使用します。サブスクリプション不要 — 自分の ElevenLabs アカウントで直接接続できます。エージェントには2つのクライアントツールを定義する必要があります: messageClaudeCode（コーディングエージェントにテキストを送信）と processPermissionRequest（ツール使用を許可または拒否）。セッションコンテキストは {{initialConversationContext}} 動的変数を通じて受信されます。',
+        byoDescription: 'Happy のデフォルトの代わりに、独自の ElevenLabs エージェントを使用します。サブスクリプション不要 — 自分の ElevenLabs アカウントで直接接続できます。エージェントには2つのクライアントツールを定義する必要があります: sendMessageToSession（コーディングエージェントにテキストを送信）と processPermissionRequest（ツール使用を許可または拒否）。セッションコンテキストは {{initialConversationContext}} 動的変数を通じて受信されます。',
         customAgentId: 'ElevenLabs Agent ID',
         customAgentIdNotSet: '未設定',
         customAgentIdDescription: 'ElevenLabs Agent ID を入力してください。空のままにすると Happy のデフォルトが使用されます。',
@@ -714,7 +708,7 @@ export const ja: TranslationStructure = {
         bypassToken: '直接接続',
         bypassTokenSubtitle: 'Happy サーバーをスキップし、ElevenLabs に直接接続',
         promptGuideTitle: 'エージェントプロンプトガイド',
-        promptGuideDescription: 'ElevenLabs エージェントには以下が必要です:\n\n• ツール: messageClaudeCode — パラメータ: message (string)。アクティブなコーディングセッションにメッセージを送信します。\n• ツール: processPermissionRequest — パラメータ: decision ("allow" または "deny")。保留中のツール許可を承認または拒否します。\n• 動的変数: {{initialConversationContext}} — 開始時にセッション履歴とコンテキストを受信します。\n\nエージェントはユーザーとコーディングエージェント間の音声ブリッジとして機能します。簡潔に、話しかけられた時のみ応答し、コーディングエージェントが作業を完了したら報告する必要があります。',
+        promptGuideDescription: 'ElevenLabs エージェントには以下が必要です:\n\n• ツール: sendMessageToSession — パラメータ: message (string)。アクティブなコーディングセッションにメッセージを送信します。\n• ツール: processPermissionRequest — パラメータ: decision ("allow" または "deny")。保留中のツール許可を承認または拒否します。\n• 動的変数: {{initialConversationContext}} — 開始時にセッション履歴とコンテキストを受信します。\n\nエージェントはユーザーとコーディングエージェント間の音声ブリッジとして機能します。簡潔に、話しかけられた時のみ応答し、コーディングエージェントが作業を完了したら報告する必要があります。',
         usageTitle: '使用状況（過去30日間）',
         usageFooter: '過去30日間に使用した音声時間。無料プラン: 20分。サブスクリプション: 5時間。月間最大100会話。',
         usageLabel: '音声時間',
@@ -851,7 +845,7 @@ export const ja: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'CodexとClaude Codeのモバイルクライアント',
+        title: 'Codexモバイルクライアント',
         subtitle: 'エンドツーエンド暗号化され、アカウントはデバイスにのみ保存されます。',
         createAccount: 'アカウントを作成',
         linkOrRestoreAccount: 'アカウントをリンクまたは復元',
@@ -924,13 +918,13 @@ export const ja: TranslationStructure = {
         }
     },
 
-    claude: {
-        // Claude permission dialog buttons
+    agentPermissions: {
+        // プロバイダー共通の v3 権限ダイアログボタン
         permissions: {
             yesAllowAllEdits: 'はい、このセッション中のすべての編集を許可',
             yesAllowEverything: 'はい、このセッション中のすべてを許可',
             yesForTool: "はい、このツールについては確認しない",
-            noTellClaude: 'いいえ、フィードバックを提供',
+            noProvideFeedback: 'いいえ、フィードバックを提供',
         }
     },
 

@@ -293,7 +293,7 @@ export type OfflineFailure = {
 class OfflineState {
     private state: 'online' | 'offline' = 'online';
     private failures = new Map<string, OfflineFailure>(); // Dedupe by operation
-    private backend = 'Claude';
+    private backend = 'Codex';
 
     /** Report failure - accumulates context, prints once on first offline transition */
     fail(failure: OfflineFailure): void {
@@ -320,7 +320,7 @@ class OfflineState {
     reset(): void {
         this.state = 'online';
         this.failures.clear();
-        this.backend = 'Claude';
+        this.backend = 'Codex';
     }
 
     private print(): void {
@@ -351,7 +351,7 @@ export const connectionState = new OfflineState();
 /**
  * @deprecated Use connectionState.fail() for deduplication and context tracking
  */
-export function printOfflineWarning(backendName: string = 'Claude'): void {
+export function printOfflineWarning(backendName: string = 'Codex'): void {
     connectionState.setBackend(backendName);
     connectionState.fail({ operation: 'Server connection' });
 }

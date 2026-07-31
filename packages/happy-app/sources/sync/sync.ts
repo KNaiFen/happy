@@ -2941,7 +2941,7 @@ class Sync {
             }
         }
 
-        // Session-level lifecycle event (Claude finished, needs permission, asks question).
+        // Session-level lifecycle event (finished, needs permission, asks question).
         // This is the same signal that triggers the mobile push — bump browser-tab
         // unread counter on these only, ignore the noisy per-message stream.
         if (updateData.type === 'session-event') {

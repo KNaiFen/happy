@@ -35,7 +35,7 @@ export type EffortLevel = ModeOption;
 export type PermissionModeKey = string;
 export type ModelModeKey = string;
 
-export type AgentFlavor = 'claude' | 'codex' | 'gemini' | string | null | undefined;
+export type AgentFlavor = 'codex' | 'gemini' | string | null | undefined;
 
 type Translate = (key: any) => string;
 
@@ -111,16 +111,6 @@ function createCodexDefaultModelOption(models: ModelMode[]): ModelMode {
     };
 }
 
-export function getClaudePermissionModes(translate: Translate): PermissionMode[] {
-    return [
-        { key: 'default', name: translate('agentInput.permissionMode.default'), description: null },
-        { key: 'plan', name: translate('agentInput.permissionMode.plan'), description: null },
-        { key: 'dontAsk', name: translate('agentInput.permissionMode.dontAsk'), description: null },
-        { key: 'acceptEdits', name: translate('agentInput.permissionMode.acceptEdits'), description: null },
-        { key: 'bypassPermissions', name: translate('agentInput.permissionMode.bypassPermissions'), description: null },
-    ];
-}
-
 export function getCodexPermissionModes(translate: Translate): PermissionMode[] {
     return [
         { key: 'default', name: translate('agentInput.codexPermissionMode.default'), description: translate('agentInput.codexPermissionMode.defaultDescription') },
@@ -136,20 +126,6 @@ export function getGeminiPermissionModes(translate: Translate): PermissionMode[]
         { key: 'auto_edit', name: translate('agentInput.geminiPermissionMode.autoEdit'), description: null },
         { key: 'yolo', name: translate('agentInput.geminiPermissionMode.yolo'), description: null },
         { key: 'plan', name: translate('agentInput.geminiPermissionMode.plan'), description: null },
-    ];
-}
-
-export function getClaudeModelModes(): ModelMode[] {
-    return [
-        { key: 'default', name: 'default model', description: null },
-        // Full model ID, not the `opus-5` short alias: the alias is not in the
-        // CLI's alias table yet (`claude --model opus-5` errors on 2.1.199),
-        // while the full ID passes straight through to the API.
-        { key: 'claude-opus-5', name: 'opus 5', description: null },
-        { key: 'opus', name: 'opus 4.8', description: null },
-        { key: 'fable', name: 'fable 5', description: null },
-        { key: 'sonnet', name: 'sonnet 4.6', description: null },
-        { key: 'haiku', name: 'haiku 4.5', description: null },
     ];
 }
 
@@ -202,7 +178,9 @@ export function getHardcodedPermissionModes(flavor: AgentFlavor, translate: Tran
     if (flavor === 'agy') {
         return getAgyPermissionModes(translate);
     }
-    return getClaudePermissionModes(translate);
+    return [
+        { key: 'default', name: translate('agentInput.permissionMode.default'), description: null },
+    ];
 }
 
 export function getOpenClawModelModes(): ModelMode[] {
@@ -238,7 +216,7 @@ export function getHardcodedModelModes(flavor: AgentFlavor, _translate: Translat
     if (flavor === 'agy') {
         return getAgyModelModes();
     }
-    return getClaudeModelModes();
+    return [{ key: 'default', name: 'default model', description: null }];
 }
 
 export function getAvailableModels(
@@ -358,7 +336,7 @@ export function getAvailablePermissionModes(
         }
         return modes;
     }
-    if (flavor === 'claude' || flavor === 'codex' || flavor === 'openclaw' || flavor === 'agy') {
+    if (flavor === 'codex' || flavor === 'openclaw' || flavor === 'agy') {
         return hackModes(getHardcodedPermissionModes(flavor, translate));
     }
 
@@ -400,16 +378,6 @@ export function getDefaultPermissionModeKey(flavor: AgentFlavor): string {
 
 // Effort levels per agent type
 
-export function getClaudeEffortLevels(): EffortLevel[] {
-    return [
-        { key: 'low', name: 'low' },
-        { key: 'medium', name: 'medium' },
-        { key: 'high', name: 'high' },
-        { key: 'xhigh', name: 'xhigh' },
-        { key: 'max', name: 'max' },
-    ];
-}
-
 export function getCodexEffortLevels(): EffortLevel[] {
     return [
         { key: 'low', name: 'low' },
@@ -421,7 +389,6 @@ export function getCodexEffortLevels(): EffortLevel[] {
 }
 
 export function getHardcodedEffortLevels(flavor: AgentFlavor): EffortLevel[] {
-    if (flavor === 'claude') return getClaudeEffortLevels();
     if (flavor === 'codex') return getCodexEffortLevels();
     return [];
 }
@@ -441,13 +408,6 @@ export function getEffortLevelsForModel(
             key: level,
             name: level,
         }));
-    }
-    // Claude and Codex expose effort/thought levels regardless of which
-    // specific model is picked — the same low/medium/high/max scale applies
-    // to the whole flavor (mirrors how Codex already worked, which the user
-    // asked Claude to match).
-    if (flavor === 'claude') {
-        return getClaudeEffortLevels();
     }
     if (flavor === 'codex') {
         const advertisedModel = findCodexModel(mapMetadataModels(metadata?.models), modelKey);

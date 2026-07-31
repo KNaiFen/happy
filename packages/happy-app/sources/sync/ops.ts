@@ -179,16 +179,10 @@ export interface SpawnSessionOptions {
     directory: string;
     approvedNewDirectoryCreation?: boolean;
     token?: string;
-    agent?: 'codex' | 'claude' | 'gemini' | 'openclaw' | 'agy';
+    agent?: 'codex' | 'gemini' | 'openclaw' | 'agy';
     permissionMode?: string;
     modelMode?: string;
     effortLevel?: string;
-    /**
-     * If set, the daemon spawns the agent with `--resume <id>` so the new
-     * Happy session attaches to a pre-existing on-disk Claude conversation
-     * file. Used by the session fork / duplicate flow.
-     */
-    resumeClaudeSessionId?: string;
     /**
      * If set, the daemon spawns Codex with `--resume <id>` so the new Happy
      * session attaches to an app-server thread created by fork / duplicate.
@@ -201,29 +195,6 @@ export interface SpawnSessionOptions {
     /** Marks the spawned session as a hidden side chat of `parentSessionId`. */
     isSideChat?: boolean;
 }
-
-// Options for forking a Claude session on a machine
-export interface ClaudeForkSessionOptions {
-    machineId: string;
-    /** Working directory of the source session — used to derive the Claude project dir. */
-    directory: string;
-    /** Source Claude session UUID (Session.metadata.claudeSessionId on the parent). */
-    claudeSessionId: string;
-}
-
-export type ClaudeForkSessionResult =
-    | { type: 'success'; newClaudeSessionId: string }
-    | { type: 'error'; errorMessage: string };
-
-export interface ClaudeRewindPoint {
-    uuid: string;
-    text: string;
-    timestamp: number;
-}
-
-export type ClaudeListRewindPointsResult =
-    | { type: 'success'; points: ClaudeRewindPoint[] }
-    | { type: 'error'; errorMessage: string };
 
 export interface CodexForkThreadOptions {
     machineId: string;
@@ -259,7 +230,7 @@ export interface ResumeSessionOptions {
  */
 export async function machineSpawnNewSession(options: SpawnSessionOptions): Promise<SpawnSessionResult> {
 
-    const { machineId, directory, approvedNewDirectoryCreation = false, token, agent, permissionMode, modelMode, effortLevel, resumeClaudeSessionId, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = options;
+    const { machineId, directory, approvedNewDirectoryCreation = false, token, agent, permissionMode, modelMode, effortLevel, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = options;
 
     try {
         const result = await apiSocket.machineRPC<SpawnSessionResult, {
@@ -267,11 +238,10 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
             directory: string
             approvedNewDirectoryCreation?: boolean,
             token?: string,
-            agent?: 'codex' | 'claude' | 'gemini' | 'openclaw' | 'agy',
+            agent?: 'codex' | 'gemini' | 'openclaw' | 'agy',
             permissionMode?: string,
             modelMode?: string,
             effortLevel?: string,
-            resumeClaudeSessionId?: string,
             resumeCodexThreadId?: string,
             parentSessionId?: string,
             forkedFromMessageId?: string,
@@ -279,7 +249,7 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
         }>(
             machineId,
             'spawn-happy-session',
-            { type: 'spawn-in-directory', directory, approvedNewDirectoryCreation, token, agent, permissionMode, modelMode, effortLevel, resumeClaudeSessionId, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat }
+            { type: 'spawn-in-directory', directory, approvedNewDirectoryCreation, token, agent, permissionMode, modelMode, effortLevel, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat }
         );
         return result;
     } catch (error) {
@@ -287,92 +257,6 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
         return {
             type: 'error',
             errorMessage: error instanceof Error ? error.message : 'Failed to spawn session'
-        };
-    }
-}
-
-/**
- * Copy the source session's Claude JSONL on the daemon machine and return
- * the new Claude session UUID. Caller then spawns a fresh Happy session
- * with `resumeClaudeSessionId` set to that UUID to attach a new Happy
- * session row to the copied conversation.
- */
-export async function claudeForkSession(options: ClaudeForkSessionOptions): Promise<ClaudeForkSessionResult> {
-    const { machineId, directory, claudeSessionId } = options;
-    try {
-        const result = await apiSocket.machineRPC<ClaudeForkSessionResult, {
-            directory: string;
-            claudeSessionId: string;
-        }>(
-            machineId,
-            'claude-fork-session',
-            { directory, claudeSessionId },
-        );
-        return result;
-    } catch (error) {
-        return {
-            type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to fork session',
-        };
-    }
-}
-
-/**
- * Read the on-disk Claude JSONL on the daemon machine and return user-text
- * messages with their underlying claudeUuid + timestamp. Disk is the
- * source of truth for the rewind picker — server-side envelopes miss
- * claudeUuid for any user message that travelled via the legacy
- * `sentFrom: 'web'` path.
- */
-export async function claudeListRewindPoints(
-    options: ClaudeForkSessionOptions,
-): Promise<ClaudeListRewindPointsResult> {
-    const { machineId, directory, claudeSessionId } = options;
-    try {
-        const result = await apiSocket.machineRPC<ClaudeListRewindPointsResult, {
-            directory: string;
-            claudeSessionId: string;
-        }>(
-            machineId,
-            'claude-list-rewind-points',
-            { directory, claudeSessionId },
-        );
-        return result;
-    } catch (error) {
-        return {
-            type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to list rewind points',
-        };
-    }
-}
-
-/**
- * Same as claudeForkSession, but truncates the copied JSONL right after the
- * line with `cutAfterUuid` (keeping the chosen message as the last entry,
- * dropping every line after — including the agent's response). Use this
- * for "rewind to message N and try again" flows. Daemon hard-fails if the
- * UUID isn't present in the source — never silently produces a
- * non-truncated copy.
- */
-export async function claudeDuplicateSession(
-    options: ClaudeForkSessionOptions & { cutAfterUuid: string },
-): Promise<ClaudeForkSessionResult> {
-    const { machineId, directory, claudeSessionId, cutAfterUuid } = options;
-    try {
-        const result = await apiSocket.machineRPC<ClaudeForkSessionResult, {
-            directory: string;
-            claudeSessionId: string;
-            cutAfterUuid: string;
-        }>(
-            machineId,
-            'claude-duplicate-session',
-            { directory, claudeSessionId, cutAfterUuid },
-        );
-        return result;
-    } catch (error) {
-        return {
-            type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to duplicate session',
         };
     }
 }
@@ -616,9 +500,13 @@ async function sessionUpdateAgentModesMetadata(
     }
 
     // Defensive copy: retries drop fields from the patch (see below)
+    const withoutRemovedProviderFields = (metadata: Record<string, unknown>): Record<string, unknown> => {
+        const { claudeSessionId: _removedSessionId, ...retained } = metadata;
+        return retained;
+    };
     let pendingPatch: SessionAgentModesPatch = { ...patch };
     let currentVersion = session.metadataVersion;
-    let currentMetadata: Record<string, unknown> = { ...session.metadata, ...pendingPatch };
+    let currentMetadata = withoutRemovedProviderFields({ ...session.metadata, ...pendingPatch });
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         const encrypted = await encryption.encryptRaw(currentMetadata);
@@ -654,7 +542,7 @@ async function sessionUpdateAgentModesMetadata(
             if (Object.keys(pendingPatch).length === 0) {
                 return;
             }
-            currentMetadata = { ...latest, ...pendingPatch };
+            currentMetadata = withoutRemovedProviderFields({ ...latest, ...pendingPatch });
             continue;
         }
         throw new Error('Failed to update session metadata');
@@ -677,6 +565,11 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
         isCodexSessionReadOnly(session?.metadata)
         || (session && isSessionMachineDeleted(session, state.machines, state.machinesLoaded))
     ) return;
+    try {
+        assertSessionInteractionAllowed(sessionId);
+    } catch {
+        return;
+    }
 
     // Only touch fields that actually change — clearing modes on a session
     // with no picks (e.g. every abort) must not cost a metadata round-trip.
@@ -1133,14 +1026,6 @@ export async function sessionDelete(sessionId: string): Promise<{ success: boole
     }
 }
 
-type ClaudeForkSource = {
-    kind?: 'claude';
-    sessionId: string;
-    machineId: string;
-    directory: string;
-    claudeSessionId: string;
-};
-
 type CodexForkSource = {
     kind: 'codex';
     sessionId: string;
@@ -1150,10 +1035,9 @@ type CodexForkSource = {
 };
 
 // Forking source description used by forkAndSpawn.
-export type ForkSource = ClaudeForkSource | CodexForkSource;
+export type ForkSource = CodexForkSource;
 
 type ForkOptions = {
-    cutAfterUuid?: string;
     cutAfterItemId?: string;
     forkedFromMessageId?: string;
     /** Marks the forked child as a hidden side chat (kept out of the session list). */
@@ -1161,12 +1045,7 @@ type ForkOptions = {
 };
 
 /**
- * Two-step orchestrator for the session fork / duplicate flow:
- *   1. Ask the daemon to copy (and optionally truncate) the source Claude
- *      JSONL — returns a fresh Claude session UUID.
- *   2. Spawn a new Happy session on the same machine with
- *      `resumeClaudeSessionId` set to that UUID so `claude --resume` picks
- *      up the copied conversation.
+ * Two-step orchestrator for the Codex thread fork / duplicate flow.
  *
  * Lineage (parentSessionId, forkedFromMessageId) rides through the spawn
  * RPC into env vars, then into the new Happy session's metadata at start
@@ -1176,68 +1055,28 @@ export async function forkAndSpawn(
     source: ForkSource,
     opts: ForkOptions = {},
 ): Promise<SpawnSessionResult> {
-    if (source.kind === 'codex') {
-        const sourceSession = storage.getState().sessions[source.sessionId];
-        assertSessionInteractionAllowed(source.sessionId);
-        if (
-            !sourceSession
-            || sourceSession.metadata?.flavor !== 'codex'
-            || sourceSession.metadata.codexThreadId !== source.codexThreadId
-            || sourceSession.metadata.machineId !== source.machineId
-            || sourceSession.metadata.path !== source.directory
-        ) {
-            throw new Error('Codex fork source is stale or owned by another Happy session');
-        }
-        const forkResult = opts.cutAfterItemId
-            ? await codexDuplicateThread({
-                machineId: source.machineId,
-                directory: source.directory,
-                codexThreadId: source.codexThreadId,
-                cutAfterItemId: opts.cutAfterItemId,
-            })
-            : await codexForkThread({
-                machineId: source.machineId,
-                directory: source.directory,
-                codexThreadId: source.codexThreadId,
-            });
-
-        if (forkResult.type !== 'success') {
-            return { type: 'error', errorMessage: forkResult.errorMessage };
-        }
-
-        const spawnResult = await machineSpawnNewSession({
-            machineId: source.machineId,
-            directory: source.directory,
-            agent: 'codex',
-            approvedNewDirectoryCreation: false,
-            resumeCodexThreadId: forkResult.newCodexThreadId,
-            parentSessionId: source.sessionId,
-            forkedFromMessageId: opts.forkedFromMessageId,
-            isSideChat: opts.isSideChat,
-        });
-
-        if (spawnResult.type === 'success') {
-            try {
-                await sync.refreshSessions();
-            } catch {
-                // Refresh is best-effort; broadcast sync will still hydrate.
-            }
-        }
-
-        return spawnResult;
+    const sourceSession = storage.getState().sessions[source.sessionId];
+    assertSessionInteractionAllowed(source.sessionId);
+    if (
+        !sourceSession
+        || sourceSession.metadata?.flavor !== 'codex'
+        || sourceSession.metadata.codexThreadId !== source.codexThreadId
+        || sourceSession.metadata.machineId !== source.machineId
+        || sourceSession.metadata.path !== source.directory
+    ) {
+        throw new Error('Codex fork source is stale or owned by another Happy session');
     }
-
-    const forkResult = opts.cutAfterUuid
-        ? await claudeDuplicateSession({
+    const forkResult = opts.cutAfterItemId
+        ? await codexDuplicateThread({
             machineId: source.machineId,
             directory: source.directory,
-            claudeSessionId: source.claudeSessionId,
-            cutAfterUuid: opts.cutAfterUuid,
+            codexThreadId: source.codexThreadId,
+            cutAfterItemId: opts.cutAfterItemId,
         })
-        : await claudeForkSession({
+        : await codexForkThread({
             machineId: source.machineId,
             directory: source.directory,
-            claudeSessionId: source.claudeSessionId,
+            codexThreadId: source.codexThreadId,
         });
 
     if (forkResult.type !== 'success') {
@@ -1247,9 +1086,9 @@ export async function forkAndSpawn(
     const spawnResult = await machineSpawnNewSession({
         machineId: source.machineId,
         directory: source.directory,
-        agent: 'claude',
+        agent: 'codex',
         approvedNewDirectoryCreation: false,
-        resumeClaudeSessionId: forkResult.newClaudeSessionId,
+        resumeCodexThreadId: forkResult.newCodexThreadId,
         parentSessionId: source.sessionId,
         forkedFromMessageId: opts.forkedFromMessageId,
         isSideChat: opts.isSideChat,
@@ -1263,8 +1102,7 @@ export async function forkAndSpawn(
         try {
             await sync.refreshSessions();
         } catch {
-            // Refresh is best-effort; the broadcast will still hydrate the
-            // session shortly even if this fetch flaked.
+            // Refresh is best-effort; broadcast sync will still hydrate.
         }
     }
 

@@ -121,7 +121,7 @@ export const es: TranslationStructure = {
         developer: 'Desarrollador',
         developerTools: 'Herramientas de desarrollador',
         about: 'Acerca de',
-        aboutFooter: 'Happy Coder es un cliente móvil para Codex y Claude Code. Todo está cifrado de extremo a extremo y tu cuenta se guarda solo en tu dispositivo. No está afiliado con Anthropic.',
+        aboutFooter: 'Happy Coder es un cliente móvil para Codex. Todo está cifrado de extremo a extremo y tu cuenta se guarda solo en tu dispositivo.',
         whatsNew: 'Novedades',
         whatsNewSubtitle: 'Ve las últimas actualizaciones y mejoras',
         reportIssue: 'Reportar un problema',
@@ -134,7 +134,6 @@ export const es: TranslationStructure = {
         scanQrCodeToAuthenticate: 'Escanea el código QR para autenticarte',
         githubConnected: ({ login }: { login: string }) => `Conectado como @${login}`,
         connectGithubAccount: 'Conecta tu cuenta de GitHub',
-        claudeAuthSuccess: 'Conectado exitosamente con Claude',
         exchangingTokens: 'Intercambiando tokens...',
         usage: 'Uso',
         usageSubtitle: 'Ver tu uso de API y costos',
@@ -338,7 +337,6 @@ export const es: TranslationStructure = {
         forkErrorMissingUuid: 'El punto de retroceso elegido ya no existe en la sesión origen — intenta bifurcar sin truncar.',
         forkErrorMissingMetadata: 'Faltan metadatos de la sesión necesarios para bifurcar.',
         forkErrorGeneric: 'No se pudo bifurcar la sesión.',
-        forkClaudeOnly: 'La bifurcación actualmente solo se admite para sesiones de Claude.',
     },
 
     commandPalette: {
@@ -383,12 +381,9 @@ export const es: TranslationStructure = {
         happySessionIdCopied: 'ID de sesión de Happy copiado al portapapeles',
         failedToCopySessionId: 'Falló al copiar ID de sesión de Happy',
         happySessionId: 'ID de sesión de Happy',
-        claudeCodeSessionId: 'ID de sesión de Claude Code',
-        claudeCodeSessionIdCopied: 'ID de sesión de Claude Code copiado al portapapeles',
         codexThreadId: 'ID del hilo de Codex',
         codexThreadIdCopied: 'ID del hilo de Codex copiado al portapapeles',
         aiProvider: 'Proveedor de IA',
-        failedToCopyClaudeCodeSessionId: 'Falló al copiar ID de sesión de Claude Code',
         failedToCopyCodexThreadId: 'Falló al copiar ID del hilo de Codex',
         metadataCopied: 'Metadatos copiados al portapapeles',
         failedToCopyMetadata: 'Falló al copiar metadatos',
@@ -407,7 +402,7 @@ export const es: TranslationStructure = {
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
         resumeSessionMissingMachine: 'This session is missing its machine metadata, so it cannot be resumed.',
-        resumeSessionMissingBackendId: 'This session does not have a resumable Claude or Codex identifier.',
+        resumeSessionMissingCodexThread: 'Esta sesión no tiene un hilo de Codex que se pueda reanudar.',
         resumeSessionUnexpectedDirectoryPrompt: 'Resume cannot create directories. Start the session manually from its original path.',
         killSessionSubtitle: 'Terminar inmediatamente la sesión',
         archiveSessionSubtitle: 'Archivar esta sesión y detenerla',
@@ -481,7 +476,6 @@ export const es: TranslationStructure = {
             badgePlanMode: 'Modo de planificación',
         },
         agent: {
-            claude: 'Claude',
             codex: 'Codex',
             gemini: 'Gemini',
             openclaw: 'OpenClaw',
@@ -705,7 +699,7 @@ export const es: TranslationStructure = {
         },
         // Bring your own agent
         byoTitle: 'Trae tu propio agente',
-        byoDescription: 'Usa tu propio agente de ElevenLabs en lugar del predeterminado de Happy. No se requiere suscripción — conéctate directamente con tu propia cuenta de ElevenLabs. Tu agente debe definir dos herramientas de cliente: messageClaudeCode (envía texto al agente de código) y processPermissionRequest (permite o deniega el uso de herramientas). Recibe el contexto de la sesión a través de la variable dinámica {{initialConversationContext}}.',
+        byoDescription: 'Usa tu propio agente de ElevenLabs en lugar del predeterminado de Happy. No se requiere suscripción — conéctate directamente con tu propia cuenta de ElevenLabs. Tu agente debe definir dos herramientas de cliente: sendMessageToSession (envía texto al agente de código) y processPermissionRequest (permite o deniega el uso de herramientas). Recibe el contexto de la sesión a través de la variable dinámica {{initialConversationContext}}.',
         customAgentId: 'ElevenLabs Agent ID',
         customAgentIdNotSet: 'No configurado',
         customAgentIdDescription: 'Ingresa tu ElevenLabs Agent ID. Déjalo vacío para usar el predeterminado de Happy.',
@@ -713,7 +707,7 @@ export const es: TranslationStructure = {
         bypassToken: 'Conexión directa',
         bypassTokenSubtitle: 'Omite el servidor de Happy, conéctate directamente a ElevenLabs',
         promptGuideTitle: 'Guía de prompt del agente',
-        promptGuideDescription: 'Tu agente de ElevenLabs necesita:\n\n• Herramienta: messageClaudeCode — parámetro: message (string). Envía un mensaje a la sesión de código activa.\n• Herramienta: processPermissionRequest — parámetro: decision ("allow" o "deny"). Aprueba o deniega un permiso de herramienta pendiente.\n• Variable dinámica: {{initialConversationContext}} — recibe el historial y contexto de la sesión al iniciar.\n\nEl agente actúa como puente de voz entre el usuario y los agentes de código. Debe ser conciso, responder solo cuando se le habla e informar cuando un agente de código termina su trabajo.',
+        promptGuideDescription: 'Tu agente de ElevenLabs necesita:\n\n• Herramienta: sendMessageToSession — parámetro: message (string). Envía un mensaje a la sesión de código activa.\n• Herramienta: processPermissionRequest — parámetro: decision ("allow" o "deny"). Aprueba o deniega un permiso de herramienta pendiente.\n• Variable dinámica: {{initialConversationContext}} — recibe el historial y contexto de la sesión al iniciar.\n\nEl agente actúa como puente de voz entre el usuario y los agentes de código. Debe ser conciso, responder solo cuando se le habla e informar cuando un agente de código termina su trabajo.',
         usageTitle: 'Uso (últimos 30 días)',
         usageFooter: 'Tiempo de voz utilizado en los últimos 30 días. Plan gratuito: 20 min. Suscrito: 5 horas. Máx. 100 conversaciones al mes.',
         usageLabel: 'Tiempo de voz',
@@ -850,7 +844,7 @@ export const es: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Cliente móvil de Codex y Claude Code',
+        title: 'Cliente móvil de Codex',
         subtitle: 'Cifrado de extremo a extremo y tu cuenta se guarda solo en tu dispositivo.',
         createAccount: 'Crear cuenta',
         linkOrRestoreAccount: 'Vincular o restaurar cuenta',
@@ -923,13 +917,13 @@ export const es: TranslationStructure = {
         }
     },
 
-    claude: {
-        // Claude permission dialog buttons
+    agentPermissions: {
+        // Botones de permisos v3 compartidos entre proveedores
         permissions: {
             yesAllowAllEdits: 'Sí, permitir todas las ediciones durante esta sesión',
             yesAllowEverything: 'Sí, permitir todo durante esta sesión',
             yesForTool: 'Sí, no volver a preguntar para esta herramienta',
-            noTellClaude: 'No, proporcionar comentarios',
+            noProvideFeedback: 'No, proporcionar comentarios',
         }
     },
 

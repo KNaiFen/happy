@@ -120,7 +120,7 @@ export const it: TranslationStructure = {
         developer: 'Sviluppatore',
         developerTools: 'Strumenti sviluppatore',
         about: 'Informazioni',
-        aboutFooter: 'Happy Coder è un client mobile per Codex e Claude Code. È completamente cifrato end-to-end e il tuo account è memorizzato solo sul tuo dispositivo. Non affiliato con Anthropic.',
+        aboutFooter: 'Happy Coder è un client mobile per Codex. È completamente cifrato end-to-end e il tuo account è memorizzato solo sul tuo dispositivo.',
         whatsNew: 'Novità',
         whatsNewSubtitle: 'Scopri gli ultimi aggiornamenti e miglioramenti',
         reportIssue: 'Segnala un problema',
@@ -133,7 +133,6 @@ export const it: TranslationStructure = {
         scanQrCodeToAuthenticate: 'Scansiona il codice QR per autenticarti',
         githubConnected: ({ login }: { login: string }) => `Connesso come @${login}`,
         connectGithubAccount: 'Collega il tuo account GitHub',
-        claudeAuthSuccess: 'Connesso a Claude con successo',
         exchangingTokens: 'Scambio dei token...',
         usage: 'Utilizzo',
         usageSubtitle: 'Vedi il tuo utilizzo API e i costi',
@@ -336,7 +335,6 @@ export const it: TranslationStructure = {
         forkErrorMissingUuid: 'Il punto di ritorno scelto non esiste più nella sessione di origine — prova a biforcare senza troncare.',
         forkErrorMissingMetadata: 'Mancano i metadati della sessione necessari per biforcare.',
         forkErrorGeneric: 'Impossibile biforcare la sessione.',
-        forkClaudeOnly: 'La biforcazione è attualmente supportata solo per le sessioni Claude.',
     },
 
     commandPalette: {
@@ -381,12 +379,9 @@ export const it: TranslationStructure = {
         happySessionIdCopied: 'ID sessione Happy copiato negli appunti',
         failedToCopySessionId: 'Impossibile copiare l\'ID sessione Happy',
         happySessionId: 'ID sessione Happy',
-        claudeCodeSessionId: 'ID sessione Claude Code',
-        claudeCodeSessionIdCopied: 'ID sessione Claude Code copiato negli appunti',
         codexThreadId: 'ID thread Codex',
         codexThreadIdCopied: 'ID thread Codex copiato negli appunti',
         aiProvider: 'Provider IA',
-        failedToCopyClaudeCodeSessionId: 'Impossibile copiare l\'ID sessione Claude Code',
         failedToCopyCodexThreadId: 'Impossibile copiare l\'ID thread Codex',
         metadataCopied: 'Metadati copiati negli appunti',
         failedToCopyMetadata: 'Impossibile copiare i metadati',
@@ -405,7 +400,7 @@ export const it: TranslationStructure = {
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
         resumeSessionMissingMachine: 'This session is missing its machine metadata, so it cannot be resumed.',
-        resumeSessionMissingBackendId: 'This session does not have a resumable Claude or Codex identifier.',
+        resumeSessionMissingCodexThread: 'Questa sessione non ha un thread Codex ripristinabile.',
         resumeSessionUnexpectedDirectoryPrompt: 'Resume cannot create directories. Start the session manually from its original path.',
         killSessionSubtitle: 'Termina immediatamente la sessione',
         archiveSessionSubtitle: 'Archivia questa sessione e fermala',
@@ -479,7 +474,6 @@ export const it: TranslationStructure = {
             badgePlanMode: 'Modalità piano',
         },
         agent: {
-            claude: 'Claude',
             codex: 'Codex',
             gemini: 'Gemini',
             openclaw: 'OpenClaw',
@@ -703,7 +697,7 @@ export const it: TranslationStructure = {
         },
         // Bring your own agent
         byoTitle: 'Porta il tuo agente',
-        byoDescription: 'Usa il tuo agente ElevenLabs al posto di quello predefinito di Happy. Nessun abbonamento richiesto — connettiti direttamente con il tuo account ElevenLabs. Il tuo agente deve definire due strumenti client: messageClaudeCode (invia testo all\'agente di codice) e processPermissionRequest (consente o nega l\'uso degli strumenti). Riceve il contesto della sessione tramite la variabile dinamica {{initialConversationContext}}.',
+        byoDescription: 'Usa il tuo agente ElevenLabs al posto di quello predefinito di Happy. Nessun abbonamento richiesto — connettiti direttamente con il tuo account ElevenLabs. Il tuo agente deve definire due strumenti client: sendMessageToSession (invia testo all\'agente di codice) e processPermissionRequest (consente o nega l\'uso degli strumenti). Riceve il contesto della sessione tramite la variabile dinamica {{initialConversationContext}}.',
         customAgentId: 'ElevenLabs Agent ID',
         customAgentIdNotSet: 'Non configurato',
         customAgentIdDescription: 'Inserisci il tuo ElevenLabs Agent ID. Lascia vuoto per usare quello predefinito di Happy.',
@@ -711,7 +705,7 @@ export const it: TranslationStructure = {
         bypassToken: 'Connessione diretta',
         bypassTokenSubtitle: 'Salta il server di Happy, connettiti direttamente a ElevenLabs',
         promptGuideTitle: 'Guida al prompt dell\'agente',
-        promptGuideDescription: 'Il tuo agente ElevenLabs necessita:\n\n• Strumento: messageClaudeCode — parametro: message (string). Invia un messaggio alla sessione di codice attiva.\n• Strumento: processPermissionRequest — parametro: decision ("allow" o "deny"). Approva o nega un permesso di strumento in sospeso.\n• Variabile dinamica: {{initialConversationContext}} — riceve la cronologia e il contesto della sessione all\'avvio.\n\nL\'agente funge da ponte vocale tra l\'utente e gli agenti di codice. Deve essere conciso, rispondere solo quando interpellato e segnalare quando un agente di codice termina il lavoro.',
+        promptGuideDescription: 'Il tuo agente ElevenLabs necessita:\n\n• Strumento: sendMessageToSession — parametro: message (string). Invia un messaggio alla sessione di codice attiva.\n• Strumento: processPermissionRequest — parametro: decision ("allow" o "deny"). Approva o nega un permesso di strumento in sospeso.\n• Variabile dinamica: {{initialConversationContext}} — riceve la cronologia e il contesto della sessione all\'avvio.\n\nL\'agente funge da ponte vocale tra l\'utente e gli agenti di codice. Deve essere conciso, rispondere solo quando interpellato e segnalare quando un agente di codice termina il lavoro.',
         usageTitle: 'Utilizzo (ultimi 30 giorni)',
         usageFooter: 'Tempo vocale utilizzato negli ultimi 30 giorni. Piano gratuito: 20 min. Abbonato: 5 ore. Max 100 conversazioni al mese.',
         usageLabel: 'Tempo vocale',
@@ -848,7 +842,7 @@ export const it: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Client mobile di Codex e Claude Code',
+        title: 'Client mobile di Codex',
         subtitle: 'Crittografia end-to-end e account memorizzato solo sul tuo dispositivo.',
         createAccount: 'Crea account',
         linkOrRestoreAccount: 'Collega o ripristina account',
@@ -921,13 +915,13 @@ export const it: TranslationStructure = {
         }
     },
 
-    claude: {
-        // Claude permission dialog buttons
+    agentPermissions: {
+        // Pulsanti di autorizzazione v3 condivisi tra provider
         permissions: {
             yesAllowAllEdits: 'Sì, consenti tutte le modifiche durante questa sessione',
             yesAllowEverything: 'Sì, consenti tutto durante questa sessione',
             yesForTool: 'Sì, non chiedere più per questo strumento',
-            noTellClaude: 'No, fornisci feedback',
+            noProvideFeedback: 'No, fornisci feedback',
         }
     },
 

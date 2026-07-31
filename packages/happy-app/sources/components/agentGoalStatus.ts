@@ -10,18 +10,12 @@ type CodexV4GoalProjection = {
     thread: Pick<CodexThreadEntityV4, 'threadId' | 'goal'> | null;
 };
 
-function expectedSourceSessionId(session: GoalSession, source: AgentGoalStatus['source']): string | null {
-    if (source === 'claude') {
-        return session.metadata?.claudeSessionId ?? null;
-    }
-    if (source === 'codex') {
-        return session.metadata?.codexThreadId ?? null;
-    }
-    return null;
+function expectedSourceSessionId(session: GoalSession): string | null {
+    return session.metadata?.codexThreadId ?? null;
 }
 
 function sourceIdentityMatches(session: GoalSession, goal: VisibleAgentGoalStatus): boolean {
-    const expected = expectedSourceSessionId(session, goal.source);
+    const expected = expectedSourceSessionId(session);
     return expected !== null
         && typeof goal.sourceSessionId === 'string'
         && goal.sourceSessionId.trim().length > 0

@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import type { SyncInvalidationV4, Update, UpdateMachineBody } from '@slopus/happy-wire';
-import { UsageSchema } from '@/claude/types'
 import type { SandboxConfig } from '@/persistence'
 
 export {
@@ -21,23 +20,10 @@ export type {
 } from '@slopus/happy-wire';
 
 /**
- * Permission mode type - includes both Claude and Codex modes
- * Must match MessageMetaSchema.permissionMode enum values
- *
- * Claude modes: default, acceptEdits, bypassPermissions, plan
- * Codex modes: read-only, safe-yolo, yolo
- *
- * When calling Claude SDK, Codex modes are mapped at the SDK boundary:
- * - yolo → bypassPermissions
- * - safe-yolo → default
- * - read-only → default
+ * Permission modes accepted by the retained Codex and generic agent paths.
+ * The broader legacy values remain because Agy and ACP still consume them.
  */
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo'
-
-/**
- * Usage data type from Claude
- */
-export type Usage = z.infer<typeof UsageSchema>
 
 /**
  * Socket events from server to client
@@ -99,18 +85,6 @@ export interface ClientToServerEvents {
     result?: string
     error?: string
   }) => void) => void
-  'usage-report': (data: {
-    key: string
-    sessionId: string
-    tokens: {
-      total: number
-      [key: string]: number
-    }
-    cost: {
-      total: number
-      [key: string]: number
-    }
-  }) => void
 }
 
 /**
@@ -157,7 +131,6 @@ export const MachineMetadataSchema = z.object({
   happyHomeDir: z.string(),
   happyLibDir: z.string(),
   cliAvailability: z.object({
-    claude: z.boolean(),
     codex: z.boolean(),
     gemini: z.boolean(),
     openclaw: z.boolean(),
@@ -281,7 +254,7 @@ export const FileEventMessageSchema = z.object({
           // Optional — native iOS picker has no Canvas to compute thumbhash.
           // App-side schema relaxed this in the same commit; keeping CLI in
           // sync so the file event isn't silently rejected by Zod and the
-          // attachment never reaches Claude.
+          // attachment never reaches the provider runtime.
           thumbhash: z.string().optional(),
         }).optional(),
       }),
@@ -336,7 +309,6 @@ export type Metadata = {
   },
   machineId?: string,
   gitBranch?: string,
-  claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID
   /** Canonical encrypted transport selected for this Codex session. */
   codexSyncVersion?: 4,
@@ -394,7 +366,7 @@ export type UsageLimits = {
 }
 
 export type AgentGoalStatus = {
-  source: 'claude' | 'codex',
+  source: 'codex',
   observedAt: number,
   sourceSessionId?: string,
   sourceRevision?: string | number,
@@ -439,9 +411,8 @@ export type AgentState = {
       tool: string,
       arguments: any,
       createdAt: number,
-      // Raw provider tool-use id when the request id is scoped (e.g. claude
-      // subagent ids are `agentID:toolUseID`); the app joins the permission
-      // card to its tool call through this.
+      // Raw provider tool-use id when the request id is scoped; the app joins
+      // the permission card to its tool call through this.
       toolUseId?: string
     }
   }

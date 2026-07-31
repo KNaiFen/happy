@@ -246,6 +246,33 @@ describe('settings', () => {
                 },
             });
         });
+
+        it('does not republish removed agent settings from passthrough data', () => {
+            const settings = {
+                ...settingsDefaults,
+                agentDefaultOverrides: {
+                    codex: { effortLevel: 'max' },
+                    claude: { modelMode: 'legacy-model' },
+                },
+                dismissedCLIWarnings: {
+                    perMachine: {
+                        machine: { codex: true, claude: true },
+                    },
+                    global: { claude: true },
+                },
+            } as Settings;
+
+            expect(settingsToSyncPayload(settings)).toMatchObject({
+                agentDefaultOverrides: {
+                    codex: { effortLevel: 'max' },
+                },
+                dismissedCLIWarnings: {
+                    perMachine: { machine: { codex: true } },
+                    global: {},
+                },
+            });
+            expect(JSON.stringify(settingsToSyncPayload(settings))).not.toContain('claude');
+        });
     });
 
     describe('forward/backward compatibility', () => {
@@ -438,7 +465,7 @@ describe('settings', () => {
         it('should preserve complex nested structures during merge', () => {
             const serverSettings = settingsParse({
                 dismissedCLIWarnings: {
-                    perMachine: { 'machine-1': { claude: true } },
+                    perMachine: { 'machine-1': { codex: true } },
                     global: { codex: true }
                 }
             });
@@ -446,7 +473,7 @@ describe('settings', () => {
             const pendingChanges: Partial<Settings> = {
                 experiments: true,
                 dismissedCLIWarnings: {
-                    perMachine: { 'machine-2': { claude: true } },
+                    perMachine: { 'machine-2': { gemini: true } },
                     global: {}
                 }
             };

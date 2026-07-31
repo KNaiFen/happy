@@ -9,7 +9,6 @@ import { useHappyAction } from '@/hooks/useHappyAction';
 import { getDuplicateSheetFrame } from '@/utils/duplicateSheetLayout';
 import {
     forkAndSpawn,
-    claudeListRewindPoints,
     codexListRewindPoints,
     type ForkSource,
 } from '@/sync/ops';
@@ -18,9 +17,7 @@ import { MobileGlassSurface } from './MobileGlass';
 
 export interface DuplicateSheetProps {
     sessionId: string;
-    /** Pre-select this rewind uuid when the sheet opens (long-press entry). */
-    initialClaudeUuid?: string;
-    /** Pre-select this provider rewind id when the sheet opens (Claude uuid or Codex item id). */
+    /** Pre-select this Codex item id when the sheet opens. */
     initialRewindPointId?: string;
     /** Fallback preselect text for Codex live messages that do not yet carry an item id. */
     initialMessageText?: string;
@@ -37,13 +34,11 @@ type RewindPoint = {
 };
 
 /**
- * Picker for "duplicate session from message N". Pulls provider-native
- * user-text rewind points via RPC: Claude reads the on-disk JSONL, Codex
- * reads the app-server thread. Tap to choose a point, confirm to
- * fork-and-spawn a new Happy session truncated around that provider id.
+ * Picker for "duplicate session from message N" using Codex app-server
+ * rewind points.
  */
 export const DuplicateSheet = React.memo(function DuplicateSheet(props: DuplicateSheetProps) {
-    const { sessionId, initialClaudeUuid, initialRewindPointId, initialMessageText, initialForkedFromMessageId, onClose } = props;
+    const { sessionId, initialRewindPointId, initialMessageText, initialForkedFromMessageId, onClose } = props;
     const session = useSession(sessionId);
     const router = useRouter();
     const { theme } = useUnistyles();
@@ -58,7 +53,6 @@ export const DuplicateSheet = React.memo(function DuplicateSheet(props: Duplicat
         session?.metadata?.flavor,
         session?.metadata?.machineId,
         session?.metadata?.path,
-        session?.metadata?.claudeSessionId,
         session?.metadata?.codexThreadId,
         session?.metadata?.codexReadOnly,
     ]);
@@ -66,7 +60,7 @@ export const DuplicateSheet = React.memo(function DuplicateSheet(props: Duplicat
 
     const [points, setPoints] = React.useState<RewindPoint[] | null>(null);
     const [pointsError, setPointsError] = React.useState<string | null>(null);
-    const initialSelectedId = initialRewindPointId ?? initialClaudeUuid ?? null;
+    const initialSelectedId = initialRewindPointId ?? null;
     const [selectedId, setSelectedId] = React.useState<string | null>(initialSelectedId);
 
     React.useEffect(() => {
@@ -79,22 +73,16 @@ export const DuplicateSheet = React.memo(function DuplicateSheet(props: Duplicat
                 }
                 return;
             }
-            const result = source.kind === 'codex'
-                ? await codexListRewindPoints({
-                    machineId: source.machineId,
-                    directory: source.directory,
-                    codexThreadId: source.codexThreadId,
-                })
-                : await claudeListRewindPoints({
-                    machineId: source.machineId,
-                    directory: source.directory,
-                    claudeSessionId: source.claudeSessionId,
-                });
+            const result = await codexListRewindPoints({
+                machineId: source.machineId,
+                directory: source.directory,
+                codexThreadId: source.codexThreadId,
+            });
             if (cancelled) return;
             if (result.type === 'success') {
                 // Newest first — easier to find a recent rewind point.
                 const normalized = result.points.map((point) => ({
-                    id: 'itemId' in point ? point.itemId : point.uuid,
+                    id: point.itemId,
                     text: point.text,
                     timestamp: point.timestamp,
                 }));
@@ -143,15 +131,10 @@ export const DuplicateSheet = React.memo(function DuplicateSheet(props: Duplicat
         const forkedFromMessageId = matchesInitialSelection(selected, initialSelectedId, initialMessageText)
             ? initialForkedFromMessageId
             : undefined;
-        const result = source.kind === 'codex'
-            ? await forkAndSpawn(source as ForkSource, {
-                cutAfterItemId: selected.id,
-                forkedFromMessageId,
-            })
-            : await forkAndSpawn(source as ForkSource, {
-                cutAfterUuid: selected.id,
-                forkedFromMessageId,
-            });
+        const result = await forkAndSpawn(source as ForkSource, {
+            cutAfterItemId: selected.id,
+            forkedFromMessageId,
+        });
 
         if (result.type === 'success') {
             onClose?.();

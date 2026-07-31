@@ -108,7 +108,7 @@ export const ru: TranslationStructure = {
         developer: 'Разработчик',
         developerTools: 'Инструменты разработчика',
         about: 'О программе',
-        aboutFooter: 'Happy Coder — мобильное приложение для работы с Codex и Claude Code. Использует сквозное шифрование, все данные аккаунта хранятся только на вашем устройстве. Не связано с Anthropic.',
+        aboutFooter: 'Happy Coder — мобильное приложение для работы с Codex. Использует сквозное шифрование, все данные аккаунта хранятся только на вашем устройстве.',
         whatsNew: 'Что нового',
         whatsNewSubtitle: 'Посмотреть последние обновления и улучшения',
         reportIssue: 'Сообщить о проблеме',
@@ -121,7 +121,6 @@ export const ru: TranslationStructure = {
         scanQrCodeToAuthenticate: 'Отсканируйте QR-код для авторизации',
         githubConnected: ({ login }: { login: string }) => `Подключен как @${login}`,
         connectGithubAccount: 'Подключить аккаунт GitHub',
-        claudeAuthSuccess: 'Успешно подключено к Claude',
         exchangingTokens: 'Обмен токенов...',
         usage: 'Использование',
         usageSubtitle: 'Просмотр использования API и затрат',
@@ -333,12 +332,9 @@ export const ru: TranslationStructure = {
         happySessionIdCopied: 'ID сессии Happy скопирован в буфер обмена',
         failedToCopySessionId: 'Не удалось скопировать ID сессии Happy',
         happySessionId: 'ID сессии Happy',
-        claudeCodeSessionId: 'ID сессии Claude Code',
-        claudeCodeSessionIdCopied: 'ID сессии Claude Code скопирован в буфер обмена',
         codexThreadId: 'ID треда Codex',
         codexThreadIdCopied: 'ID треда Codex скопирован в буфер обмена',
         aiProvider: 'Поставщик ИИ',
-        failedToCopyClaudeCodeSessionId: 'Не удалось скопировать ID сессии Claude Code',
         failedToCopyCodexThreadId: 'Не удалось скопировать ID треда Codex',
         metadataCopied: 'Метаданные скопированы в буфер обмена',
         failedToCopyMetadata: 'Не удалось скопировать метаданные',
@@ -357,7 +353,7 @@ export const ru: TranslationStructure = {
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
         resumeSessionMissingMachine: 'This session is missing its machine metadata, so it cannot be resumed.',
-        resumeSessionMissingBackendId: 'This session does not have a resumable Claude or Codex identifier.',
+        resumeSessionMissingCodexThread: 'В этой сессии нет потока Codex, который можно возобновить.',
         resumeSessionUnexpectedDirectoryPrompt: 'Resume cannot create directories. Start the session manually from its original path.',
         killSessionSubtitle: 'Немедленно завершить сессию',
         archiveSessionSubtitle: 'Архивировать эту сессию и остановить её',
@@ -477,7 +473,6 @@ export const ru: TranslationStructure = {
         forkErrorMissingUuid: 'Выбранная точка отката больше не существует в исходной сессии — попробуйте форк без обрезки.',
         forkErrorMissingMetadata: 'Не хватает метаданных сессии для форка.',
         forkErrorGeneric: 'Не удалось форкнуть сессию.',
-        forkClaudeOnly: 'Форк сейчас поддерживается только для Claude-сессий.',
     },
 
     commandPalette: {
@@ -497,7 +492,6 @@ export const ru: TranslationStructure = {
             badgePlanMode: 'Режим планирования',
         },
         agent: {
-            claude: 'Claude',
             codex: 'Codex',
             gemini: 'Gemini',
             openclaw: 'OpenClaw',
@@ -721,7 +715,7 @@ export const ru: TranslationStructure = {
         },
         // Bring your own agent
         byoTitle: 'Используйте своего агента',
-        byoDescription: 'Используйте собственного агента ElevenLabs вместо стандартного Happy. Подписка не требуется — подключайтесь напрямую через свой аккаунт ElevenLabs. Ваш агент должен определить два клиентских инструмента: messageClaudeCode (отправляет текст агенту кодирования) и processPermissionRequest (разрешает или запрещает использование инструментов). Контекст сессии передаётся через динамическую переменную {{initialConversationContext}}.',
+        byoDescription: 'Используйте собственного агента ElevenLabs вместо стандартного Happy. Подписка не требуется — подключайтесь напрямую через свой аккаунт ElevenLabs. Ваш агент должен определить два клиентских инструмента: sendMessageToSession (отправляет текст агенту кодирования) и processPermissionRequest (разрешает или запрещает использование инструментов). Контекст сессии передаётся через динамическую переменную {{initialConversationContext}}.',
         customAgentId: 'ElevenLabs Agent ID',
         customAgentIdNotSet: 'Не настроено',
         customAgentIdDescription: 'Введите ваш ElevenLabs Agent ID. Оставьте пустым, чтобы использовать стандартный Happy.',
@@ -729,7 +723,7 @@ export const ru: TranslationStructure = {
         bypassToken: 'Прямое подключение',
         bypassTokenSubtitle: 'Пропустить сервер Happy, подключиться напрямую к ElevenLabs',
         promptGuideTitle: 'Руководство по промптам агента',
-        promptGuideDescription: 'Вашему агенту ElevenLabs необходимы:\n\n• Инструмент: messageClaudeCode — параметр: message (string). Отправляет сообщение в активную сессию кодирования.\n• Инструмент: processPermissionRequest — параметр: decision ("allow" или "deny"). Одобряет или отклоняет ожидающее разрешение на использование инструмента.\n• Динамическая переменная: {{initialConversationContext}} — получает историю и контекст сессии при запуске.\n\nАгент выступает голосовым мостом между пользователем и агентами кодирования. Он должен быть кратким, отвечать только при обращении и сообщать, когда агент кодирования завершает работу.',
+        promptGuideDescription: 'Вашему агенту ElevenLabs необходимы:\n\n• Инструмент: sendMessageToSession — параметр: message (string). Отправляет сообщение в активную сессию кодирования.\n• Инструмент: processPermissionRequest — параметр: decision ("allow" или "deny"). Одобряет или отклоняет ожидающее разрешение на использование инструмента.\n• Динамическая переменная: {{initialConversationContext}} — получает историю и контекст сессии при запуске.\n\nАгент выступает голосовым мостом между пользователем и агентами кодирования. Он должен быть кратким, отвечать только при обращении и сообщать, когда агент кодирования завершает работу.',
         usageTitle: 'Использование (последние 30 дней)',
         usageFooter: 'Время голосового общения за последние 30 дней. Бесплатный тариф: 20 мин. С подпиской: 5 часов. Макс. 100 разговоров в месяц.',
         usageLabel: 'Голосовое время',
@@ -854,7 +848,7 @@ export const ru: TranslationStructure = {
 
     welcome: {
         // Main welcome screen for unauthenticated users
-        title: 'Мобильный клиент Codex и Claude Code',
+        title: 'Мобильный клиент Codex',
         subtitle: 'Сквозное шифрование, аккаунт хранится только на вашем устройстве.',
         createAccount: 'Создать аккаунт',
         linkOrRestoreAccount: 'Связать или восстановить аккаунт',
@@ -927,13 +921,13 @@ export const ru: TranslationStructure = {
         }
     },
 
-    claude: {
-        // Claude permission dialog buttons
+    agentPermissions: {
+        // Общие для провайдеров кнопки разрешений v3
         permissions: {
             yesAllowAllEdits: 'Да, разрешить все правки в этой сессии',
             yesAllowEverything: 'Да, разрешить всё в этой сессии',
             yesForTool: 'Да, больше не спрашивать для этого инструмента',
-            noTellClaude: 'Нет, дать обратную связь',
+            noProvideFeedback: 'Нет, дать обратную связь',
         }
     },
 

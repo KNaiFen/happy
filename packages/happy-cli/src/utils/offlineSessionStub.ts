@@ -170,28 +170,6 @@ class OfflineApiSessionClient
             );
         };
 
-    readonly sendClaudeSessionMessage:
-        ApiSessionClientContract['sendClaudeSessionMessage'] = (body) => {
-            this.queueOutbound((target) => target.sendClaudeSessionMessage(body));
-        };
-
-    readonly sendClaudeSessionMessageFromLocalTranscript:
-        ApiSessionClientContract['sendClaudeSessionMessageFromLocalTranscript'] = async (body) => {
-            this.queueOutbound((target) => (
-                target.sendClaudeSessionMessageFromLocalTranscript(body)
-            ));
-        };
-
-    readonly closeClaudeSessionTurn:
-        ApiSessionClientContract['closeClaudeSessionTurn'] = (status) => {
-            this.queueOutbound((target) => target.closeClaudeSessionTurn(status));
-        };
-
-    readonly sendCodexMessage:
-        ApiSessionClientContract['sendCodexMessage'] = (body) => {
-            this.queueOutbound((target) => target.sendCodexMessage(body));
-        };
-
     readonly sendSessionProtocolMessage:
         ApiSessionClientContract['sendSessionProtocolMessage'] = (envelope) => {
             this.queueOutbound((target) => target.sendSessionProtocolMessage(envelope));
@@ -215,11 +193,6 @@ class OfflineApiSessionClient
     readonly sendSessionDeath:
         ApiSessionClientContract['sendSessionDeath'] = () => {
             this.queueOutbound((target) => target.sendSessionDeath());
-        };
-
-    readonly sendUsageData:
-        ApiSessionClientContract['sendUsageData'] = (usage, model) => {
-            this.queueOutbound((target) => target.sendUsageData(usage, model));
         };
 
     readonly getMetadata: ApiSessionClientContract['getMetadata'] = () => (

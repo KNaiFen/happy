@@ -11,11 +11,11 @@ import {
 
 /**
  * Static client tools for the realtime voice interface.
- * These tools allow the voice assistant to interact with Claude Code sessions.
+ * These tools allow the voice assistant to interact with supported coding sessions.
  */
 export const realtimeClientTools = {
     /**
-     * Send a message to a specific Claude Code session
+     * Send a message to a specific coding session
      */
     sendMessageToSession: async (parameters: unknown) => {
         const schema = z.object({
@@ -44,7 +44,7 @@ export const realtimeClientTools = {
     },
 
     /**
-     * Respond to a permission request from a Claude Code session
+     * Respond to a permission request from a coding session
      */
     processPermissionRequest: async (parameters: unknown) => {
         const schema = z.object({

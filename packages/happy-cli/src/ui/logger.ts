@@ -1,6 +1,6 @@
 /**
  * Design decisions:
- * - Logging should be done only through file for debugging, otherwise we might disturb the claude session when in interactive mode
+ * - Debug logging is file-only so interactive agent output stays intact.
  * - Use info for logs that are useful to the user - this is our UI
  * - File output location: ~/.handy/logs/<date time in local timezone>.log
  */
@@ -70,7 +70,7 @@ class Logger {
     this.logToFile(`[${this.localTimezoneTimestamp()}]`, message, ...args)
 
     // NOTE: @kirill does not think its a good ideas,
-    // as it will break us using claude in interactive mode.
+    // as it can break interactive agent output.
     // Instead simply open the debug file in a new editor window.
     //
     // Also log to console in development mode

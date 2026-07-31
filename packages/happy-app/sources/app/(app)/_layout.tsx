@@ -316,21 +316,6 @@ export default function RootLayout() {
                 }}
             />
             <Stack.Screen
-                name="settings/connect/claude"
-                options={{
-                    headerShown: true,
-                    headerTitle: 'Connect to Claude',
-                    headerBackTitle: t('common.back'),
-                    // headerStyle: {
-                    //     backgroundColor: Platform.OS === 'web' ? theme.colors.header.background : '#1F1E1C',
-                    // },
-                    // headerTintColor: Platform.OS === 'web' ? theme.colors.header.tint : '#FFFFFF',
-                    // headerTitleStyle: {
-                    //     color: Platform.OS === 'web' ? theme.colors.header.tint : '#FFFFFF',
-                    // },
-                }}
-            />
-            <Stack.Screen
                 name="new/index"
                 options={{
                     headerTitle: t('newSession.title'),

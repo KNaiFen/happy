@@ -7,10 +7,10 @@ import {
 } from './attachmentSupport';
 
 describe('supportsImageAttachmentsForFlavor', () => {
-    it('supports legacy sessions, Claude, and Codex', () => {
-        expect(supportsImageAttachmentsForFlavor(undefined)).toBe(true);
-        expect(supportsImageAttachmentsForFlavor(null)).toBe(true);
-        expect(supportsImageAttachmentsForFlavor('claude')).toBe(true);
+    it('supports only explicit Codex sessions', () => {
+        expect(supportsImageAttachmentsForFlavor(undefined)).toBe(false);
+        expect(supportsImageAttachmentsForFlavor(null)).toBe(false);
+        expect(supportsImageAttachmentsForFlavor('claude')).toBe(false);
         expect(supportsImageAttachmentsForFlavor('codex')).toBe(true);
     });
 

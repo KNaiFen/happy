@@ -1,7 +1,7 @@
 /**
  * Session Metadata Factory
  *
- * Creates session state and metadata objects for all backends (Claude, Codex, Gemini).
+ * Creates session state and metadata objects for retained backends.
  * This follows DRY principles by providing a single implementation for all backends.
  *
  * @module createSessionMetadata
@@ -20,13 +20,13 @@ import packageJson from '../../package.json';
 /**
  * Backend flavor identifier for session metadata.
  */
-export type BackendFlavor = 'claude' | 'codex' | 'gemini' | 'opencode' | 'openclaw' | 'agy' | 'acp';
+export type BackendFlavor = 'codex' | 'gemini' | 'opencode' | 'openclaw' | 'agy' | 'acp';
 
 /**
  * Options for creating session metadata.
  */
 export interface CreateSessionMetadataOptions {
-    /** Backend flavor (claude, codex, gemini) */
+    /** Backend flavor */
     flavor: BackendFlavor;
     /** Machine ID for server identification */
     machineId: string;

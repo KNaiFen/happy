@@ -12,7 +12,7 @@ import { sync } from '@/sync/sync';
 import { useIsSessionMachineDeleted, useSetting } from '@/sync/storage';
 import { Option } from './markdown/MarkdownView';
 import { layout } from "./layout";
-import { parseLocalCommandMessage, isUserSlashCommandEcho } from './parseLocalCommandMessage';
+import { parseLocalCommandMessage } from './parseLocalCommandMessage';
 import { resolveUserMessageBubbleColor } from '@/utils/userMessageBubbleColor';
 import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 
@@ -107,30 +107,7 @@ function UserTextBlock(props: {
     backgroundColor: bubblePalette.background,
     borderColor: bubblePalette.border,
   };
-  // Claude Agent SDK emits synthetic user messages wrapped in tags like
-  // <local-command-caveat>…</local-command-caveat> and
-  // <command-message>…</command-message><command-name>/foo</command-name>
-  // whenever a slash command runs. The plain MarkdownView renders these as
-  // literal text, which looks broken. Collapse them into chips or hide
-  // them entirely depending on what kind of wrapper this is.
-  // The user's own slash-command input is shown optimistically (carries a
-  // localId); the SDK then injects the canonical wrapper chip. Hide the raw
-  // echo so we don't render the command twice. Gated to Claude flavor only:
-  // Codex/Gemini don't reliably emit the <command-*> wrapper, so hiding the
-  // echo there would drop the command with nothing to replace it. (Absent
-  // flavor == Claude, matching the convention used elsewhere.)
-  const isClaudeFlavor = !props.metadata?.flavor || props.metadata.flavor === 'claude';
-  if (isClaudeFlavor && isUserSlashCommandEcho(props.message.text, props.message.localId != null)) {
-    return null;
-  }
-
   const parsed = parseLocalCommandMessage(props.message.displayText || props.message.text);
-  if (parsed.kind === 'caveat') {
-    return null;
-  }
-  if (parsed.kind === 'goal-confirmation') {
-    return null;
-  }
   if (parsed.kind === 'goal-run') {
     return (
       <View style={styles.userMessageContainer}>

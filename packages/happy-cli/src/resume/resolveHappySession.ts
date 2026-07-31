@@ -14,7 +14,6 @@ import {
 export const ResumableMetadataSchema = z.object({
     path: z.string().min(1),
     flavor: z.string().optional(),
-    claudeSessionId: z.string().optional(),
     codexThreadId: z.string().optional(),
 }).passthrough();
 

@@ -128,7 +128,6 @@ type ReducerMessage = {
     event: AgentEvent | null;
     tool: ToolCall | null;
     meta?: MessageMeta;
-    claudeUuid?: string;
     codexItemId?: string;
 }
 
@@ -419,7 +418,7 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                 }
 
                 // Join key for the tool call: the raw provider tool-use id when
-                // the request id is scoped (claude subagents use
+                // the request id is scoped (nested agents use
                 // `agentID:toolUseID`), otherwise the request id itself.
                 const joinId = request.toolUseId || permId;
 
@@ -687,7 +686,6 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                 tool: null,
                 event: null,
                 meta: msg.meta,
-                claudeUuid: msg.claudeUuid,
                 codexItemId: msg.codexItemId,
             });
 
@@ -1200,7 +1198,6 @@ function convertReducerMessageToMessage(reducerMsg: ReducerMessage, state: Reduc
             kind: 'user-text',
             text: reducerMsg.text,
             ...(reducerMsg.meta?.displayText && { displayText: reducerMsg.meta.displayText }),
-            ...(reducerMsg.claudeUuid && { claudeUuid: reducerMsg.claudeUuid }),
             ...(reducerMsg.codexItemId && { codexItemId: reducerMsg.codexItemId }),
             meta: reducerMsg.meta
         };

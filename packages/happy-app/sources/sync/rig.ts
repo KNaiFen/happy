@@ -1,7 +1,7 @@
 import type { Metadata } from './storageTypes';
 import { isCodexSessionReadOnly } from './codexV4Capabilities';
 
-export type ProviderIconKind = 'codex' | 'claude' | 'grok' | 'kimi' | 'generic';
+export type ProviderIconKind = 'codex' | 'grok' | 'kimi' | 'generic';
 
 export type RigModelDescriptor = {
     key: string;
@@ -39,7 +39,6 @@ export function usesControlledSessionUi(metadata: Metadata | null | undefined): 
 export function getProviderIconKind(kind: string | null | undefined): ProviderIconKind {
     switch (kind?.trim().toLowerCase()) {
         case 'codex': return 'codex';
-        case 'claude': return 'claude';
         case 'grok': return 'grok';
         case 'kimi': return 'kimi';
         default: return 'generic';

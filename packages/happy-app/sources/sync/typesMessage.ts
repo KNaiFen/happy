@@ -37,12 +37,6 @@ export type UserTextMessage = {
     displayText?: string; // Optional text to display in UI instead of actual text
     meta?: MessageMeta;
     /**
-     * Claude conversation-file `uuid` corresponding to this message. Used as
-     * the rewind point when forking / duplicating a session. Optional —
-     * older messages and non-Claude agents may not have one.
-     */
-    claudeUuid?: string;
-    /**
      * Codex app-server item id corresponding to this user message. Used as
      * the rewind point when duplicating/forking Codex threads.
      */

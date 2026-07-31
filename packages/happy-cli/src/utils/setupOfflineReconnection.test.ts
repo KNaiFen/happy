@@ -48,7 +48,7 @@ describe('setupOfflineReconnection', () => {
 
         await expect(onReconnected()).rejects.toBe(bindingError);
         expect(close).toHaveBeenCalledOnce();
-        expect(() => result.session.sendCodexMessage({ afterFailure: true })).not.toThrow();
+        expect(() => result.session.sendAgentMessage('codex', { type: 'message', message: 'after-failure' })).not.toThrow();
     });
 
     it('marks the replacement usable only after asynchronous binding completes', async () => {

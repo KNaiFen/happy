@@ -928,7 +928,7 @@ export const knownTools = {
             return null;
         }
     },
-    // Internal Claude Code tool for loading deferred tools - no user-visible output
+    // Internal provider tool for loading deferred tools - no user-visible output
     'Skill': {
         icon: ICON_TASK,
         hidden: true,

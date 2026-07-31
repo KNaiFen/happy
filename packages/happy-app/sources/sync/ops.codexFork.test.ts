@@ -34,10 +34,10 @@ describe('codex fork ops', () => {
         const result = await machineSpawnNewSession({
             machineId: 'machine-1',
             directory: '/tmp/project',
-            agent: 'claude',
-            permissionMode: 'bypassPermissions',
-            modelMode: 'opus',
-            effortLevel: 'xhigh',
+            agent: 'codex',
+            permissionMode: 'yolo',
+            modelMode: 'gpt-5.6-sol',
+            effortLevel: 'max',
         });
 
         expect(result).toEqual({ type: 'success', sessionId: 'happy-new' });
@@ -46,10 +46,10 @@ describe('codex fork ops', () => {
             'spawn-happy-session',
             expect.objectContaining({
                 directory: '/tmp/project',
-                agent: 'claude',
-                permissionMode: 'bypassPermissions',
-                modelMode: 'opus',
-                effortLevel: 'xhigh',
+                agent: 'codex',
+                permissionMode: 'yolo',
+                modelMode: 'gpt-5.6-sol',
+                effortLevel: 'max',
             }),
         );
     });
@@ -60,6 +60,7 @@ describe('codex fork ops', () => {
                 'happy-source': {
                     metadata: {
                         flavor: 'codex',
+                        codexSyncVersion: 4,
                         machineId: 'machine-1',
                         path: '/tmp/project',
                         codexThreadId: 'thread-source',
@@ -113,6 +114,7 @@ describe('codex fork ops', () => {
                 'happy-source': {
                     metadata: {
                         flavor: 'codex',
+                        codexSyncVersion: 4,
                         machineId: 'machine-1',
                         path: '/tmp/project',
                         codexThreadId: 'thread-source',
@@ -167,6 +169,7 @@ describe('codex fork ops', () => {
                 'happy-child': {
                     metadata: {
                         flavor: 'codex',
+                        codexSyncVersion: 4,
                         machineId: 'machine-1',
                         path: '/tmp/project',
                         codexThreadId: 'thread-child',

@@ -11,13 +11,13 @@ describe('buildResumeCommand', () => {
             capabilities: { resume: false },
         })).toBeNull();
     });
-    it('builds a Claude resume command that enters the session directory first', () => {
+    it('builds a Codex resume command that enters the session directory first', () => {
         expect(buildResumeCommand({
             path: '/tmp/project',
             os: 'darwin',
-            flavor: 'claude',
-            claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
-        })).toBe(`cd '/tmp/project' && happy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd`);
+            flavor: 'codex',
+            codexThreadId: 'thread-1',
+        })).toBe(`cd '/tmp/project' && happy codex --resume thread-1`);
     });
 
     it('builds a Windows Codex resume command using PowerShell directory navigation', () => {
@@ -31,15 +31,15 @@ describe('buildResumeCommand', () => {
 
     it('falls back to the bare resume command when no path is available', () => {
         expect(buildResumeCommand({
-            flavor: 'claude',
-            claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
-        })).toBe('happy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd');
+            flavor: 'codex',
+            codexThreadId: 'thread-1',
+        })).toBe('happy codex --resume thread-1');
     });
 
     it('returns null when there is no resumable session identifier', () => {
         expect(buildResumeCommand({
             path: '/tmp/project',
-            flavor: 'claude',
+            flavor: 'codex',
         })).toBeNull();
     });
 });
@@ -49,24 +49,24 @@ describe('buildResumeCommandBlock', () => {
         expect(buildResumeCommandBlock({
             path: '/tmp/project',
             os: 'darwin',
-            flavor: 'claude',
-            claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
+            flavor: 'codex',
+            codexThreadId: 'thread-1',
         })).toEqual({
             lines: [
                 `cd '/tmp/project'`,
-                'happy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd',
+                'happy codex --resume thread-1',
             ],
-            copyText: `cd '/tmp/project'\nhappy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd`,
+            copyText: `cd '/tmp/project'\nhappy codex --resume thread-1`,
         });
     });
 
     it('falls back to a single-line command block when no path is available', () => {
         expect(buildResumeCommandBlock({
-            flavor: 'claude',
-            claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
+            flavor: 'codex',
+            codexThreadId: 'thread-1',
         })).toEqual({
-            lines: ['happy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd'],
-            copyText: 'happy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd',
+            lines: ['happy codex --resume thread-1'],
+            copyText: 'happy codex --resume thread-1',
         });
     });
 
@@ -74,14 +74,14 @@ describe('buildResumeCommandBlock', () => {
         expect(buildResumeCommandBlock({
             path: 'C:\\Users\\test\\project',
             os: 'win32',
-            flavor: 'claude',
-            claudeSessionId: '93a9705e-bc6a-406d-8dce-8acc014dedbd',
+            flavor: 'codex',
+            codexThreadId: 'thread-1',
         })).toEqual({
             lines: [
                 `Set-Location -LiteralPath 'C:\\Users\\test\\project'`,
-                'happy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd',
+                'happy codex --resume thread-1',
             ],
-            copyText: `Set-Location -LiteralPath 'C:\\Users\\test\\project'\nhappy claude --resume 93a9705e-bc6a-406d-8dce-8acc014dedbd`,
+            copyText: `Set-Location -LiteralPath 'C:\\Users\\test\\project'\nhappy codex --resume thread-1`,
         });
     });
 });

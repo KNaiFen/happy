@@ -15,7 +15,6 @@ export type ResumeLaunch = {
 };
 
 export type ResumeLaunchOptions = {
-    claudeStartingMode?: 'local' | 'remote';
     startedBy?: 'daemon' | 'terminal';
 };
 
@@ -40,12 +39,9 @@ export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; ses
     };
 }
 
-function resolveFlavor(metadata: Metadata): 'codex' | 'claude' | null {
+function resolveFlavor(metadata: Metadata): 'codex' | null {
     if (metadata.flavor === 'codex' || metadata.codexThreadId) {
         return 'codex';
-    }
-    if (metadata.flavor === 'claude' || metadata.claudeSessionId) {
-        return 'claude';
     }
     return null;
 }
@@ -62,24 +58,6 @@ export function buildResumeLaunch(session: ResumableHappySession, options: Resum
         if (options.startedBy) {
             args.push('--started-by', options.startedBy);
         }
-        return {
-            cwd: metadata.path,
-            args,
-        };
-    }
-
-    if (flavor === 'claude') {
-        if (!metadata.claudeSessionId) {
-            throw new Error(`Happy session ${session.id} is missing its Claude session ID.`);
-        }
-        const args = ['claude'];
-        if (options.claudeStartingMode) {
-            args.push('--happy-starting-mode', options.claudeStartingMode);
-        }
-        if (options.startedBy) {
-            args.push('--started-by', options.startedBy);
-        }
-        args.push('--resume', metadata.claudeSessionId);
         return {
             cwd: metadata.path,
             args,

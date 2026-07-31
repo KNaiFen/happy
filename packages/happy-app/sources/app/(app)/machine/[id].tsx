@@ -495,15 +495,6 @@ export default function MachineDetailScreen() {
                 {metadata?.cliAvailability && (
                     <ItemGroup title={t('machine.cliAvailability')}>
                         <Item
-                            title="Claude"
-                            showChevron={false}
-                            rightElement={
-                                <Text style={{ color: metadata.cliAvailability.claude ? '#34C759' : theme.colors.textSecondary, fontSize: 14 }}>
-                                    {metadata.cliAvailability.claude ? t('machine.cliInstalled') : t('machine.cliNotFound')}
-                                </Text>
-                            }
-                        />
-                        <Item
                             title="Codex"
                             showChevron={false}
                             rightElement={

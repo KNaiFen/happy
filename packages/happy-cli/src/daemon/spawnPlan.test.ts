@@ -42,7 +42,7 @@ describe('buildDaemonSpawnPlan', () => {
     });
 
     it('rejects Claude and unknown values instead of falling back', () => {
-        expect(() => buildDaemonSpawnPlan({ directory: '/workspace', agent: 'claude' }))
+        expect(() => buildDaemonSpawnPlan({ directory: '/workspace', agent: 'claude' as never }))
             .toThrow('Claude support has been removed');
         expect(() => buildDaemonSpawnPlan({
             directory: '/workspace',

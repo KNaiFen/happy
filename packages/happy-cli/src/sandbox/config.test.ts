@@ -16,10 +16,8 @@ function resolveLikeRuntime(pathValue: string): string {
 
 function expectedSharedAgentStatePaths(): string[] {
     const codexHome = process.env.CODEX_HOME || '~/.codex';
-    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || '~/.claude';
     return [...new Set([
         resolveLikeRuntime(codexHome),
-        resolveLikeRuntime(claudeConfigDir),
     ])];
 }
 
@@ -156,29 +154,20 @@ describe('buildSandboxRuntimeConfig', () => {
         ]);
     });
 
-    it('includes overridden CODEX_HOME and CLAUDE_CONFIG_DIR in allowWrite', () => {
+    it('includes overridden CODEX_HOME in allowWrite', () => {
         const originalCodexHome = process.env.CODEX_HOME;
-        const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
         try {
             process.env.CODEX_HOME = '~/custom-codex-home';
-            process.env.CLAUDE_CONFIG_DIR = './custom-claude-config';
 
             const runtimeConfig = buildSandboxRuntimeConfig(createConfig(), sessionPath);
 
             expect(runtimeConfig.filesystem?.allowWrite).toContain(`${homedir()}/custom-codex-home`);
-            expect(runtimeConfig.filesystem?.allowWrite).toContain(resolve(sessionPath, './custom-claude-config'));
         } finally {
             if (originalCodexHome === undefined) {
                 delete process.env.CODEX_HOME;
             } else {
                 process.env.CODEX_HOME = originalCodexHome;
-            }
-
-            if (originalClaudeConfigDir === undefined) {
-                delete process.env.CLAUDE_CONFIG_DIR;
-            } else {
-                process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
             }
         }
     });

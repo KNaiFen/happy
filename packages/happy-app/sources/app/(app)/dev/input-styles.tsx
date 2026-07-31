@@ -1256,8 +1256,8 @@ export default function InputStylesDemo() {
             ),
         },
         {
-            id: 'claude',
-            name: 'Claude Style',
+            id: 'codex',
+            name: 'Codex Style',
             description: 'AI assistant with artifacts',
             preview: (
                 <View style={{ backgroundColor: '#f9f7f4' }}>
@@ -1276,7 +1276,7 @@ export default function InputStylesDemo() {
                                     color: '#000',
                                     minHeight: 40,
                                 }}
-                                placeholder="Ask Claude anything..."
+                                placeholder="Ask Codex anything..."
                                 placeholderTextColor="#999"
                                 multiline
                                 editable={false}
@@ -1330,7 +1330,7 @@ export default function InputStylesDemo() {
                                 backgroundColor: '#d97706',
                                 marginRight: 6,
                             }} />
-                            <Text style={{ fontSize: 13, color: '#666' }}>Claude 3.5</Text>
+                            <Text style={{ fontSize: 13, color: '#666' }}>Codex</Text>
                         </Pressable>
                         <Pressable style={{
                             paddingHorizontal: 12,

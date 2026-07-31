@@ -2,7 +2,7 @@
  * AgentBackend - Universal interface for AI agent backends
  * 
  * This module defines the core abstraction for different agent backends
- * (Claude, Codex, Gemini, OpenCode, etc.) that can be controlled through
+ * (Codex, Gemini, OpenCode, etc.) that can be controlled through
  * the Happy CLI and mobile app.
  * 
  * The AgentBackend interface provides a unified way to:
@@ -45,10 +45,10 @@ export interface McpServerConfig {
 }
 
 /** Transport type for agent communication */
-export type AgentTransport = 'native-claude' | 'mcp-codex' | 'acp';
+export type AgentTransport = 'mcp-codex' | 'acp';
 
 /** Agent identifier */
-export type AgentId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'openclaw' | 'agy' | 'claude-acp' | 'codex-acp';
+export type AgentId = 'codex' | 'gemini' | 'opencode' | 'openclaw' | 'agy' | 'codex-acp';
 
 /**
  * Configuration for creating an agent backend
@@ -98,7 +98,7 @@ export type AgentMessageHandler = (msg: AgentMessage) => void;
 /**
  * Universal interface for agent backends.
  * 
- * All agent implementations (Claude, Codex, Gemini, etc.) should implement
+ * All retained agent implementations should implement
  * this interface to be usable through the Happy CLI and mobile app.
  */
 export interface AgentBackend {

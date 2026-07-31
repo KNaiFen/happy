@@ -26,6 +26,7 @@ import { copySessionMetadataToClipboard, copySessionMetadataAndLogsToClipboard }
 import { HappyError } from '@/utils/errors';
 import { MobileGlassSurface } from '@/components/MobileGlass';
 import { getRigIdentity, isRigMetadata } from '@/sync/rig';
+import { isSupportedExistingSession } from '@/sync/sessionFlavor';
 
 // Animated status dot component
 function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: boolean; size?: number }) {
@@ -104,9 +105,7 @@ function formatSandboxMetadata(sandbox: unknown, homeDir?: string): string {
 
 function formatDangerouslySkipPermissionsMetadata(
     value: unknown,
-    flavor: string | null | undefined,
     permissionMode: Session['permissionMode'],
-    sandbox: unknown,
 ): string {
     if (typeof value === 'boolean') {
         return value ? 'Enabled' : 'Disabled';
@@ -114,13 +113,6 @@ function formatDangerouslySkipPermissionsMetadata(
 
     if (permissionMode === 'bypassPermissions' || permissionMode === 'yolo') {
         return 'Enabled';
-    }
-
-    if (flavor === 'claude' && sandbox && typeof sandbox === 'object') {
-        const sandboxValue = sandbox as Record<string, unknown>;
-        if (sandboxValue.enabled === true) {
-            return 'Enabled';
-        }
     }
 
     return 'Unknown';
@@ -306,21 +298,6 @@ function SessionInfoContent({ session }: { session: Session }) {
                         icon={<Ionicons name="finger-print-outline" size={29} color="#007AFF" />}
                         onPress={handleCopySessionId}
                     />
-                    {session.metadata?.claudeSessionId && (
-                        <Item
-                            title={t('sessionInfo.claudeCodeSessionId')}
-                            subtitle={`${session.metadata.claudeSessionId.substring(0, 8)}...${session.metadata.claudeSessionId.substring(session.metadata.claudeSessionId.length - 8)}`}
-                            icon={<Ionicons name="code-outline" size={29} color="#9C27B0" />}
-                            onPress={async () => {
-                                try {
-                                    await Clipboard.setStringAsync(session.metadata!.claudeSessionId!);
-                                    Modal.alert(t('common.success'), t('sessionInfo.claudeCodeSessionIdCopied'));
-                                } catch (error) {
-                                    Modal.alert(t('common.error'), t('sessionInfo.failedToCopyClaudeCodeSessionId'));
-                                }
-                            }}
-                        />
-                    )}
                     {session.metadata?.codexThreadId && (
                         <Item
                             title={t('sessionInfo.codexThreadId')}
@@ -478,9 +455,8 @@ function SessionInfoContent({ session }: { session: Session }) {
                             subtitle={(() => {
                                 const rigIdentity = getRigIdentity(session.metadata);
                                 if (rigIdentity) return rigIdentity.providerName;
-                                const flavor = session.metadata.flavor || 'claude';
-                                if (flavor === 'claude') return 'Claude';
-                                if (flavor === 'gpt' || flavor === 'openai') return 'Codex';
+                                const flavor = session.metadata.flavor ?? 'Unknown';
+                                if (flavor === 'codex' || flavor === 'gpt' || flavor === 'openai') return 'Codex';
                                 if (flavor === 'gemini') return 'Gemini';
                                 if (flavor === 'openclaw') return 'OpenClaw';
                                 return flavor;
@@ -506,9 +482,7 @@ function SessionInfoContent({ session }: { session: Session }) {
                             title="Dangerously Skip Permissions"
                             subtitle={formatDangerouslySkipPermissionsMetadata(
                                 session.metadata.dangerouslySkipPermissions,
-                                session.metadata.flavor,
                                 session.permissionMode,
-                                session.metadata.sandbox,
                             )}
                             icon={<Ionicons name="warning-outline" size={29} color="#5856D6" />}
                             showChevron={false}
@@ -692,6 +666,16 @@ export default React.memo(() => {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Ionicons name="trash-outline" size={48} color={theme.colors.textSecondary} />
+                <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>{t('errors.sessionDeleted')}</Text>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>{t('errors.sessionDeletedDescription')}</Text>
+            </View>
+        );
+    }
+
+    if (!isSupportedExistingSession(session.metadata)) {
+        return (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="ban-outline" size={48} color={theme.colors.textSecondary} />
                 <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, ...Typography.default('semiBold') }}>{t('errors.sessionDeleted')}</Text>
                 <Text style={{ color: theme.colors.textSecondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32, ...Typography.default() }}>{t('errors.sessionDeletedDescription')}</Text>
             </View>

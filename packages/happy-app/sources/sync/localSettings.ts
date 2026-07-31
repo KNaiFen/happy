@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import {
     AgentDefaultOverridesSchema,
+    sanitizeAgentDefaultOverrides,
     type AgentDefaultOverrides,
 } from './agentDefaults';
 
@@ -72,7 +73,9 @@ export function localSettingsParse(settings: unknown): LocalSettings {
     if (!parsed.success) {
         return { ...localSettingsDefaults };
     }
-    return { ...localSettingsDefaults, ...parsed.data };
+    const result = { ...localSettingsDefaults, ...parsed.data };
+    result.agentDefaultOverrides = sanitizeAgentDefaultOverrides(result.agentDefaultOverrides);
+    return result;
 }
 
 //
@@ -80,7 +83,9 @@ export function localSettingsParse(settings: unknown): LocalSettings {
 //
 
 export function applyLocalSettings(settings: LocalSettings, delta: Partial<LocalSettings>): LocalSettings {
-    return { ...localSettingsDefaults, ...settings, ...delta };
+    const result = { ...localSettingsDefaults, ...settings, ...delta };
+    result.agentDefaultOverrides = sanitizeAgentDefaultOverrides(result.agentDefaultOverrides);
+    return result;
 }
 
 export function migrateAgentDefaultOverridesToLocal(
@@ -91,7 +96,7 @@ export function migrateAgentDefaultOverridesToLocal(
         return settings;
     }
     return applyLocalSettings(settings, {
-        agentDefaultOverrides: syncedOverrides,
+        agentDefaultOverrides: sanitizeAgentDefaultOverrides(syncedOverrides),
         agentDefaultOverridesMigrated: true,
     });
 }

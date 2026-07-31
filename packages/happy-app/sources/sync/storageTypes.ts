@@ -120,7 +120,6 @@ export const MetadataSchema = z.object({
         updatedAt: z.number()
     }).optional(),
     machineId: z.string().optional(),
-    claudeSessionId: z.string().optional(), // Claude Code session ID
     codexThreadId: z.string().optional(), // Codex app-server thread ID
     /** Encrypted marker proving the session owner selected canonical Sync v4. */
     codexSyncVersion: z.literal(4).optional(),
@@ -138,7 +137,7 @@ export const MetadataSchema = z.object({
     startedBy: z.enum(['daemon', 'terminal']).optional(),
     flavor: z.string().nullish(), // Session flavor/variant identifier
     sandbox: z.any().nullish(), // Sandbox config metadata from CLI (or null when disabled)
-    dangerouslySkipPermissions: z.boolean().nullish(), // Claude --dangerously-skip-permissions mode (or null when unknown)
+    dangerouslySkipPermissions: z.boolean().nullish(), // Provider permission bypass state (or null when unknown)
     lifecycleState: z.string().optional(),
     lifecycleStateSince: z.number().optional(),
     archivedBy: z.string().optional(),
@@ -175,7 +174,7 @@ export const MetadataSchema = z.object({
 
 export type Metadata = z.infer<typeof MetadataSchema>;
 
-export const AgentGoalSourceSchema = z.enum(['claude', 'codex']);
+export const AgentGoalSourceSchema = z.literal('codex');
 
 export const AgentGoalProgressStepSchema = z.object({
     text: z.string().trim().min(1),
@@ -251,9 +250,8 @@ export const AgentStateSchema = z.object({
         tool: z.string(),
         arguments: z.any(),
         createdAt: z.number().nullish(),
-        // Raw provider tool-use id when the request id is scoped (e.g. claude
-        // subagent ids are `agentID:toolUseID`); used to join the permission
-        // to its tool call, while the request id stays the response key.
+        // Raw provider tool-use id when the request id is scoped; used to join
+        // the permission to its tool call, while the request id stays the response key.
         toolUseId: z.string().nullish()
     })).nullish(),
     completedRequests: z.record(z.string(), z.object({
@@ -377,7 +375,6 @@ export const MachineMetadataSchema = z.object({
     shutdownRequestedAt: z.number().optional(),
     shutdownSource: z.enum(['happy-app', 'happy-cli', 'os-signal', 'unknown']).optional(),
     cliAvailability: z.object({
-        claude: z.boolean(),
         codex: z.boolean(),
         gemini: z.boolean(),
         openclaw: z.boolean(),

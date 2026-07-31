@@ -58,7 +58,7 @@ describe('createSessionMetadata', () => {
 
     it('sets metadata.sandbox to null when sandbox is not provided', () => {
         const { metadata } = createSessionMetadata({
-            flavor: 'claude',
+            flavor: 'codex',
             machineId: 'machine-3',
         });
 
@@ -76,7 +76,7 @@ describe('createSessionMetadata', () => {
 
     it('sets metadata.dangerouslySkipPermissions when provided', () => {
         const { metadata } = createSessionMetadata({
-            flavor: 'claude',
+            flavor: 'codex',
             machineId: 'machine-5',
             dangerouslySkipPermissions: true,
         });
@@ -98,7 +98,7 @@ describe('createSessionMetadata', () => {
 
     it('sets metadata.isSideChat when the session is a side chat', () => {
         const { metadata } = createSessionMetadata({
-            flavor: 'claude',
+            flavor: 'codex',
             machineId: 'machine-side',
             parentSessionId: 'happy-parent',
             isSideChat: true,
@@ -110,7 +110,7 @@ describe('createSessionMetadata', () => {
 
     it('omits metadata.isSideChat for a normal session', () => {
         const { metadata } = createSessionMetadata({
-            flavor: 'claude',
+            flavor: 'codex',
             machineId: 'machine-normal',
         });
 

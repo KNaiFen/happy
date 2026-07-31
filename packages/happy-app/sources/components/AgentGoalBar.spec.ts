@@ -49,10 +49,10 @@ vi.mock('@/text', () => ({
 
 const goal: VisibleAgentGoalStatus = {
     status: 'active',
-    source: 'claude',
+    source: 'codex',
     text: 'finish the current task',
     observedAt: 11_000,
-    sourceSessionId: 'claude-session-1',
+    sourceSessionId: 'codex-thread-1',
 };
 
 type ElementWithProps = React.ReactElement<Record<string, any>>;

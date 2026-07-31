@@ -29,21 +29,6 @@ export function parseMessageAsEvent(msg: NormalizedMessage): AgentEvent | null {
     // Check for agent messages that should become events
     if (msg.role === 'agent') {
         for (const content of msg.content) {
-            // Check for Claude AI usage limit messages
-            if (content.type === 'text') {
-                const limitMatch = content.text.match(/^Claude AI usage limit reached\|(\d+)$/);
-                if (limitMatch) {
-                    const timestamp = parseInt(limitMatch[1], 10);
-                    if (!isNaN(timestamp)) {
-                        return {
-                            type: 'limit-reached',
-                            endsAt: timestamp
-                        } as AgentEvent;
-                    }
-                }
-                
-            }
-            
             // Check for mcp__happy__change_title tool calls
             if (content.type === 'tool-call' && content.name === 'mcp__happy__change_title') {
                 const title = content.input?.title;

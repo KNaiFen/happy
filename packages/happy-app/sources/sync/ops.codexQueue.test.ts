@@ -39,7 +39,16 @@ describe('Codex queued message ops', () => {
         machineRPC.mockReset();
         request.mockReset();
         request.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
-        getState.mockReturnValue({ sessions: {} });
+        getState.mockReturnValue({
+            sessions: {
+                'session-1': {
+                    metadata: {
+                        flavor: 'codex',
+                        codexSyncVersion: 4,
+                    },
+                },
+            },
+        });
         isCodexV4Eligible.mockReset();
         isCodexV4Eligible.mockReturnValue(false);
         publishCodexV4Command.mockReset();
@@ -163,6 +172,7 @@ describe('Codex queued message ops', () => {
                         path: '/workspace',
                         host: 'host',
                         flavor: 'codex',
+                        codexSyncVersion: 4,
                         codexThreadId: 'thread-current',
                     },
                 },

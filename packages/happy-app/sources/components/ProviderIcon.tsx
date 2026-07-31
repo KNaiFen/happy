@@ -6,19 +6,18 @@ import { getProviderIconKind } from '@/sync/rig';
 
 const providerImages = {
     codex: require('@/assets/images/icon-gpt.png'),
-    claude: require('@/assets/images/icon-claude.png'),
 } as const;
 
 export function ProviderIcon({ kind, size = 14 }: { kind?: string | null; size?: number }) {
     const { theme } = useUnistyles();
     const mapped = getProviderIconKind(kind);
-    if (mapped === 'codex' || mapped === 'claude') {
+    if (mapped === 'codex') {
         return (
             <Image
                 source={providerImages[mapped]}
                 style={{ width: size, height: size }}
                 contentFit="contain"
-                tintColor={mapped === 'codex' ? theme.colors.textSecondary : undefined}
+                tintColor={theme.colors.textSecondary}
             />
         );
     }

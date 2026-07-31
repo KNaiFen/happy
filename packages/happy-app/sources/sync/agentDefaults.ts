@@ -1,6 +1,6 @@
 import * as z from 'zod';
 
-export const agentKeys = ['claude', 'codex', 'gemini', 'openclaw', 'agy'] as const;
+export const agentKeys = ['codex', 'gemini', 'openclaw', 'agy'] as const;
 export type AgentKey = typeof agentKeys[number];
 
 export const AgentDefaultOverrideSchema = z.object({
@@ -10,7 +10,6 @@ export const AgentDefaultOverrideSchema = z.object({
 }).passthrough();
 
 export const AgentDefaultOverridesSchema = z.object({
-    claude: AgentDefaultOverrideSchema.optional(),
     codex: AgentDefaultOverrideSchema.optional(),
     gemini: AgentDefaultOverrideSchema.optional(),
     openclaw: AgentDefaultOverrideSchema.optional(),
@@ -28,31 +27,50 @@ export type AgentDefaultConfig = {
 };
 
 const codeAgentDefaults: Record<AgentKey, AgentDefaultConfig> = {
-    // The Claude UI key for YOLO is `bypassPermissions`; the CLI also accepts
-    // `yolo` and maps it to the Claude SDK's bypass mode.
-    claude: { permissionMode: 'bypassPermissions', modelMode: 'opus', effortLevel: 'medium' },
     codex: { permissionMode: 'yolo', modelMode: 'gpt-5.5', effortLevel: 'medium' },
     gemini: { permissionMode: 'default', modelMode: 'gemini-2.5-pro', effortLevel: null },
     openclaw: { permissionMode: 'default', modelMode: 'default', effortLevel: null },
     agy: { permissionMode: 'default', modelMode: 'Gemini 3.1 Pro (High)', effortLevel: null },
 };
 
-export function normalizeAgentKey(flavor: string | null | undefined): AgentKey {
+const unknownAgentDefaults: AgentDefaultConfig = {
+    permissionMode: 'default',
+    modelMode: 'default',
+    effortLevel: null,
+};
+
+function parseAgentKey(flavor: string | null | undefined): AgentKey | null {
     if (flavor === 'codex' || flavor === 'gemini' || flavor === 'openclaw' || flavor === 'agy') {
         return flavor;
     }
-    return 'claude';
+    return null;
+}
+
+export function resolveNewSessionAgent(flavor: string | null | undefined): AgentKey {
+    return parseAgentKey(flavor) ?? 'codex';
+}
+
+export function sanitizeAgentDefaultOverrides(
+    overrides: AgentDefaultOverrides | null | undefined,
+): AgentDefaultOverrides {
+    const source = overrides ?? {};
+    return Object.fromEntries(agentKeys.flatMap((key) => {
+        const value = source[key];
+        return value && typeof value === 'object' ? [[key, { ...value }]] : [];
+    })) as AgentDefaultOverrides;
 }
 
 export function getCodeAgentDefaults(flavor: string | null | undefined): AgentDefaultConfig {
-    return codeAgentDefaults[normalizeAgentKey(flavor)];
+    const key = parseAgentKey(flavor);
+    return key ? codeAgentDefaults[key] : unknownAgentDefaults;
 }
 
 export function getAgentDefaultOverride(
     overrides: AgentDefaultOverrides | null | undefined,
     flavor: string | null | undefined,
 ): AgentDefaultOverride {
-    return overrides?.[normalizeAgentKey(flavor)] ?? {};
+    const key = parseAgentKey(flavor);
+    return key ? overrides?.[key] ?? {} : {};
 }
 
 export function resolveAgentDefaultConfig(
@@ -90,8 +108,9 @@ export function setAgentDefaultOverride(
     field: AgentDefaultField,
     value: string | null | undefined,
 ): AgentDefaultOverrides {
-    const key = normalizeAgentKey(flavor);
-    const next: AgentDefaultOverrides = { ...(overrides ?? {}) };
+    const key = parseAgentKey(flavor);
+    const next = sanitizeAgentDefaultOverrides(overrides);
+    if (!key) return next;
     const current: AgentDefaultOverride = { ...(next[key] ?? {}) };
 
     if (value === null || value === undefined) {
