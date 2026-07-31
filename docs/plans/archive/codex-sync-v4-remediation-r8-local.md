@@ -6,7 +6,7 @@
 - 本地状态：完成
 - 目标版本：CLI `1.4.6`、Server `1.1.23`
 - 保持版本：App `1.11.11`、Wire `0.1.3`
-- 后续入口：`docs/plans/codex-sync-v4-remediation.md`
+- 后续完成记录：`docs/plans/archive/codex-sync-v4-remediation-r12.md`
 
 本文件保存 R8 已完成的根因、实现和本地验证。云端发布与物理设备验收完成前，
 R8 整体仍未关闭。

@@ -2,9 +2,9 @@
 
 ## 状态
 
-本轮已于 2026-08-01 进入实施阶段。本文与
-`remove-claude-codex-default.md` 是实现、验证与发布的唯一进度基线；发现范围或协议
-假设变化时必须先更新本文，再修改业务代码。
+本轮已于 2026-08-01 完成并归档。本文与
+`remove-claude-codex-default.md` 保留实现、验证与发布证据；后续工作不得把它们当作
+活动计划或重新打开 Claude provider 兼容路径。
 
 实施进度：
 
@@ -13,7 +13,7 @@
 - [x] 完成认证状态机、MCP startup、App 投影和新会话配置修复。
 - [x] 完成 Claude 主动能力删除及 Server/Wire 协调升级。
 - [x] 补齐 happy-agent、Codium、发布形态和真实链路云端门禁。
-- [ ] 推进协调版本，完成本地源码验证、云端 CI、发布产物与主分支同步。
+- [x] 推进协调版本，完成本地源码验证、云端 CI、发布产物与主分支同步。
 
 ### 2026-08-01 实施记录
 
@@ -42,15 +42,28 @@
   `--skip-git-repo-check`。随后确认真实根因是 Codium 保留了 child stdin pipe：
   `codex exec` 会把已打开的 pipe 当作额外上下文并等待 EOF，因此 runner 必须在
   spawn 后立即关闭 stdin。
-- 待完成：在同一协调版本上完成云端构建、真实 app-server/Codium runtime、tgz 与
-  Android workflow 验收，随后同步 `main`。
+- 已完成：同一提交 `553ba3b5` 已正常同步 `main`。Monorepo CI
+  `30669721850`、CLI release `30669721707`、happy-agent release `30669721675`、
+  Debian relay release `30669721666`、Android APK release `30669721651` 和 Android
+  API 36 现场 E2E `30669721872` 全部成功。
+- 已完成：现场 E2E 使用云端构建的官方 Codex app-server、真实 relay、CLI、App 与
+  无认证 Responses fixture，覆盖 Codex Default Agent 的 model/`max` effort、Machine
+  目录新建、首条命令、真实 MCP/tool 进度与最终回复、Sync v4 投影及进程恢复。它不依赖
+  OpenAI 账户凭据，也不把空等十分钟当作验收。
+- 已完成：发布物已下载并校验。`happy-1.4.11.tgz` SHA-256 为
+  `dd6a5c2e63eabee9a6a8dcf9f9379c889cb56ca7cab39d64c3f5515599908c43`，包含 macOS
+  ARM64 `rg` 与 `difftastic` archives；Debian relay bundle SHA-256 为
+  `dd6b2143258831757890faf5d532f876940c3cbfbe696bf1f8bd1a0a7e44f628`。Android
+  产物为 GitHub Artifact `happy-app-1.11.18-android-arm64-v8a-no-ota`。
 
 当前发布基线：
 
-- CLI `1.4.10`
-- App `1.11.17`
-- Server/relay `1.1.31`
-- Wire `0.1.4`
+- CLI `1.4.11`
+- App `1.11.18`
+- Server/relay `1.1.32`
+- Wire `0.1.5`
+- happy-agent `0.1.1`
+- private Codium `0.0.2`
 
 本计划处理五个互相关联但可独立验收的问题：
 
@@ -63,7 +76,7 @@
    happy-agent、Codium 与云端凭据接口中保留完整 Claude 执行能力。
 
 第五项的删除范围、历史数据边界和分阶段门禁单独落盘到
-`docs/plans/remove-claude-codex-default.md`。该文件与本文件共同构成本轮权威计划；
+`docs/plans/archive/remove-claude-codex-default.md`。该文件与本文件共同构成本轮权威计划；
 实现时必须先建立 Codex 防回归门禁和提取共享模块，再删除 Claude 专属代码。
 
 ## 已确认根因
@@ -247,7 +260,7 @@ Server 已有足够接口，本项默认只修改 CLI；若实现时发现 GET/P
 
 ### 5. 移除 Claude 主动兼容并切换 Codex 默认
 
-- 按 `docs/plans/remove-claude-codex-default.md` 分阶段执行，不在本文件重复展开删除
+- 按 `docs/plans/archive/remove-claude-codex-default.md` 分阶段执行，不在本文件重复展开删除
   清单。
 - 裸 `happy`、daemon 缺省 spawn、App 首次 draft 和 happy-agent 缺省 Agent 全部改为
   Codex；`happy codex` 继续作为显式别名。

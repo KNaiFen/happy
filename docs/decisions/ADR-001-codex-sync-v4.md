@@ -244,8 +244,8 @@ provider IDs, prompts, tool arguments, and outputs to the relay.
 
 The initial implementation review found recovery, ordering, scale, and
 platform gaps that must be closed before the feature flag is enabled. The
-tracked execution baseline is
-`docs/plans/codex-sync-v4-remediation.md`.
+tracked execution baseline was completed on 2026-08-01 and is archived at
+`docs/plans/archive/codex-sync-v4-remediation-r12.md`.
 
 Three product boundaries are now explicit:
 

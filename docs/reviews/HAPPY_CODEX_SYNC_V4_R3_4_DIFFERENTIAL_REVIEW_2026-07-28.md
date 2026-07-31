@@ -155,8 +155,9 @@ skills/model 查询仍可无 thread。
 ## 发布判定
 
 R3-4 可在完整 CLI 门禁和云端 CLI/PR/Smoke 检查通过后作为独立提交合入当前
-重构分支；不得因此启用 Sync v4。最终发布判定仍以
-`docs/plans/codex-sync-v4-remediation.md` 的 R4-R6 和完成定义为准。
+重构分支；不得因此启用 Sync v4。最终发布判定已按
+`docs/plans/archive/codex-sync-v4-remediation-r12.md` 的完成定义执行，并于
+2026-08-01 通过同一提交的完整云端门禁。
 
 本地门禁结果：CLI build/typecheck 通过，`101/101` 测试文件、
 `993/993` 单元测试通过；R3-4 定向集合 `10/10` 文件、`127/127` 测试通过。

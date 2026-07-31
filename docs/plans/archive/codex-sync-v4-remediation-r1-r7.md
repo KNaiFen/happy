@@ -1,8 +1,8 @@
 # Codex Sync v4 R1-R7 整改与发布归档
 
 > 归档于 2026-07-30。本文保留 R1-R7 的完整执行记录和首次 R8 故障发现，
-> 不再作为当前工作清单。活动计划见
-> `docs/plans/codex-sync-v4-remediation.md`。
+> 不再作为当前工作清单。最终完成记录见
+> `docs/plans/archive/codex-sync-v4-remediation-r12.md`。
 
 ## 状态
 

@@ -2,7 +2,7 @@
 
 ## 状态与目标
 
-本文件是 `codex-sync-v4-remediation.md` 的权威子计划，已于 2026-08-01 进入实施。
+本文件是 `codex-sync-v4-remediation-r12.md` 的权威子计划，已于 2026-08-01 完成并归档。
 删除工作必须按“防回归门禁 -> 共享模块迁出 -> 分包删除 -> 静态残留审计”的顺序
 推进；每个阶段完成后在主计划勾选并留下对应提交。
 
@@ -13,7 +13,7 @@ rewind、授权、连接或配置 Claude；所有未指定 Agent 的新操作使
 
 ### 2026-08-01 实施记录
 
-本计划的代码删除与本地源码验证已完成，云端验收与发布仍待执行：
+本计划的代码删除、本地源码验证、云端验收与发布均已完成：
 
 - CLI 的裸入口和 daemon omitted-agent 路径已显式选择 Codex；旧命令、旧 agent 与
   旧 provider 参数均在认证或 spawn 前确定性拒绝。
@@ -36,8 +36,10 @@ rewind、授权、连接或配置 Claude；所有未指定 Agent 的新操作使
   provider 请求。
 - `.agents` 外的五个本地 Claude-first 指令文件已按用户授权删除，未纳入 Git。
 
-待完成：版本 `CLI 1.4.11`、`App 1.11.18`、`Server 1.1.32`、`Wire 0.1.5`、
-`happy-agent 0.1.1` 与 `Codium 0.0.2` 的云端门禁、产物与 `main` 同步。
+已完成：版本 `CLI 1.4.11`、`App 1.11.18`、`Server 1.1.32`、`Wire 0.1.5`、
+`happy-agent 0.1.1` 与 `Codium 0.0.2` 已通过完整门禁并同步至 `main` 的提交
+`553ba3b5`。Monorepo CI、官方 app-server、macOS Codium runtime、打包 CLI/
+happy-agent、Debian relay、Android APK 与 Android API 36 现场场景均成功。
 
 ## 范围定义
 

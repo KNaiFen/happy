@@ -7,8 +7,8 @@
 - 保持版本：App `1.11.11`、Wire `0.1.3`
 - 代码、main CI 和云端制品已完成。
 - 现场部署暴露出 R9 阻断故障，原“等待物理设备验收”结论不再成立。
-- 后续修复与验收以
-  `docs/plans/codex-sync-v4-remediation.md` 为唯一活动基线。
+- 后续修复与验收已完成，最终记录见
+  `docs/plans/archive/codex-sync-v4-remediation-r12.md`。
 
 ## R8 原待办
 
