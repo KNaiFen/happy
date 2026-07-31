@@ -565,7 +565,9 @@ export class CodexSyncV4Mapper {
                 await this.applyModelReroute(notification.params.threadId, notification.params.toModel);
                 return;
             case 'mcpServer/startupStatus/updated':
-                if (notification.params.threadId) await this.applyMcpStartup(notification.params);
+                // MCP server startup belongs to the thread runtime, not a model turn.
+                // Keep the stable-v2 method classified as known, but do not publish
+                // chat entities or guess which active turn owns the notification.
                 return;
             case 'thread/archived':
             case 'thread/closed':
@@ -739,55 +741,6 @@ export class CodexSyncV4Mapper {
         const next = { ...thread, model, updatedAt: now };
         await this.publisher.publishEntity(next);
         this.threads.set(threadId, next);
-    }
-
-    private async applyMcpStartup(
-        params: Extract<ServerNotification, { method: 'mcpServer/startupStatus/updated' }>['params'],
-    ): Promise<void> {
-        if (!params.threadId) return;
-        const now = this.now();
-        const turnId = this.activeTurnByThread.get(params.threadId) ?? '__runtime_events__';
-        await this.ensureTurn(
-            params.threadId,
-            turnId,
-            now,
-            turnId === '__runtime_events__' ? 'completed' : 'inProgress',
-        );
-        const itemId = `__mcp_startup__${params.name}`;
-        const current = await this.ensureItem(params.threadId, turnId, itemId, 'mcpStartup', now);
-        const terminal = params.status !== 'starting';
-        const item: CodexItemEntityV4 = {
-            ...current,
-            status: params.status === 'ready' ? 'completed' : params.status,
-            completedAt: terminal ? now : null,
-            server: params.name,
-            tool: 'startup',
-            arguments: asJsonValue({ failureReason: params.failureReason }),
-            updatedAt: now,
-        };
-        await this.publisher.publishEntity(item);
-        this.items.set(item.providerId, item);
-        const stream = this.ensureStream({
-            threadId: params.threadId,
-            turnId,
-            itemId,
-            kind: 'mcpProgress',
-            index: 0,
-            contentType: 'json',
-        });
-        const content = stringifyJson({
-            name: params.name,
-            status: params.status,
-            error: params.error,
-            failureReason: params.failureReason,
-        });
-        if (terminal) {
-            await this.setStreamContent(stream, content, false);
-            stream.finalized = true;
-            await this.flushStream(stream);
-        } else {
-            await this.setStreamContent(stream, content, true);
-        }
     }
 
     private async applyThreadSettings(threadId: string, settings: Record<string, unknown>): Promise<void> {

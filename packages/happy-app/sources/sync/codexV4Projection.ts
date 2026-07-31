@@ -957,6 +957,11 @@ function projectItem(
     const text = contentForKinds(parts, ['text', 'userInput']);
     const order = projectItemOrder(item);
 
+    // Older snapshots may still contain startup telemetry produced before R12.
+    // It is a thread-runtime concern, not a model tool call, so keep the cached
+    // entity for sync integrity while excluding it from the chat projection.
+    if (itemType === 'mcpstartup') return null;
+
     if (itemType === 'usermessage') {
         if (!text) return null;
         return {

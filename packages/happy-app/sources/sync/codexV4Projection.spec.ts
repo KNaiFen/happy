@@ -155,6 +155,32 @@ describe('Codex v4 projection', () => {
         });
     });
 
+    it('keeps historical MCP startup entities cached but out of chat', () => {
+        const startupItem: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'startup-item',
+            itemId: 'startup-item',
+            itemType: 'mcpStartup',
+            server: 'example',
+            tool: 'startup',
+        };
+        const startupPart: CodexPartEntityV4 = {
+            ...part('{"status":"ready"}', 'mcpProgress'),
+            providerId: 'startup-part',
+            partId: 'startup-part',
+            itemId: 'startup-item',
+        };
+
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: startupItem, revision: 1, op: 'upsert' },
+            { entity: startupPart, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.entities['codex.item']['startup-item']).toBeDefined();
+        expect(projection.entities['codex.part']['startup-part']).toBeDefined();
+        expect(projection.messages).toEqual([]);
+    });
+
     it('orders provider events by their stable turn sequence instead of skewed timestamps', () => {
         const userItem: CodexItemEntityV4 = {
             ...item,

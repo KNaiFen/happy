@@ -928,7 +928,7 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.close();
     });
 
-    it('projects thread metadata and MCP startup lifecycle without unknown-method noise', async () => {
+    it('classifies repeated MCP startup lifecycle without publishing chat entities', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
         mapper.importThread(thread('thread-meta'));
@@ -946,26 +946,34 @@ describe('CodexSyncV4Mapper', () => {
                 reason: 'highRiskCyberActivity' as never,
             },
         }));
+        for (let index = 0; index < 25; index += 1) {
+            mapper.handleNotification(notification({
+                method: 'mcpServer/startupStatus/updated',
+                params: {
+                    threadId: 'thread-meta',
+                    name: `server-${index % 5}`,
+                    status: 'starting',
+                    error: null,
+                    failureReason: null,
+                },
+            }));
+        }
         mapper.handleNotification(notification({
-            method: 'mcpServer/startupStatus/updated',
-            params: {
-                threadId: 'thread-meta',
-                name: 'happy',
-                status: 'starting',
-                error: null,
-                failureReason: null,
-            },
+            method: 'turn/started',
+            params: { threadId: 'thread-meta', turn: turn('turn-meta', 'inProgress') },
         }));
-        mapper.handleNotification(notification({
-            method: 'mcpServer/startupStatus/updated',
-            params: {
-                threadId: 'thread-meta',
-                name: 'happy',
-                status: 'ready',
-                error: null,
-                failureReason: null,
-            },
-        }));
+        for (let index = 0; index < 5; index += 1) {
+            mapper.handleNotification(notification({
+                method: 'mcpServer/startupStatus/updated',
+                params: {
+                    threadId: 'thread-meta',
+                    name: `server-${index}`,
+                    status: 'ready',
+                    error: null,
+                    failureReason: null,
+                },
+            }));
+        }
         mapper.handleNotification(notification({
             method: 'process/exited',
             params: {
@@ -980,14 +988,8 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.flush();
 
         expect(publisher.latest('codex.thread')[0]).toMatchObject({ name: 'Stable name', model: 'gpt-new' });
-        expect(publisher.latest('codex.item').find((item) => item.itemType === 'mcpStartup')).toMatchObject({
-            status: 'completed',
-            server: 'happy',
-        });
-        expect(publisher.latest('codex.part').find((part) => part.kind === 'mcpProgress')).toMatchObject({
-            final: true,
-            content: expect.stringContaining('"status":"ready"'),
-        });
+        expect(publisher.latest('codex.item').some((item) => item.itemType === 'mcpStartup')).toBe(false);
+        expect(publisher.latest('codex.part').some((part) => part.kind === 'mcpProgress')).toBe(false);
         expect(mapper.diagnostics().unknownNotificationMethods).toEqual({});
         await mapper.close();
     });
