@@ -31,11 +31,18 @@ interface NewSessionDraftState {
     setMachineId: (id: string | null) => void;
     setPath: (path: string | null) => void;
     setAgentType: (agent: NewSessionAgentType) => void;
-    setPermissionMode: (mode: PermissionModeKey) => void;
-    setModelMode: (mode: string) => void;
-    setEffortLevel: (level: string) => void;
+    setPermissionMode: (mode: PermissionModeKey | null) => void;
+    setModelMode: (mode: string | null) => void;
+    setEffortLevel: (level: string | null) => void;
     setSessionType: (type: NewSessionSessionType) => void;
     setWorktreeKey: (key: string | null) => void;
+    resetModeOverrides: () => void;
+    prepareEnvironment: (environment: {
+        machineId: string;
+        path: string;
+        sessionType?: NewSessionSessionType;
+        worktreeKey?: string | null;
+    }) => void;
 }
 
 function persist(state: NewSessionDraftState) {
@@ -62,7 +69,7 @@ export const useNewSessionDraft = create<NewSessionDraftState>()((set, get) => (
     attachments: [],
     selectedMachineId: initial?.selectedMachineId ?? null,
     selectedPath: initial?.selectedPath ?? null,
-    agentType: initial?.agentType ?? 'claude',
+    agentType: initial?.agentType ?? 'codex',
     permissionMode: initial?.permissionMode ?? null,
     modelMode: initial?.modelMode ?? null,
     effortLevel: initial?.effortLevel ?? null,
@@ -73,10 +80,29 @@ export const useNewSessionDraft = create<NewSessionDraftState>()((set, get) => (
     setAttachments: (attachments) => { set({ attachments }); },
     setMachineId: (id) => { set({ selectedMachineId: id, selectedPath: null, worktreeKey: null }); persist(get()); },
     setPath: (path) => { set({ selectedPath: path, worktreeKey: null }); persist(get()); },
-    setAgentType: (agent) => { set({ agentType: agent }); persist(get()); },
+    setAgentType: (agent) => {
+        set({ agentType: agent, permissionMode: null, modelMode: null, effortLevel: null });
+        persist(get());
+    },
     setPermissionMode: (mode) => { set({ permissionMode: mode }); persist(get()); },
     setModelMode: (mode) => { set({ modelMode: mode }); persist(get()); },
     setEffortLevel: (level) => { set({ effortLevel: level }); persist(get()); },
     setSessionType: (type) => { set({ sessionType: type }); persist(get()); },
     setWorktreeKey: (key) => { set({ worktreeKey: key }); persist(get()); },
+    resetModeOverrides: () => {
+        set({ permissionMode: null, modelMode: null, effortLevel: null });
+        persist(get());
+    },
+    prepareEnvironment: ({ machineId, path, sessionType = 'simple', worktreeKey = null }) => {
+        set({
+            selectedMachineId: machineId,
+            selectedPath: path,
+            sessionType,
+            worktreeKey,
+            permissionMode: null,
+            modelMode: null,
+            effortLevel: null,
+        });
+        persist(get());
+    },
 }));

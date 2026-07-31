@@ -310,6 +310,7 @@ export function getAvailableModelsForMachine(
     flavor: AgentFlavor,
     metadata: MachineMetadata | null | undefined,
     translate: Translate,
+    selectedKey?: string | null,
 ): ModelMode[] {
     const codexModels = flavor === 'codex'
         ? metadata?.agentCapabilities?.codex?.models
@@ -318,7 +319,15 @@ export function getAvailableModelsForMachine(
     if (models.length > 0) {
         return [createCodexDefaultModelOption(models), ...models];
     }
-    return getHardcodedModelModes(flavor, translate);
+    const fallbacks = getHardcodedModelModes(flavor, translate);
+    if (
+        flavor === 'codex'
+        && selectedKey
+        && !fallbacks.some((model) => model.key === selectedKey)
+    ) {
+        return [{ key: selectedKey, name: selectedKey, description: null }, ...fallbacks];
+    }
+    return fallbacks;
 }
 
 export function getAvailablePermissionModes(
@@ -407,6 +416,7 @@ export function getCodexEffortLevels(): EffortLevel[] {
         { key: 'medium', name: 'medium' },
         { key: 'high', name: 'high' },
         { key: 'xhigh', name: 'xhigh' },
+        { key: 'max', name: 'max' },
     ];
 }
 
@@ -453,6 +463,7 @@ export function getEffortLevelsForModelOnMachine(
     flavor: AgentFlavor,
     modelKey: string,
     metadata: MachineMetadata | null | undefined,
+    selectedKey?: string | null,
 ): EffortLevel[] {
     if (flavor === 'codex') {
         const advertisedModel = findCodexModel(
@@ -463,7 +474,16 @@ export function getEffortLevelsForModelOnMachine(
             return advertisedModel.thinkingLevels.map((level) => ({ key: level, name: level }));
         }
     }
-    return getEffortLevelsForModel(flavor, modelKey);
+    const fallbacks = getEffortLevelsForModel(flavor, modelKey);
+    if (
+        flavor === 'codex'
+        && !metadata?.agentCapabilities?.codex
+        && selectedKey
+        && !fallbacks.some((level) => level.key === selectedKey)
+    ) {
+        return [{ key: selectedKey, name: selectedKey }, ...fallbacks];
+    }
+    return fallbacks;
 }
 
 export function getRigCurrentModelOptionKey(metadata: Metadata | null | undefined): string | null {

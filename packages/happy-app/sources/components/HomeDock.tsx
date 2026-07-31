@@ -50,7 +50,6 @@ type AgentSetting = 'agent' | 'model' | 'permission' | 'effort';
 const CUSTOM_PROJECT_PATH_KEY = '__custom_project_path__';
 
 const AGENTS: Array<{ key: NewSessionAgentType; name: string }> = [
-    { key: 'claude', name: 'Claude Code' },
     { key: 'codex', name: 'Codex' },
     { key: 'openclaw', name: 'OpenClaw' },
     { key: 'gemini', name: 'Gemini' },
@@ -608,21 +607,33 @@ export const HomeDock = React.memo(({
         [agentType],
     );
     const modelOptions = React.useMemo(
-        () => getAvailableModelsForMachine(agentType, selectedMachine?.metadata, t),
-        [agentType, selectedMachine?.metadata],
+        () => getAvailableModelsForMachine(
+            agentType,
+            selectedMachine?.metadata,
+            t,
+            modelMode ?? defaults.modelMode,
+        ),
+        [agentType, defaults.modelMode, modelMode, selectedMachine?.metadata],
     );
     const currentPermission = resolveOption(permissionOptions, [permissionMode, defaults.permissionMode]);
     const currentModel = resolveOption(modelOptions, [modelMode, defaults.modelMode]);
     const effortOptions = React.useMemo(
-        () => getEffortLevelsForModelOnMachine(agentType, currentModel?.key ?? 'default', selectedMachine?.metadata),
-        [agentType, currentModel?.key, selectedMachine?.metadata],
+        () => getEffortLevelsForModelOnMachine(
+            agentType,
+            currentModel?.key ?? 'default',
+            selectedMachine?.metadata,
+            effortLevel ?? defaults.effortLevel,
+        ),
+        [agentType, currentModel?.key, defaults.effortLevel, effortLevel, selectedMachine?.metadata],
     );
     const currentEffort = resolveOption(effortOptions, [effortLevel, defaults.effortLevel]);
     React.useEffect(() => {
         if (!effortLevel) return;
         if (effortOptions.some((level) => level.key === effortLevel)) return;
-        setEffortLevel(currentModel?.defaultThinkingLevel ?? effortOptions[0]?.key ?? null);
-    }, [currentModel?.defaultThinkingLevel, effortLevel, effortOptions, setEffortLevel]);
+        if (agentType !== 'codex' || selectedMachine?.metadata?.agentCapabilities?.codex) {
+            setEffortLevel(currentModel?.defaultThinkingLevel ?? effortOptions[0]?.key ?? null);
+        }
+    }, [agentType, currentModel?.defaultThinkingLevel, effortLevel, effortOptions, selectedMachine?.metadata?.agentCapabilities?.codex, setEffortLevel]);
     const currentAgent = availableAgents.find((agent) => agent.key === agentType) ?? availableAgents[0] ?? AGENTS[0];
     const canSubmit = !isSubmitting && (
         prompt.trim().length > 0 || (expImageUpload && selectedImages.length > 0)
@@ -766,12 +777,8 @@ export const HomeDock = React.memo(({
     }, [finishCloseFocusMode, focusPresentation]);
 
     const selectAgent = React.useCallback((agent: NewSessionAgentType) => {
-        const nextDefaults = resolveAgentDefaultConfig(defaultOverrides, agent);
         setAgentType(agent);
-        setPermissionMode(nextDefaults.permissionMode);
-        setModelMode(nextDefaults.modelMode);
-        if (nextDefaults.effortLevel) setEffortLevel(nextDefaults.effortLevel);
-    }, [defaultOverrides, setAgentType, setEffortLevel, setModelMode, setPermissionMode]);
+    }, [setAgentType]);
 
     React.useEffect(() => {
         if (availableAgents.length > 0 && !availableAgents.some((agent) => agent.key === agentType)) {
@@ -867,12 +874,27 @@ export const HomeDock = React.memo(({
             return { title: 'Agent', options: availableAgents, selectedKey: agentType, onSelect: (key) => selectAgent(key as NewSessionAgentType) };
         }
         if (setting === 'model') {
-            return { title: t('agentInput.model.title'), options: modelOptions, selectedKey: currentModel?.key, onSelect: setModelMode };
+            return {
+                title: t('agentInput.model.title'),
+                options: modelOptions,
+                selectedKey: currentModel?.key,
+                onSelect: (key) => setModelMode(key === defaults.modelMode ? null : key),
+            };
         }
         if (setting === 'permission') {
-            return { title: t('agentInput.permissionMode.title'), options: permissionOptions, selectedKey: currentPermission?.key, onSelect: setPermissionMode };
+            return {
+                title: t('agentInput.permissionMode.title'),
+                options: permissionOptions,
+                selectedKey: currentPermission?.key,
+                onSelect: (key) => setPermissionMode(key === defaults.permissionMode ? null : key),
+            };
         }
-        return { title: t('agentInput.effort.title'), options: effortOptions, selectedKey: currentEffort?.key, onSelect: setEffortLevel };
+        return {
+            title: t('agentInput.effort.title'),
+            options: effortOptions,
+            selectedKey: currentEffort?.key,
+            onSelect: (key) => setEffortLevel(key === defaults.effortLevel ? null : key),
+        };
     };
 
     const agentSettingsGroups: NativeSettingsMenuGroup[] = agentRows.map((row) => {

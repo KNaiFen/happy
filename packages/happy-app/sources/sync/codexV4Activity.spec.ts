@@ -6,7 +6,7 @@ import type {
     CodexTurnEntityV4,
 } from '@slopus/happy-wire';
 import { describe, expect, it } from 'vitest';
-import { resolveCodexV4Activity } from './codexV4Activity';
+import { resolveCodexV4Activity, shouldCollapseCurrentCodexV4Turn } from './codexV4Activity';
 import { applyCodexV4ProjectionUpdates, createCodexV4Projection } from './codexV4Projection';
 
 const runtime: CodexRuntimeEntityV4 = {
@@ -177,5 +177,16 @@ describe('Codex v4 chat activity', () => {
             ...runtime,
             execution: { type: 'idle' },
         }, { ...turn, status: 'completed', completedAt: 6 }))).toBeNull();
+
+        expect(shouldCollapseCurrentCodexV4Turn(projection(runtime, turn, request))).toBe(false);
+        expect(shouldCollapseCurrentCodexV4Turn(projection({
+            ...runtime,
+            connection: 'disconnected',
+            statusUnknown: true,
+        }, turn))).toBe(false);
+        expect(shouldCollapseCurrentCodexV4Turn(projection({
+            ...runtime,
+            execution: { type: 'idle' },
+        }, { ...turn, status: 'completed', completedAt: 6 }))).toBe(true);
     });
 });

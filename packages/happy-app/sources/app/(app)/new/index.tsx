@@ -60,6 +60,7 @@ import { isRunningOnMac } from '@/utils/platform';
 import { getNewSessionSidebarLayout } from '@/utils/newSessionSidebarLayout';
 import { getAgentPickerItems, getModePickerItems } from '@/utils/newSessionPickerItems';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
+import { resolveNewSessionAgentConfig } from '@/sync/newSessionConfig';
 import { MobileGlassSurface } from '@/components/MobileGlass';
 import { BubblePressable } from '@/components/BubblePressable';
 import { Header } from '@/components/navigation/Header';
@@ -73,7 +74,6 @@ import {
 
 // Agent icon assets
 const agentIcons = {
-    claude: require('@/assets/images/icon-claude.png'),
     codex: require('@/assets/images/icon-gpt.png'),
     openclaw: require('@/assets/images/icon-openclaw.png'),
     gemini: require('@/assets/images/icon-gemini.png'),
@@ -82,8 +82,8 @@ const agentIcons = {
 
 type AgentKey = NewSessionAgentType;
 const ALL_AGENTS: { key: AgentKey; label: string }[] = [
-    { key: 'claude', label: 'claude code' },
     { key: 'codex', label: 'codex' },
+    { key: 'gemini', label: 'gemini' },
     { key: 'openclaw', label: 'openclaw' },
     { key: 'agy', label: 'agy' },
 ];
@@ -918,21 +918,60 @@ function NewSessionScreen() {
         () => getHardcodedPermissionModes(selectedAgent, t),
         [selectedAgent],
     );
+    const effectiveAgentDefaults = React.useMemo(() => (
+        resolveAgentDefaultConfig(agentDefaultOverrides, selectedAgent)
+    ), [agentDefaultOverrides, selectedAgent]);
     const modelModes = React.useMemo<ModelMode[]>(
-        () => getAvailableModelsForMachine(selectedAgent, selectedMachine?.metadata, t),
-        [selectedAgent, selectedMachine?.metadata],
+        () => getAvailableModelsForMachine(
+            selectedAgent,
+            selectedMachine?.metadata,
+            t,
+            draft.modelMode ?? effectiveAgentDefaults.modelMode,
+        ),
+        [draft.modelMode, effectiveAgentDefaults.modelMode, selectedAgent, selectedMachine?.metadata],
     );
+    const resolvedSessionConfig = React.useMemo(() => resolveNewSessionAgentConfig({
+        defaults: effectiveAgentDefaults,
+        overrides: {
+            ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
+            ...(draft.modelMode ? { modelMode: draft.modelMode } : {}),
+            ...(draft.effortLevel ? { effortLevel: draft.effortLevel } : {}),
+        },
+        permissionOptions: permissionModes,
+        modelOptions: modelModes,
+        effortOptionsForModel: (modelKey) => getEffortLevelsForModelOnMachine(
+            selectedAgent,
+            modelKey,
+            selectedMachine?.metadata,
+            draft.effortLevel ?? effectiveAgentDefaults.effortLevel,
+        ),
+        capabilityState: selectedAgent === 'codex'
+            && !selectedMachine?.metadata?.agentCapabilities?.codex
+            ? 'unknown'
+            : 'authoritative',
+    }), [
+        draft.effortLevel,
+        draft.modelMode,
+        draft.permissionMode,
+        effectiveAgentDefaults,
+        modelModes,
+        permissionModes,
+        selectedAgent,
+        selectedMachine?.metadata,
+    ]);
 
     const currentModel = modelModes[modelIndex] ?? modelModes[0];
     const currentModelKey = currentModel?.key ?? 'default';
 
     const effortLevels = React.useMemo<EffortLevel[]>(
-        () => getEffortLevelsForModelOnMachine(selectedAgent, currentModelKey, selectedMachine?.metadata),
-        [selectedAgent, currentModelKey, selectedMachine?.metadata],
+        () => getEffortLevelsForModelOnMachine(
+            selectedAgent,
+            currentModelKey,
+            selectedMachine?.metadata,
+            draft.effortLevel ?? effectiveAgentDefaults.effortLevel,
+        ),
+        [draft.effortLevel, effectiveAgentDefaults.effortLevel, selectedAgent, currentModelKey, selectedMachine?.metadata],
     );
-    const effectiveAgentDefaults = React.useMemo(() => (
-        resolveAgentDefaultConfig(agentDefaultOverrides, selectedAgent)
-    ), [agentDefaultOverrides, selectedAgent]);
 
     const supportsWorktree = getSupportsWorktree(selectedAgent);
     const showModel = modelModes.length > 1;
@@ -942,13 +981,11 @@ function NewSessionScreen() {
     // Reset indices when agent/default settings change.
     React.useEffect(() => {
         setPermissionIndex(findPreferredModeIndex(permissionModes, [
-            draft.permissionMode,
-            effectiveAgentDefaults.permissionMode,
+            resolvedSessionConfig.permissionMode,
         ]));
 
         setModelIndex(findPreferredModeIndex(modelModes, [
-            draft.modelMode,
-            effectiveAgentDefaults.modelMode,
+            resolvedSessionConfig.modelMode,
         ]));
 
         if (!supportsWorktree) setWorktreeKey('__none__');
@@ -958,6 +995,8 @@ function NewSessionScreen() {
         supportsWorktree,
         draft.permissionMode,
         draft.modelMode,
+        resolvedSessionConfig.permissionMode,
+        resolvedSessionConfig.modelMode,
         effectiveAgentDefaults.permissionMode,
         effectiveAgentDefaults.modelMode,
     ]);
@@ -969,16 +1008,19 @@ function NewSessionScreen() {
             return;
         }
         setEffortIndex(findPreferredModeIndex(effortLevels, [
-            draft.effortLevel,
-            effectiveAgentDefaults.effortLevel,
+            resolvedSessionConfig.effortLevel,
         ]));
-    }, [draft.effortLevel, effectiveAgentDefaults.effortLevel, currentModelKey, effortLevels]);
+    }, [currentModelKey, effortLevels, resolvedSessionConfig.effortLevel]);
 
     React.useEffect(() => {
         if (!draft.effortLevel) return;
         if (effortLevels.some((level) => level.key === draft.effortLevel)) return;
-        draft.setEffortLevel(currentModel?.defaultThinkingLevel ?? effortLevels[0]?.key ?? null);
-    }, [currentModel?.defaultThinkingLevel, draft.effortLevel, draft.setEffortLevel, effortLevels]);
+        // Capability data may arrive after the screen mounts. Keep the user's
+        // configured key intact until the authoritative catalog says it is invalid.
+        if (selectedAgent !== 'codex' || selectedMachine?.metadata?.agentCapabilities?.codex) {
+            draft.setEffortLevel(currentModel?.defaultThinkingLevel ?? effortLevels[0]?.key ?? null);
+        }
+    }, [currentModel?.defaultThinkingLevel, draft.effortLevel, draft.setEffortLevel, effortLevels, selectedAgent, selectedMachine?.metadata?.agentCapabilities?.codex]);
 
     // The reference keeps the context controls visible while the keyboard is
     // open. Preserve that on mobile and let users collapse them explicitly.
@@ -1167,7 +1209,8 @@ function NewSessionScreen() {
                 const next = modelModes.findIndex((mode) => mode.key === key);
                 if (next >= 0) {
                     setModelIndex(next);
-                    draft.setModelMode(modelModes[next]?.key ?? 'default');
+                    const value = modelModes[next]?.key ?? 'default';
+                    draft.setModelMode(value === effectiveAgentDefaults.modelMode ? null : value);
                 }
                 break;
             }
@@ -1175,7 +1218,8 @@ function NewSessionScreen() {
                 const next = effortLevels.findIndex((level) => level.key === key);
                 if (next >= 0) {
                     setEffortIndex(next);
-                    draft.setEffortLevel(effortLevels[next]?.key ?? key);
+                    const value = effortLevels[next]?.key ?? key;
+                    draft.setEffortLevel(value === effectiveAgentDefaults.effortLevel ? null : value);
                 }
                 break;
             }
@@ -1183,7 +1227,8 @@ function NewSessionScreen() {
                 const next = permissionModes.findIndex((mode) => mode.key === key);
                 if (next >= 0) {
                     setPermissionIndex(next);
-                    draft.setPermissionMode(permissionModes[next]?.key ?? 'default');
+                    const value = permissionModes[next]?.key ?? 'default';
+                    draft.setPermissionMode(value === effectiveAgentDefaults.permissionMode ? null : value);
                 }
                 break;
             }
@@ -1196,6 +1241,7 @@ function NewSessionScreen() {
         draft.setModelMode,
         draft.setPermissionMode,
         effortLevels,
+        effectiveAgentDefaults,
         modelModes,
         permissionModes,
         setSelectedAgent,
@@ -1209,7 +1255,8 @@ function NewSessionScreen() {
                 const next = modelModes.findIndex((mode) => mode.key === key);
                 if (next >= 0) {
                     setModelIndex(next);
-                    draft.setModelMode(modelModes[next]?.key ?? 'default');
+                    const value = modelModes[next]?.key ?? 'default';
+                    draft.setModelMode(value === effectiveAgentDefaults.modelMode ? null : value);
                 }
                 break;
             }
@@ -1217,7 +1264,8 @@ function NewSessionScreen() {
                 const next = effortLevels.findIndex((level) => level.key === key);
                 if (next >= 0) {
                     setEffortIndex(next);
-                    draft.setEffortLevel(effortLevels[next]?.key ?? key);
+                    const value = effortLevels[next]?.key ?? key;
+                    draft.setEffortLevel(value === effectiveAgentDefaults.effortLevel ? null : value);
                 }
                 break;
             }
@@ -1225,14 +1273,15 @@ function NewSessionScreen() {
                 const next = permissionModes.findIndex((mode) => mode.key === key);
                 if (next >= 0) {
                     setPermissionIndex(next);
-                    draft.setPermissionMode(permissionModes[next]?.key ?? 'default');
+                    const value = permissionModes[next]?.key ?? 'default';
+                    draft.setPermissionMode(value === effectiveAgentDefaults.permissionMode ? null : value);
                 }
                 break;
             }
         }
         setNativePickerMeasuredHeight(null);
         setComposerSettingsPage(null);
-    }, [composerSettingsPage, draft.setEffortLevel, draft.setModelMode, draft.setPermissionMode, effortLevels, modelModes, permissionModes]);
+    }, [composerSettingsPage, draft.setEffortLevel, draft.setModelMode, draft.setPermissionMode, effortLevels, effectiveAgentDefaults, modelModes, permissionModes]);
 
     // Spawn session handler
     const handleSend = React.useCallback(async (approvedNewDirectoryCreation: boolean = false) => {
@@ -1272,9 +1321,13 @@ function NewSessionScreen() {
                 // For codex, 'default' is a concrete ask-first mode (the codex
                 // launch default is yolo) — it must be forwarded. For other
                 // agents 'default' is the ambient no-override value.
-                permissionMode: selectedAgent === 'codex' || currentPermission.key !== 'default' ? currentPermission.key : undefined,
-                modelMode: currentModelKey !== 'default' ? currentModelKey : undefined,
-                effortLevel: currentEffort?.key,
+                permissionMode: selectedAgent === 'codex' || resolvedSessionConfig.permissionMode !== 'default'
+                    ? resolvedSessionConfig.permissionMode
+                    : undefined,
+                modelMode: resolvedSessionConfig.modelMode !== 'default'
+                    ? resolvedSessionConfig.modelMode
+                    : undefined,
+                effortLevel: resolvedSessionConfig.effortLevel ?? undefined,
             });
 
             switch (result.type) {
@@ -1283,13 +1336,13 @@ function NewSessionScreen() {
 
                     // Store only per-session overrides. Matching the effective
                     // default stays null so future code default changes apply.
-                    const permissionOverride = currentPermission.key === effectiveAgentDefaults.permissionMode
+                    const permissionOverride = resolvedSessionConfig.permissionMode === effectiveAgentDefaults.permissionMode
                         ? null
-                        : currentPermission.key;
-                    const modelOverride = currentModelKey === effectiveAgentDefaults.modelMode
+                        : resolvedSessionConfig.permissionMode;
+                    const modelOverride = resolvedSessionConfig.modelMode === effectiveAgentDefaults.modelMode
                         ? null
-                        : currentModelKey;
-                    const currentEffortKey = currentEffort?.key ?? null;
+                        : resolvedSessionConfig.modelMode;
+                    const currentEffortKey = resolvedSessionConfig.effortLevel;
                     const effortOverride = currentEffortKey === effectiveAgentDefaults.effortLevel
                         ? null
                         : currentEffortKey;
@@ -1312,6 +1365,7 @@ function NewSessionScreen() {
                     const attachments = draftState.attachments;
                     draftState.setInput('');
                     draftState.setAttachments([]);
+                    draftState.resetModeOverrides();
 
                     // Send initial message if provided
                     if (trimmedPrompt || attachments.length > 0) {
@@ -1344,7 +1398,7 @@ function NewSessionScreen() {
         } finally {
             setIsSpawning(false);
         }
-    }, [selectedMachineId, selectedMachine, selectedPath, selectedAgent, router, navigateToSession, currentPermission.key, currentModelKey, currentEffort?.key, effectiveAgentDefaults.permissionMode, effectiveAgentDefaults.modelMode, effectiveAgentDefaults.effortLevel, worktreeKey]);
+    }, [selectedMachineId, selectedMachine, selectedPath, selectedAgent, router, navigateToSession, resolvedSessionConfig, effectiveAgentDefaults.permissionMode, effectiveAgentDefaults.modelMode, effectiveAgentDefaults.effortLevel, worktreeKey]);
 
     const canSend = selectedMachineId && selectedMachine && isMachineOnline(selectedMachine) && !isSpawning;
     React.useEffect(() => {

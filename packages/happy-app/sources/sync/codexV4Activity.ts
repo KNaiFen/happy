@@ -7,6 +7,21 @@ export interface CodexV4Activity {
     turnId: string | null;
 }
 
+export function shouldCollapseCurrentCodexV4Turn(
+    projection: CodexV4Projection | null | undefined,
+): boolean {
+    if (!projection) return true;
+    const threadId = projection.selectedThreadId ?? projection.runtime?.threadId ?? null;
+    if (!threadId) return true;
+    const hasActiveTurn = Object.values(projection.entities['codex.turn']).some((turn) => (
+        turn.threadId === threadId && turn.status === 'inProgress'
+    ));
+    const hasPendingRequest = Object.values(projection.entities['codex.request']).some((request) => (
+        request.threadId === threadId && request.status === 'pending'
+    ));
+    return projection.runtime?.execution.type !== 'active' && !hasActiveTurn && !hasPendingRequest;
+}
+
 export function resolveCodexV4Activity(
     projection: CodexV4Projection | null | undefined,
 ): CodexV4Activity | null {

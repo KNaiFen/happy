@@ -79,12 +79,13 @@ const SectionHeader = React.memo(({ session, displayPath }: { session: SessionRo
     const handleAdd = React.useCallback(() => {
         const machineId = session.machineId;
         if (machineId) {
-            draft.setMachineId(machineId);
+            draft.prepareEnvironment({
+                machineId,
+                path: formatPathRelativeToHome(repoPath, session.homeDir ?? undefined),
+                sessionType: isWorktree ? 'worktree' : 'simple',
+                worktreeKey: isWorktree ? sessionPath : null,
+            });
         }
-        const pathToSet = formatPathRelativeToHome(repoPath, session.homeDir ?? undefined);
-        draft.setPath(pathToSet);
-        draft.setSessionType(isWorktree ? 'worktree' : 'simple');
-        draft.setWorktreeKey(isWorktree ? sessionPath : null);
         router.navigate('/new');
     }, [session.machineId, session.homeDir, repoPath, isWorktree, sessionPath, draft, router]);
 

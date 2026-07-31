@@ -15,6 +15,7 @@ import {
 } from '@/components/modelModeOptions';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { resolveNewSessionAgentConfig } from '@/sync/newSessionConfig';
 
 function resolveOption<T extends { key: string }>(
     options: T[],
@@ -50,34 +51,34 @@ export function useStartSessionFromDraft() {
         }
 
         const defaults = resolveAgentDefaultConfig(defaultOverrides, draft.agentType);
-        const permission = resolveOption(
-            getHardcodedPermissionModes(draft.agentType, t),
-            [draft.permissionMode, defaults.permissionMode],
-        );
-        const model = resolveOption(
-            getAvailableModelsForMachine(draft.agentType, machine.metadata, t),
-            [draft.modelMode, defaults.modelMode],
-        );
-        const effortLevels = getEffortLevelsForModelOnMachine(
+        const permissionOptions = getHardcodedPermissionModes(draft.agentType, t);
+        const modelOptions = getAvailableModelsForMachine(
             draft.agentType,
-            model?.key ?? 'default',
             machine.metadata,
+            t,
+            draft.modelMode ?? defaults.modelMode,
         );
-        const requestedEffort = draft.effortLevel ?? defaults.effortLevel;
-        const requestedEffortIsSupported = requestedEffort
-            ? effortLevels.some((level) => level.key === requestedEffort)
-            : false;
-        const effort = resolveOption(
-            effortLevels,
-            [
-                requestedEffortIsSupported ? requestedEffort : model?.defaultThinkingLevel,
-                defaults.effortLevel,
-            ],
-        );
-        if (!permission || !model) {
-            Modal.alert(t('common.error'), 'The selected agent configuration is unavailable');
-            return false;
-        }
+        const capabilityState = draft.agentType === 'codex'
+            && !machine.metadata?.agentCapabilities?.codex
+            ? 'unknown'
+            : 'authoritative';
+        const config = resolveNewSessionAgentConfig({
+            defaults,
+            overrides: {
+                ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
+                ...(draft.modelMode ? { modelMode: draft.modelMode } : {}),
+                ...(draft.effortLevel ? { effortLevel: draft.effortLevel } : {}),
+            },
+            permissionOptions,
+            modelOptions,
+            effortOptionsForModel: (modelKey) => getEffortLevelsForModelOnMachine(
+                draft.agentType,
+                modelKey,
+                machine.metadata,
+                draft.effortLevel ?? defaults.effortLevel,
+            ),
+            capabilityState,
+        });
 
         const prompt = draft.input.trim();
         const attachments = draft.attachments;
@@ -108,11 +109,11 @@ export function useStartSessionFromDraft() {
                     directory: spawnDirectory,
                     approvedNewDirectoryCreation,
                     agent: draft.agentType,
-                    permissionMode: draft.agentType === 'codex' || permission.key !== 'default'
-                        ? permission.key
+                    permissionMode: draft.agentType === 'codex' || config.permissionMode !== 'default'
+                        ? config.permissionMode
                         : undefined,
-                    modelMode: model.key !== 'default' ? model.key : undefined,
-                    effortLevel: effort?.key,
+                    modelMode: config.modelMode !== 'default' ? config.modelMode : undefined,
+                    effortLevel: config.effortLevel ?? undefined,
                 });
 
                 if (result.type === 'success') return result.sessionId;
@@ -135,15 +136,16 @@ export function useStartSessionFromDraft() {
             await sync.refreshSessions();
 
             const modesPatch: SessionAgentModesPatch = {};
-            if (permission.key !== defaults.permissionMode) modesPatch.permissionMode = permission.key;
-            if (model.key !== defaults.modelMode) modesPatch.modelMode = model.key;
-            if ((effort?.key ?? null) !== defaults.effortLevel) modesPatch.effortLevel = effort?.key ?? null;
+            if (config.permissionMode !== defaults.permissionMode) modesPatch.permissionMode = config.permissionMode;
+            if (config.modelMode !== defaults.modelMode) modesPatch.modelMode = config.modelMode;
+            if (config.effortLevel !== defaults.effortLevel) modesPatch.effortLevel = config.effortLevel;
             if (Object.keys(modesPatch).length > 0) {
                 sessionSetAgentModes(sessionId, modesPatch);
             }
 
             draft.setInput('');
             draft.setAttachments([]);
+            draft.resetModeOverrides();
             navigateToSession(sessionId);
             if (prompt || attachments.length > 0) {
                 // The session is ready at this point. Open it immediately and

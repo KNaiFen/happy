@@ -16,7 +16,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { resolveControlMode } from '@/sync/controlHandoff';
 import { usesControlledSessionUi } from '@/sync/rig';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
-import { resolveCodexV4Activity } from '@/sync/codexV4Activity';
+import { resolveCodexV4Activity, shouldCollapseCurrentCodexV4Turn } from '@/sync/codexV4Activity';
 import { t } from '@/text';
 
 const SCROLL_THRESHOLD = 300;
@@ -132,7 +132,10 @@ const ChatListInternal = React.memo((props: {
     const hasPendingPermission = Boolean(
         session?.agentState?.requests && Object.keys(session.agentState.requests).length > 0,
     );
-    const collapseCurrentTurn = session?.thinking !== true && !hasPendingPermission;
+    const hasCanonicalCodexState = isCodexV4SyncActive(props.metadata, codexV4Session);
+    const collapseCurrentTurn = hasCanonicalCodexState
+        ? shouldCollapseCurrentCodexV4Turn(codexV4Session)
+        : session?.thinking !== true && !hasPendingPermission;
     const groupingOptions = React.useMemo(
         () => ({ collapseCurrentTurn }),
         [collapseCurrentTurn],

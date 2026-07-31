@@ -16,8 +16,7 @@ import { sync } from '@/sync/sync';
 import { useUnistyles, StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
-import { machineSpawnNewSession } from '@/sync/ops';
-import { resolveAbsolutePath } from '@/utils/pathUtils';
+import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
 import { MultiTextInput, type MultiTextInputHandle } from '@/components/MultiTextInput';
 
 const styles = StyleSheet.create((theme) => ({
@@ -77,7 +76,6 @@ export default function MachineDetailScreen() {
     const [isRenamingMachine, setIsRenamingMachine] = useState(false);
     const [isDeletingMachine, setIsDeletingMachine] = useState(false);
     const [customPath, setCustomPath] = useState('');
-    const [isSpawning, setIsSpawning] = useState(false);
     const inputRef = useRef<MultiTextInputHandle>(null);
     const [showAllPaths, setShowAllPaths] = useState(false);
     // Variant D only
@@ -235,45 +233,14 @@ export default function MachineDetailScreen() {
         }
     };
 
-    const handleStartSession = async (approvedNewDirectoryCreation: boolean = false): Promise<void> => {
+    const handleStartSession = async (): Promise<void> => {
         if (!machine || !machineId) return;
-        try {
-            const pathToUse = (customPath.trim() || '~');
-            if (!isMachineOnline(machine)) return;
-            setIsSpawning(true);
-            const absolutePath = resolveAbsolutePath(pathToUse, machine?.metadata?.homeDir);
-            const result = await machineSpawnNewSession({
-                machineId: machineId!,
-                directory: absolutePath,
-                approvedNewDirectoryCreation
-            });
-            switch (result.type) {
-                case 'success':
-                    // Dismiss machine picker & machine detail screen
-                    router.back();
-                    router.back();
-                    navigateToSession(result.sessionId);
-                    break;
-                case 'requestToApproveDirectoryCreation': {
-                    const approved = await Modal.confirm('Create Directory?', `The directory '${result.directory}' does not exist. Would you like to create it?`, { cancelText: t('common.cancel'), confirmText: t('common.create') });
-                    if (approved) {
-                        await handleStartSession(true);
-                    }
-                    break;
-                }
-                case 'error':
-                    Modal.alert(t('common.error'), result.errorMessage);
-                    break;
-            }
-        } catch (error) {
-            let errorMessage = 'Failed to start session. Make sure the daemon is running on the target machine.';
-            if (error instanceof Error && !error.message.includes('Failed to spawn session')) {
-                errorMessage = error.message;
-            }
-            Modal.alert(t('common.error'), errorMessage);
-        } finally {
-            setIsSpawning(false);
-        }
+        if (!isMachineOnline(machine)) return;
+        useNewSessionDraft.getState().prepareEnvironment({
+            machineId,
+            path: customPath.trim() || '~',
+        });
+        router.push('/new');
     };
 
     const pastUsedRelativePath = useCallback((session: Session) => {
@@ -303,7 +270,7 @@ export default function MachineDetailScreen() {
     const metadata = machine.metadata;
     const machineName = metadata?.displayName || metadata?.host || 'unknown machine';
 
-    const spawnButtonDisabled = !customPath.trim() || isSpawning || !isMachineOnline(machine!);
+    const spawnButtonDisabled = !customPath.trim() || !isMachineOnline(machine!);
 
     return (
         <>
@@ -398,13 +365,14 @@ export default function MachineDetailScreen() {
                                     <Pressable
                                         onPress={() => handleStartSession()}
                                         disabled={spawnButtonDisabled}
+                                        accessibilityLabel={t('common.continue')}
                                         style={[
                                             styles.inlineSendButton,
                                             spawnButtonDisabled ? styles.inlineSendInactive : styles.inlineSendActive
                                         ]}
                                     >
                                         <Ionicons
-                                            name="play"
+                                            name="arrow-forward"
                                             size={16}
                                             color={spawnButtonDisabled ? theme.colors.textSecondary : theme.colors.button.primary.tint}
                                             style={{ marginLeft: 1 }}

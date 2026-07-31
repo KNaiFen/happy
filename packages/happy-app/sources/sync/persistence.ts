@@ -3,30 +3,22 @@ import { Settings, settingsDefaults, settingsParse, settingsToSyncPayload, Setti
 import { LocalSettings, localSettingsDefaults, localSettingsParse } from './localSettings';
 import { Purchases, purchasesDefaults, purchasesParse } from './purchases';
 import { Profile, profileDefaults, profileParse } from './profile';
-import type { PermissionModeKey } from '@/components/PermissionModeSelector';
+import {
+    parseNewSessionDraft,
+    type NewSessionAgentType,
+    type NewSessionDraft,
+    type NewSessionSessionType,
+} from './newSessionDraftModel';
+
+export type { NewSessionAgentType, NewSessionDraft, NewSessionSessionType } from './newSessionDraftModel';
 
 const mmkv = new MMKV();
-const NEW_SESSION_DRAFT_KEY = 'new-session-draft-v1';
+const NEW_SESSION_DRAFT_KEY = 'new-session-draft-v2';
+const LEGACY_NEW_SESSION_DRAFT_KEY = 'new-session-draft-v1';
 const REGISTERED_PUSH_TOKEN_KEY = 'registered-push-token-v1';
 const VOICE_SOFT_PAYWALL_SHOWN_KEY = 'voice-soft-paywall-shown';
 const VOICE_ONBOARDING_PROMPT_LOAD_COUNT_KEY = 'voice-onboarding-prompt-load-count';
 const VOICE_MESSAGE_COUNT_KEY = 'voice-message-count';
-
-export type NewSessionAgentType = 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
-export type NewSessionSessionType = 'simple' | 'worktree';
-
-export interface NewSessionDraft {
-    input: string;
-    selectedMachineId: string | null;
-    selectedPath: string | null;
-    agentType: NewSessionAgentType;
-    permissionMode: PermissionModeKey | null;
-    modelMode: string | null;
-    effortLevel: string | null;
-    sessionType: NewSessionSessionType;
-    worktreeKey: string | null;
-    updatedAt: number;
-}
 
 export function loadSettings(): { settings: Settings, version: number | null } {
     const settings = mmkv.getString('settings');
@@ -133,43 +125,16 @@ export function saveSessionDrafts(drafts: Record<string, string>) {
 }
 
 export function loadNewSessionDraft(): NewSessionDraft | null {
-    const raw = mmkv.getString(NEW_SESSION_DRAFT_KEY);
-    if (!raw) {
-        return null;
-    }
+    const current = mmkv.getString(NEW_SESSION_DRAFT_KEY);
     try {
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object') {
-            return null;
+        if (current) {
+            return parseNewSessionDraft(JSON.parse(current));
         }
-
-        const input = typeof parsed.input === 'string' ? parsed.input : '';
-        const selectedMachineId = typeof parsed.selectedMachineId === 'string' ? parsed.selectedMachineId : null;
-        const selectedPath = typeof parsed.selectedPath === 'string' ? parsed.selectedPath : null;
-        const agentType: NewSessionAgentType = parsed.agentType === 'codex' || parsed.agentType === 'gemini' || parsed.agentType === 'openclaw' || parsed.agentType === 'agy'
-            ? parsed.agentType
-            : 'claude';
-        const permissionMode: PermissionModeKey | null = typeof parsed.permissionMode === 'string'
-            ? parsed.permissionMode
-            : null;
-        const modelMode: string | null = typeof parsed.modelMode === 'string' ? parsed.modelMode : null;
-        const effortLevel: string | null = typeof parsed.effortLevel === 'string' ? parsed.effortLevel : null;
-        const sessionType: NewSessionSessionType = parsed.sessionType === 'worktree' ? 'worktree' : 'simple';
-        const worktreeKey = typeof parsed.worktreeKey === 'string' ? parsed.worktreeKey : null;
-        const updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now();
-
-        return {
-            input,
-            selectedMachineId,
-            selectedPath,
-            agentType,
-            permissionMode,
-            modelMode,
-            effortLevel,
-            sessionType,
-            worktreeKey,
-            updatedAt,
-        };
+        const legacy = mmkv.getString(LEGACY_NEW_SESSION_DRAFT_KEY);
+        if (!legacy) return null;
+        const migrated = parseNewSessionDraft(JSON.parse(legacy), true);
+        if (migrated) saveNewSessionDraft(migrated);
+        return migrated;
     } catch (e) {
         console.error('Failed to parse new session draft', e);
         return null;

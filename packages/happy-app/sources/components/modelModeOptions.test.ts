@@ -213,7 +213,7 @@ describe('modelModeOptions', () => {
 
         expect(getEffortLevelsForModel('codex', 'gpt-5.6-terra', sessionMetadata).at(-1)?.key).toBe('ultra');
         expect(getEffortLevelsForModel('codex', 'default', sessionMetadata).at(-1)?.key).toBe('xhigh');
-        expect(getEffortLevelsForModel('codex', 'gpt-5.5', null).at(-1)?.key).toBe('xhigh');
+        expect(getEffortLevelsForModel('codex', 'gpt-5.5', null).at(-1)?.key).toBe('max');
     });
 
     it('keeps codex permission modes hardcoded even when metadata modes exist', () => {
