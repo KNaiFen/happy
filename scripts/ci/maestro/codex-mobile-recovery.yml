@@ -15,7 +15,7 @@ tags:
     visible: hello-from-android-e2e
     timeout: 45000
 - extendedWaitUntil:
-    visible: Fake Codex response
+    visible: Official Codex source E2E response
     timeout: 45000
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call

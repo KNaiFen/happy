@@ -48,7 +48,7 @@ tags:
     visible: hello-from-android-e2e
     timeout: 30000
 - extendedWaitUntil:
-    visible: Fake Codex response
+    visible: Official Codex source E2E response
     timeout: 60000
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
@@ -59,7 +59,7 @@ tags:
 - launchApp:
     stopApp: false
 - extendedWaitUntil:
-    visible: Fake Codex response
+    visible: Official Codex source E2E response
     timeout: 30000
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call

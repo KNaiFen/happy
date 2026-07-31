@@ -11,19 +11,22 @@ import {
     unlink,
     writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nacl from 'tweetnacl';
+import {
+    type CodexResponsesFixture,
+    startCodexResponsesFixture,
+    writeCodexResponsesConfig,
+} from './codex-responses-fixture';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const serverRoot = join(repoRoot, 'packages', 'happy-server');
 const cliRoot = join(repoRoot, 'packages', 'happy-cli');
 const cliEntrypoint = join(cliRoot, 'dist', 'index.mjs');
-const fakeCodexEntrypoint = join(cliRoot, 'scripts', 'fake-codex-app-server.cjs');
 const tsxEntrypoint = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const appVersion = packageVersion(join(repoRoot, 'packages', 'happy-app', 'package.json'));
 const cliVersion = packageVersion(join(cliRoot, 'package.json'));
-const expectedCodexVersion = 'codex-cli 0.145.0';
 const relayMasterSecret = randomBytes(32).toString('base64url');
 
 interface FixtureState {
@@ -36,10 +39,11 @@ interface FixtureState {
     root: string;
     verificationFile: string;
     diagnosticsFile: string;
+    codexVersion: string;
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 1;
+    schemaVersion: 2;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -47,6 +51,9 @@ interface FieldDiagnostic {
     cliRoundTripObserved: boolean;
     v3MessageCount: number;
     entityCounts: Record<string, number>;
+    officialCodexVersion: string;
+    providerRequestCount: number;
+    providerToolOutputObserved: boolean;
 }
 
 interface ManagedProcess {
@@ -80,13 +87,17 @@ const serverUrl = `http://127.0.0.1:${port}`;
 const processes: ManagedProcess[] = [];
 let stopping = false;
 let requestStop: (() => void) | null = null;
+let responsesFixture: CodexResponsesFixture | null = null;
 
 async function main(): Promise<void> {
     await rm(fixtureRoot, { recursive: true, force: true });
     await mkdir(fixtureRoot, { recursive: true });
     await mkdir(dirname(stateFile), { recursive: true });
 
-    assertPinnedCodex();
+    const codexVersion = configureOfficialCodexPath();
+    responsesFixture = await startCodexResponsesFixture();
+    const codexHome = join(fixtureRoot, 'codex-home');
+    await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl);
     await migrateRelay();
     const relay = startManagedProcess(
         'relay',
@@ -103,12 +114,6 @@ async function main(): Promise<void> {
     const cliHome = join(fixtureRoot, 'cli-home');
     await prepareCliHome(cliHome, terminalToken, sharedSecret);
 
-    const scenarioPath = join(fixtureRoot, 'fake-codex-scenario.json');
-    await writeFile(
-        scenarioPath,
-        JSON.stringify({ strictStableV2: true }, null, 2),
-        { encoding: 'utf8', mode: 0o600 },
-    );
     const verificationFile = join(fixtureRoot, 'roundtrip-verified.json');
     const diagnosticsFile = join(fixtureRoot, 'field-diagnostics.json');
     const appReadyFile = join(fixtureRoot, 'app-ready');
@@ -120,6 +125,7 @@ async function main(): Promise<void> {
         root: fixtureRoot,
         verificationFile,
         diagnosticsFile,
+        codexVersion,
     };
 
     await writeState({
@@ -128,7 +134,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -136,11 +142,14 @@ async function main(): Promise<void> {
         cliRoundTripObserved: false,
         v3MessageCount: 0,
         entityCounts: {},
+        officialCodexVersion: codexVersion,
+        providerRequestCount: 0,
+        providerToolOutputObserved: false,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 1,
+            schemaVersion: 2,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -148,24 +157,29 @@ async function main(): Promise<void> {
             cliRoundTripObserved: false,
             v3MessageCount: 0,
             entityCounts: {},
+            officialCodexVersion: codexVersion,
+            providerRequestCount: 0,
+            providerToolOutputObserved: false,
         });
     }
 
+    const daemonEnvironment: NodeJS.ProcessEnv = {
+        ...process.env,
+        HAPPY_HOME_DIR: cliHome,
+        HAPPY_SERVER_URL: serverUrl,
+        HAPPY_DISABLE_CAFFEINATE: '1',
+        HAPPY_EXPERIMENTAL: '0',
+        CODEX_HOME: codexHome,
+        NODE_ENV: 'test',
+    };
+    delete daemonEnvironment.HAPPY_CODEX_APP_SERVER_PATH;
+    delete daemonEnvironment.HAPPY_FAKE_CODEX_SCENARIO;
     const daemon = startManagedProcess(
         'daemon',
         process.execPath,
         [cliEntrypoint, 'daemon', 'start-sync'],
         repoRoot,
-        {
-            ...process.env,
-            HAPPY_HOME_DIR: cliHome,
-            HAPPY_SERVER_URL: serverUrl,
-            HAPPY_DISABLE_CAFFEINATE: '1',
-            HAPPY_EXPERIMENTAL: '0',
-            HAPPY_CODEX_APP_SERVER_PATH: fakeCodexEntrypoint,
-            HAPPY_FAKE_CODEX_SCENARIO: scenarioPath,
-            NODE_ENV: 'test',
-        },
+        daemonEnvironment,
     );
     const machineId = await waitForOnlineMachine(appToken, daemon);
     await assertNoSessions(appToken);
@@ -175,7 +189,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -183,10 +197,19 @@ async function main(): Promise<void> {
         cliRoundTripObserved: false,
         v3MessageCount: 0,
         entityCounts: {},
+        officialCodexVersion: codexVersion,
+        providerRequestCount: 0,
+        providerToolOutputObserved: false,
     });
 
     console.log(`Mobile field fixture ready for machine ${hashForLog(machineId)}`);
-    void verifyFieldRoundTrip(appToken, machineId, verificationFile, diagnosticsFile).catch((error) => {
+    void verifyFieldRoundTrip(
+        appToken,
+        machineId,
+        verificationFile,
+        diagnosticsFile,
+        codexVersion,
+    ).catch((error) => {
         console.error(
             `Mobile field round trip failed: ${
                 error instanceof Error ? error.message : String(error)
@@ -416,10 +439,11 @@ async function verifyFieldRoundTrip(
     machineId: string,
     verificationFile: string,
     diagnosticsFile: string,
+    codexVersion: string,
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -427,9 +451,15 @@ async function verifyFieldRoundTrip(
         cliRoundTripObserved: false,
         v3MessageCount: 0,
         entityCounts: {},
+        officialCodexVersion: codexVersion,
+        providerRequestCount: 0,
+        providerToolOutputObserved: false,
     };
     let lastDiagnostic = '';
     const persistDiagnostic = async (): Promise<void> => {
+        const provider = responsesFixture?.snapshot();
+        diagnostic.providerRequestCount = provider?.requestCount ?? 0;
+        diagnostic.providerToolOutputObserved = provider?.toolOutputObserved ?? false;
         const serialized = JSON.stringify(diagnostic);
         if (serialized === lastDiagnostic) return;
         lastDiagnostic = serialized;
@@ -492,6 +522,13 @@ async function verifyFieldRoundTrip(
                 [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)),
             );
             diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 1;
+            const provider = responsesFixture?.snapshot();
+            if (
+                (provider?.requestCount ?? 0) >= 2
+                && provider?.toolOutputObserved !== true
+            ) {
+                throw new Error('Official Codex provider follow-up omitted tool output');
+            }
             diagnostic.cliRoundTripObserved = (
                 diagnostic.commandAccepted
                 && (counts.get('codex.thread') ?? 0) >= 1
@@ -499,6 +536,8 @@ async function verifyFieldRoundTrip(
                 && (counts.get('codex.turn') ?? 0) >= 1
                 && (counts.get('codex.item') ?? 0) >= 2
                 && (counts.get('codex.part') ?? 0) >= 2
+                && (provider?.requestCount ?? 0) >= 2
+                && provider?.toolOutputObserved === true
             );
             await persistDiagnostic();
             if (!diagnostic.cliRoundTripObserved) return false;
@@ -520,6 +559,9 @@ async function verifyFieldRoundTrip(
             sessionHash: verifiedSessionHash,
             v3MessageCount: diagnostic.v3MessageCount,
             entityCounts: diagnostic.entityCounts,
+            officialCodexVersion: diagnostic.officialCodexVersion,
+            providerRequestCount: diagnostic.providerRequestCount,
+            providerToolOutputObserved: diagnostic.providerToolOutputObserved,
             verifiedAt: Date.now(),
         }, null, 2),
         { encoding: 'utf8', mode: 0o600 },
@@ -608,17 +650,24 @@ async function shutdown(): Promise<void> {
             await waitForExit(child);
         }
     }));
+    await responsesFixture?.close().catch(() => undefined);
+    responsesFixture = null;
 }
 
-function assertPinnedCodex(): void {
-    const binary = process.env.HAPPY_SCENARIO_CODEX_BIN?.trim() || 'codex';
+function configureOfficialCodexPath(): string {
+    const binary = process.env.HAPPY_SCENARIO_CODEX_BIN?.trim();
+    const expectedVersion = process.env.HAPPY_SCENARIO_CODEX_VERSION?.trim();
+    if (!binary) throw new Error('HAPPY_SCENARIO_CODEX_BIN is required');
+    if (!expectedVersion) throw new Error('HAPPY_SCENARIO_CODEX_VERSION is required');
     const result = spawnSync(binary, ['--version'], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 10_000,
     });
-    assert.equal(result.status, 0, `Unable to execute pinned Codex at ${binary}`);
-    assert.equal(result.stdout.trim(), expectedCodexVersion);
+    assert.equal(result.status, 0, `Unable to execute official Codex at ${binary}`);
+    assert.equal(result.stdout.trim(), `codex-cli ${expectedVersion}`);
+    process.env.PATH = `${dirname(binary)}${delimiter}${process.env.PATH ?? ''}`;
+    return result.stdout.trim();
 }
 
 function assertRunning(processHandle: ManagedProcess): void {
@@ -669,7 +718,7 @@ function packageVersion(path: string): string {
 }
 
 function requiredAbsolutePath(value: string | undefined, name: string): string {
-    assert(value?.trim(), `${name} is required`);
+    if (!value?.trim()) throw new Error(`${name} is required`);
     const normalized = resolve(value);
     assert.equal(normalized, value, `${name} must be an absolute path`);
     return normalized;
