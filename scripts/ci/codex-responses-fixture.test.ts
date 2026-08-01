@@ -65,7 +65,10 @@ describe('official Codex Responses fixture', () => {
         assert.deepEqual(snapshot.requestShapes[1]?.inputTypes, ['function_call_output']);
     });
 
-    it('prefers the offered Happy MCP tool and records its provider round trip', async () => {
+    it.each([
+        'happy__change_title',
+        'mcp__happy__change_title',
+    ])('prefers the offered flat Happy MCP tool %s', async (toolName) => {
         fixture = await startCodexResponsesFixture({ preferHappyMcpTool: true });
 
         const first = await postResponses(fixture.baseUrl, {
@@ -73,10 +76,10 @@ describe('official Codex Responses fixture', () => {
             input: [{ type: 'message', role: 'user' }],
             tools: [
                 { type: 'function', name: 'shell_command' },
-                { type: 'function', name: 'mcp__happy__change_title' },
+                { type: 'function', name: toolName },
             ],
         });
-        expect(first).toContain('"name":"mcp__happy__change_title"');
+        expect(first).toContain(`"name":"${toolName}"`);
         expect(first).toContain(OFFICIAL_CODEX_MCP_SENTINEL);
 
         const second = await postResponses(fixture.baseUrl, {
@@ -95,10 +98,17 @@ describe('official Codex Responses fixture', () => {
         assert.equal(snapshot.namespaceToolOfferCount, 0);
         assert.equal(snapshot.mcpToolCallCount, 1);
         assert.equal(snapshot.mcpToolOutputObserved, true);
-        assert.deepEqual(snapshot.toolNames, ['mcp__happy__change_title']);
+        assert.deepEqual(snapshot.toolNames, [toolName]);
     });
 
-    it('calls a Happy MCP tool offered through an official Responses namespace', async () => {
+    it.each([
+        ['current', 'happy', 'happy__change_title'],
+        ['legacy-prefixed', 'mcp__happy', 'mcp__happy__change_title'],
+    ])('calls a Happy MCP tool offered through the %s Responses namespace', async (
+        _variant,
+        namespace,
+        canonicalName,
+    ) => {
         fixture = await startCodexResponsesFixture({ preferHappyMcpTool: true });
 
         const first = await postResponses(fixture.baseUrl, {
@@ -106,13 +116,13 @@ describe('official Codex Responses fixture', () => {
             input: [{ type: 'message', role: 'user' }],
             tools: [{
                 type: 'namespace',
-                name: 'mcp__happy__',
+                name: namespace,
                 description: 'Happy tools',
                 tools: [{ type: 'function', name: 'change_title' }],
             }],
         });
         expect(first).toContain('"name":"change_title"');
-        expect(first).toContain('"namespace":"mcp__happy__"');
+        expect(first).toContain(`"namespace":"${namespace}"`);
         expect(first).toContain(OFFICIAL_CODEX_MCP_SENTINEL);
 
         const second = await postResponses(fixture.baseUrl, {
@@ -130,7 +140,37 @@ describe('official Codex Responses fixture', () => {
         assert.equal(snapshot.namespaceToolOfferCount, 1);
         assert.equal(snapshot.mcpToolCallCount, 1);
         assert.equal(snapshot.mcpToolOutputObserved, true);
-        assert.deepEqual(snapshot.toolNames, ['mcp__happy__change_title']);
+        assert.deepEqual(snapshot.toolNames, [canonicalName]);
+    });
+
+    it('rejects bare and lookalike Happy MCP tool identities', async () => {
+        fixture = await startCodexResponsesFixture({ preferHappyMcpTool: true });
+
+        const response = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{ type: 'message', role: 'user' }],
+            tools: [
+                { type: 'function', name: 'change_title' },
+                { type: 'function', name: 'unhappy__change_title' },
+                {
+                    type: 'namespace',
+                    name: 'happy-tools',
+                    tools: [{ type: 'function', name: 'change_title' }],
+                },
+                {
+                    type: 'namespace',
+                    name: 'happy',
+                    tools: [{ type: 'function', name: 'change_title_and_run' }],
+                },
+            ],
+        });
+        expect(response).toContain('"name":"shell_command"');
+
+        const snapshot = fixture.snapshot();
+        assert.equal(snapshot.happyMcpOfferCount, 0);
+        assert.equal(snapshot.namespaceToolOfferCount, 2);
+        assert.equal(snapshot.mcpToolCallCount, 0);
+        assert.deepEqual(snapshot.toolNames, ['shell_command']);
     });
 });
 

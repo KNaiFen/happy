@@ -17,8 +17,10 @@
 - 首轮云端结果：Monorepo CI 与 App `1.11.21` Android release 已通过；官方 Codex Android field 在 Happy MCP 卡片断言失败。产物证明 CLI bridge 与 app-server MCP startup 均正常，但 provider 请求计数停在 3，MCP call/output 均为 0。
 - 根因：本次云端编译的官方 `codex-cli 0.146.0` 使用 Responses namespace 工具结构 `type=namespace -> tools[]`；夹具只识别顶层或 `function.name`，未选择 namespace 内的 `change_title`，因此错误返回普通最终回复。产品的 `thread/resume` 已正确传递 `config.mcp_servers`，无需修改 CLI。
 - 修复：夹具同时解析扁平 function 与 namespace 子工具；向官方 app-server 返回 namespaced `function_call` 时保留 `namespace` 字段，并记录不含参数/输出的 namespace 覆盖计数。单元测试分别固定扁平与 namespace 两种协议形态，Android field 仍必须完成真实 Happy MCP provider call/output、唯一 UI 卡片、compact 和重启恢复。
-- 本轮源码验证：Responses fixture `3/3`、官方 Codex CI TypeScript、field shell 语法与 `git diff --check` 均通过。
-- 待办：提交并推送 `origin/main`，等待官方 Codex Android field 复验通过后归档本计划。
+- 第一轮夹具源码验证：Responses fixture `3/3`、官方 Codex CI TypeScript、field shell 语法与 `git diff --check` 均通过。
+- 第二轮云端结果：提交 `091a503` 的 Monorepo CI `30718655386` 全绿；Android field `30718655368` 诊断记录 `providerNamespaceToolOfferCount=5`、`providerHappyMcpOfferCount=0`，证明 namespace 解析已生效，但严格身份匹配仍未选中 Happy 工具。
+- 根因修正：官方 `0.146.0` 默认启用 `NonPrefixedMcpToolNames` 时，Happy MCP 的模型可见 namespace 是 `happy`；旧版/旧配置才是 `mcp__happy`。子工具均为 `change_title`。夹具不得把旧 `mcp__` 前缀当成唯一合法形式。
+- 二次修复：只接受精确的 `(happy, change_title)` 与 `(mcp__happy, change_title)` namespace 组合，以及对应的扁平 `happy__change_title`/`mcp__happy__change_title`；负向用例固定拒绝裸名、子串和相似名称。新旧 namespace/扁平 fixture `6/6`、官方 Codex CI TypeScript、field shell 与 diff 检查均通过。等待下一轮官方 Codex Android field 复验通过后归档本计划。
 
 ## 目标
 

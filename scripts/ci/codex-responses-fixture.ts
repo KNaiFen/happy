@@ -478,7 +478,13 @@ function canonicalToolName(tool: OfferedTool): string {
 }
 
 function isHappyMcpTool(tool: OfferedTool): boolean {
-    return canonicalToolName(tool).toLowerCase() === 'mcp__happy__change_title';
+    const name = tool.name.toLowerCase();
+    if (tool.namespace) {
+        const namespace = tool.namespace.toLowerCase().replace(/__$/, '');
+        return name === 'change_title'
+            && (namespace === 'happy' || namespace === 'mcp__happy');
+    }
+    return name === 'happy__change_title' || name === 'mcp__happy__change_title';
 }
 
 function containsString(value: unknown, expected: string): boolean {
