@@ -11,26 +11,31 @@ describe('resumeExistingThread', () => {
     it.each([
         [false, undefined, {
             emitLegacySnapshot: true,
+            emitLegacyAnnouncement: true,
             migrateToSyncV4: false,
             finalizeSyncV4Activation: false,
         }],
         [true, undefined, {
             emitLegacySnapshot: false,
+            emitLegacyAnnouncement: false,
             migrateToSyncV4: true,
             finalizeSyncV4Activation: false,
         }],
         [true, 'importing' as const, {
             emitLegacySnapshot: false,
+            emitLegacyAnnouncement: false,
             migrateToSyncV4: true,
             finalizeSyncV4Activation: false,
         }],
         [true, 'activating' as const, {
             emitLegacySnapshot: false,
+            emitLegacyAnnouncement: false,
             migrateToSyncV4: false,
             finalizeSyncV4Activation: true,
         }],
         [true, 'ready' as const, {
             emitLegacySnapshot: false,
+            emitLegacyAnnouncement: false,
             migrateToSyncV4: false,
             finalizeSyncV4Activation: false,
         }],
@@ -38,7 +43,7 @@ describe('resumeExistingThread', () => {
         expect(resolveCodexResumeSyncStrategy(enabled, state)).toEqual(expected);
     });
 
-    it('resumes the thread and updates session metadata', async () => {
+    it.each([true, false])('resumes the thread and updates session metadata with announce=%s', async (announce) => {
         const client = {
             resumeThread: vi.fn().mockResolvedValue({
                 threadId: '019ccca2-1a77-7481-9873-de72f3464372',
@@ -62,6 +67,7 @@ describe('resumeExistingThread', () => {
             threadId: '019ccca2-1a77-7481-9873-de72f3464372',
             cwd: '/tmp/project',
             mcpServers: { happy: { command: 'happy-mcp' } },
+            announce,
         });
 
         expect(result).toEqual({
@@ -81,10 +87,14 @@ describe('resumeExistingThread', () => {
             codexThreadId: '019ccca2-1a77-7481-9873-de72f3464372',
         });
         expect(messageBuffer.addMessage).toHaveBeenCalledWith(expect.stringContaining('Resumed thread'), 'status');
-        expect(session.sendSessionEvent).toHaveBeenCalledWith({
-            type: 'message',
-            message: 'Resumed Codex thread 019ccca2-1a77-7481-9873-de72f3464372',
-        });
+        if (announce) {
+            expect(session.sendSessionEvent).toHaveBeenCalledWith({
+                type: 'message',
+                message: 'Resumed Codex thread 019ccca2-1a77-7481-9873-de72f3464372',
+            });
+        } else {
+            expect(session.sendSessionEvent).not.toHaveBeenCalled();
+        }
     });
 
     it('wraps backend resume errors with the thread ID', async () => {
@@ -107,6 +117,7 @@ describe('resumeExistingThread', () => {
                 threadId: 'thread-404',
                 cwd: '/tmp/project',
                 mcpServers: {},
+                announce: false,
             }),
         ).rejects.toThrow('Failed to resume Codex thread thread-404: thread not found');
     });

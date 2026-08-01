@@ -1777,8 +1777,9 @@ export async function runCodex(opts: {
                 cwd: process.cwd(),
                 mcpServers,
                 emitSnapshot: resumeSyncStrategy.emitLegacySnapshot,
-                // Side chats start empty — keep the resume notice out of the UI.
-                announce: !isSideChat,
+                // Sync v4 restores provider history through canonical entities;
+                // never add a parallel v3 resume announcement.
+                announce: !isSideChat && resumeSyncStrategy.emitLegacyAnnouncement,
             });
             first = false;
             appendSystemPromptInjected = true;

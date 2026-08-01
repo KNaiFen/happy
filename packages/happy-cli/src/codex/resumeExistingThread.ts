@@ -22,6 +22,7 @@ type ResumeThreadMessageBuffer = {
 
 export interface CodexResumeSyncStrategy {
     emitLegacySnapshot: boolean;
+    emitLegacyAnnouncement: boolean;
     migrateToSyncV4: boolean;
     finalizeSyncV4Activation: boolean;
 }
@@ -33,6 +34,7 @@ export function resolveCodexResumeSyncStrategy(
 ): CodexResumeSyncStrategy {
     return {
         emitLegacySnapshot: !syncV4Enabled,
+        emitLegacyAnnouncement: !syncV4Enabled,
         migrateToSyncV4: syncV4Enabled
             && migrationState !== 'ready'
             && migrationState !== 'activating',
@@ -48,12 +50,8 @@ export async function resumeExistingThread(opts: {
     cwd: string;
     mcpServers: Record<string, unknown>;
     emitSnapshot?: boolean;
-    /**
-     * Whether to surface a "Resumed Codex thread …" message in the chat UI.
-     * Side chats open empty on purpose, so they pass `false` to keep this
-     * internal resume detail out of the conversation. Defaults to `true`.
-     */
-    announce?: boolean;
+    /** Whether to publish the legacy v3 resume announcement. */
+    announce: boolean;
 }): Promise<{ threadId: string; model: string; thread: Thread }> {
     try {
         const resumedThread = await opts.client.resumeThread({
@@ -68,7 +66,7 @@ export async function resumeExistingThread(opts: {
             codexThreadId: resumedThread.threadId,
         }));
         opts.messageBuffer.addMessage(`Resumed thread ${trimIdent(resumedThread.threadId)}`, 'status');
-        if (opts.announce !== false) {
+        if (opts.announce) {
             opts.session.sendSessionEvent({
                 type: 'message',
                 message: `Resumed Codex thread ${resumedThread.threadId}`,

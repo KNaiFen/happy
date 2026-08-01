@@ -2,9 +2,9 @@
 
 ## 状态
 
-- 状态：功能与发布构建完成；Android field 第二轮发现 resume 迁移窗口仍向 v3 双写，修复与复验中
+- 状态：功能与发布构建完成；Android field 第三轮发现 resume announcement 绕过旧输出门，修复与复验中
 - 基线：`main@f371de5fd9eb3edd11eade0ffd894ea865eacc7f`
-- 目标版本：App `1.11.20`、CLI `1.4.13`、Server `1.1.33`
+- 目标版本：App `1.11.20`、CLI `1.4.14`、Server `1.1.33`
 - Wire 保持 `0.1.5`
 
 ## 目标
@@ -72,4 +72,6 @@
 - Android field 首轮现场：零机器 bootstrap、零会话 App surface、真实中继、官方 Codex provenance、历史线程选择和在线会话导航均通过；`agent-input-message` 等待被已显示的 `Enjoying the app?` 原生模态遮挡。修复为关键点条件关闭反馈弹窗，并删除“发送后必须出现”的错误测试边界。
 - Android field 第二轮现场：反馈弹窗处理已通过；恢复进程在 v4 migration 尚未 ready 时收到官方历史通知，`CodexLegacyOutput` 因 `canonicalV4Active=false` 将一问一答写入 `/v3/sessions/:id/messages`。field 的零 v3 断言正确失败并关闭临时中继，后续 UI 空白和滚动超时是该主动关停的结果，不是历史投影或滚动方向问题。
 - 修复要求：v4 已启用时旧输出适配器全程只读/静默，不因在线、离线或 migration 状态回退；增加 migration-pending 在线场景回归测试，保留 field 的零 v3 强断言。
-- 待云端复验：CLI `1.4.13` 构建及 Android API 36 从零 Happy 会话选择官方历史、继续发言并在进程死亡后恢复。
+- Android field 第三轮现场：`CodexLegacyOutput` 修复已把 v3 记录从两条降为一条，但 `resumeExistingThread` 的聊天内恢复公告直接调用 `session.sendSessionEvent`，绕过统一旧输出门；fixture 再次按零 v3 断言关闭中继，CLI 尚未 ACK 的 23 条 v4 历史 mutation 因此未到达 App。
+- 修复要求：resume 策略同时决定 legacy snapshot 与 legacy announcement；v4 任意 migration 状态下两者都必须关闭。`resumeExistingThread` 的公告参数改为必填，避免未来调用方无意默认写入 v3。
+- 待云端复验：CLI `1.4.14` 构建及 Android API 36 从零 Happy 会话选择官方历史、继续发言并在进程死亡后恢复。
