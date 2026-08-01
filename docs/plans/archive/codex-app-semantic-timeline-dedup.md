@@ -2,8 +2,8 @@
 
 ## 状态
 
-- 状态：官方 deferred MCP tool-search 夹具已本地修复，等待云端复验
-- 基线：`main@74724a98`
+- 状态：已完成并归档
+- 验收基线：`main@06a6b75`
 - 目标版本：App `1.11.21`
 - CLI、Server、Wire 保持当前版本；本轮仅修 CI 夹具，不重复发布 App
 
@@ -27,6 +27,7 @@
 - 三次修复本地验证：Responses fixture `7/7`（含种子 shell 隔离和完整 deferred tool-search 往返）、官方 Codex CI TypeScript、field shell 语法与 `git diff --check` 均通过。
 - 第四轮云端结果：提交 `e186889` 的 Monorepo CI `30721479746` 全绿；Android field `30721479743` 的主流程 `2m29s` 通过，schema 5 记录 `tool_search=1/1`、Happy offer/call/output 均成功、零 v3 回退，并通过唯一 MCP 卡片、compact 与首次 App 重启断言。随后独立进程死亡恢复流失败在查找旧标题 `New chat`；失败截图明确显示真实 Happy `change_title` 已将持久化会话标题更新为 `MCP single-card field verification`，会话本身仍在列表中。
 - 四次修复：recovery 流不再依赖被真实 MCP 主动替换掉的初始标题，改为等待并打开 `MCP single-card field verification`，使该步骤同时验证标题和会话在进程死亡后恢复，再继续核对种子历史与官方回复。
+- 最终云端验收：提交 `06a6b75` 的 Monorepo CI `30722923182` 与 Android field `30722923181` 全绿。field 从官方源码固定构建 `codex-cli 0.146.0`，schema 5 证明 5 次 provider 请求、一次 tool-search call/output、一次真实 Happy offer/call/output、零 v3 消息；zero-machine bootstrap、零设备 App 入口、MCP/compact 主流程和 19 秒进程死亡恢复四份 JUnit 均为 `failures=0`。
 
 ## 目标
 
@@ -75,6 +76,6 @@ compaction item  -> timeline divider
 
 ## 发布
 
-- App patch 推进到 `1.11.21`，使用中文提交并推送 `origin/main`。
-- 等待 Monorepo CI、官方 Codex 场景、Android field 和 Android release 全绿；失败时修复并按发布规则推进新 patch。
-- 完成后记录验证证据并移入 `docs/plans/archive/`；同步本地 `.agents`，但不提交本地 AI 文件。
+- App patch 已推进到 `1.11.21`，Android release `30716908465` 已通过。
+- 最终 Monorepo CI `30722923182` 与官方 Codex Android field `30722923181` 已通过。
+- 计划已记录验证证据并移入 `docs/plans/archive/`；本地 `.agents` 已同步但不提交。
