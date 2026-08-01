@@ -40,6 +40,14 @@ tags:
 - tapOn:
     id: codex-resume-confirm
 
+- waitForAnimationToEnd:
+    timeout: 10000
+- runFlow:
+    when:
+      visible: Enjoying the app?
+    commands:
+      - tapOn: NOT REALLY
+
 - extendedWaitUntil:
     visible:
       id: agent-input-message
@@ -64,10 +72,11 @@ tags:
 - tapOn:
     id: agent-input-send
 
-- extendedWaitUntil:
-    visible: Enjoying the app?
-    timeout: 30000
-- tapOn: Not really
+- runFlow:
+    when:
+      visible: Enjoying the app?
+    commands:
+      - tapOn: NOT REALLY
 
 - scrollUntilVisible:
     element: hello-from-android-e2e
