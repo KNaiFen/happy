@@ -44,7 +44,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 2;
+    schemaVersion: 3;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -55,6 +55,8 @@ interface FieldDiagnostic {
     officialCodexVersion: string;
     providerRequestCount: number;
     providerToolOutputObserved: boolean;
+    providerMcpToolCallCount: number;
+    providerMcpToolOutputObserved: boolean;
 }
 
 interface ManagedProcess {
@@ -96,7 +98,10 @@ async function main(): Promise<void> {
     await mkdir(dirname(stateFile), { recursive: true });
 
     const codexVersion = configureOfficialCodexPath();
-    responsesFixture = await startCodexResponsesFixture();
+    responsesFixture = await startCodexResponsesFixture({
+        preferHappyMcpTool: true,
+        mcpFollowupDelayMs: 5_000,
+    });
     const codexHome = join(fixtureRoot, 'codex-home');
     await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl);
     process.env.CODEX_HOME = codexHome;
@@ -138,7 +143,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 2,
+        schemaVersion: 3,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -149,11 +154,13 @@ async function main(): Promise<void> {
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
         providerToolOutputObserved: false,
+        providerMcpToolCallCount: 0,
+        providerMcpToolOutputObserved: false,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 2,
+            schemaVersion: 3,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -164,6 +171,8 @@ async function main(): Promise<void> {
             officialCodexVersion: codexVersion,
             providerRequestCount: 0,
             providerToolOutputObserved: false,
+            providerMcpToolCallCount: 0,
+            providerMcpToolOutputObserved: false,
         });
     }
 
@@ -193,7 +202,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 2,
+        schemaVersion: 3,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -204,6 +213,8 @@ async function main(): Promise<void> {
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
         providerToolOutputObserved: false,
+        providerMcpToolCallCount: 0,
+        providerMcpToolOutputObserved: false,
     });
 
     console.log(`Mobile field fixture ready for machine ${hashForLog(machineId)}`);
@@ -469,7 +480,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -480,12 +491,16 @@ async function verifyFieldRoundTrip(
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
         providerToolOutputObserved: false,
+        providerMcpToolCallCount: 0,
+        providerMcpToolOutputObserved: false,
     };
     let lastDiagnostic = '';
     const persistDiagnostic = async (): Promise<void> => {
         const provider = responsesFixture?.snapshot();
         diagnostic.providerRequestCount = provider?.requestCount ?? 0;
         diagnostic.providerToolOutputObserved = provider?.toolOutputObserved ?? false;
+        diagnostic.providerMcpToolCallCount = provider?.mcpToolCallCount ?? 0;
+        diagnostic.providerMcpToolOutputObserved = provider?.mcpToolOutputObserved ?? false;
         const serialized = JSON.stringify(diagnostic);
         if (serialized === lastDiagnostic) return;
         lastDiagnostic = serialized;
@@ -549,12 +564,6 @@ async function verifyFieldRoundTrip(
             );
             diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 1;
             const provider = responsesFixture?.snapshot();
-            if (
-                (provider?.requestCount ?? 0) >= 2
-                && provider?.toolOutputObserved !== true
-            ) {
-                throw new Error('Official Codex provider follow-up omitted tool output');
-            }
             diagnostic.cliRoundTripObserved = (
                 diagnostic.commandAccepted
                 && (counts.get('codex.thread') ?? 0) >= 1
@@ -562,8 +571,10 @@ async function verifyFieldRoundTrip(
                 && (counts.get('codex.turn') ?? 0) >= 1
                 && (counts.get('codex.item') ?? 0) >= 2
                 && (counts.get('codex.part') ?? 0) >= 2
-                && (provider?.requestCount ?? 0) >= 3
+                && (provider?.requestCount ?? 0) >= 4
                 && provider?.toolOutputObserved === true
+                && (provider?.mcpToolCallCount ?? 0) >= 1
+                && provider?.mcpToolOutputObserved === true
             );
             await persistDiagnostic();
             if (!diagnostic.cliRoundTripObserved) return false;
@@ -588,6 +599,8 @@ async function verifyFieldRoundTrip(
             officialCodexVersion: diagnostic.officialCodexVersion,
             providerRequestCount: diagnostic.providerRequestCount,
             providerToolOutputObserved: diagnostic.providerToolOutputObserved,
+            providerMcpToolCallCount: diagnostic.providerMcpToolCallCount,
+            providerMcpToolOutputObserved: diagnostic.providerMcpToolOutputObserved,
             verifiedAt: Date.now(),
         }, null, 2),
         { encoding: 'utf8', mode: 0o600 },

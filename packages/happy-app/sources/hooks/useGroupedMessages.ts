@@ -282,7 +282,7 @@ function collectAgentWorkGroups(messages: Message[], turnOf: number[], collapseC
             const msg = messages[index];
             if (msg.kind === 'user-text') return false;
             if (isInvisibleMessage(msg) || isUserAttachment(msg)) return false;
-            return true;
+            return msg.kind === 'agent-text' || msg.kind === 'tool-call';
         });
 
         const finalTextIndex = visibleAgentIndexes.find((index) => messages[index].kind === 'agent-text');

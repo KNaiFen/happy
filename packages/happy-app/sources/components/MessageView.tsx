@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { MarkdownView } from "./markdown/MarkdownView";
 import { t } from '@/text';
-import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage } from "@/sync/typesMessage";
+import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage, TimelineEventMessage } from "@/sync/typesMessage";
 import { Metadata } from "@/sync/storageTypes";
 import { ToolView } from "./tools/ToolView";
 import { AgentEvent } from "@/sync/typesRaw";
@@ -80,12 +80,34 @@ function RenderBlock(props: {
     case 'agent-event':
       return <AgentEventBlock event={props.message.event} metadata={props.metadata} />;
 
+    case 'timeline-event':
+      return <TimelineEventBlock message={props.message} />;
+
 
     default:
       // Exhaustive check - TypeScript will error if we miss a case
       const _exhaustive: never = props.message;
       throw new Error(`Unknown message kind: ${_exhaustive}`);
   }
+}
+
+function TimelineEventBlock(props: { message: TimelineEventMessage }) {
+  const label = props.message.event === 'context-compaction'
+    ? t('message.contextCompaction')
+    : props.message.event === 'review-started'
+      ? t('message.reviewStarted')
+      : t('message.reviewFinished');
+  return (
+    <View
+      style={styles.timelineEventContainer}
+      accessibilityLabel={label}
+      testID={`codex-timeline-${props.message.event}`}
+    >
+      <View style={styles.timelineEventLine} />
+      <Text style={styles.timelineEventText}>{label}</Text>
+      <View style={styles.timelineEventLine} />
+    </View>
+  );
 }
 
 function UserTextBlock(props: {
@@ -227,7 +249,10 @@ function ToolCallBlock(props: {
     return null;
   }
   return (
-    <View style={styles.toolContainer}>
+    <View
+      style={styles.toolContainer}
+      testID={props.message.tool.name.startsWith('mcp__') ? 'codex-mcp-tool-message' : undefined}
+    >
       <ToolView
         tool={props.message.tool}
         metadata={props.metadata}
@@ -321,6 +346,22 @@ const styles = StyleSheet.create((theme) => ({
   agentEventText: {
     color: theme.colors.agentEventText,
     fontSize: 14,
+  },
+  timelineEventContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    paddingVertical: 10,
+  },
+  timelineEventLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: theme.colors.divider,
+  },
+  timelineEventText: {
+    color: theme.colors.agentEventText,
+    fontSize: 12,
   },
   toolContainer: {
     marginHorizontal: 8,

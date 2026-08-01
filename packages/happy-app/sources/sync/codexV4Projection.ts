@@ -485,6 +485,12 @@ function collectAffectedOwners(
             return;
         case 'codex.item': {
             affected.items.add(entity.providerId);
+            if (isPlanOrDiffItem(entity)) {
+                for (const providerId of indexes.getGroup(
+                    'itemProviderIdsByTurn',
+                    turnKey(entity.threadId, entity.turnId),
+                )) affected.items.add(providerId);
+            }
             for (const providerId of indexes.getGroup(
                 'requestProviderIdsByItem',
                 itemKey(entity.threadId, entity.turnId, entity.itemId),
@@ -505,9 +511,17 @@ function collectAffectedOwners(
             if (providerId) affected.items.add(providerId);
             return;
         }
-        case 'codex.request':
+        case 'codex.request': {
             affected.requests.add(entity.providerId);
+            if (entity.turnId !== null && entity.itemId !== null) {
+                const parentItemProviderId = indexes.getDirect(
+                    'itemProviderIdByKey',
+                    itemKey(entity.threadId, entity.turnId, entity.itemId),
+                );
+                if (parentItemProviderId) affected.items.add(parentItemProviderId);
+            }
             return;
+        }
         case 'codex.command':
             affected.commands.add(entity.providerId);
             for (const providerId of indexes.getGroup(
@@ -544,6 +558,15 @@ function collectAffectedOwners(
         default:
             return assertNever(entity);
     }
+}
+
+function isPlanOrDiffItem(item: CodexItemEntityV4): boolean {
+    const itemType = item.itemType.toLowerCase();
+    return item.itemId === '__turn_plan__'
+        || item.itemId === '__turn_diff__'
+        || itemType === 'plan'
+        || itemType === 'filechange'
+        || itemType === 'turndiff';
 }
 
 function addEntityToIndexes(entity: CodexEntityV4, indexes: ProjectionIndexBuilder): void {
@@ -752,11 +775,16 @@ function projectAffectedMessages(
                 .map((id) => entities['codex.relation'][id])
                 .filter((entry): entry is CodexRelationEntityV4 => Boolean(entry)),
         );
+        const requests = (indexes.requestProviderIdsByItem[key] ?? [])
+            .map((id) => entities['codex.request'][id])
+            .filter((request): request is CodexRequestEntityV4 => Boolean(request));
+        if (shouldSuppressSyntheticItem(item, entities, indexes)) continue;
         const message = projectItem(
             item,
             parts,
             turnProviderId ? entities['codex.turn'][turnProviderId] : undefined,
             relation ?? undefined,
+            requests,
         );
         if (message) projected.push(message);
     }
@@ -768,10 +796,12 @@ function projectAffectedMessages(
             const parentItemProviderId = request.turnId !== null && request.itemId !== null
                 ? indexes.itemProviderIdByKey[itemKey(request.threadId, request.turnId, request.itemId)]
                 : undefined;
-            projected.push(projectRequestMessage(
-                request,
-                parentItemProviderId ? entities['codex.item'][parentItemProviderId] : undefined,
-            ));
+            const parentItem = parentItemProviderId
+                ? entities['codex.item'][parentItemProviderId]
+                : undefined;
+            if (!parentItem || request.requestType === 'toolUserInput') {
+                projected.push(projectRequestMessage(request, parentItem));
+            }
         }
     }
 
@@ -802,7 +832,7 @@ function projectAffectedMessages(
         if (!entityAffectsSelectedThread(result, selectedThreadId)) continue;
         const commandProviderId = indexes.commandProviderIdByCommandId[result.commandId];
         const command = commandProviderId ? entities['codex.command'][commandProviderId] : undefined;
-        if (isTextTurnCommand(command) && !isCommandFailure(result.status)) continue;
+        if (!shouldProjectCommandResult(result, command)) continue;
         projected.push(projectCommandResult(result, command));
     }
 
@@ -938,8 +968,14 @@ function projectCommandResult(
     };
 }
 
-function isTextTurnCommand(command: CodexCommandEntityV4 | undefined): boolean {
-    return command?.command === 'turn.start' || command?.command === 'turn.steer';
+const QUERY_COMMANDS = new Set(['skills.list', 'mcp.status.list', 'model.list']);
+
+function shouldProjectCommandResult(
+    result: CodexCommandResultEntityV4,
+    command: CodexCommandEntityV4 | undefined,
+): boolean {
+    return isCommandFailure(result.status)
+        || Boolean(command && QUERY_COMMANDS.has(command.command));
 }
 
 function isCommandFailure(status: CodexCommandResultEntityV4['status']): boolean {
@@ -951,6 +987,7 @@ function projectItem(
     parts: CodexPartEntityV4[],
     turn: CodexTurnEntityV4 | undefined,
     relation: CodexRelationEntityV4 | undefined,
+    requests: CodexRequestEntityV4[],
 ): Message | null {
     const itemType = item.itemType.toLowerCase();
     const createdAt = item.startedAt ?? item.createdAt;
@@ -961,6 +998,23 @@ function projectItem(
     // It is a thread-runtime concern, not a model tool call, so keep the cached
     // entity for sync integrity while excluding it from the chat projection.
     if (itemType === 'mcpstartup') return null;
+
+    const isTimelineEvent = itemType === 'contextcompaction'
+        || itemType === 'enteredreviewmode'
+        || itemType === 'exitedreviewmode';
+    if (isTimelineEvent && toolState(item, turn) !== 'error') {
+        return {
+            kind: 'timeline-event',
+            id: itemMessageId(item.providerId),
+            createdAt,
+            event: itemType === 'contextcompaction'
+                ? 'context-compaction'
+                : itemType === 'enteredreviewmode'
+                    ? 'review-started'
+                    : 'review-finished',
+            ...order,
+        };
+    }
 
     if (itemType === 'usermessage') {
         if (!text) return null;
@@ -985,6 +1039,23 @@ function projectItem(
             text,
             ...order,
         };
+    }
+
+    if (itemType === 'subagentactivity') return null;
+
+    const linkedRequests = requests.filter((request) => request.requestType !== 'toolUserInput');
+    const pendingRequest = oldestPendingRequest(linkedRequests);
+    if (pendingRequest) {
+        return projectRequestMessage(
+            pendingRequest,
+            item,
+            itemMessageId(item.providerId),
+            linkedRequests.filter((request) => request.status === 'pending').length,
+        );
+    }
+    const latestRequest = newestEntity(linkedRequests);
+    if (latestRequest && isRejectedRequest(latestRequest)) {
+        return projectRequestMessage(latestRequest, item, itemMessageId(item.providerId));
     }
 
     const tool = projectTool(item, parts, turn, relation);
@@ -1082,23 +1153,57 @@ function projectTool(
             result: content || undefined,
         };
     }
-    if (itemType === 'contextcompaction') {
+    if (itemType === 'plan') {
         return {
             ...base,
-            name: 'CodexCompact',
+            name: 'CodexPlan',
             input: {},
             result: content || undefined,
         };
     }
-    if (content) {
+    if (itemType === 'turndiff') {
         return {
             ...base,
-            name: item.tool ?? `Codex:${item.itemType}`,
-            input: item.arguments ?? {},
-            result: (parseJsonContent(content) ?? content) || undefined,
+            name: 'CodexPatch',
+            input: { changes: content },
+            result: state === 'error' ? content : undefined,
         };
     }
-    return null;
+    if (itemType === 'websearch') {
+        const parsed = parseJsonContent(content);
+        return {
+            ...base,
+            name: 'WebSearch',
+            input: parsed ?? item.arguments ?? {},
+            result: (parsed ?? content) || undefined,
+        };
+    }
+    return {
+        ...base,
+        name: 'CodexActivity',
+        input: { type: item.itemType, arguments: item.arguments ?? {} },
+        result: (parseJsonContent(content) ?? content) || undefined,
+        description: item.tool ?? item.itemType,
+    };
+}
+
+function oldestPendingRequest(requests: CodexRequestEntityV4[]): CodexRequestEntityV4 | null {
+    let oldest: CodexRequestEntityV4 | null = null;
+    for (const request of requests) {
+        if (request.status !== 'pending') continue;
+        if (
+            !oldest
+            || request.createdAt < oldest.createdAt
+            || (request.createdAt === oldest.createdAt && request.providerId < oldest.providerId)
+        ) oldest = request;
+    }
+    return oldest;
+}
+
+function isRejectedRequest(request: CodexRequestEntityV4): boolean {
+    return request.status === 'declined'
+        || request.status === 'cancelled'
+        || request.status === 'error';
 }
 
 function projectPermission(request: CodexRequestEntityV4 | undefined): ToolCall['permission'] {
@@ -1121,20 +1226,19 @@ function projectPermission(request: CodexRequestEntityV4 | undefined): ToolCall[
 function projectRequestMessage(
     request: CodexRequestEntityV4,
     parentItem: CodexItemEntityV4 | undefined,
+    messageId: string = requestMessageId(request.providerId),
+    pendingRequestCount: number = 1,
 ): ToolCallMessage {
     const isUserInput = request.requestType === 'toolUserInput';
     const name = isUserInput
         ? 'AskUserQuestion'
-        : request.requestType === 'commandApproval'
-            ? 'CodexCommandApproval'
-            : request.requestType === 'fileChangeApproval'
-                ? 'CodexFileChangeApproval'
-                : 'CodexPermissions';
+        : 'CodexApproval';
+    const messageCreatedAt = parentItem?.startedAt ?? parentItem?.createdAt ?? request.createdAt;
     return {
         kind: 'tool-call',
-        id: requestMessageId(request.providerId),
+        id: messageId,
         localId: null,
-        createdAt: request.createdAt,
+        createdAt: messageCreatedAt,
         children: [],
         tool: {
             name,
@@ -1146,6 +1250,7 @@ function projectRequestMessage(
                     title: request.title,
                     prompt: request.prompt,
                     options: request.options,
+                    pendingRequestCount,
                 },
             result: request.response ?? undefined,
             createdAt: request.createdAt,
@@ -1158,6 +1263,22 @@ function projectRequestMessage(
         },
         ...(parentItem ? projectItemOrder(parentItem) : {}),
     };
+}
+
+function shouldSuppressSyntheticItem(
+    item: CodexItemEntityV4,
+    entities: CodexV4EntityBuckets,
+    indexes: CodexV4ProjectionIndexes,
+): boolean {
+    if (item.itemId !== '__turn_plan__' && item.itemId !== '__turn_diff__') return false;
+    const canonicalType = item.itemId === '__turn_plan__' ? 'plan' : 'filechange';
+    return (indexes.itemProviderIdsByTurn[turnKey(item.threadId, item.turnId)] ?? []).some((providerId) => {
+        const candidate = entities['codex.item'][providerId];
+        return candidate
+            && candidate.providerId !== item.providerId
+            && candidate.itemId !== item.itemId
+            && candidate.itemType.toLowerCase() === canonicalType;
+    });
 }
 
 function contentForKinds(parts: CodexPartEntityV4[], kinds: CodexPartEntityV4['kind'][]): string {

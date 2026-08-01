@@ -621,6 +621,9 @@ export const ru: TranslationStructure = {
             applyChanges: 'Обновить файл',
             viewDiff: 'Текущие изменения файла',
             question: 'Вопрос',
+            approvalRequired: 'Требуется подтверждение',
+            codexControl: 'Управление Codex',
+            codexActivity: 'Действие Codex',
         },
         desc: {
             terminalCmd: ({ cmd }: { cmd: string }) => `Терминал(команда: ${cmd})`,
@@ -942,6 +945,9 @@ export const ru: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Лимит использования достигнут до ${time}`,
         sentAsGoal: 'Отправлено в качестве цели',
         unknownTime: 'неизвестное время',
+        contextCompaction: 'Контекст сжат',
+        reviewStarted: 'Проверка начата',
+        reviewFinished: 'Проверка завершена',
     },
 
     codex: {

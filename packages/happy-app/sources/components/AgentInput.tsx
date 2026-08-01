@@ -1,6 +1,6 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
-import { Keyboard, View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, TouchableWithoutFeedback } from 'react-native';
+import { View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, TouchableWithoutFeedback } from 'react-native';
 import { Image } from 'expo-image';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
 import type { AttachmentPreview } from '@/sync/attachmentTypes';
@@ -36,6 +36,7 @@ import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
+import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -911,53 +912,27 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // visible, including while we dismiss the keyboard on mobile.
     type ComposerPicker = 'permission' | 'model' | 'effort';
     const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
-    const pickerOpeningRef = React.useRef<ComposerPicker | null>(null);
-    const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
-    const pickerOpenTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    const cancelPendingPickerOpen = React.useCallback(() => {
-        pickerOpeningRef.current = null;
-        pickerKeyboardSubscriptionRef.current?.remove();
-        pickerKeyboardSubscriptionRef.current = null;
-        if (pickerOpenTimerRef.current) {
-            clearTimeout(pickerOpenTimerRef.current);
-            pickerOpenTimerRef.current = null;
-        }
-    }, []);
+    const pickerCoordinator = useKeyboardDismissCoordinator<ComposerPicker>();
 
     const closePicker = React.useCallback(() => {
-        cancelPendingPickerOpen();
+        pickerCoordinator.cancel();
         setOpenPicker(null);
-    }, [cancelPendingPickerOpen]);
-
-    React.useEffect(() => cancelPendingPickerOpen, [cancelPendingPickerOpen]);
+    }, [pickerCoordinator]);
 
     const handlePickerPress = React.useCallback((picker: ComposerPicker) => {
         hapticsLight();
-        if (openPicker === picker || pickerOpeningRef.current === picker) {
+        if (openPicker === picker || pickerCoordinator.isPending(picker)) {
             closePicker();
             return;
         }
 
         closePicker();
-        if (Platform.OS === 'web' || !Keyboard.isVisible()) {
-            setOpenPicker(picker);
-            return;
-        }
-
-        pickerOpeningRef.current = picker;
-        const finishOpening = () => {
-            const pickerToOpen = pickerOpeningRef.current;
-            cancelPendingPickerOpen();
-            if (pickerToOpen) {
-                setOpenPicker(pickerToOpen);
-            }
-        };
-        pickerKeyboardSubscriptionRef.current = Keyboard.addListener('keyboardDidHide', finishOpening);
-        pickerOpenTimerRef.current = setTimeout(finishOpening, 420);
-        inputRef.current?.blur();
-        Keyboard.dismiss();
-    }, [cancelPendingPickerOpen, closePicker, openPicker]);
+        pickerCoordinator.schedule(
+            picker,
+            () => setOpenPicker(picker),
+            () => inputRef.current?.blur(),
+        );
+    }, [closePicker, openPicker, pickerCoordinator]);
 
     const handleSettingsPress = React.useCallback(() => {
         handlePickerPress('permission');

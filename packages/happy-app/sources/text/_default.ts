@@ -619,6 +619,9 @@ export const en = {
             applyChanges: 'Update file',
             viewDiff: 'Current file changes',
             question: 'Question',
+            approvalRequired: 'Approval required',
+            codexControl: 'Codex control',
+            codexActivity: 'Codex activity',
         },
         askUserQuestion: {
             submit: 'Submit Answer',
@@ -953,6 +956,9 @@ export const en = {
         usageLimitUntil: ({ time }: { time: string }) => `Usage limit reached until ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: 'unknown time',
+        contextCompaction: 'Context compacted',
+        reviewStarted: 'Review started',
+        reviewFinished: 'Review finished',
     },
 
     codex: {

@@ -605,6 +605,9 @@ export const ca: TranslationStructure = {
             applyChanges: 'Actualitza fitxer',
             viewDiff: 'Canvis del fitxer actual',
             question: 'Pregunta',
+            approvalRequired: 'Cal aprovació',
+            codexControl: 'Control de Codex',
+            codexActivity: 'Activitat de Codex',
         },
         desc: {
             terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
@@ -938,6 +941,9 @@ export const ca: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Límit d'ús assolit fins a ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: 'temps desconegut',
+        contextCompaction: 'Context compactat',
+        reviewStarted: 'Revisió iniciada',
+        reviewFinished: 'Revisió finalitzada',
     },
 
     codex: {

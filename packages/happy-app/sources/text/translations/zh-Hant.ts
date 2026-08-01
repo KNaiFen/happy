@@ -605,6 +605,9 @@ export const zhHant: TranslationStructure = {
             applyChanges: '更新檔案',
             viewDiff: '目前檔案更改',
             question: '問題',
+            approvalRequired: '需要批准',
+            codexControl: 'Codex 控制',
+            codexActivity: 'Codex 活動',
         },
         askUserQuestion: {
             submit: '提交答案',
@@ -938,6 +941,9 @@ export const zhHant: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: '未知時間',
+        contextCompaction: '上下文壓縮',
+        reviewStarted: '開始審查',
+        reviewFinished: '結束審查',
     },
 
     codex: {

@@ -51,6 +51,15 @@ function namedToolMessage(id: string, name: string, createdAt: number): ToolCall
     };
 }
 
+function timelineMessage(id: string, createdAt: number): Message {
+    return {
+        kind: 'timeline-event',
+        id,
+        createdAt,
+        event: 'context-compaction',
+    };
+}
+
 describe('useGroupedMessages', () => {
     it('stores grouped tools in chronological render order', () => {
         const messages: Message[] = [
@@ -118,6 +127,19 @@ describe('useGroupedMessages', () => {
         expect(groups[1]?.messages.map((message) => message.id)).toEqual(['tool-1', 'tool-2']);
     });
 
+    it('uses timeline events as stable boundaries between tool runs', () => {
+        const messages: Message[] = [
+            toolMessage('tool-after', 3),
+            timelineMessage('compact', 2),
+            toolMessage('tool-before', 1),
+        ];
+
+        const items = groupToolCallsForDisplay(messages, true);
+
+        expect(items.map((entry) => entry.id)).toEqual(['tool-after', 'compact', 'tool-before']);
+        expect(items.every((entry) => entry.type === 'message')).toBe(true);
+    });
+
     it('keeps the final agent message visible and collapses earlier agent work', () => {
         const messages: Message[] = [
             {
@@ -158,6 +180,37 @@ describe('useGroupedMessages', () => {
             'agent-progress',
             'tool-earliest',
         ]);
+    });
+
+    it('never swallows a timeline event into completed agent work', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-final',
+                localId: null,
+                createdAt: 4,
+                text: 'done',
+            },
+            timelineMessage('compact', 3),
+            toolMessage('tool-before-compact', 2),
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'compact',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, true);
+
+        expect(items.map((entry) => entry.id)).toEqual([
+            'agent-final',
+            'compact',
+            'work-tool-before-compact',
+            'user',
+        ]);
+        expect(items.filter((entry) => entry.id === 'compact')).toHaveLength(1);
     });
 
     it('does not attach a tool from another Codex turn to the newest reply', () => {

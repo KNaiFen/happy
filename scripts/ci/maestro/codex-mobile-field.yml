@@ -25,7 +25,6 @@ tags:
     id: machine-session-path
 - setClipboard: "~"
 - pasteText
-- hideKeyboard
 - tapOn:
     id: machine-resume-history
 
@@ -78,29 +77,57 @@ tags:
     commands:
       - tapOn: NOT REALLY
 
+- extendedWaitUntil:
+    visible:
+      id: codex-mcp-tool-message
+    timeout: 60000
+- assertNotVisible: Used 2 tools
+- takeScreenshot: codex-live-single-mcp
+
 - scrollUntilVisible:
-    element: hello-from-android-e2e
-    direction: UP
-    timeout: 30000
-- assertVisible: hello-from-android-e2e
-- scrollUntilVisible:
-    element: Official Codex source E2E response
+    element: Official Codex Happy MCP E2E response
     direction: DOWN
     timeout: 60000
-- assertVisible: Official Codex source E2E response
+- assertVisible: Official Codex Happy MCP E2E response
+- assertNotVisible: Used 2 tools
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
 - assertNotVisible: <happy-system>
 - takeScreenshot: codex-first-reply
 
+- tapOn:
+    id: agent-input-message
+- setClipboard: /compact
+- pasteText
+- hideKeyboard
+- tapOn:
+    id: agent-input-send
+- extendedWaitUntil:
+    visible:
+      id: codex-timeline-context-compaction
+    timeout: 60000
+- assertNotVisible: CodexControlCommand
+- assertNotVisible: CodexCompact
+- takeScreenshot: codex-context-compaction
+
 - pressKey: home
 - launchApp:
     stopApp: false
 - scrollUntilVisible:
-    element: Official Codex source E2E response
+    element:
+      id: codex-timeline-context-compaction
     direction: DOWN
-    timeout: 30000
-- assertVisible: Official Codex source E2E response
+    timeout: 60000
+- assertVisible:
+    id: codex-timeline-context-compaction
+- scrollUntilVisible:
+    element: Official Codex Happy MCP E2E response
+    direction: UP
+    timeout: 60000
+- assertVisible: Official Codex Happy MCP E2E response
+- assertNotVisible: Used 2 tools
+- assertNotVisible: CodexControlCommand
+- assertNotVisible: CodexCompact
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
 - assertNotVisible: <happy-system>

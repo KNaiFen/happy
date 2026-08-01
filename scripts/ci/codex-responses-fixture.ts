@@ -10,7 +10,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const OFFICIAL_CODEX_RESPONSE_SENTINEL = 'Official Codex source E2E response';
+export const OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL = 'Official Codex Happy MCP E2E response';
 export const OFFICIAL_CODEX_TOOL_SENTINEL = 'HAPPY_OFFICIAL_CODEX_TOOL_OK';
+export const OFFICIAL_CODEX_MCP_SENTINEL = 'MCP single-card field verification';
 
 const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumDecodedRequestBytes = 32 * 1024 * 1024;
@@ -24,12 +26,18 @@ interface RequestShape {
 export interface CodexResponsesFixtureSnapshot {
     requestCount: number;
     toolOutputObserved: boolean;
+    toolOutputCount: number;
+    mcpToolCallCount: number;
+    mcpToolOutputObserved: boolean;
+    toolNames: string[];
     instructionSentinelObserved: boolean;
     requestShapes: RequestShape[];
 }
 
 export interface CodexResponsesFixtureOptions {
     expectedInstructionSentinel?: string;
+    preferHappyMcpTool?: boolean;
+    mcpFollowupDelayMs?: number;
 }
 
 export interface CodexResponsesFixture {
@@ -44,15 +52,21 @@ export async function startCodexResponsesFixture(
     const state: CodexResponsesFixtureSnapshot = {
         requestCount: 0,
         toolOutputObserved: false,
+        toolOutputCount: 0,
+        mcpToolCallCount: 0,
+        mcpToolOutputObserved: false,
+        toolNames: [],
         instructionSentinelObserved: false,
         requestShapes: [],
     };
+    const pendingTools = new Map<string, { isHappyMcp: boolean }>();
     const server = createServer((request, response) => {
         void handleRequest(
             request,
             response,
             state,
-            options.expectedInstructionSentinel,
+            options,
+            pendingTools,
         ).catch((error: unknown) => {
             const errorName = error instanceof Error ? error.name : 'UnknownError';
             if (!response.headersSent) {
@@ -107,7 +121,8 @@ async function handleRequest(
     request: IncomingMessage,
     response: ServerResponse,
     state: CodexResponsesFixtureSnapshot,
-    expectedInstructionSentinel: string | undefined,
+    options: CodexResponsesFixtureOptions,
+    pendingTools: Map<string, { isHappyMcp: boolean }>,
 ): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
     if (request.method !== 'POST' || pathname !== '/v1/responses') {
@@ -122,16 +137,18 @@ async function handleRequest(
     state.requestCount += 1;
     state.requestShapes.push({ contentEncoding, inputTypes });
     if (
-        expectedInstructionSentinel
-        && containsString(body, expectedInstructionSentinel)
+        options.expectedInstructionSentinel
+        && containsString(body, options.expectedInstructionSentinel)
     ) {
         state.instructionSentinelObserved = true;
     }
-    if (containsToolOutput(body, toolCallId)) {
+
+    const completedTool = findMatchingToolOutput(body, pendingTools);
+    if (completedTool) {
+        pendingTools.delete(completedTool.callId);
         state.toolOutputObserved = true;
-    }
-    if (state.requestCount === 2 && !state.toolOutputObserved) {
-        throw new Error('Official Codex follow-up omitted function_call_output');
+        state.toolOutputCount += 1;
+        if (completedTool.isHappyMcp) state.mcpToolOutputObserved = true;
     }
 
     response.writeHead(200, {
@@ -139,44 +156,75 @@ async function handleRequest(
         'Cache-Control': 'no-cache',
         Connection: 'close',
     });
-    if (state.requestCount === 1) {
-        writeEvents(response, toolCallEvents());
+    if (completedTool) {
+        if (completedTool.isHappyMcp && options.mcpFollowupDelayMs) {
+            await delay(options.mcpFollowupDelayMs);
+        }
+        await writeFinalResponse(
+            response,
+            state.toolOutputCount,
+            completedTool.isHappyMcp
+                ? OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL
+                : OFFICIAL_CODEX_RESPONSE_SENTINEL,
+        );
+        return;
+    }
+
+    const selectedTool = selectOfferedToolName(body, state, options);
+    if (selectedTool) {
+        const callId = state.toolNames.length === 0
+            ? toolCallId
+            : `${toolCallId}-${state.toolNames.length + 1}`;
+        const isHappyMcp = isHappyMcpToolName(selectedTool);
+        pendingTools.set(callId, { isHappyMcp });
+        state.toolNames.push(selectedTool);
+        if (isHappyMcp) state.mcpToolCallCount += 1;
+        writeEvents(response, toolCallEvents(callId, selectedTool));
         response.end();
         return;
     }
 
-    await writeFinalResponse(response);
+    await writeFinalResponse(response, state.requestCount);
 }
 
-function toolCallEvents(): Array<Record<string, unknown>> {
-    const argumentsJson = JSON.stringify({
-        command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
-        workdir: null,
-        timeout_ms: 5_000,
-    });
+function toolCallEvents(
+    callId: string,
+    toolName: string,
+): Array<Record<string, unknown>> {
+    const argumentsJson = JSON.stringify(isHappyMcpToolName(toolName)
+        ? { title: OFFICIAL_CODEX_MCP_SENTINEL }
+        : {
+            command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
+            workdir: null,
+            timeout_ms: 5_000,
+        });
     return [
-        responseCreated('happy-tool-response'),
+        responseCreated(`happy-tool-response-${callId}`),
         {
             type: 'response.output_item.done',
             item: {
                 type: 'function_call',
-                call_id: toolCallId,
-                name: 'shell_command',
+                call_id: callId,
+                name: toolName,
                 arguments: argumentsJson,
             },
         },
-        responseCompleted('happy-tool-response'),
+        responseCompleted(`happy-tool-response-${callId}`),
     ];
 }
 
-async function writeFinalResponse(response: ServerResponse): Promise<void> {
-    const messageId = 'happy-official-message';
-    const reasoningId = 'happy-official-reasoning';
-    const splitAt = Math.floor(OFFICIAL_CODEX_RESPONSE_SENTINEL.length / 2);
-    const firstDelta = OFFICIAL_CODEX_RESPONSE_SENTINEL.slice(0, splitAt);
-    const secondDelta = OFFICIAL_CODEX_RESPONSE_SENTINEL.slice(splitAt);
+async function writeFinalResponse(
+    response: ServerResponse,
+    sequence: number,
+    responseText = OFFICIAL_CODEX_RESPONSE_SENTINEL,
+): Promise<void> {
+    const messageId = `happy-official-message-${sequence}`;
+    const reasoningId = `happy-official-reasoning-${sequence}`;
+    const splitAt = Math.floor(responseText.length / 2);
+    const firstDelta = responseText.slice(0, splitAt);
+    const secondDelta = responseText.slice(splitAt);
     const events: Array<Record<string, unknown>> = [
-        responseCreated('happy-final-response'),
+        responseCreated(`happy-final-response-${sequence}`),
         {
             type: 'response.output_item.added',
             item: { type: 'reasoning', id: reasoningId, summary: [] },
@@ -217,11 +265,11 @@ async function writeFinalResponse(response: ServerResponse): Promise<void> {
                 id: messageId,
                 content: [{
                     type: 'output_text',
-                    text: OFFICIAL_CODEX_RESPONSE_SENTINEL,
+                    text: responseText,
                 }],
             },
         },
-        responseCompleted('happy-final-response'),
+        responseCompleted(`happy-final-response-${sequence}`),
     ];
 
     for (const [index, event] of events.entries()) {
@@ -346,13 +394,54 @@ function collectInputTypes(body: unknown): string[] {
         .sort();
 }
 
-function containsToolOutput(body: unknown, callId: string): boolean {
-    if (!isRecord(body) || !Array.isArray(body.input)) return false;
-    return body.input.some((item) => (
-        isRecord(item)
-        && item.type === 'function_call_output'
-        && item.call_id === callId
-    ));
+function findMatchingToolOutput(
+    body: unknown,
+    pendingTools: Map<string, { isHappyMcp: boolean }>,
+): { callId: string; isHappyMcp: boolean } | null {
+    if (!isRecord(body) || !Array.isArray(body.input)) return null;
+    for (const item of body.input) {
+        if (
+            !isRecord(item)
+            || item.type !== 'function_call_output'
+            || typeof item.call_id !== 'string'
+        ) {
+            continue;
+        }
+        const pending = pendingTools.get(item.call_id);
+        if (pending) return { callId: item.call_id, ...pending };
+    }
+    return null;
+}
+
+function selectOfferedToolName(
+    body: unknown,
+    state: CodexResponsesFixtureSnapshot,
+    options: CodexResponsesFixtureOptions,
+): string | null {
+    const offeredTools = collectOfferedToolNames(body);
+    if (options.preferHappyMcpTool && state.mcpToolCallCount === 0) {
+        const happyMcp = offeredTools.find(isHappyMcpToolName);
+        if (happyMcp) return happyMcp;
+    }
+    if (state.toolNames.length === 0) return 'shell_command';
+    return null;
+}
+
+function collectOfferedToolNames(body: unknown): string[] {
+    if (!isRecord(body) || !Array.isArray(body.tools)) return [];
+    return body.tools.flatMap((tool) => {
+        if (!isRecord(tool)) return [];
+        if (typeof tool.name === 'string') return [tool.name];
+        if (isRecord(tool.function) && typeof tool.function.name === 'string') {
+            return [tool.function.name];
+        }
+        return [];
+    });
+}
+
+function isHappyMcpToolName(toolName: string): boolean {
+    const normalized = toolName.toLowerCase();
+    return normalized.includes('happy') && normalized.includes('change_title');
 }
 
 function containsString(value: unknown, expected: string): boolean {

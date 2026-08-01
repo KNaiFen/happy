@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+    OFFICIAL_CODEX_MCP_SENTINEL,
+    OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL,
     OFFICIAL_CODEX_RESPONSE_SENTINEL,
     OFFICIAL_CODEX_TOOL_SENTINEL,
     type CodexResponsesFixture,
@@ -61,6 +63,37 @@ describe('official Codex Responses fixture', () => {
         assert.equal(snapshot.toolOutputObserved, true);
         assert.equal(snapshot.instructionSentinelObserved, true);
         assert.deepEqual(snapshot.requestShapes[1]?.inputTypes, ['function_call_output']);
+    });
+
+    it('prefers the offered Happy MCP tool and records its provider round trip', async () => {
+        fixture = await startCodexResponsesFixture({ preferHappyMcpTool: true });
+
+        const first = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{ type: 'message', role: 'user' }],
+            tools: [
+                { type: 'function', name: 'shell_command' },
+                { type: 'function', name: 'mcp__happy__change_title' },
+            ],
+        });
+        expect(first).toContain('"name":"mcp__happy__change_title"');
+        expect(first).toContain(OFFICIAL_CODEX_MCP_SENTINEL);
+
+        const second = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'function_call_output',
+                call_id: 'happy-official-codex-tool-call',
+                output: JSON.stringify({ content: [{ type: 'text', text: 'Title changed' }] }),
+            }],
+        });
+        expect(second).toContain(OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL);
+
+        const snapshot = fixture.snapshot();
+        assert.equal(snapshot.toolOutputCount, 1);
+        assert.equal(snapshot.mcpToolCallCount, 1);
+        assert.equal(snapshot.mcpToolOutputObserved, true);
+        assert.deepEqual(snapshot.toolNames, ['mcp__happy__change_title']);
     });
 });
 

@@ -20,6 +20,7 @@ import { MultiTextInput, type MultiTextInputHandle } from '@/components/MultiTex
 import { CodexResumeThreadSheet } from '@/components/CodexResumeThreadSheet';
 import { resolveAbsolutePath } from '@/utils/pathUtils';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
+import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
 
 const styles = StyleSheet.create((theme) => ({
     pathInputContainer: {
@@ -81,6 +82,7 @@ export default function MachineDetailScreen() {
     const [isDeletingMachine, setIsDeletingMachine] = useState(false);
     const [customPath, setCustomPath] = useState('');
     const inputRef = useRef<MultiTextInputHandle>(null);
+    const resumeCoordinator = useKeyboardDismissCoordinator<'resume'>();
     const [showAllPaths, setShowAllPaths] = useState(false);
     // Variant D only
 
@@ -243,19 +245,24 @@ export default function MachineDetailScreen() {
 
     const handleOpenPreviousSession = (): void => {
         if (!machine || !machineId || !isMachineOnline(machine)) return;
+        if (resumeCoordinator.isPending('resume')) return;
         if (machine.metadata?.resumeSupport?.codexThreadHistoryRpcAvailable !== true) {
             Modal.alert(t('machine.resumeRequiresUpgradeTitle'), t('machine.resumeRequiresUpgradeMessage'));
             return;
         }
         const directory = resolveAbsolutePath(customPath.trim(), machine.metadata?.homeDir);
-        Modal.show({
-            component: CodexResumeThreadSheet,
-            props: {
-                machineId,
-                directory,
-                defaults: resolveAgentDefaultConfig(defaultOverrides, 'codex'),
-            },
-        } as any);
+        resumeCoordinator.schedule(
+            'resume',
+            () => Modal.show({
+                component: CodexResumeThreadSheet,
+                props: {
+                    machineId,
+                    directory,
+                    defaults: resolveAgentDefaultConfig(defaultOverrides, 'codex'),
+                },
+            } as any),
+            () => inputRef.current?.blur(),
+        );
     };
 
     if (!machine) {

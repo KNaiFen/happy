@@ -610,6 +610,9 @@ export const it: TranslationStructure = {
             applyChanges: 'Aggiorna file',
             viewDiff: 'Modifiche file attuali',
             question: 'Domanda',
+            approvalRequired: 'Approvazione richiesta',
+            codexControl: 'Controllo Codex',
+            codexActivity: 'Attività Codex',
         },
         desc: {
             terminalCmd: ({ cmd }: { cmd: string }) => `Terminale(cmd: ${cmd})`,
@@ -936,6 +939,9 @@ export const it: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Limite di utilizzo raggiunto fino a ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: 'ora sconosciuta',
+        contextCompaction: 'Contesto compattato',
+        reviewStarted: 'Revisione avviata',
+        reviewFinished: 'Revisione completata',
     },
 
     codex: {

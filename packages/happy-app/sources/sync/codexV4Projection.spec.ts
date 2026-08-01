@@ -181,6 +181,174 @@ describe('Codex v4 projection', () => {
         expect(projection.messages).toEqual([]);
     });
 
+    it('updates one MCP tool message through progress and completion', () => {
+        const mcpItem: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'mcp-item',
+            itemId: 'mcp-item',
+            itemType: 'mcpToolCall',
+            eventSequence: 1,
+            server: 'happy',
+            tool: 'change_title',
+        };
+        const mcpPart: CodexPartEntityV4 = {
+            ...part('{"result":"starting"}', 'mcpProgress'),
+            providerId: 'mcp-part',
+            partId: 'mcp-part',
+            itemId: 'mcp-item',
+        };
+        let projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: turn, revision: 1, op: 'upsert' },
+            { entity: mcpItem, revision: 1, op: 'upsert' },
+            { entity: mcpPart, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:item:mcp-item',
+            tool: { name: 'mcp__happy__change_title', state: 'running' },
+        });
+
+        projection = apply(projection, {
+            ...mcpPart,
+            content: '{"result":"done"}',
+            final: true,
+            updatedAt: 13,
+        }, 2);
+        projection = apply(projection, {
+            ...mcpItem,
+            status: 'completed',
+            completedAt: 14,
+            updatedAt: 14,
+        }, 2);
+
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:item:mcp-item',
+            tool: { state: 'completed', result: { result: 'done' } },
+        });
+    });
+
+    it('projects compact and review lifecycle as stable timeline dividers', () => {
+        const compactCommand: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-compact',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'command-compact',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'thread.compact',
+            payload: { displayText: '/compact' },
+            clientUserMessageId: 'command-compact',
+            replacesCommandId: null,
+        };
+        const compactResult: CodexCommandResultEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'result-compact',
+            createdAt: 11,
+            updatedAt: 11,
+            commandId: 'command-compact',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            status: 'succeeded',
+            providerRequestId: null,
+            result: null,
+            error: null,
+        };
+        const compactItem: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'compact-item',
+            itemId: 'compact-item',
+            itemType: 'contextCompaction',
+            eventSequence: 1,
+            status: 'completed',
+            completedAt: 13,
+        };
+        const reviewStarted: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'review-started',
+            itemId: 'review-started',
+            itemType: 'enteredReviewMode',
+            eventSequence: 2,
+            status: 'completed',
+            completedAt: 14,
+        };
+        const reviewFinished: CodexItemEntityV4 = {
+            ...item,
+            providerId: 'review-finished',
+            itemId: 'review-finished',
+            itemType: 'exitedReviewMode',
+            eventSequence: 3,
+            status: 'completed',
+            completedAt: 15,
+        };
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: reviewFinished, revision: 1, op: 'upsert' },
+            { entity: compactResult, revision: 1, op: 'upsert' },
+            { entity: compactCommand, revision: 1, op: 'upsert' },
+            { entity: compactItem, revision: 2, op: 'upsert' },
+            { entity: reviewStarted, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages.map((message) => ({ id: message.id, kind: message.kind }))).toEqual([
+            { id: 'codex-v4:item:review-finished', kind: 'timeline-event' },
+            { id: 'codex-v4:item:review-started', kind: 'timeline-event' },
+            { id: 'codex-v4:item:compact-item', kind: 'timeline-event' },
+            { id: 'codex-v4:command:command-compact', kind: 'user-text' },
+        ]);
+        expect(projection.messages.filter((message) => message.kind === 'tool-call')).toEqual([]);
+        expect(projection.messages[2]).toMatchObject({ event: 'context-compaction' });
+    });
+
+    it('prefers canonical plan and file-change items over turn-level synthetic copies', () => {
+        const entity = (
+            providerId: string,
+            itemId: string,
+            itemType: string,
+            eventSequence: number,
+        ): CodexItemEntityV4 => ({
+            ...item,
+            providerId,
+            itemId,
+            itemType,
+            eventSequence,
+        });
+        const entityPart = (
+            providerId: string,
+            itemId: string,
+            kind: CodexPartEntityV4['kind'],
+            content: string,
+        ): CodexPartEntityV4 => ({
+            ...part(content, kind),
+            providerId,
+            partId: providerId,
+            itemId,
+        });
+        const updates = [
+            entity('synthetic-plan', '__turn_plan__', 'plan', 1),
+            entityPart('synthetic-plan-part', '__turn_plan__', 'plan', 'synthetic plan'),
+            entity('canonical-plan', 'plan-1', 'plan', 2),
+            entityPart('canonical-plan-part', 'plan-1', 'plan', 'canonical plan'),
+            entity('synthetic-diff', '__turn_diff__', 'turnDiff', 3),
+            entityPart('synthetic-diff-part', '__turn_diff__', 'patch', 'synthetic diff'),
+            entity('canonical-change', 'change-1', 'fileChange', 4),
+            entityPart('canonical-change-part', 'change-1', 'patch', '{"file":"change"}'),
+        ];
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), updates.map((entry) => ({
+            entity: entry,
+            revision: 1,
+            op: 'upsert' as const,
+        })));
+
+        expect(projection.messages.map((message) => message.id)).toEqual([
+            'codex-v4:item:canonical-change',
+            'codex-v4:item:canonical-plan',
+        ]);
+    });
+
     it('orders provider events by their stable turn sequence instead of skewed timestamps', () => {
         const userItem: CodexItemEntityV4 = {
             ...item,
@@ -562,7 +730,7 @@ describe('Codex v4 projection', () => {
         });
     });
 
-    it('projects every request for one item as an independent stable control', () => {
+    it('uses one semantic slot for a tool and all of its linked approvals', () => {
         const approvalItem = {
             ...item,
             itemType: 'commandExecution',
@@ -595,12 +763,16 @@ describe('Codex v4 projection', () => {
             { entity: firstRequest, revision: 1, op: 'upsert' },
             { entity: secondRequest, revision: 1, op: 'upsert' },
         ]);
-        const secondBefore = projection.messages.find((message) => message.id === 'codex-v4:request:request-2');
-
-        expect(projection.messages.filter((message) => (
-            message.kind === 'tool-call' && message.tool.permission?.status === 'pending'
-        )).map((message) => message.kind === 'tool-call' ? message.tool.permission?.id : null))
-            .toEqual(['request-2', 'request-1']);
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:item:item-1',
+            kind: 'tool-call',
+            tool: {
+                name: 'CodexApproval',
+                permission: { id: 'request-1', status: 'pending' },
+                input: { pendingRequestCount: 2 },
+            },
+        });
 
         projection = apply(projection, {
             ...firstRequest,
@@ -610,10 +782,167 @@ describe('Codex v4 projection', () => {
             updatedAt: 15,
         }, 2);
 
-        expect(projection.messages.find((message) => message.id === 'codex-v4:request:request-1'))
-            .toMatchObject({ tool: { permission: { status: 'approved' } } });
-        expect(projection.messages.find((message) => message.id === 'codex-v4:request:request-2'))
-            .toBe(secondBefore);
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:item:item-1',
+            tool: {
+                name: 'CodexApproval',
+                permission: { id: 'request-2', status: 'pending' },
+                input: { pendingRequestCount: 1 },
+            },
+        });
+
+        projection = apply(projection, {
+            ...secondRequest,
+            status: 'resolved',
+            response: { scope: 'turn' },
+            resolvedAt: 16,
+            updatedAt: 16,
+        }, 2);
+
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:item:item-1',
+            tool: { name: 'CodexBash' },
+        });
+    });
+
+    it('rebinds an approval that arrives before its MCP item into one item slot', () => {
+        const request: CodexRequestEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.request',
+            providerId: 'request-before-item',
+            createdAt: 10,
+            updatedAt: 10,
+            requestId: 'request-before-item',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: 'item-1',
+            requestType: 'permissions',
+            status: 'pending',
+            title: null,
+            prompt: 'Allow MCP call?',
+            options: {},
+            response: null,
+            resolvedAt: null,
+        };
+        let projection = apply(createCodexV4Projection(), request);
+        expect(projection.messages).toMatchObject([{
+            id: 'codex-v4:request:request-before-item',
+            tool: { name: 'CodexApproval' },
+        }]);
+
+        projection = apply(projection, {
+            ...item,
+            itemType: 'mcpToolCall',
+            server: 'happy',
+            tool: 'change_title',
+        });
+
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:item:item-1',
+            tool: {
+                name: 'CodexApproval',
+                permission: { id: 'request-before-item', status: 'pending' },
+            },
+        });
+    });
+
+    it('replaces a failed compaction divider with a visible compact error', () => {
+        const failedCompaction: CodexItemEntityV4 = {
+            ...item,
+            itemType: 'contextCompaction',
+            status: 'failed',
+            completedAt: 13,
+        };
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: turn, revision: 1, op: 'upsert' },
+            { entity: failedCompaction, revision: 1, op: 'upsert' },
+            { entity: part('Compaction failed', 'error'), revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages).toMatchObject([{
+            id: 'codex-v4:item:item-1',
+            kind: 'tool-call',
+            tool: {
+                name: 'CodexActivity',
+                state: 'error',
+                result: 'Compaction failed',
+            },
+        }]);
+    });
+
+    it('keeps a rejected linked approval as one compact outcome', () => {
+        const approvalItem: CodexItemEntityV4 = {
+            ...item,
+            itemType: 'mcpToolCall',
+            server: 'happy',
+            tool: 'change_title',
+        };
+        const request: CodexRequestEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.request',
+            providerId: 'request-denied',
+            createdAt: 12,
+            updatedAt: 13,
+            requestId: 'request-denied',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: 'item-1',
+            requestType: 'permissions',
+            status: 'declined',
+            title: null,
+            prompt: 'Allow title change?',
+            options: {},
+            response: { decision: 'decline' },
+            resolvedAt: 13,
+        };
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: turn, revision: 1, op: 'upsert' },
+            { entity: approvalItem, revision: 1, op: 'upsert' },
+            { entity: request, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:item:item-1',
+            tool: {
+                name: 'CodexApproval',
+                state: 'completed',
+                permission: { id: 'request-denied', status: 'denied' },
+            },
+        });
+    });
+
+    it('keeps standalone tool user input independent and actionable', () => {
+        const request: CodexRequestEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.request',
+            providerId: 'elicitation-1',
+            createdAt: 12,
+            updatedAt: 12,
+            requestId: 'elicitation-1',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: null,
+            requestType: 'toolUserInput',
+            status: 'pending',
+            title: 'MCP input',
+            prompt: 'Choose a value',
+            options: { requestMethod: 'mcpServer/elicitation/request' },
+            response: null,
+            resolvedAt: null,
+        };
+        const projection = apply(createCodexV4Projection(), request);
+
+        expect(projection.messages).toMatchObject([{
+            id: 'codex-v4:request:elicitation-1',
+            tool: {
+                name: 'AskUserQuestion',
+                permission: { id: 'elicitation-1', status: 'pending' },
+            },
+        }]);
     });
 
     it('links a delegation item to its isolated child Happy session', () => {
@@ -735,7 +1064,7 @@ describe('Codex v4 projection', () => {
         }]);
     });
 
-    it('projects control progress and failed prompt results as stable tool messages', () => {
+    it('hides control progress but keeps failures as compact stable messages', () => {
         const control: CodexCommandEntityV4 = {
             schemaVersion: 1,
             entityType: 'codex.command',
@@ -766,15 +1095,58 @@ describe('Codex v4 projection', () => {
         };
         let projection = apply(createCodexV4Projection(), control);
         projection = apply(projection, result);
-        expect(projection.messages.find((message) => message.kind === 'tool-call')).toMatchObject({
-            id: 'codex-v4:command-result:command-compact',
-            tool: { state: 'running', input: { command: 'thread.compact' } },
-        });
+        expect(projection.messages).toMatchObject([{
+            id: 'codex-v4:command:command-compact',
+            kind: 'user-text',
+            text: '/compact',
+        }]);
 
         projection = apply(projection, { ...result, status: 'failed', error: 'compact failed', updatedAt: 12 }, 2);
+        expect(projection.messages).toHaveLength(2);
         expect(projection.messages.find((message) => message.kind === 'tool-call')).toMatchObject({
             id: 'codex-v4:command-result:command-compact',
-            tool: { state: 'error', result: 'compact failed' },
+            tool: { name: 'CodexControlCommand', state: 'error', result: 'compact failed' },
+        });
+    });
+
+    it('keeps query command results as one compact row', () => {
+        const command: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-skills',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'command-skills',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'skills.list',
+            payload: { displayText: '/skills' },
+            clientUserMessageId: 'command-skills',
+            replacesCommandId: null,
+        };
+        const result: CodexCommandResultEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'result-skills',
+            createdAt: 11,
+            updatedAt: 12,
+            commandId: 'command-skills',
+            threadId: 'thread-1',
+            turnId: null,
+            status: 'succeeded',
+            providerRequestId: null,
+            result: { skills: ['one'] },
+            error: null,
+        };
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: command, revision: 1, op: 'upsert' },
+            { entity: result, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages).toHaveLength(2);
+        expect(projection.messages.find((message) => message.kind === 'tool-call')).toMatchObject({
+            id: 'codex-v4:command-result:result-skills',
+            tool: { name: 'CodexControlCommand', state: 'completed' },
         });
     });
 

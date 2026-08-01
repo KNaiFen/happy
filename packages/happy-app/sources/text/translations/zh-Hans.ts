@@ -606,6 +606,9 @@ export const zhHans: TranslationStructure = {
             applyChanges: '更新文件',
             viewDiff: '当前文件更改',
             question: '问题',
+            approvalRequired: '需要批准',
+            codexControl: 'Codex 控制',
+            codexActivity: 'Codex 活动',
         },
         desc: {
             terminalCmd: ({ cmd }: { cmd: string }) => `终端(命令: ${cmd})`,
@@ -939,6 +942,9 @@ export const zhHans: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: '未知时间',
+        contextCompaction: '上下文压缩',
+        reviewStarted: '开始审查',
+        reviewFinished: '结束审查',
     },
 
     codex: {

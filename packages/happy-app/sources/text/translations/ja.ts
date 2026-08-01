@@ -613,6 +613,9 @@ export const ja: TranslationStructure = {
             applyChanges: 'ファイルを更新',
             viewDiff: '現在のファイル変更',
             question: '質問',
+            approvalRequired: '承認が必要',
+            codexControl: 'Codex コントロール',
+            codexActivity: 'Codex アクティビティ',
         },
         desc: {
             terminalCmd: ({ cmd }: { cmd: string }) => `ターミナル(cmd: ${cmd})`,
@@ -939,6 +942,9 @@ export const ja: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `${time}まで使用制限中`,
         sentAsGoal: 'Sent as goal',
         unknownTime: '不明な時間',
+        contextCompaction: 'コンテキストを圧縮',
+        reviewStarted: 'レビュー開始',
+        reviewFinished: 'レビュー終了',
     },
 
     codex: {

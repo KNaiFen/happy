@@ -538,6 +538,52 @@ export const knownTools = {
             status: z.enum(['completed', 'in_progress', 'error']).optional(),
         }).passthrough(),
     },
+    'CodexApproval': {
+        title: t('tools.names.approvalRequired'),
+        icon: ICON_QUESTION,
+        minimal: true,
+        noStatus: true,
+        input: z.object({
+            requestType: z.string().optional(),
+            title: z.string().nullable().optional(),
+            prompt: z.string().nullable().optional(),
+            pendingRequestCount: z.number().int().positive().optional(),
+        }).partial().passthrough(),
+        extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
+            if (typeof opts.tool.input?.title === 'string' && opts.tool.input.title) {
+                return opts.tool.input.title;
+            }
+            if (typeof opts.tool.input?.prompt === 'string' && opts.tool.input.prompt) {
+                return opts.tool.input.prompt;
+            }
+            return null;
+        },
+    },
+    'CodexControlCommand': {
+        title: t('tools.names.codexControl'),
+        icon: ICON_TERMINAL,
+        minimal: true,
+        input: z.object({ command: z.string().optional() }).partial().passthrough(),
+        extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => (
+            typeof opts.tool.input?.command === 'string' ? opts.tool.input.command : null
+        ),
+    },
+    'CodexActivity': {
+        title: t('tools.names.codexActivity'),
+        icon: ICON_TASK,
+        minimal: true,
+        input: z.object({ type: z.string().optional() }).partial().passthrough(),
+        extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => (
+            opts.tool.description
+                ?? (typeof opts.tool.input?.type === 'string' ? opts.tool.input.type : null)
+        ),
+    },
+    'CodexPlan': {
+        title: t('tools.names.planProposal'),
+        icon: ICON_TODO,
+        minimal: true,
+        input: z.object({}).passthrough(),
+    },
     'GeminiReasoning': {
         title: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             if (opts.tool.input?.title && typeof opts.tool.input.title === 'string') {

@@ -71,6 +71,7 @@ import {
     AnimatedPopup,
     LocalBlurHalo,
 } from '@/components/AnimatedOverlay';
+import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
 
 // Agent icon assets
 const agentIcons = {
@@ -784,9 +785,7 @@ function NewSessionScreen() {
     const [nativePickerMeasuredHeight, setNativePickerMeasuredHeight] = React.useState<number | null>(null);
     const autoSubmitStartedRef = React.useRef(false);
     const composerInputRef = React.useRef<import('@/components/MultiTextInput').MultiTextInputHandle>(null);
-    const pendingPickerRef = React.useRef<PickerType | null>(null);
-    const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
-    const pickerOpenTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pickerCoordinator = useKeyboardDismissCoordinator<PickerType>();
 
     // Config collapse — auto-collapses when typing, expands when empty
     const [isConfigExpanded, setIsConfigExpanded] = React.useState(true);
@@ -1034,23 +1033,15 @@ function NewSessionScreen() {
     }, []);
 
     const cancelPendingPickerOpen = React.useCallback(() => {
-        pendingPickerRef.current = null;
-        pickerKeyboardSubscriptionRef.current?.remove();
-        pickerKeyboardSubscriptionRef.current = null;
-        if (pickerOpenTimerRef.current) {
-            clearTimeout(pickerOpenTimerRef.current);
-            pickerOpenTimerRef.current = null;
-        }
-    }, []);
-
-    React.useEffect(() => cancelPendingPickerOpen, [cancelPendingPickerOpen]);
+        pickerCoordinator.cancel();
+    }, [pickerCoordinator]);
 
     React.useEffect(() => {
         setNativePickerMeasuredHeight(null);
     }, [activePicker, composerSettingsPage]);
 
     const togglePicker = React.useCallback((type: PickerType) => {
-        if (activePicker === type || pendingPickerRef.current === type) {
+        if (activePicker === type || pickerCoordinator.isPending(type)) {
             cancelPendingPickerOpen();
             setActivePicker(null);
             return;
@@ -1058,24 +1049,13 @@ function NewSessionScreen() {
 
         cancelPendingPickerOpen();
         setActivePicker(null);
-        if (isDesktop || !Keyboard.isVisible()) {
-            setActivePicker(type);
-            return;
-        }
-
-        pendingPickerRef.current = type;
-        const finishOpening = () => {
-            const nextPicker = pendingPickerRef.current;
-            cancelPendingPickerOpen();
-            if (nextPicker) {
-                setActivePicker(nextPicker);
-            }
-        };
-        pickerKeyboardSubscriptionRef.current = Keyboard.addListener('keyboardDidHide', finishOpening);
-        pickerOpenTimerRef.current = setTimeout(finishOpening, 420);
-        composerInputRef.current?.blur();
-        Keyboard.dismiss();
-    }, [activePicker, cancelPendingPickerOpen, isDesktop]);
+        pickerCoordinator.schedule(
+            type,
+            () => setActivePicker(type),
+            () => composerInputRef.current?.blur(),
+            { immediate: isDesktop },
+        );
+    }, [activePicker, cancelPendingPickerOpen, isDesktop, pickerCoordinator]);
 
     const isOffline = selectedMachine ? !isMachineOnline(selectedMachine) : false;
     const agent = availableAgents.find(a => a.key === selectedAgent) ?? ALL_AGENTS[0];

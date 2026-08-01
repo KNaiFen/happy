@@ -2445,10 +2445,14 @@ function commandStatus(
 
 function assertFastProviderOrder(projection: CodexV4Projection): void {
     const messageIds = projection.messages.map((message) => message.id);
-    const userIndex = messageIds.indexOf('codex-v4:item:field-first-user-item-private-v4');
-    const mcpIndex = messageIds.indexOf('codex-v4:item:field-first-mcp-item-private-v4');
-    const replyIndex = messageIds.indexOf('codex-v4:item:field-first-agent-item-private-v4');
+    const userMessageId = 'codex-v4:item:field-first-user-item-private-v4';
+    const mcpMessageId = 'codex-v4:item:field-first-mcp-item-private-v4';
+    const replyMessageId = 'codex-v4:item:field-first-agent-item-private-v4';
+    const userIndex = messageIds.indexOf(userMessageId);
+    const mcpIndex = messageIds.indexOf(mcpMessageId);
+    const replyIndex = messageIds.indexOf(replyMessageId);
     assert(userIndex >= 0 && mcpIndex >= 0 && replyIndex >= 0, 'fast provider timeline is incomplete');
+    assert.equal(messageIds.filter((id) => id === mcpMessageId).length, 1);
     assert(
         replyIndex < mcpIndex && mcpIndex < userIndex,
         `provider eventSequence order was lost: ${messageIds.join(',')}`,
@@ -2457,9 +2461,11 @@ function assertFastProviderOrder(projection: CodexV4Projection): void {
 
 function assertFastCommandWindowOrder(projection: CodexV4Projection, commandId: string): void {
     const messageIds = projection.messages.map((message) => message.id);
-    const commandIndex = messageIds.indexOf(`codex-v4:command:${commandId}`);
+    const commandMessageId = `codex-v4:command:${commandId}`;
+    const commandIndex = messageIds.indexOf(commandMessageId);
     const mcpIndex = messageIds.indexOf('codex-v4:item:field-first-mcp-item-private-v4');
     assert(commandIndex >= 0 && mcpIndex >= 0, 'fast command/MCP window is incomplete');
+    assert.equal(messageIds.filter((id) => id === commandMessageId).length, 1);
     assert(
         mcpIndex < commandIndex,
         `fast MCP appeared before its local prompt: ${messageIds.join(',')}`,

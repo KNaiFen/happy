@@ -51,6 +51,13 @@ export type ModeSwitchMessage = {
     meta?: MessageMeta;
 } & CodexMessageOrder;
 
+export type TimelineEventMessage = {
+    kind: 'timeline-event';
+    id: string;
+    createdAt: number;
+    event: 'context-compaction' | 'review-started' | 'review-finished';
+} & CodexMessageOrder;
+
 export type AgentTextMessage = {
     kind: 'agent-text';
     id: string;
@@ -71,4 +78,4 @@ export type ToolCallMessage = {
     meta?: MessageMeta;
 } & CodexMessageOrder;
 
-export type Message = UserTextMessage | AgentTextMessage | ToolCallMessage | ModeSwitchMessage;
+export type Message = UserTextMessage | AgentTextMessage | ToolCallMessage | ModeSwitchMessage | TimelineEventMessage;
