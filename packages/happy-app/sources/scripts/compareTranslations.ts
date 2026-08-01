@@ -13,29 +13,40 @@ import { en } from '../text/translations/en';
 import { ru } from '../text/translations/ru';
 import { pl } from '../text/translations/pl';
 import { es } from '../text/translations/es';
+import { it } from '../text/translations/it';
 import { pt } from '../text/translations/pt';
 import { ca } from '../text/translations/ca';
 import { zhHans } from '../text/translations/zh-Hans';
+import { zhHant } from '../text/translations/zh-Hant';
+import { ja } from '../text/translations/ja';
+import type { SupportedLanguage } from '../text/_all';
 
 const translations = {
     en,
     ru,
     pl,
     es,
+    it,
     pt,
     ca,
     'zh-Hans': zhHans,
-};
+    'zh-Hant': zhHant,
+    ja,
+} satisfies Record<SupportedLanguage, unknown>;
 
-const languageNames: Record<string, string> = {
+const languageNames: Record<SupportedLanguage, string> = {
     en: 'English',
     ru: 'Russian',
     pl: 'Polish',
     es: 'Spanish',
+    it: 'Italian',
     pt: 'Portuguese',
     ca: 'Catalan',
     'zh-Hans': 'Chinese (Simplified)',
+    'zh-Hant': 'Chinese (Traditional)',
+    ja: 'Japanese',
 };
+const supportedLanguages = Object.keys(translations) as SupportedLanguage[];
 
 // Function to recursively extract all keys from an object
 function extractKeys(obj: any, prefix = ''): Set<string> {
@@ -59,7 +70,7 @@ function extractKeys(obj: any, prefix = ''): Set<string> {
 }
 
 // Function to check if a value is still in English (for non-English translations)
-function checkIfEnglish(path: string, value: any, englishValue: any, lang: string): boolean {
+function checkIfEnglish(path: string, value: any, englishValue: any, lang: SupportedLanguage): boolean {
     if (lang === 'en') return false;
 
     // For functions, we can't easily compare
@@ -108,12 +119,13 @@ const englishKeys = extractKeys(translations.en);
 console.log(`**English (reference)**: ${englishKeys.size} keys\n`);
 
 // Track all issues
-const missingKeys: Record<string, string[]> = {};
-const untranslatedStrings: Record<string, string[]> = {};
+const missingKeys: Partial<Record<SupportedLanguage, string[]>> = {};
+const untranslatedStrings: Partial<Record<SupportedLanguage, string[]>> = {};
 
 // Compare each language with English
-for (const [langCode, translation] of Object.entries(translations)) {
+for (const langCode of supportedLanguages) {
     if (langCode === 'en') continue;
+    const translation = translations[langCode];
 
     const langKeys = extractKeys(translation);
     const missing: string[] = [];
@@ -171,7 +183,9 @@ if (Object.keys(missingKeys).length > 0 || Object.keys(untranslatedStrings).leng
     // Report missing keys
     if (Object.keys(missingKeys).length > 0) {
         console.log('### Missing Translation Keys\n');
-        for (const [langCode, missing] of Object.entries(missingKeys)) {
+        for (const langCode of supportedLanguages) {
+            const missing = missingKeys[langCode];
+            if (!missing) continue;
             console.log(`#### ${languageNames[langCode]} (${langCode})\n`);
             console.log('Missing the following keys:');
             for (const key of missing) {
@@ -189,7 +203,9 @@ if (Object.keys(missingKeys).length > 0 || Object.keys(untranslatedStrings).leng
     // Report untranslated strings
     if (Object.keys(untranslatedStrings).length > 0) {
         console.log('### Untranslated Strings (Still in English)\n');
-        for (const [langCode, untranslated] of Object.entries(untranslatedStrings)) {
+        for (const langCode of supportedLanguages) {
+            const untranslated = untranslatedStrings[langCode];
+            if (!untranslated) continue;
             console.log(`#### ${languageNames[langCode]} (${langCode})\n`);
             console.log('The following strings appear to be untranslated:');
             for (const item of untranslated) {
@@ -209,7 +225,8 @@ const sampleKeys = ['common.cancel', 'settings.title', 'errors.networkError', 'c
 
 for (const key of sampleKeys) {
     console.log(`### Key: \`${key}\`\n`);
-    for (const [langCode, translation] of Object.entries(translations)) {
+    for (const langCode of supportedLanguages) {
+        const translation = translations[langCode];
         const value = getNestedValue(translation, key);
         console.log(`- **${languageNames[langCode]}**: ${typeof value === 'string' ? `"${value}"` : '(function)'}`);
     }

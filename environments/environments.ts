@@ -15,6 +15,7 @@ const ENVIRONMENTS_DATA_DIR = path.join(ENVIRONMENTS_ROOT, "data");
 const ENVIRONMENTS_DIR = path.join(ENVIRONMENTS_DATA_DIR, "envs");
 const CURRENT_ENV_PATH = path.join(ENVIRONMENTS_DATA_DIR, "current.json");
 const LAB_RAT_PROJECT_TEMPLATE_DIR = path.join(ENVIRONMENTS_ROOT, "lab-rat-todo-project");
+export const LAB_RAT_AGENT_INSTRUCTION_SENTINEL = "HAPPY_CODEX_LAB_RAT_INSTRUCTIONS_V1";
 
 // ============================================================================
 // Name generation (expanded from packages/happy-app/sources/utils/generateWorktreeName.ts)
@@ -142,10 +143,25 @@ function ensureLabRatProjectTemplate() {
     }
 }
 
-function copyLabRatProject(envDir: string): string {
+export function copyLabRatProject(envDir: string): string {
     ensureLabRatProjectTemplate();
     const targetDir = path.join(envDir, "project");
     fs.cpSync(LAB_RAT_PROJECT_TEMPLATE_DIR, targetDir, { recursive: true });
+    const instructionTemplate = path.join(targetDir, "AGENTS.template.md");
+    if (!fs.existsSync(instructionTemplate)) {
+        throw new Error(`Missing Codex instruction template at ${instructionTemplate}`);
+    }
+    const instructions = fs.readFileSync(instructionTemplate, "utf8");
+    if (!instructions.includes(LAB_RAT_AGENT_INSTRUCTION_SENTINEL)) {
+        throw new Error("Lab-rat Codex instruction template is missing its sentinel");
+    }
+    fs.rmSync(instructionTemplate);
+    for (const legacyName of ["agents.md", "CLAUDE.md", "CLAUDE.local.md"]) {
+        fs.rmSync(path.join(targetDir, legacyName), { force: true });
+    }
+    // On case-insensitive filesystems, removing agents.md after this write also
+    // removes AGENTS.md. Materialize the canonical Codex file last.
+    fs.writeFileSync(path.join(targetDir, "AGENTS.md"), instructions);
     return targetDir;
 }
 
@@ -523,7 +539,6 @@ export async function seedEnvironment(name: string): Promise<void> {
 
     const envVars = buildEnvVars(envDir, config.serverPort, config.expoPort);
     const daemonEnv = { ...process.env, ...envVars };
-    delete daemonEnv.CLAUDECODE;
 
     const happyBin = path.join(REPO_ROOT, "packages", "happy-cli", "bin", "happy.mjs");
     const daemon = spawn("node", [happyBin, "daemon", "start"], {
