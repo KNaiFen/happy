@@ -1,3 +1,8 @@
+# August 1 — Readable settings descriptions
+
+- Long descriptions in Settings now wrap to show their full text instead of ending in an ellipsis.
+- Explicit single-line rows remain available for compact technical values.
+
 # July 24 — Liquid glass, Opus 5
 
 A full mobile refresh and a new top model.

@@ -15,11 +15,12 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { BubblePressable } from './BubblePressable';
+import { resolveItemSubtitleLines } from './itemTextLayout';
 
 export interface ItemProps {
     title: string;
     subtitle?: string;
-    subtitleLines?: number; // set 0 or undefined for auto/multiline
+    subtitleLines?: number; // defaults to multiline; use a positive number to cap lines
     detail?: string;
     icon?: React.ReactNode;
     leftElement?: React.ReactNode;
@@ -63,6 +64,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     centerContent: {
         flex: 1,
+        minWidth: 0,
         justifyContent: 'center',
     },
     title: {
@@ -222,20 +224,14 @@ export const Item = React.memo<ItemProps>((props) => {
                     >
                         {title}
                     </Text>
-                    {subtitle && (() => {
-                        // Allow multiline when requested or when content contains line breaks
-                        const effectiveLines = subtitleLines !== undefined
-                            ? (subtitleLines <= 0 ? undefined : subtitleLines)
-                            : (typeof subtitle === 'string' && subtitle.indexOf('\n') !== -1 ? undefined : 1);
-                        return (
-                            <Text
-                                style={[styles.subtitle, subtitleStyle]}
-                                numberOfLines={effectiveLines}
-                            >
-                                {subtitle}
-                            </Text>
-                        );
-                    })()}
+                    {subtitle && (
+                        <Text
+                            style={[styles.subtitle, subtitleStyle]}
+                            numberOfLines={resolveItemSubtitleLines(subtitleLines)}
+                        >
+                            {subtitle}
+                        </Text>
+                    )}
                 </View>
 
                 {/* Right Section */}

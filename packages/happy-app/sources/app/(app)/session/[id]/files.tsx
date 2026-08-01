@@ -154,6 +154,7 @@ export default React.memo(function FilesScreen() {
                 key={`${prefix}-${file.fullPath}-${index}`}
                 title={file.fileName}
                 subtitle={renderFileSubtitle(file)}
+                subtitleLines={1}
                 icon={renderFileIcon(file)}
                 rightElement={renderStatusIcon(file)}
                 onPress={() => handleFilePress(file)}
@@ -370,6 +371,7 @@ export default React.memo(function FilesScreen() {
                                     key={`file-${file.fullPath}-${index}`}
                                     title={file.fileName}
                                     subtitle={file.filePath || t('files.projectRoot')}
+                                    subtitleLines={1}
                                     icon={renderFileIconForSearch(file)}
                                     onPress={() => handleFilePress(file)}
                                     showDivider={index < searchResults.length - 1}
