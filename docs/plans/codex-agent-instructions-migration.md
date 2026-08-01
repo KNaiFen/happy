@@ -2,7 +2,8 @@
 
 ## 状态
 
-执行中。本文是本轮迁移的权威范围；实施中如发现边界变化，必须先更新本文再改代码。
+已完成。本文记录本轮迁移的权威范围、实施结果和验收证据；Codex Desktop
+local environment action 仍是独立的人工 UI 验收项，不影响代码与云端门禁结论。
 
 ### 执行进度
 
@@ -11,7 +12,7 @@
       action 因官方 UI-only 边界保留为人工验收项。
 - [x] 清理活跃文档并补充最终 Codex-only ADR。
 - [x] 重构 Codex-only CI 门禁并证明官方 app-server 加载 `AGENTS.md`。
-- [ ] 完成本地源码验证、提交、推送和云端验收。
+- [x] 完成本地源码验证、提交、推送和云端验收。
 
 ## 目标
 
@@ -214,6 +215,28 @@ action 保留为推送后的人工验收项，由用户在 Codex Desktop 设置�
 - 若实施中必须修改 CLI/App/Server/Wire/happy-agent/Codium 的运行时行为，则只推进实际受影响包的 patch 版本，并遵守已运行版本不得复用规则。
 - 计划与跟踪文档使用中文提交主题；本地 `AGENTS.md`、`.agents/` 和 `.codex/` 不提交。
 - 推送后等待 monorepo CI 和官方 Codex 场景；只有对应版本发生变化时才等待并交付 release artifact。
+
+## 完成证据
+
+- 代码验收提交为 `4825c07395af2e37751a7b41a99133aed161b897`，已正常推送到
+  `origin/main`，未使用 force push。
+- Monorepo CI run `30694431142` 全绿；App、CLI、Server、Wire、Codium、
+  Prisma migration、Tauri、stable-v2 drift、传输故障、依赖审计、
+  Codex-only provider boundary、官方 Codex app-server 生命周期和 required gate
+  均通过。
+- Android field E2E run `30694431146` 全绿；云端从官方最新稳定 Codex 源码解析并
+  验证 app-server，生成 API 36 New Architecture x86_64 APK，随后完成真实中继鉴权和
+  App 到官方 Codex 的往返场景。
+- 本地源码级验证覆盖 workflow YAML、活动文档链接、Codex-only boundary 正反例、
+  Responses fixture、App/官方 fixture TypeScript、10 种语言翻译比较、大小写不敏感
+  lab-rat 指令生成和 `git diff --check`；未在本地构建 App、CLI、Rust、Docker、
+  Android 或 Codex 发布制品。
+- 本轮没有修改 distributable 运行时行为，因此保持 CLI `1.4.11`、App `1.11.19`、
+  Server `1.1.32`、Wire `0.1.5`、happy-agent `0.1.1` 和 Codium `0.0.2`。
+- Codex Desktop 没有公开可安全手写的 local environment schema，且自动化不能控制
+  Codex 应用自身；仍需在 Desktop 设置中人工创建命令
+  `pnpm --dir packages/happy-app web`、端口 `8081` 的 App Web action，并在新会话中
+  确认可见和可运行。
 
 ## 完成标准
 
