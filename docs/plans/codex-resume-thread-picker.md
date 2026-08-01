@@ -2,9 +2,9 @@
 
 ## 状态
 
-- 状态：功能与发布构建完成；Android field 首轮因反馈弹窗时序假设失败，修复后待复验
+- 状态：功能与发布构建完成；Android field 第二轮发现 resume 迁移窗口仍向 v3 双写，修复与复验中
 - 基线：`main@f371de5fd9eb3edd11eade0ffd894ea865eacc7f`
-- 目标版本：App `1.11.20`、CLI `1.4.12`、Server `1.1.33`
+- 目标版本：App `1.11.20`、CLI `1.4.13`、Server `1.1.33`
 - Wire 保持 `0.1.5`
 
 ## 目标
@@ -52,6 +52,7 @@
 - Chaos：双击、两台 App、spawn/POST 后退出、daemon 重启、RPC 结果未知；同一 thread 最终最多一个 Happy session。
 - 云端：最新稳定版官方 Codex app-server 执行 `thread/list/read/resume`；Android API 36 field E2E 从设备页选择旧线程、恢复完整历史、发送消息并验证重启恢复。
 - Android field 必须把应用反馈弹窗视为可在任意关键导航点出现的真实异步 UI：出现时条件关闭，不出现时继续。不得假设它只在发送首条消息后出现，也不得用等待反馈弹窗代替业务断言。
+- Codex 只要已经协商启用 Sync v4，就必须从进程启动起禁止新增 v3 内容；`canonicalV4Active` 只表示 v4 历史迁移及投影切换完成，不能作为允许 v3 输出的条件。迁移前 App 可继续显示已有 v3 历史，但 CLI 不得在 `thread/resume/read` 导入窗口把官方历史或 live notification 双写回 v3。
 - 本地只运行源码 Vitest、`tsc --noEmit`、翻译比较和开发服务器；构建、打包、Android、Docker、Rust/Tauri 和官方 Codex 源码都留在 GitHub Actions。
 
 ## 发布
@@ -69,4 +70,6 @@
 - 云端场景源码：官方 app-server/Android fixture TypeScript 通过；全部 workflow 与 Maestro YAML 可解析；Android field shell 通过 `bash -n`；`git diff --check` 通过。
 - 云端已证明：monorepo CI 全绿；最新稳定版官方 Codex 源码构建及 `thread/list/read/resume` 场景通过；CLI `1.4.12`、Android `1.11.20` 和 Debian Relay `1.1.33` 发布构建通过。
 - Android field 首轮现场：零机器 bootstrap、零会话 App surface、真实中继、官方 Codex provenance、历史线程选择和在线会话导航均通过；`agent-input-message` 等待被已显示的 `Enjoying the app?` 原生模态遮挡。修复为关键点条件关闭反馈弹窗，并删除“发送后必须出现”的错误测试边界。
-- 待云端复验：Android API 36 从零 Happy 会话选择官方历史、继续发言并在进程死亡后恢复。
+- Android field 第二轮现场：反馈弹窗处理已通过；恢复进程在 v4 migration 尚未 ready 时收到官方历史通知，`CodexLegacyOutput` 因 `canonicalV4Active=false` 将一问一答写入 `/v3/sessions/:id/messages`。field 的零 v3 断言正确失败并关闭临时中继，后续 UI 空白和滚动超时是该主动关停的结果，不是历史投影或滚动方向问题。
+- 修复要求：v4 已启用时旧输出适配器全程只读/静默，不因在线、离线或 migration 状态回退；增加 migration-pending 在线场景回归测试，保留 field 的零 v3 强断言。
+- 待云端复验：CLI `1.4.13` 构建及 Android API 36 从零 Happy 会话选择官方历史、继续发言并在进程死亡后恢复。

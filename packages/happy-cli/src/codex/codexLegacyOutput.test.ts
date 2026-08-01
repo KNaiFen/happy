@@ -7,26 +7,17 @@ import {
 import { mapCodexMcpMessageToSessionEnvelopes } from './utils/sessionProtocolMapper';
 
 describe('CodexLegacyOutput', () => {
-    it('suppresses v3 output while a confirmed v4 session is offline', () => {
+    it('suppresses v3 output for the entire v4 lifecycle, including online migration', () => {
         expect(shouldSuppressCodexLegacyOutput({
-            canonicalV4Active: false,
             syncV4Enabled: true,
-            sessionOffline: true,
         })).toBe(true);
         expect(shouldSuppressCodexLegacyOutput({
-            canonicalV4Active: false,
             syncV4Enabled: false,
-            sessionOffline: true,
         })).toBe(false);
-        expect(shouldSuppressCodexLegacyOutput({
-            canonicalV4Active: true,
-            syncV4Enabled: true,
-            sessionOffline: false,
-        })).toBe(true);
     });
 
-    it('blocks v3 writes after canonical activation without suppressing presence or push', () => {
-        let canonicalV4Active = false;
+    it('blocks v3 writes as soon as v4 is enabled without suppressing presence or push', () => {
+        let syncV4Enabled = false;
         const session = {
             sendSessionEvent: vi.fn(),
             sendSessionProtocolMessage: vi.fn(),
@@ -35,7 +26,7 @@ describe('CodexLegacyOutput', () => {
         const push = vi.fn();
         const output = new CodexLegacyOutput(
             () => session as never,
-            () => canonicalV4Active,
+            () => shouldSuppressCodexLegacyOutput({ syncV4Enabled }),
         );
         const emitProviderCycle = () => {
             output.sendSessionEvent({ type: 'ready' });
@@ -48,7 +39,7 @@ describe('CodexLegacyOutput', () => {
         };
 
         emitProviderCycle();
-        canonicalV4Active = true;
+        syncV4Enabled = true;
         emitProviderCycle();
 
         expect(session.sendSessionEvent).toHaveBeenCalledOnce();
@@ -68,26 +59,26 @@ describe('CodexLegacyOutput', () => {
     });
 
     it('stops the provider mapper and v3 writes in the event boundary used by runCodex', () => {
-        let canonicalV4Active = false;
+        let syncV4Enabled = false;
         const session = {
             sendSessionEvent: vi.fn(),
             sendSessionProtocolMessage: vi.fn(),
         };
         const output = new CodexLegacyOutput(
             () => session as never,
-            () => canonicalV4Active,
+            () => shouldSuppressCodexLegacyOutput({ syncV4Enabled }),
         );
         const project = vi.fn(() => mapCodexMcpMessageToSessionEnvelopes(
             { type: 'agent_message', message: 'provider payload' },
             { currentTurnId: 'turn-1' },
         ));
 
-        const beforeActivation = output.projectEnvelopes(project);
-        canonicalV4Active = true;
-        const afterActivation = output.projectEnvelopes(project);
+        const beforeV4Enabled = output.projectEnvelopes(project);
+        syncV4Enabled = true;
+        const afterV4Enabled = output.projectEnvelopes(project);
 
-        expect(beforeActivation?.envelopes).toHaveLength(1);
-        expect(afterActivation).toBeNull();
+        expect(beforeV4Enabled?.envelopes).toHaveLength(1);
+        expect(afterV4Enabled).toBeNull();
         expect(project).toHaveBeenCalledOnce();
         expect(session.sendSessionProtocolMessage).toHaveBeenCalledOnce();
     });

@@ -39,9 +39,7 @@ export class CodexLegacyOutput {
 }
 
 export function shouldSuppressCodexLegacyOutput(input: {
-    canonicalV4Active: boolean;
     syncV4Enabled: boolean;
-    sessionOffline: boolean;
 }): boolean {
-    return input.canonicalV4Active || (input.syncV4Enabled && input.sessionOffline);
+    return input.syncV4Enabled;
 }

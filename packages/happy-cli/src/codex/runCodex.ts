@@ -560,9 +560,7 @@ export async function runCodex(opts: {
     const legacyOutput = new CodexLegacyOutput(
         () => session,
         () => shouldSuppressCodexLegacyOutput({
-            canonicalV4Active: codexV4CanonicalActive,
             syncV4Enabled: codexSyncV4Enabled,
-            sessionOffline: session.isOffline,
         }),
     );
     const sendLegacyCodexSessionEvent = (
