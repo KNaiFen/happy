@@ -2,6 +2,10 @@
 
 Status: **DRAFT — under review**
 
+Provider scope note: this draft applies only to retained v3/ACP agents. Codex
+uses Sync v4 entities, and historical vendor evidence below is research rather
+than a proposal to restore a removed adapter.
+
 ## Context
 
 The current session protocol (`happy-wire/src/sessionProtocol.ts`) was designed to solve a real problem: three different message formats (`output`, `codex`, `acp`) hitting the app, each with different field names and tool call shapes. The v1 protocol unified them into a flat event stream with 7 event types, normalized once in the CLI.
@@ -87,7 +91,7 @@ Happy sits in the **ACP layer** — we're a remote UI controlling coding agents.
                    CLI mappers
                         │
 ┌─────────────────────────────────────────────────────┐
-│ Provider output (Claude SDK, Codex MCP, ACP, etc.)   │
+│ Provider output (retained v3 adapters and ACP)       │
 │   Each provider has its own format                   │
 │   Mappers convert to our inner envelope              │
 └─────────────────────────────────────────────────────┘
@@ -723,8 +727,7 @@ type SessionMessage = AgentMessage | UserMessage;
 - Update `happy-wire/src/index.ts` to export v2
 
 ### Phase 2: Update CLI mappers
-- Rewrite `claude/utils/sessionProtocolMapper.ts` to emit v2 format
-- Rewrite `codex/utils/sessionProtocolMapper.ts` to emit v2 format
+- Rewrite retained v3 adapter mappers to emit v2 format
 - Rewrite `agent/acp/AcpSessionManager.ts` to emit v2 format
 - Add permission-request/response messages to the stream alongside existing RPC flow
 
@@ -758,7 +761,7 @@ The current design models `photo`, `video`, and `file` as standalone messages in
 
 **How others handle this:**
 
-- **Claude API**: messages have `content: Array<TextBlock | ImageBlock | ...>` — multi-part by design
+- **Historical provider API research**: messages can use `content: Array<TextBlock | ImageBlock | ...>` — multi-part by design
 - **A2A**: messages have `parts: Array<Part>` where each part can be text, file, or structured data
 - **ACP (Zed)**: prompts have `prompt: Array<TextContent | ResourceContent>` — multi-part
 - **Pi**: user messages have `attachments: Array<Attachment>` alongside the text content
@@ -768,7 +771,7 @@ Every protocol uses a **parts/content array** for this. Our flat "one message = 
 
 **Options to consider:**
 
-1. **Add a `parts` array** — a user message can carry `parts: [{ type: "text", text: "..." }, { type: "photo", ref: "...", ... }]`. This is the Claude/A2A approach. Clean but means user messages become structurally different from the flat event stream.
+1. **Add a `parts` array** — a user message can carry `parts: [{ type: "text", text: "..." }, { type: "photo", ref: "...", ... }]`. This follows the multi-part API/A2A approach. Clean but means user messages become structurally different from the flat event stream.
 
 2. **Add a `groupId` field** — messages that should be treated as one atomic input share a `groupId`. Transport batches them. Keeps the flat stream but adds coordination complexity.
 
@@ -778,7 +781,7 @@ Every protocol uses a **parts/content array** for this. Our flat "one message = 
 
 **Also relevant:** we currently only have **server-hosted media** (`ref` pointing to encrypted upload). We'll want **machine-native files** soon (files on the remote machine, referenced by path). And eventually **app-uploaded files** (user attaches from phone/browser). These are three different `ref` schemes that the `file`/`photo`/`video` types need to support — the `ref` field will need to distinguish between `media/<id>` (our uploads), `machine-file://<path>` (remote machine), etc.
 
-### Evidence from Claude Code session logs
+### Historical evidence from Claude Code session logs
 
 Analysis of the current session's JSONL log (grouped by `message.id` to reconstruct actual API messages):
 
@@ -803,7 +806,7 @@ Analysis of the current session's JSONL log (grouped by `message.id` to reconstr
   1x  tool_result + text + tool_result      (results interleaved with injected text)
 ```
 
-Claude Code **streams each block as a separate JSONL entry**, but the actual API message groups them by `message.id`. When Claude requests 3 parallel tool calls, that's ONE message with 3 `tool_use` blocks. The results come back as ONE message with 3 `tool_result` blocks.
+The inspected historical runtime **streams each block as a separate JSONL entry**, but its API message groups them by `message.id`. Three parallel tool calls are one message with three `tool_use` blocks, and their results are one message with three `tool_result` blocks.
 
 **Implication:** Our flat "one event per message" model **loses this batching information**. Three separate `tool-call-start` events don't convey that they were requested as a parallel batch. This matters for:
 - Display (the UI could show parallel calls side-by-side)

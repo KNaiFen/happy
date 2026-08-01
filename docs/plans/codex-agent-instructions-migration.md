@@ -2,7 +2,16 @@
 
 ## 状态
 
-待执行。本文是本轮迁移的权威范围；实施中如发现边界变化，必须先更新本文再改代码。
+执行中。本文是本轮迁移的权威范围；实施中如发现边界变化，必须先更新本文再改代码。
+
+### 执行进度
+
+- [x] 完成 Claude/Codex 指令、技能、配置、活跃文档和现有 CI 门禁盘点。
+- [x] 迁移本地 Agent 指令、技能和 lab-rat 模板；Desktop local environment
+      action 因官方 UI-only 边界保留为人工验收项。
+- [x] 清理活跃文档并补充最终 Codex-only ADR。
+- [x] 重构 Codex-only CI 门禁并证明官方 app-server 加载 `AGENTS.md`。
+- [ ] 完成本地源码验证、提交、推送和云端验收。
 
 ## 目标
 
@@ -42,6 +51,10 @@ Read ./agents.md for instructions.
 
 旧翻译代理只列出 `en/ru/pl/es`，而当前 App 实际支持 `en/ru/pl/es/it/pt/ca/zh-Hans/zh-Hant/ja`，不能原样搬运。
 
+实施盘点进一步确认 `packages/happy-app/sources/scripts/compareTranslations.ts`
+也只导入其中 7 种语言，漏掉 `it`、`zh-Hant` 和 `ja`。本轮必须同时修正
+该源码级校验器，否则新 skill 的“检查全部支持语言”无法得到真实验证。
+
 ### 已有 Codex 格式
 
 - 根项目规则使用 `AGENTS.md`。
@@ -55,6 +68,9 @@ Read ./agents.md for instructions.
 
 - 所有项目内 `CLAUDE.md`、`CLAUDE.local.md` 和 `.claude/` Agent 配置。
 - 会重新生成 `CLAUDE.md` 的模板、脚本或文档说明。
+- 跟踪中的 `packages/happy-cli/agents.md` 不是 Codex 原生入口，且仍指向已删除
+  的 provider 测试；把有效的测试分层迁入普通工程文档后删除，不能通过改名为
+  可提交的嵌套 `AGENTS.md` 绕过本地指令策略。
 - 活跃 README、隐私说明、架构说明和使用指南中仍宣称 Happy 可以启动或控制 Claude 的内容。
 - 已失效但仍放在 `docs/plans/` 活动目录中的 Claude SDK、Claude permission 或 `happy claude` 实施计划。
 - CI 中以 Claude 为中心的任务名和脚本名，改成 Codex-only provider boundary。
@@ -118,12 +134,19 @@ environments/
 - 在 Codex desktop 中创建 App Web local environment action，命令保持 `pnpm --dir packages/happy-app web`、端口 8081；检查 Codex 生成的 `.codex` 文件后再保留，禁止手写未公开 schema。
 - 验证新 Codex 会话能发现该 action 后，删除 `.claude/launch.json`。
 
+执行中确认：Codex 官方文档只公开了 Desktop 设置入口，没有公开可安全手写的
+local environment 文件 schema；当前自动化会话也被应用自控安全策略禁止操作
+`com.openai.codex`。因此 `.claude/launch.json` 已删除，避免继续生效；对应 App Web
+action 保留为推送后的人工验收项，由用户在 Codex Desktop 设置中生成。不得为了
+让清单显示完成而伪造 `.codex` 文件。
+
 ### 3. 迁移技能
 
 - 删除 `.claude/skills/agent-browser` 和 `.claude/skills/terminal-emulator`，因为 Codex 版本已经存在且内容相同。
 - 将 `packages/happy-app/.claude/agents/i18n-translator.md` 重写为 `.agents/skills/i18n-translator/SKILL.md`。
 - 新 skill 只保留 `name`、精准 `description` 和工作流正文，不携带 Claude 的 `tools`、`model`、`color` frontmatter。
 - 翻译语言从 `packages/happy-app/sources/text/_all.ts` 和 `translations/` 动态确认，不能硬编码旧四语言清单。
+- 修正 `compareTranslations.ts`，使其覆盖 `_all.ts` 声明的全部 10 种语言；新增语言后若校验器遗漏，TypeScript 或测试必须失败。
 - 工作流要求所有支持语言结构一致、动态参数类型一致、设置说明允许换行、紧凑按钮文字单独检查，并运行现有源码级 translation comparison/typecheck。
 - 用应触发、间接触发、不应触发和缺少上下文四类提示验证 skill 路由。
 
@@ -132,6 +155,8 @@ environments/
 - 将跟踪中的 `environments/lab-rat-todo-project/agents.md` 改为 `AGENTS.template.md`。
 - 内容改成 Codex/Happy Codex app-server 测试夹具说明，删除 Claude Code 入口描述；保留已知缺陷和 `exercise-flow.md` 逐步执行约束。
 - `copyLabRatProject()` 在目标目录写出 `AGENTS.md`，不复制 `AGENTS.template.md` 或 `agents.md`。
+- 在 macOS 等大小写不敏感文件系统上，必须先删除小写 `agents.md`，再写入
+  `AGENTS.md`；反向顺序会把刚生成的 Codex 指令一并删除，场景测试必须覆盖。
 - 删除模板中的 `CLAUDE.md`，更新 README 文件表和使用说明。
 - 对现有 `environments/data/envs/*/project/` 做原位迁移：写入 `AGENTS.md` 后删除 `CLAUDE.md` 和小写 `agents.md`，不删除项目代码、数据库或会话状态。
 - 删除无实际作用的 `daemonEnv.CLAUDECODE` 清理前，先用测试确认它不再承担嵌套进程保护；若仍有外部运行时意义，则作为有注释的负向环境隔离保留。
@@ -145,6 +170,8 @@ environments/
 - 审查 `docs/api.md`、`docs/backend-architecture.md`、`docs/cli-architecture.md`、`docs/encryption.md`，区分真实保留的数据结构和已失效的 Anthropic 接入说明。
 - 把 `docs/plans/` 中完全依赖 Claude SDK 的未归档计划移入 `docs/plans/archive/` 并标记 Deprecated；仍服务非 Claude provider 的 v3/ACP 计划改成 provider-neutral 表述。
 - 新增 ADR-003，记录“移除主动 Claude provider、Codex 成为唯一默认”的最终决策；ADR-001 保留 Sync v4 内容，但在 status/context 中标注其 Claude-v3 范围已被 ADR-003 取代。
+- 将 `packages/happy-cli/agents.md` 的有效测试分层迁到 `docs/agent-testing.md`，
+  更新引用并删除其中不存在的 provider 测试路径。
 
 ### 6. 强化 Codex-only 防回归门禁
 
@@ -169,7 +196,7 @@ environments/
 - `git status` 不出现未解释的 Claude 配置文件。
 - Codex 从项目根启动时只加载根 `AGENTS.md`；从生成的 lab-rat 项目启动时加载生成的 `AGENTS.md`。
 - `/skills` 能看到唯一的 `agent-browser`、`terminal-emulator` 和新的 `i18n-translator`，不存在同名重复技能。
-- App Web local environment action 能从 Codex desktop 启动开发服务。
+- 人工验收：App Web local environment action 能从 Codex desktop 启动开发服务。
 - translation comparison、相关 TypeScript typecheck 和配置扫描通过。
 - 新的 Codex-only boundary 脚本对允许项和故意注入的违规 fixture 都有测试。
 

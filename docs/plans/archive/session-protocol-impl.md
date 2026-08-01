@@ -1,5 +1,8 @@
 # Session Protocol Implementation
 
+> Status: Implemented and archived. Codex canonical projection was later
+> replaced by Sync v4 entities under ADR-001.
+
 ## Overview
 
 Implement `docs/session-protocol.md` as the new message format for Codex sessions in the CLI, and add client-side support in `happy-app` to parse, normalize, and render these messages alongside existing legacy formats (output, codex, acp).

@@ -1,5 +1,8 @@
 # Add Anthropic Sandbox Runtime to CLI
 
+> Status: Implemented and archived. The package remains the outer sandbox for
+> Codex; the removed provider integration described below is historical only.
+
 ## Overview
 Integrate `@anthropic-ai/sandbox-runtime` into happy-cli to sandbox both **Claude Code** and **Codex** sessions with OS-level filesystem and network restrictions. The sandbox wraps agent subprocesses, enforcing configurable restrictions without requiring containers.
 

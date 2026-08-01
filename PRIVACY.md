@@ -9,14 +9,14 @@ Happy Coder is committed to protecting your privacy. This policy explains how we
 ## What We Collect
 
 ### Encrypted Data
-- **Messages and Code**: All your Claude Code conversations and code snippets are end-to-end encrypted on your device before transmission. We store this encrypted data but have no ability to decrypt or read it.
+- **Messages and Code**: Your coding-agent conversations and code snippets are end-to-end encrypted on your device before transmission. We store this encrypted data but have no ability to decrypt or read it.
 - **Encryption Keys**: When you pair devices, encryption keys are transmitted between your devices in encrypted form. We cannot access or decrypt these keys.
 
 ### Metadata (Not Encrypted)
 - **Message IDs**: Unique identifiers for message ordering and synchronization
 - **Timestamps**: When messages were created and synced
 - **Device IDs**: Anonymous identifiers for device pairing
-- **Session IDs**: Identifiers for your Claude Code terminal sessions
+- **Session IDs**: Opaque identifiers for your Happy and Codex sessions
 - **Push Notification Tokens**: Device tokens for sending push notifications via Expo's push notification service
 
 ### Analytics (PostHog)
@@ -55,7 +55,7 @@ When you turn on voice, your device connects to ElevenLabs to provide the voice 
 ### Metadata
 - Message IDs and timestamps are used to maintain proper message ordering
 - Device IDs enable secure pairing between your devices
-- Session IDs track your Claude Code terminal sessions for synchronization
+- Session IDs track Happy and Codex sessions for synchronization
 - Push notification tokens are stored to enable notifications through Expo's service
 
 ### Push Notifications

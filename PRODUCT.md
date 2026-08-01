@@ -6,7 +6,7 @@ product
 
 ## Users
 
-Software engineers who run Claude Code or Codex on a computer and need to monitor, guide, and approve agent work from a phone while away from their desk.
+Software engineers who run Codex on a computer and need to monitor, guide, and approve agent work from a phone while away from their desk.
 
 ## Product Purpose
 

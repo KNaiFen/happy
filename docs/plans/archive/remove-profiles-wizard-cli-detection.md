@@ -1,5 +1,8 @@
 # Plan: Remove Profiles & Wizard, Move CLI Detection to Daemon
 
+> Status: Implemented and archived. Historical provider fields in the design
+> are not part of the current machine capability contract.
+
 ## Context
 
 The profiles feature (AI Backend Profiles) is half-baked — it provides env var management per session via a complex sync/schema system, but it's barely used and adds significant complexity. The wizard (new session creation flow) is tightly coupled to profiles. Both should be ripped out.

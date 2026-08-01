@@ -390,7 +390,6 @@ Messages are encrypted as `MessageContent` and then base64 encoded:
   "os": "...",
   "summary": { "text": "...", "updatedAt": 123 },
   "machineId": "...",
-  "claudeSessionId": "...",
   "tools": ["..."],
   "slashCommands": ["..."],
   "startedFromDaemon": true,
@@ -490,7 +489,6 @@ graph LR
     subgraph "Third-Party Tokens"
         GH[GitHub OAuth]
         OAI[OpenAI]
-        ANT[Anthropic]
         GEM[Gemini]
     end
 
@@ -503,11 +501,10 @@ graph LR
     DB[(Postgres)]
 
     Secret --> KeyTree --> Encrypt
-    GH & OAI & ANT & GEM --> Encrypt --> DB
+    GH & OAI & GEM --> Encrypt --> DB
 
     style GH fill:#fff3e0
     style OAI fill:#fff3e0
-    style ANT fill:#fff3e0
     style GEM fill:#fff3e0
 ```
 

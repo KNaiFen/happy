@@ -1,5 +1,8 @@
 # `happy server` — bundled self-host mode
 
+> Status: Implemented and archived. Command examples reflect the historical
+> implementation plan; current usage is documented in package README files.
+
 ## Goal
 
 Ship a zero-network, fully self-hosted Happy in the regular `npm i -g happy` package. One foreground command — `happy server` — runs the sync server + web app on `localhost` and writes the local URL into `~/.happy/settings.json`. Every other Happy process (daemon, `happy claude`, etc.) reads that URL from settings. No analytics, no external endpoints, no extra installs.

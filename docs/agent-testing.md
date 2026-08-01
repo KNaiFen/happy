@@ -1,0 +1,42 @@
+# Agent Testing
+
+Happy uses distinct layers so a passing mock does not get reported as proof of
+the real Codex integration.
+
+## Layer 1: Codex Gateway
+
+Source-level tests exercise parsing, routing, lifecycle, permissions, streaming,
+Sync v4 persistence, crash recovery, and projection behavior with deterministic
+fixtures. These tests are fast and may use a fake JSON-RPC or Responses endpoint,
+but they are regression tests rather than final acceptance.
+
+The cloud-only official scenario builds the latest stable upstream Codex source,
+starts the real `codex app-server`, and drives meaningful thread, turn, tool,
+reasoning-summary, stream, and completion behavior. Its local Responses fixture
+removes the need for model credentials without replacing the official app-server.
+The scenario also creates a lab-rat project from
+`environments/lab-rat-todo-project/AGENTS.template.md` and verifies that a
+sentinel present only in the generated `AGENTS.md` reaches the provider request.
+
+Do not treat an empty wall-clock wait, a fake app-server, or a mocked SDK as this
+layer's acceptance evidence.
+
+## Layer 2: Happy Product Chain
+
+Transport scenarios cover CLI journal persistence, relay sequencing, App cache
+projection, invalidation loss, reconnect, duplicate and out-of-order delivery,
+approval round trips, tool ordering, child sessions, process restart, and
+snapshot recovery. Browser and Android field scenarios then verify the visible
+session flow, including a zero-machine first launch and the first Sync v4 reply.
+
+## Retained Agents
+
+Gemini, Agy, OpenClaw, and generic ACP runners keep their own focused tests.
+They must not be used as substitutes for the Codex official scenario, and an
+unsupported provider value must fail explicitly rather than fall back to Codex.
+
+## Where Tests Run
+
+Routine unit tests and `tsc --noEmit` may run locally from source. Anything that
+builds a distributable, Docker image, Rust/Tauri target, Android app, packed npm
+archive, or upstream Codex source runs in GitHub Actions.

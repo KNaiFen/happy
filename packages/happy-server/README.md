@@ -1,10 +1,10 @@
 # Happy Server
 
-Minimal backend for open-source end-to-end encrypted Claude Code clients.
+Minimal relay for open-source end-to-end encrypted coding-agent clients.
 
 ## What is Happy?
 
-Happy Server is the synchronization backbone for secure Claude Code clients. It enables multiple devices to share encrypted conversations while maintaining complete privacy - the server never sees your messages, only encrypted blobs it cannot read.
+Happy Server is the synchronization backbone for secure Codex clients. It enables multiple devices to share encrypted conversations while maintaining complete privacy - the server never sees your messages, only encrypted blobs it cannot read.
 
 ## Features
 
@@ -15,12 +15,12 @@ Happy Server is the synchronization backbone for secure Claude Code clients. It 
 - 🔑 **Cryptographic Auth** - No passwords stored, only public key signatures
 - ⚡ **Real-time Sync** - WebSocket-based synchronization across all your devices
 - 📱 **Multi-device** - Seamless session management across phones, tablets, and computers
-- 🔔 **Push Notifications** - Notify when Claude Code finishes tasks or needs permissions (encrypted, we can't see the content)
+- 🔔 **Push Notifications** - Notify when Codex finishes tasks or needs permissions (encrypted, we can't see the content)
 - 🌐 **Distributed Ready** - Built to scale horizontally when needed
 
 ## How It Works
 
-Your Claude Code clients generate encryption keys locally and use Happy Server as a secure relay. Messages are end-to-end encrypted before leaving your device. The server's job is simple: store encrypted blobs and sync them between your devices in real-time.
+Happy clients generate encryption keys locally and use Happy Server as a secure relay. Messages are end-to-end encrypted before leaving your device. The server's job is simple: store encrypted blobs and synchronize them between your devices.
 
 ## Hosting
 

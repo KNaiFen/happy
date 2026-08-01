@@ -1,5 +1,7 @@
 # Agent Testing Layers
 
+> Status: Superseded by `docs/agent-testing.md` and archived.
+
 Keep this simple.
 
 ## Layer 1
@@ -8,7 +10,7 @@ Layer 1 is direct integration with the real agent.
 
 Source of truth:
 
-- `packages/happy-cli/agents.md`
+- `../agent-testing.md`
 
 ## Layer 2
 

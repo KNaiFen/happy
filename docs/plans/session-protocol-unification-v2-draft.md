@@ -196,7 +196,7 @@ Written to the stream when user presses stop. RPC still does real-time delivery.
 **`agent-configuration-changed`** — user or agent
 
 ```json
-{ "t": "agent-configuration-changed", "model": "claude-sonnet-4-6", "thinkingLevel": "high" }
+{ "t": "agent-configuration-changed", "model": "provider-model-v2", "thinkingLevel": "high" }
 ```
 
 All fields optional — include only what changed:
@@ -284,7 +284,7 @@ User opens session on phone, agent runs on CLI, user steers mid-turn, switches m
 ← { id: "m20", time: 3009, role: "agent",  turn: "t1", ev: { t: "turn-end", status: "completed", usage: { inputTokens: 4800, outputTokens: 620, cost: 0.024 } } }
 
 // User switches model from phone
-← { id: "m21", time: 5000, role: "user",   ev: { t: "agent-configuration-changed", model: "claude-sonnet-4-6", thinkingLevel: "low" } }
+← { id: "m21", time: 5000, role: "user",   ev: { t: "agent-configuration-changed", model: "provider-model-v2", thinkingLevel: "low" } }
 
 // User sends next prompt
 ← { id: "m22", time: 5001, role: "user",   ev: { t: "text", text: "Now run the tests" } }
@@ -337,7 +337,7 @@ The CLI already emits only the modern `role: 'session'` envelope for user text. 
 | `acp` | `{ type: 'acp', provider, data }` | Remove after Gemini migration |
 | `codex` | `{ type: 'codex', data }` | Remove — Codex already on envelopes |
 | `event` | `{ type: 'event', data }` | Remove — replaced by `service` and `turn-end` |
-| `output` | Raw Claude JSONL | Keep for historical message replay (oldest format, may exist in production databases) |
+| `output` | Removed legacy JSONL | Reject for new writes; no historical conversation migration is required |
 
 Also remove the hyphenated content normalization transforms (`normalizeToToolUse()` / `normalizeToToolResult()`) once no active clients send those formats.
 

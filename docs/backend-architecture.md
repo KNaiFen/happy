@@ -354,12 +354,11 @@ graph TB
     subgraph "Server-side Encryption"
         S1[GitHub OAuth tokens]
         S2[OpenAI tokens]
-        S3[Anthropic tokens]
-        S4[Gemini tokens]
+        S3[Gemini tokens]
     end
 
     C1 & C2 & C3 & C4 & C5 & C6 --> |opaque blobs| DB[(Postgres)]
-    S1 & S2 & S3 & S4 --> |KeyTree from HANDY_MASTER_SECRET| DB
+    S1 & S2 & S3 --> |KeyTree from HANDY_MASTER_SECRET| DB
 
     style C1 fill:#e1f5fe
     style C2 fill:#e1f5fe
@@ -370,7 +369,6 @@ graph TB
     style S1 fill:#fff3e0
     style S2 fill:#fff3e0
     style S3 fill:#fff3e0
-    style S4 fill:#fff3e0
 ```
 
 - Session metadata, agent state, daemon state, and message content are stored as opaque encrypted strings or blobs.
@@ -379,7 +377,7 @@ graph TB
 
 ## Integrations
 - **GitHub**: OAuth connect + webhook verification, optional if env vars are set.
-- **AI vendors**: encrypted token storage for `openai`, `anthropic`, `gemini`.
+- **AI vendors**: encrypted token storage for the supported `openai` and `gemini` connect flows.
 - **Voice**: RevenueCat subscription check + ElevenLabs token minting.
 - **Push tokens**: stored for later notification delivery.
 

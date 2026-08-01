@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; provider-scope portions superseded by ADR-003
 
 ## Date
 
@@ -29,16 +29,18 @@ or child-session navigation. The earlier assumptions that the existing
 transport was sufficient and that Codex was a CLI-only change are therefore
 rejected.
 
-Claude's v3 integration does not share the Codex provider protocol and remains
-supported. A provider-wide migration would increase release risk without
-helping the Codex failure modes.
+At the time of this decision, a separate legacy provider remained on v3 and was
+explicitly outside the Codex migration. That compatibility decision was later
+superseded by ADR-003; the Sync v4 transport and Codex lifecycle decisions in
+this ADR remain authoritative.
 
 ## Decision
 
 ### Scope and cutover
 
-Codex sessions use Sync v4 across Wire, Server, CLI, and App. Claude sessions
-continue to use v3. Codex does not dual-write v3 and v4 canonical state.
+Codex sessions use Sync v4 across Wire, Server, CLI, and App. Codex does not
+dual-write v3 and v4 canonical state. The original decision to retain another
+provider on v3 is historical and is superseded by ADR-003.
 
 The four distributables are upgraded as one coordinated compatibility set.
 The Server routes may be deployed before the clients, but Codex v4 is enabled
@@ -200,9 +202,10 @@ cursors, rebuild provider execution state, or isolate child projections.
 
 ### Move every provider to Sync v4
 
-Rejected for this release. Claude remains maintained on v3, and changing it
-would enlarge the compatibility and rollback surface without fixing an
-additional Codex requirement.
+Rejected for the original Sync v4 release. Moving every provider at once would
+have enlarged the compatibility and rollback surface without fixing an
+additional Codex requirement. ADR-003 later removed the obsolete active
+provider without changing retained v3 infrastructure used by other agents.
 
 ### Dual-write Codex to v3 and v4
 
@@ -265,7 +268,7 @@ by the CLI command ownership boundary.
 
 This ADR supersedes the architectural and release-scope assumptions in:
 
-- `docs/plans/codex-app-server-migration.md`; and
+- `docs/plans/archive/codex-app-server-migration.md`; and
 - `docs/plans/archive/codex-slash-command-routing.md` (deprecated historical plan).
 
 Those files remain as historical implementation plans. Where they conflict

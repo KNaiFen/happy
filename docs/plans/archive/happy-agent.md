@@ -1,5 +1,8 @@
 # happy-agent CLI Tool
 
+> Status: Implemented and archived. Current package acceptance requirements are
+> documented in `docs/agent-testing.md` and enforced by GitHub Actions.
+
 ## Overview
 A new standalone CLI tool (`happy-agent`) in `packages/happy-agent` that acts as a dedicated client for controlling Happy Coder agents remotely. Unlike `happy-cli` which both runs and controls agents, `happy-agent` only controls them — listing machines, spawning sessions on a machine, creating sessions, sending messages, reading history, monitoring state, and stopping sessions.
 

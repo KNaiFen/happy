@@ -1,5 +1,8 @@
 # Agent SDK Upgrade + Plan Mode Fix + Integration Tests
 
+> Status: Deprecated and archived. The active provider and SDK described here
+> were removed; this file is retained only as historical implementation context.
+
 ## Context
 
 Plan mode buttons (accept/reject) don't reliably appear in the Happy app UI. Root cause: the CLI's `permissionHandler.handleToolCall` auto-approves ExitPlanMode when `permissionMode` is stale (`bypassPermissions` from a prior session), and `reset()` never clears `permissionMode`. Additionally, `isAborted` always returns true for ExitPlanMode as part of a PLAN_FAKE_RESTART hack, which causes a dead-end when the tool is auto-approved without injecting a restart message.

@@ -2,6 +2,10 @@
 
 Status: **DRAFT — v2 (OpenCode-derived)**
 
+Provider scope note: this proposal targets retained v3/ACP agents. Codex uses
+its dedicated Sync v4 entity schema, and the removed Claude adapter is not a
+migration target.
+
 Previous version of this doc proposed `user-message` + `agent-event` as two flat
 payload kinds. This revision replaces that with OpenCode's message+parts model,
 adapted for Happy's encrypted storage and with permissions/questions unified into
@@ -122,8 +126,8 @@ type UserMessage = {
   time: { created: number }
   agent: string         // "build" | "explore" | "plan" | ...
   model: {
-    providerID: string  // "anthropic" | "openai" | ...
-    modelID: string     // "claude-sonnet-4-6" | ...
+    providerID: string  // "google" | "openai" | ...
+    modelID: string     // "gemini-2.5-pro" | ...
   }
   format?: OutputFormat
   system?: string       // system prompt snapshot (debugging only)
@@ -504,7 +508,7 @@ Session has edit permission rule forcing asks.
     "id": "msg_01abc", "sessionID": "ses_01xyz", "role": "user",
     "time": { "created": 1753120000000 },
     "agent": "build",
-    "model": { "providerID": "anthropic", "modelID": "claude-sonnet-4-6" }
+    "model": { "providerID": "google", "modelID": "gemini-2.5-pro" }
   },
   "parts": [
     { "id": "prt_001", "sessionID": "ses_01xyz", "messageID": "msg_01abc",
@@ -522,7 +526,7 @@ Session has edit permission rule forcing asks.
     "id": "msg_02def", "sessionID": "ses_01xyz", "role": "assistant",
     "time": { "created": 1753120001000, "completed": 1753120004000 },
     "parentID": "msg_01abc",
-    "modelID": "claude-sonnet-4-6", "providerID": "anthropic",
+    "modelID": "gemini-2.5-pro", "providerID": "google",
     "agent": "build",
     "path": { "cwd": "/home/user/app", "root": "/home/user/app" },
     "cost": 0.0087,
@@ -598,7 +602,7 @@ No special event types. Just tool state transitions.
     "id": "msg_03ghi", "sessionID": "ses_01xyz", "role": "assistant",
     "time": { "created": 1753120004100, "completed": 1753120004800 },
     "parentID": "msg_01abc",
-    "modelID": "claude-sonnet-4-6", "providerID": "anthropic",
+    "modelID": "gemini-2.5-pro", "providerID": "google",
     "agent": "build",
     "path": { "cwd": "/home/user/app", "root": "/home/user/app" },
     "cost": 0.0023,
@@ -678,7 +682,7 @@ The `task` tool part on the parent assistant message:
     "title": "task → explore",
     "metadata": {
       "sessionId": "ses_child_001",
-      "model": { "providerID": "anthropic", "modelID": "claude-haiku-4-5" }
+      "model": { "providerID": "google", "modelID": "gemini-2.5-flash" }
     },
     "time": { "start": 1753120005000, "end": 1753120012000 }
   }
@@ -792,8 +796,6 @@ Move to tool parts:
 
 Every provider adapter normalizes into this exact format at the CLI boundary:
 
-- Claude adapter → messages + parts
-- Codex adapter → messages + parts
 - OpenClaw adapter → messages + parts
 - ACP runner → messages + parts
 - Gemini adapter → messages + parts
@@ -828,7 +830,7 @@ The reducer gets simpler:
 
 ### Phase 2: migrate one provider end to end
 
-Target: ACP runner or Codex (both have adapter boundaries and event streams).
+Target: ACP runner or OpenClaw (both have adapter boundaries and event streams).
 
 ### Phase 3: migrate permissions into tool state
 
@@ -838,7 +840,7 @@ Target: ACP runner or Codex (both have adapter boundaries and event streams).
 
 ### Phase 4: migrate remaining providers
 
-Claude, OpenClaw, Gemini.
+Agy, OpenClaw, Gemini.
 
 ### Phase 5: delete legacy parsing
 

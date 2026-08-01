@@ -13,12 +13,14 @@ This folder documents how Happy works internally, with a focus on protocol, back
 - multi-process.md: Deeper multi-replica Socket.IO + Redis streams behavior, failure modes, and integration-test history.
 - dev-environments.md: Local `environments/data/` workflow, lab-rat project provisioning, `env:cli` passthrough behavior, and daemon usage.
 - session-protocol.md: Unified encrypted chat event protocol.
-- session-protocol-claude.md: Claude-specific session-protocol flow (local vs remote launchers, dedupe/restarts).
 - plans/provider-envelope-redesign.md: Proposed replacement for the current provider/session envelope design.
-- permission-resolution.md: State-based permission mode resolution across app and CLI (including sandbox behavior).
+- permission-resolution.md: Codex stable-v2 permission, approval, and sandbox resolution.
+- agent-testing.md: Codex integration and end-to-end acceptance layers.
 - happy-wire.md: Shared wire schemas/types package and migration notes.
 - decisions/ADR-001-codex-sync-v4.md: Accepted Codex Sync v4 transport,
   Gateway, migration, and compatibility decisions.
+- decisions/ADR-003-codex-only-provider.md: Active Codex provider boundary and
+  retained agent integrations.
 - voice-architecture.md: ElevenLabs voice assistant integration, session routing, context batching, and VAD detection.
 - research/: general research notes and exploratory writeups.
 - competition/: competitor research, protocol analysis, and comparison notes.

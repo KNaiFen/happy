@@ -1,5 +1,8 @@
 # Metadata-Driven Model and Mode Selection on Client
 
+> Status: Implemented and archived. Provider examples below describe the state
+> at implementation time and are not current support claims.
+
 ## Overview
 - Make the client use backend-provided metadata fields (`metadata.models[]`, `metadata.operatingModes[]`, `metadata.currentModelCode`, `metadata.currentOperatingModeCode`) for model and mode selection in active sessions, instead of hardcoding options per agent type
 - Principle: if metadata provides options, use them; otherwise fall back to hardcoded defaults

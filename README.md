@@ -7,11 +7,11 @@
 </div>
 
 <h1 align="center">
-  Mobile and Web Client for Claude Code & Codex
+  Mobile and Web Client for Codex
 </h1>
 
 <h4 align="center">
-Use Claude Code or Codex from anywhere with end-to-end encryption.
+Use Codex from anywhere with end-to-end encryption.
 </h4>
 
 <div align="center">
@@ -42,24 +42,26 @@ npm install -g happy
 > Migrated from the `happy-coder` package. Thanks to [@franciscop](https://github.com/franciscop) for donating the `happy` package name!
 
 <h3 align="center">
-Step 3: Start using `happy` instead of `claude` or `codex`
+Step 3: Start Codex through `happy`
 </h3>
 
 ```bash
-# Instead of claude, use:
-happy claude
-# or
+happy
+# or explicitly:
 happy codex
 ```
 
 ## How does it work?
 
-On your computer, run `happy` instead of `claude` or `happy codex` instead of `codex` to start your AI through our wrapper. When you want to control your coding agent from your phone, it restarts the session in remote mode. To switch back to your computer, just press any key on your keyboard.
+On your computer, run `happy` (or `happy codex`) to start Codex through the
+official app-server protocol. Happy projects encrypted thread, turn, item, tool,
+approval, and status updates to your paired App so the same session can be
+monitored and controlled away from the terminal.
 
 ## 🔥 Why Happy Coder?
 
-- 📱 **Mobile access to Claude Code and Codex** - Check what your AI is building while away from your desk
-- 🔔 **Push notifications** - Get alerted when Claude Code and Codex needs permission or encounters errors  
+- 📱 **Mobile access to Codex** - Check what your coding agent is building while away from your desk
+- 🔔 **Push notifications** - Get alerted when Codex needs permission or encounters errors
 - ⚡ **Switch devices instantly** - Take control from phone or desktop with one keypress
 - 🔐 **End-to-end encrypted** - Your code never leaves your devices unencrypted
 - 🛠️ **Open source** - Audit the code yourself. No telemetry, no tracking
@@ -67,7 +69,7 @@ On your computer, run `happy` instead of `claude` or `happy codex` instead of `c
 ## 📦 Project Components
 
 - **[Happy App](https://github.com/slopus/happy/tree/main/packages/happy-app)** - Web UI + mobile client (Expo)
-- **[Happy CLI](https://github.com/slopus/happy/tree/main/packages/happy-cli)** - Command-line interface for Claude Code and Codex
+- **[Happy CLI](https://github.com/slopus/happy/tree/main/packages/happy-cli)** - Command-line interface for Codex and retained ACP-compatible agents
 - **[Happy Agent](https://github.com/slopus/happy/tree/main/packages/happy-agent)** - Remote agent control CLI (create, send, monitor sessions)
 - **[Happy Server](https://github.com/slopus/happy/tree/main/packages/happy-server)** - Backend server for encrypted sync
 

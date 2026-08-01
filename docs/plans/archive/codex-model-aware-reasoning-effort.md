@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented (unreleased)
+Implemented and archived
 
 ## Date
 

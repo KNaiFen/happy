@@ -1,5 +1,8 @@
 # CLI V3 Messages API Migration (happy-cli)
 
+> Status: Implemented and archived. Codex canonical state now uses Sync v4;
+> retained agents may still use the provider-neutral v3 transport.
+
 ## Overview
 Migrate `happy-cli`'s `ApiSessionClient` from Socket.IO-based message read/write to the new v3 HTTP endpoints. The client will:
 - **Send messages** via `POST /v3/sessions/:sessionId/messages` using InvalidateSync to batch outgoing messages from an outbox — fixes the current problem where messages are silently lost on disconnect

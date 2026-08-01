@@ -134,9 +134,9 @@ happy sandbox disable
 
 ```bash
 git clone https://github.com/slopus/happy
-cd happy-cli
-yarn install
-yarn workspace happy cli --help
+cd happy
+pnpm install --frozen-lockfile
+pnpm --filter happy cli --help
 ```
 
 ## Requirements
