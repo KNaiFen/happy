@@ -24,7 +24,10 @@ describe('official Codex Responses fixture', () => {
     });
 
     it('drives a tool follow-up and a streamed final response without auth', async () => {
-        fixture = await startCodexResponsesFixture();
+        const instructionSentinel = 'HAPPY_TEST_PROJECT_INSTRUCTIONS';
+        fixture = await startCodexResponsesFixture({
+            expectedInstructionSentinel: instructionSentinel,
+        });
         root = await mkdtemp(join(tmpdir(), 'happy-codex-responses-fixture-'));
         await writeCodexResponsesConfig(root, fixture.baseUrl);
 
@@ -35,6 +38,7 @@ describe('official Codex Responses fixture', () => {
 
         const first = await postResponses(fixture.baseUrl, {
             model: 'mock-model',
+            instructions: `Apply ${instructionSentinel} before responding.`,
             input: [{ type: 'message', role: 'user' }],
         });
         expect(first).toContain('"name":"shell_command"');
@@ -55,6 +59,7 @@ describe('official Codex Responses fixture', () => {
         const snapshot = fixture.snapshot();
         assert.equal(snapshot.requestCount, 2);
         assert.equal(snapshot.toolOutputObserved, true);
+        assert.equal(snapshot.instructionSentinelObserved, true);
         assert.deepEqual(snapshot.requestShapes[1]?.inputTypes, ['function_call_output']);
     });
 });

@@ -24,7 +24,12 @@ interface RequestShape {
 export interface CodexResponsesFixtureSnapshot {
     requestCount: number;
     toolOutputObserved: boolean;
+    instructionSentinelObserved: boolean;
     requestShapes: RequestShape[];
+}
+
+export interface CodexResponsesFixtureOptions {
+    expectedInstructionSentinel?: string;
 }
 
 export interface CodexResponsesFixture {
@@ -33,14 +38,22 @@ export interface CodexResponsesFixture {
     close(): Promise<void>;
 }
 
-export async function startCodexResponsesFixture(): Promise<CodexResponsesFixture> {
+export async function startCodexResponsesFixture(
+    options: CodexResponsesFixtureOptions = {},
+): Promise<CodexResponsesFixture> {
     const state: CodexResponsesFixtureSnapshot = {
         requestCount: 0,
         toolOutputObserved: false,
+        instructionSentinelObserved: false,
         requestShapes: [],
     };
     const server = createServer((request, response) => {
-        void handleRequest(request, response, state).catch((error: unknown) => {
+        void handleRequest(
+            request,
+            response,
+            state,
+            options.expectedInstructionSentinel,
+        ).catch((error: unknown) => {
             const errorName = error instanceof Error ? error.name : 'UnknownError';
             if (!response.headersSent) {
                 response.writeHead(500, {
@@ -94,6 +107,7 @@ async function handleRequest(
     request: IncomingMessage,
     response: ServerResponse,
     state: CodexResponsesFixtureSnapshot,
+    expectedInstructionSentinel: string | undefined,
 ): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
     if (request.method !== 'POST' || pathname !== '/v1/responses') {
@@ -107,6 +121,12 @@ async function handleRequest(
     const inputTypes = collectInputTypes(body);
     state.requestCount += 1;
     state.requestShapes.push({ contentEncoding, inputTypes });
+    if (
+        expectedInstructionSentinel
+        && containsString(body, expectedInstructionSentinel)
+    ) {
+        state.instructionSentinelObserved = true;
+    }
     if (containsToolOutput(body, toolCallId)) {
         state.toolOutputObserved = true;
     }
@@ -333,6 +353,15 @@ function containsToolOutput(body: unknown, callId: string): boolean {
         && item.type === 'function_call_output'
         && item.call_id === callId
     ));
+}
+
+function containsString(value: unknown, expected: string): boolean {
+    if (typeof value === 'string') return value.includes(expected);
+    if (Array.isArray(value)) {
+        return value.some((entry) => containsString(entry, expected));
+    }
+    if (!isRecord(value)) return false;
+    return Object.values(value).some((entry) => containsString(entry, expected));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

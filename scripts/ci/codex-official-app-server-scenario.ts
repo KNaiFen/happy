@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import {
@@ -16,10 +16,15 @@ import {
     startCodexResponsesFixture,
     writeCodexResponsesConfig,
 } from './codex-responses-fixture';
+import {
+    LAB_RAT_AGENT_INSTRUCTION_SENTINEL,
+    copyLabRatProject,
+} from '../../environments/environments';
 
 async function main(): Promise<void> {
     const root = await mkdtemp(join(tmpdir(), 'happy-codex-official-app-server-'));
     const codexHome = join(root, 'codex-home');
+    const projectRoot = copyLabRatProject(root);
     const originalAppServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH;
     const originalFakeScenario = process.env.HAPPY_FAKE_CODEX_SCENARIO;
     const originalCodexHome = process.env.CODEX_HOME;
@@ -33,7 +38,26 @@ async function main(): Promise<void> {
         const officialVersion = configureOfficialCodexPath();
         delete process.env.HAPPY_CODEX_APP_SERVER_PATH;
         delete process.env.HAPPY_FAKE_CODEX_SCENARIO;
-        fixture = await startCodexResponsesFixture();
+        const projectInstructions = await readFile(join(projectRoot, 'AGENTS.md'), 'utf8');
+        assert(
+            projectInstructions.includes(LAB_RAT_AGENT_INSTRUCTION_SENTINEL),
+            'generated lab-rat project omitted the Codex instruction sentinel',
+        );
+        const projectFiles = await readdir(projectRoot);
+        for (const legacyName of [
+            'AGENTS.template.md',
+            'agents.md',
+            'CLAUDE.md',
+            'CLAUDE.local.md',
+        ]) {
+            assert(
+                !projectFiles.includes(legacyName),
+                `generated lab-rat project retained ${legacyName}`,
+            );
+        }
+        fixture = await startCodexResponsesFixture({
+            expectedInstructionSentinel: LAB_RAT_AGENT_INSTRUCTION_SENTINEL,
+        });
         await writeCodexResponsesConfig(codexHome, fixture.baseUrl);
         process.env.CODEX_HOME = codexHome;
 
@@ -90,7 +114,7 @@ async function main(): Promise<void> {
 
         await codex.connect();
         await codex.startThread({
-            cwd: root,
+            cwd: projectRoot,
             approvalPolicy: 'never',
             sandbox: 'read-only',
         });
@@ -102,6 +126,7 @@ async function main(): Promise<void> {
                     'Official lifecycle diagnostics:',
                     `requests=${provider.requestCount}`,
                     `toolOutput=${provider.toolOutputObserved}`,
+                    `instructions=${provider.instructionSentinelObserved}`,
                     `methods=${notificationOrder.join(',')}`,
                     `droppedMethods=${droppedNotificationOrderEntries}`,
                     `commandDeltaBytes=${Buffer.byteLength(commandOutput, 'utf8')}`,
@@ -140,6 +165,10 @@ async function main(): Promise<void> {
                 provider.toolOutputObserved,
                 'official Codex did not return function_call_output to the provider',
             );
+            assert(
+                provider.instructionSentinelObserved,
+                'official Codex did not load the generated project AGENTS.md',
+            );
             for (const method of [
                 'turn/started',
                 'item/started',
@@ -174,7 +203,7 @@ async function main(): Promise<void> {
             assert(reasoningSummary.includes('official app-server tool round trip'));
             assert.equal(agentText, OFFICIAL_CODEX_RESPONSE_SENTINEL);
             console.log(
-                `Official Codex app-server lifecycle passed: version=${officialVersion} requests=${provider.requestCount} tool=ok reasoning=ok stream=ok completion=ok`,
+                `Official Codex app-server lifecycle passed: version=${officialVersion} requests=${provider.requestCount} instructions=ok tool=ok reasoning=ok stream=ok completion=ok`,
             );
         } catch (error) {
             reportDiagnostics();

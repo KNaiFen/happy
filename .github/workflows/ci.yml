@@ -501,7 +501,7 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
-      - name: Exercise tool, reasoning, stream, and completion lifecycle
+      - name: Exercise project instructions, tool, reasoning, stream, and completion lifecycle
         run: pnpm --filter happy test:codex-official-app-server
 
   dependency-audit:
@@ -525,8 +525,8 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level=critical
 
-  claude_provider_boundary:
-    name: Claude provider removal boundary
+  codex_provider_boundary:
+    name: Codex-only provider boundary
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -538,8 +538,11 @@ jobs:
         with:
           node-version: 24
 
-      - name: Reject removed provider imports and active protocol fields
-        run: node scripts/ci/assert-no-claude-provider.cjs
+      - name: Test provider boundary allowlist
+        run: node --test scripts/ci/assert-codex-only-provider.test.cjs
+
+      - name: Reject removed provider code, instructions, and active documentation
+        run: node scripts/ci/assert-codex-only-provider.cjs
 
   ci-gate:
     name: Required CI gate
@@ -559,7 +562,7 @@ jobs:
       - codex_transport_scenarios
       - codex_official_app_server
       - dependency-audit
-      - claude_provider_boundary
+      - codex_provider_boundary
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI job to pass
@@ -578,7 +581,7 @@ jobs:
           SCENARIOS_RESULT: ${{ needs.codex_transport_scenarios.result }}
           OFFICIAL_APP_SERVER_RESULT: ${{ needs.codex_official_app_server.result }}
           AUDIT_RESULT: ${{ needs.dependency-audit.result }}
-          CLAUDE_BOUNDARY_RESULT: ${{ needs.claude_provider_boundary.result }}
+          CODEX_BOUNDARY_RESULT: ${{ needs.codex_provider_boundary.result }}
         run: |
           test "$WIRE_RESULT" = success
           test "$AGENT_RESULT" = success
@@ -594,4 +597,4 @@ jobs:
           test "$SCENARIOS_RESULT" = success
           test "$OFFICIAL_APP_SERVER_RESULT" = success
           test "$AUDIT_RESULT" = success
-          test "$CLAUDE_BOUNDARY_RESULT" = success
+          test "$CODEX_BOUNDARY_RESULT" = success
