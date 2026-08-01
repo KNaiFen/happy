@@ -25,6 +25,8 @@
 - 完整根因：官方 `0.146.0` 在 `tool_search` 启用时把普通 MCP runtime 标记为 deferred。首个 Responses 请求只声明 `type=tool_search`，Happy `change_title` 仅在 provider 发出 `tool_search_call`、Codex 执行 BM25 并回传 `tool_search_output` 后可见。旧夹具既未识别 `type=tool_search`，也未处理 search output，因此前两次 namespace 修正无法触达真实 Happy 工具。
 - 三次修复：fixture 按官方事件形态执行 `tool_search_call -> tool_search_output -> namespaced function_call -> function_call_output`；优先兼容旧版直接暴露的 Happy 工具，search 仅在 direct offer 不存在时执行。诊断 schema 记录 search call/output，但最终门禁仍以真实 Happy offer、MCP call/output、唯一 App 卡片、compact 与重启恢复为准，避免把 search 本身误当业务成功。
 - 三次修复本地验证：Responses fixture `7/7`（含种子 shell 隔离和完整 deferred tool-search 往返）、官方 Codex CI TypeScript、field shell 语法与 `git diff --check` 均通过。
+- 第四轮云端结果：提交 `e186889` 的 Monorepo CI `30721479746` 全绿；Android field `30721479743` 的主流程 `2m29s` 通过，schema 5 记录 `tool_search=1/1`、Happy offer/call/output 均成功、零 v3 回退，并通过唯一 MCP 卡片、compact 与首次 App 重启断言。随后独立进程死亡恢复流失败在查找旧标题 `New chat`；失败截图明确显示真实 Happy `change_title` 已将持久化会话标题更新为 `MCP single-card field verification`，会话本身仍在列表中。
+- 四次修复：recovery 流不再依赖被真实 MCP 主动替换掉的初始标题，改为等待并打开 `MCP single-card field verification`，使该步骤同时验证标题和会话在进程死亡后恢复，再继续核对种子历史与官方回复。
 
 ## 目标
 

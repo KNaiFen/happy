@@ -8,9 +8,9 @@ tags:
 - launchApp:
     stopApp: false
 - extendedWaitUntil:
-    visible: New chat
+    visible: MCP single-card field verification
     timeout: 45000
-- tapOn: New chat
+- tapOn: MCP single-card field verification
 - scrollUntilVisible:
     element: resume-history-from-android-e2e
     direction: UP
