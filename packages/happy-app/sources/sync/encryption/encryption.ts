@@ -39,6 +39,7 @@ export class Encryption {
     // Session and machine encryption management
     private sessionEncryptions = new Map<string, SessionEncryption>();
     private sessionDataKeys = new Map<string, Uint8Array>();
+    private independentSessionIds = new Set<string>();
     private machineEncryptions = new Map<string, MachineEncryption>();
     private sessionBlobKeys = new Map<string, Uint8Array>();
     private cache: EncryptionCache;
@@ -90,6 +91,7 @@ export class Encryption {
             );
             this.sessionEncryptions.set(sessionId, sessionEnc);
             this.sessionDataKeys.set(sessionId, dataKey ?? this.masterSecret);
+            if (dataKey) this.independentSessionIds.add(sessionId);
 
             // Derive blob key for this session.
             // Legacy sessions (null dataKey) use the master blob key.
@@ -118,12 +120,32 @@ export class Encryption {
         return key ? key.slice() : null;
     }
 
+    /** Returns only an independently wrapped session key; legacy master keys never cross machine RPC. */
+    getIndependentSessionDataKey(sessionId: string): Uint8Array | null {
+        if (!this.independentSessionIds.has(sessionId)) return null;
+        const key = this.sessionDataKeys.get(sessionId);
+        return key ? key.slice() : null;
+    }
+
+    /** Deterministic, domain-separated key for attaching one external Codex thread. */
+    async deriveCodexResumeSessionDataKey(machineId: string, threadId: string): Promise<Uint8Array> {
+        if (!machineId || !threadId) {
+            throw new Error('machineId and threadId are required');
+        }
+        return deriveKey(this.masterSecret, 'Happy Codex Resume Session', [
+            'v1',
+            machineId,
+            threadId,
+        ]);
+    }
+
     /**
      * Remove session encryption from memory when session is deleted
      */
     removeSessionEncryption(sessionId: string): void {
         this.sessionEncryptions.delete(sessionId);
         this.sessionDataKeys.delete(sessionId);
+        this.independentSessionIds.delete(sessionId);
         this.sessionBlobKeys.delete(sessionId);
         // Also clear any cached data for this session
         this.cache.clearSessionCache(sessionId);

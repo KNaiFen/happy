@@ -11,6 +11,7 @@ import {
     unlink,
     writeFile,
 } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nacl from 'tweetnacl';
@@ -98,6 +99,9 @@ async function main(): Promise<void> {
     responsesFixture = await startCodexResponsesFixture();
     const codexHome = join(fixtureRoot, 'codex-home');
     await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl);
+    process.env.CODEX_HOME = codexHome;
+    const seededThreadId = await seedOfficialCodexHistory();
+    console.log(`Seeded official Codex history ${hashForLog(seededThreadId)}`);
     await migrateRelay();
     const relay = startManagedProcess(
         'relay',
@@ -219,6 +223,28 @@ async function main(): Promise<void> {
         requestShutdown();
     });
     await waitForStop();
+}
+
+async function seedOfficialCodexHistory(): Promise<string> {
+    const { CodexAppServerClient } = await import(
+        '../../packages/happy-cli/src/codex/codexAppServerClient'
+    );
+    const codex = new CodexAppServerClient();
+    try {
+        await codex.connect();
+        const started = await codex.startThread({
+            cwd: homedir(),
+            approvalPolicy: 'never',
+            sandbox: 'read-only',
+        });
+        const completed = await codex.sendTurnAndWait('resume-history-from-android-e2e', {
+            clientUserMessageId: 'android-history-seed',
+        });
+        assert.equal(completed.aborted, false, 'Official history seed turn was aborted');
+        return started.threadId;
+    } finally {
+        await codex.disconnect().catch(() => undefined);
+    }
 }
 
 function startManagedProcess(
@@ -536,7 +562,7 @@ async function verifyFieldRoundTrip(
                 && (counts.get('codex.turn') ?? 0) >= 1
                 && (counts.get('codex.item') ?? 0) >= 2
                 && (counts.get('codex.part') ?? 0) >= 2
-                && (provider?.requestCount ?? 0) >= 2
+                && (provider?.requestCount ?? 0) >= 3
                 && provider?.toolOutputObserved === true
             );
             await persistDiagnostic();

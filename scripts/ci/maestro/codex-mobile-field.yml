@@ -15,29 +15,54 @@ tags:
 - assertVisible:
     id: empty-main-machine-name
 - tapOn:
-    id: empty-main-new-session
+    id: empty-main-machine-details
 
 - extendedWaitUntil:
     visible:
-      id: new-session-agent-picker
+      id: machine-session-path
     timeout: 15000
 - tapOn:
-    id: new-session-agent-picker
+    id: machine-session-path
+- setClipboard: "~"
+- pasteText
+- hideKeyboard
+- tapOn:
+    id: machine-resume-history
+
+- extendedWaitUntil:
+    visible: resume-history-from-android-e2e
+    timeout: 60000
+- tapOn: resume-history-from-android-e2e
 - extendedWaitUntil:
     visible:
-      id: picker-option-codex
-    timeout: 10000
+      id: codex-resume-confirm
+    timeout: 60000
 - tapOn:
-    id: picker-option-codex
+    id: codex-resume-confirm
+
+- extendedWaitUntil:
+    visible:
+      id: agent-input-message
+    timeout: 90000
+- scrollUntilVisible:
+    element: resume-history-from-android-e2e
+    direction: UP
+    timeout: 60000
+- assertVisible: resume-history-from-android-e2e
+- scrollUntilVisible:
+    element: Official Codex source E2E response
+    direction: DOWN
+    timeout: 60000
+- assertVisible: Official Codex source E2E response
 
 - tapOn:
-    id: new-session-prompt
+    id: agent-input-message
 - setClipboard: hello-from-android-e2e
 - pasteText
 - assertVisible: hello-from-android-e2e
 - hideKeyboard
 - tapOn:
-    id: new-session-send
+    id: agent-input-send
 
 - extendedWaitUntil:
     visible: Enjoying the app?

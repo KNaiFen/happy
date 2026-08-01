@@ -412,6 +412,8 @@ export async function runCodex(opts: {
     //
 
     const initialPermissionMode = opts.permissionMode ?? DEFAULT_CODEX_PERMISSION_MODE;
+    const initialModel = opts.model ?? DEFAULT_CODEX_MODEL;
+    const initialEffort = opts.effort ?? DEFAULT_CODEX_EFFORT;
     // Lineage from the daemon's spawn RPC (set by app-side fork / duplicate).
     const forkedFromSessionId = process.env.HAPPY_FORKED_FROM_SESSION_ID;
     const forkedFromMessageId = process.env.HAPPY_FORKED_FROM_MESSAGE_ID;
@@ -429,6 +431,9 @@ export async function runCodex(opts: {
     });
     if (codexSyncV4Enabled) metadata.codexSyncVersion = 4;
     metadata.codexCapabilities = { queueSteering: supportsQueueSteering };
+    metadata.permissionMode = initialPermissionMode;
+    metadata.modelMode = initialModel;
+    metadata.effortLevel = initialEffort;
     if (supportsQueueSteering) {
         state.codexMessageQueue = { revision: 0, messages: [] };
     }
@@ -638,9 +643,9 @@ export async function runCodex(opts: {
     // default for plain codex is yolo, and it must not wave through a
     // straggler approval after an abort.
     let currentPermissionModeExplicitlySet = false;
-    const launchModel = opts.model ?? DEFAULT_CODEX_MODEL;
+    const launchModel = initialModel;
     let currentModel: string | undefined = launchModel;
-    let currentEffort: ReasoningEffort | undefined = opts.effort ?? DEFAULT_CODEX_EFFORT;
+    let currentEffort: ReasoningEffort | undefined = initialEffort;
     let codexModelCapabilities: CodexModelCapability[] | null = null;
     let currentAppendSystemPrompt: string | undefined = undefined;
 
@@ -652,7 +657,7 @@ export async function runCodex(opts: {
         currentPermissionMode = initialPermissionMode;
         currentPermissionModeExplicitlySet = false;
         currentModel = launchModel;
-        currentEffort = opts.effort ?? DEFAULT_CODEX_EFFORT;
+        currentEffort = initialEffort;
         currentAppendSystemPrompt = undefined;
         logger.debug('[Codex] Reset current mode defaults after abort');
     };
@@ -737,6 +742,25 @@ export async function runCodex(opts: {
                 effortHash: currentEffort ? syncV4DiagnosticHash(`effort:${currentEffort}`) : undefined,
             });
         }
+
+        session.updateMetadata((currentMetadata) => {
+            const nextPermissionMode = messagePermissionMode ?? null;
+            const nextModelMode = messageModel ?? null;
+            const nextEffortLevel = messageEffort ?? null;
+            if (
+                currentMetadata.permissionMode === nextPermissionMode
+                && currentMetadata.modelMode === nextModelMode
+                && currentMetadata.effortLevel === nextEffortLevel
+            ) {
+                return currentMetadata;
+            }
+            return {
+                ...currentMetadata,
+                permissionMode: nextPermissionMode,
+                modelMode: nextModelMode,
+                effortLevel: nextEffortLevel,
+            };
+        });
 
         let messageAppendSystemPrompt = currentAppendSystemPrompt;
         if (hasOwn(messageMeta, 'appendSystemPrompt')) {

@@ -20,6 +20,14 @@ import {
     forkCodexThread,
     listCodexRewindPoints,
 } from '@/codex/codexThreadFork';
+import type {
+    CodexListThreadsRequest,
+    CodexListThreadsResult,
+} from '@/codex/codexThreadHistory';
+import type {
+    CodexOpenThreadRequest,
+    CodexOpenThreadResult,
+} from '@/codex/codexThreadOpenCoordinator';
 
 interface ServerToDaemonEvents {
     update: (data: Update) => void;
@@ -80,16 +88,35 @@ interface DaemonToServerEvents {
 
 type MachineRpcHandlers = {
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
-    resumeSession?: (sessionId: string, options?: { model?: string; permissionMode?: string }) => Promise<SpawnSessionResult>;
+    resumeSession?: (sessionId: string, options?: { model?: string; permissionMode?: string; effort?: string }) => Promise<SpawnSessionResult>;
+    listCodexThreads: (request: CodexListThreadsRequest) => Promise<CodexListThreadsResult>;
+    openCodexThread: (request: CodexOpenThreadRequest) => Promise<CodexOpenThreadResult>;
     stopSession: (sessionId: string) => boolean;
     requestShutdown: () => void;
 }
+
+const CODEX_OPEN_PERMISSION_MODES = new Set(['default', 'read-only', 'safe-yolo', 'yolo']);
 
 function requireNonEmptyString(value: unknown, name: string): string {
     if (typeof value !== 'string' || value.length === 0) {
         throw new Error(`${name} is required`);
     }
     return value;
+}
+
+function requireBoundedNonEmptyString(value: unknown, name: string, maxLength: number): string {
+    const result = requireNonEmptyString(value, name);
+    if (result.trim().length === 0 || result.length > maxLength) {
+        throw new Error(`${name} must contain between 1 and ${maxLength} characters`);
+    }
+    return result;
+}
+
+function validateOptionalString(value: unknown, name: string, maxLength: number): void {
+    if (value === undefined || value === null) return;
+    if (typeof value !== 'string' || value.length > maxLength) {
+        throw new Error(`${name} must be a string no longer than ${maxLength} characters`);
+    }
 }
 
 async function withCodexAppServerClient<T>(handler: (client: CodexAppServerClient) => Promise<T>): Promise<T> {
@@ -108,7 +135,7 @@ export class ApiMachineClient {
     private lastKnownCLIAvailability: CLIAvailability | null = null;
     private lastKnownResumeSupport: ResumeSupport | null = null;
     private rpcHandlerManager: RpcHandlerManager;
-    private resumeSessionHandler: ((sessionId: string, options?: { model?: string; permissionMode?: string }) => Promise<SpawnSessionResult>) | null = null;
+    private resumeSessionHandler: ((sessionId: string, options?: { model?: string; permissionMode?: string; effort?: string }) => Promise<SpawnSessionResult>) | null = null;
     private reconnectInterval: NodeJS.Timeout | null = null;
 
     constructor(
@@ -131,6 +158,8 @@ export class ApiMachineClient {
     setRPCHandlers({
         spawnSession,
         resumeSession,
+        listCodexThreads,
+        openCodexThread,
         stopSession,
         requestShutdown
     }: MachineRpcHandlers) {
@@ -139,7 +168,15 @@ export class ApiMachineClient {
         // Register spawn session handler
         this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
             const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = params || {};
-            logger.debug(`[API MACHINE] Spawning session with params: ${JSON.stringify(params)}`);
+            logger.debug('[API MACHINE] Spawning session', {
+                agent: typeof agent === 'string' ? agent : 'default',
+                approvedNewDirectoryCreation: approvedNewDirectoryCreation === true,
+                hasSessionId: typeof sessionId === 'string',
+                hasEnvironmentVariables: Boolean(environmentVariables && Object.keys(environmentVariables).length > 0),
+                hasToken: typeof token === 'string',
+                hasResumeThread: typeof resumeCodexThreadId === 'string',
+                isSideChat: isSideChat === true,
+            });
 
             if (!directory) {
                 throw new Error('Directory is required');
@@ -162,6 +199,88 @@ export class ApiMachineClient {
         });
 
         this.syncResumeSessionRpcRegistration();
+
+        this.rpcHandlerManager.registerHandler('codex-list-threads', async (params: any) => {
+            const directory = requireBoundedNonEmptyString(params?.directory, 'directory', 8_192);
+            const cursor = params?.cursor;
+            const searchTerm = params?.searchTerm;
+            validateOptionalString(cursor, 'cursor', 4_096);
+            validateOptionalString(searchTerm, 'searchTerm', 512);
+            return listCodexThreads({ directory, cursor, searchTerm });
+        });
+
+        this.rpcHandlerManager.registerHandler('codex-open-thread', async (params: any) => {
+            const directory = requireBoundedNonEmptyString(params?.directory, 'directory', 8_192);
+            const threadId = requireBoundedNonEmptyString(params?.threadId, 'threadId', 256);
+            const binding = params?.binding;
+            if (binding !== undefined && (
+                !binding
+                || typeof binding !== 'object'
+                || typeof binding.sessionId !== 'string'
+                || binding.sessionId.trim().length === 0
+                || binding.sessionId.length > 256
+                || (binding.dataEncryptionKey !== undefined && (
+                    typeof binding.dataEncryptionKey !== 'string'
+                    || binding.dataEncryptionKey.trim().length === 0
+                    || binding.dataEncryptionKey.length > 128
+                ))
+            )) {
+                throw new Error('binding is invalid');
+            }
+            const externalDataEncryptionKey = params?.externalDataEncryptionKey;
+            if (externalDataEncryptionKey !== undefined && (
+                typeof externalDataEncryptionKey !== 'string'
+                || externalDataEncryptionKey.trim().length === 0
+                || externalDataEncryptionKey.length > 128
+            )) {
+                throw new Error('externalDataEncryptionKey must be a string');
+            }
+            if (binding && externalDataEncryptionKey !== undefined) {
+                throw new Error('binding and externalDataEncryptionKey are mutually exclusive');
+            }
+            const defaults = params?.defaults;
+            if (defaults !== undefined && (!defaults || typeof defaults !== 'object')) {
+                throw new Error('defaults is invalid');
+            }
+            for (const field of ['permissionMode', 'modelMode', 'effortLevel'] as const) {
+                if (defaults?.[field] !== undefined && (
+                    typeof defaults[field] !== 'string'
+                    || defaults[field].trim().length === 0
+                    || defaults[field].length > 256
+                )) {
+                    throw new Error(`defaults.${field} must be a string`);
+                }
+            }
+            if (
+                defaults?.permissionMode !== undefined
+                && !CODEX_OPEN_PERMISSION_MODES.has(defaults.permissionMode)
+            ) {
+                throw new Error('defaults.permissionMode is not supported by Codex');
+            }
+            if (
+                !binding
+                && externalDataEncryptionKey !== undefined
+                && (
+                    typeof defaults?.permissionMode !== 'string'
+                    || typeof defaults.modelMode !== 'string'
+                    || typeof defaults.effortLevel !== 'string'
+                )
+            ) {
+                throw new Error('defaults.permissionMode, defaults.modelMode, and defaults.effortLevel are required');
+            }
+            return openCodexThread({
+                directory,
+                threadId,
+                ...(binding ? {
+                    binding: {
+                        sessionId: binding.sessionId,
+                        ...(binding.dataEncryptionKey ? { dataEncryptionKey: binding.dataEncryptionKey } : {}),
+                    },
+                } : {}),
+                ...(externalDataEncryptionKey ? { externalDataEncryptionKey } : {}),
+                ...(defaults ? { defaults } : {}),
+            });
+        });
 
         // Register stop session handler
         this.rpcHandlerManager.registerHandler('stop-session', (params: any) => {
@@ -247,7 +366,7 @@ export class ApiMachineClient {
         if (this.resumeSessionHandler) {
             if (!this.rpcHandlerManager.hasHandler(method)) {
                 this.rpcHandlerManager.registerHandler(method, async (params: any) => {
-                    const { sessionId, model, permissionMode } = params || {};
+                    const { sessionId, model, permissionMode, effort } = params || {};
 
                     if (!sessionId || typeof sessionId !== 'string') {
                         throw new Error('Session ID is required');
@@ -258,7 +377,7 @@ export class ApiMachineClient {
                         throw new Error('Resume session handler not available');
                     }
 
-                    const result = await handler(sessionId, { model, permissionMode });
+                    const result = await handler(sessionId, { model, permissionMode, effort });
                     switch (result.type) {
                         case 'success':
                             return { type: 'success', sessionId: result.sessionId };
@@ -380,7 +499,7 @@ export class ApiMachineClient {
 
         // Single consolidated RPC handler
         this.socket.on('rpc-request', async (data: { method: string, params: string }, callback: (response: string) => void) => {
-            logger.debugLargeJson(`[API MACHINE] Received RPC request:`, data);
+            logger.debug('[API MACHINE] Received encrypted RPC request', { method: data.method });
             callback(await this.rpcHandlerManager.handleRequest(data));
         });
 
@@ -443,7 +562,11 @@ export class ApiMachineClient {
             this.updateMachineMetadata((metadata) => ({
                 ...(metadata || {} as any),
                 cliAvailability: newAvailability,
-                resumeSupport: { ...newResumeSupport, rpcAvailable: !!this.resumeSessionHandler },
+                resumeSupport: {
+                    ...newResumeSupport,
+                    rpcAvailable: !!this.resumeSessionHandler,
+                    codexThreadHistoryRpcAvailable: true,
+                },
             })).catch((err) => {
                 logger.debug('[API MACHINE] Failed to update machine capabilities:', err);
             });

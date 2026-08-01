@@ -113,7 +113,7 @@ async function main(): Promise<void> {
         });
 
         await codex.connect();
-        await codex.startThread({
+        const startedThread = await codex.startThread({
             cwd: projectRoot,
             approvalPolicy: 'never',
             sandbox: 'read-only',
@@ -202,8 +202,48 @@ async function main(): Promise<void> {
             );
             assert(reasoningSummary.includes('official app-server tool round trip'));
             assert.equal(agentText, OFFICIAL_CODEX_RESPONSE_SENTINEL);
+
+            const listed = await codex.listThreads({
+                cursor: null,
+                limit: 50,
+                sortKey: 'recency_at',
+                sortDirection: 'desc',
+                sourceKinds: ['cli', 'vscode', 'exec', 'appServer', 'unknown'],
+                archived: false,
+                cwd: projectRoot,
+                searchTerm: 'exercise the official app-server lifecycle',
+            });
+            assert(
+                listed.data.some((thread) => thread.id === startedThread.threadId),
+                'official thread/list omitted the completed root thread',
+            );
+            const read = await codex.readThread({
+                threadId: startedThread.threadId,
+                includeTurns: true,
+                emitSnapshot: false,
+            });
+            assert.equal(read.thread.id, startedThread.threadId);
+            assert.equal(read.thread.cwd, projectRoot);
+            assert(read.thread.turns.length >= 1, 'official thread/read omitted completed turns');
+
+            await codex.disconnect();
+            codex = new CodexAppServerClient();
+            await codex.connect();
+            const resumed = await codex.resumeThread({
+                threadId: startedThread.threadId,
+                cwd: projectRoot,
+                approvalPolicy: 'never',
+                sandbox: 'read-only',
+                emitSnapshot: false,
+            });
+            assert.equal(resumed.threadId, startedThread.threadId);
+            assert.equal(resumed.thread.cwd, projectRoot);
+            assert(
+                resumed.thread.turns.length >= 1,
+                'official thread/resume omitted the prior conversation snapshot',
+            );
             console.log(
-                `Official Codex app-server lifecycle passed: version=${officialVersion} requests=${provider.requestCount} instructions=ok tool=ok reasoning=ok stream=ok completion=ok`,
+                `Official Codex app-server lifecycle passed: version=${officialVersion} requests=${provider.requestCount} instructions=ok tool=ok reasoning=ok stream=ok completion=ok history=list/read/resume`,
             );
         } catch (error) {
             reportDiagnostics();

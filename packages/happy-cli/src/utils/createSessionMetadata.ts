@@ -30,6 +30,8 @@ export interface CreateSessionMetadataOptions {
     flavor: BackendFlavor;
     /** Machine ID for server identification */
     machineId: string;
+    /** Working directory represented by this session. Defaults to process.cwd(). */
+    cwd?: string;
     /** How the session was started */
     startedBy?: 'daemon' | 'terminal';
     /** Active sandbox config for the session, or undefined when not used */
@@ -94,7 +96,7 @@ export function createSessionMetadata(opts: CreateSessionMetadataOptions): Sessi
     const state: AgentState = {
         controlledByUser: false,
     };
-    const cwd = process.cwd();
+    const cwd = resolve(opts.cwd ?? process.cwd());
     const gitBranch = getGitBranch(cwd);
 
     const metadata: Metadata = {

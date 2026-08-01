@@ -31,7 +31,9 @@ vi.mock('@/ui/logger', () => ({
 vi.mock('./encryption', () => ({
     decodeBase64: vi.fn((data: string) => data),
     encodeBase64: vi.fn((data: any) => data),
-    decrypt: vi.fn((data: any) => data),
+    decrypt: vi.fn((_: any, __: any, data: any) => (
+        typeof data === 'string' && data.startsWith('{') ? JSON.parse(data) : data
+    )),
     encrypt: vi.fn((_: any, __: any, data: any) => data),
     libsodiumEncryptForPublicKey: vi.fn(() => new Uint8Array(48)),
     libsodiumPublicKeyFromSecretKey: vi.fn(() => new Uint8Array(32)),
@@ -545,6 +547,114 @@ describe('Api server error handling', () => {
                 expect.stringContaining('⚠️  Happy server unreachable')
             );
             consoleSpy.mockRestore();
+        });
+    });
+
+    describe('getMachineSessionSnapshot', () => {
+        const sessionRow = (id: string) => ({
+            id,
+            seq: 0,
+            metadata: JSON.stringify(testMetadata),
+            metadataVersion: 0,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: 'wrapped-key',
+            active: false,
+            originMachineId: 'test-machine',
+            machineDeletedAt: null,
+        });
+
+        it('finds and decrypts a machine session beyond the first page', async () => {
+            mockGet
+                .mockResolvedValueOnce({
+                    data: {
+                        sessions: Array.from({ length: 200 }, (_, index) => sessionRow(`other-${index}`)),
+                        nextCursor: 'cursor-2',
+                        hasNext: true,
+                    },
+                })
+                .mockResolvedValueOnce({
+                    data: {
+                        sessions: [{
+                            id: 'session-target',
+                            seq: 42,
+                            metadata: JSON.stringify(testMetadata),
+                            metadataVersion: 7,
+                            agentState: JSON.stringify({ codexMessageQueue: { revision: 3, messages: [] } }),
+                            agentStateVersion: 9,
+                            dataEncryptionKey: 'wrapped-key',
+                            active: false,
+                            originMachineId: 'test-machine',
+                            machineDeletedAt: null,
+                        }],
+                        nextCursor: null,
+                        hasNext: false,
+                    },
+                });
+            const encryptionKey = new Uint8Array(32).fill(7);
+
+            const snapshot = await api.getMachineSessionSnapshot({
+                sessionId: 'session-target',
+                machineId: 'test-machine',
+                encryptionKey,
+                encryptionVariant: 'dataKey',
+            });
+
+            expect(snapshot).toMatchObject({
+                id: 'session-target',
+                seq: 42,
+                metadata: testMetadata,
+                metadataVersion: 7,
+                agentStateVersion: 9,
+                active: false,
+                originMachineId: 'test-machine',
+                machineDeletedAt: null,
+                hasIndependentDataKey: true,
+                encryptionVariant: 'dataKey',
+            });
+            expect(snapshot?.encryptionKey).toEqual(encryptionKey);
+            expect(mockGet).toHaveBeenNthCalledWith(
+                1,
+                'https://api.example.com/v2/sessions?limit=200&originMachineId=test-machine',
+                expect.objectContaining({
+                    headers: expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+                }),
+            );
+            expect(mockGet).toHaveBeenNthCalledWith(
+                2,
+                'https://api.example.com/v2/sessions?limit=200&originMachineId=test-machine&cursor=cursor-2',
+                expect.anything(),
+            );
+        });
+
+        it('rejects a repeated relay cursor instead of looping forever', async () => {
+            mockGet
+                .mockResolvedValueOnce({
+                    data: { sessions: [], nextCursor: 'same', hasNext: true },
+                })
+                .mockResolvedValueOnce({
+                    data: { sessions: [], nextCursor: 'same', hasNext: true },
+                });
+
+            await expect(api.getMachineSessionSnapshot({
+                sessionId: 'missing',
+                machineId: 'test-machine',
+                encryptionKey: new Uint8Array(32),
+                encryptionVariant: 'dataKey',
+            })).rejects.toThrow('repeated cursor');
+        });
+
+        it('rejects malformed relay pages before decrypting them', async () => {
+            mockGet.mockResolvedValueOnce({
+                data: { sessions: [{ id: 'incomplete' }], nextCursor: null, hasNext: false },
+            });
+
+            await expect(api.getMachineSessionSnapshot({
+                sessionId: 'incomplete',
+                machineId: 'test-machine',
+                encryptionKey: new Uint8Array(32),
+                encryptionVariant: 'dataKey',
+            })).rejects.toThrow('invalid page');
         });
     });
 

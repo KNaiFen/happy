@@ -1881,6 +1881,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     ]}>
                         <MultiTextInput
                             ref={inputRef}
+                            testID="agent-input-message"
                             defaultValue={props.initialValue}
                             paddingTop={compactMobileComposer ? 4 : Platform.OS === 'web' ? 10 : 8}
                             paddingBottom={compactMobileComposer ? 4 : Platform.OS === 'web' ? 10 : 8}
@@ -2041,6 +2042,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 ]}
                             >
                                 <BubblePressable
+                                    testID="agent-input-send"
                                     style={(p) => ({
                                         width: '100%',
                                         height: '100%',

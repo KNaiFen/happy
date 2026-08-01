@@ -1240,6 +1240,13 @@ class Sync {
         return this.sessionsSync.invalidateAndAwait();
     }
 
+    public hydrateSessionFromHistory = (session: Omit<Session, 'presence'> & {
+        presence?: 'online' | number;
+    }): void => {
+        this.applySessions([session]);
+        this.reconcileCodexV4Clients(Object.values(storage.getState().sessions));
+    }
+
     public getCredentials() {
         return this.credentials;
     }

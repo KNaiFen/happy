@@ -1,11 +1,11 @@
 import fs from 'fs/promises';
 import os from 'os';
 import * as tmp from 'tmp';
-import axios from 'axios';
+import { createHmac } from 'node:crypto';
 
 import { ApiClient } from '@/api/api';
 import { TrackedSession, SessionEncryptionData } from './types';
-import { MachineMetadata, DaemonState, Metadata } from '@/api/types';
+import { MachineMetadata, DaemonState, Metadata, type MachineSessionSnapshot } from '@/api/types';
 import { SpawnSessionOptions, SpawnSessionResult } from '@/modules/common/registerCommonHandlers';
 import { logger } from '@/ui/logger';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
@@ -20,14 +20,14 @@ import type { PersistedSession } from '@/persistence';
 import { cleanupDaemonState, isDaemonRunningForCurrentProfile, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
 import { statSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { projectPath } from '@/projectPath';
 import { getTmuxUtilities, isTmuxAvailable, parseTmuxSessionIdentifier, formatTmuxSessionIdentifier } from '@/utils/tmux';
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
 import { detectCLIAvailability } from '@/utils/detectCLI';
 import { buildResumeLaunch } from '@/resume/handleResumeCommand';
 import { detectResumeSupport } from '@/resume/localHappyAgentAuth';
-import { encodeBase64, decodeBase64, decrypt } from '@/api/encryption';
+import { encodeBase64, decodeBase64 } from '@/api/encryption';
 import {
   buildSessionChildEnvironment,
   sanitizeSessionEnvironment,
@@ -40,10 +40,49 @@ import {
 import { delay } from '@/utils/time';
 import { machineRegistrationRetryDelay } from './machineRegistration';
 import { buildDaemonSpawnPlan } from './spawnPlan';
+import { createSessionMetadata } from '@/utils/createSessionMetadata';
+import {
+  CodexThreadHistoryService,
+  type CodexThreadHistorySummary,
+} from '@/codex/codexThreadHistory';
+import {
+  CodexThreadOpenCoordinator,
+  resolveCodexBoundThreadLaunchDecision,
+  type CodexOpenThreadRequest,
+  type CodexOpenThreadResult,
+} from '@/codex/codexThreadOpenCoordinator';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
     return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+function decodeIndependentSessionKey(encoded: string): Uint8Array {
+  if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length > 128) {
+    throw new Error('Invalid per-session encryption key');
+  }
+  const key = decodeBase64(encoded);
+  if (key.length !== 32) {
+    throw new Error('Invalid per-session encryption key');
+  }
+  return key;
+}
+
+function stableCodexResumeTag(dataKey: Uint8Array): string {
+  const digest = createHmac('sha256', dataKey)
+    .update('Happy Codex Resume Session Tag v1', 'utf8')
+    .digest('base64url');
+  return `codex-resume-v1-${digest}`;
+}
+
+function isProcessAlive(pid: number | undefined): boolean {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Prepare initial metadata
@@ -59,7 +98,11 @@ export const initialMachineMetadata: MachineMetadata = {
   happyHomeDir: configuration.happyHomeDir,
   happyLibDir: projectPath(),
   cliAvailability: detectCLIAvailability(),
-  resumeSupport: { ...detectResumeSupport(), rpcAvailable: true },
+  resumeSupport: {
+    ...detectResumeSupport(),
+    rpcAvailable: true,
+    codexThreadHistoryRpcAvailable: true,
+  },
 };
 
 export async function startDaemon(): Promise<void> {
@@ -195,7 +238,7 @@ export async function startDaemon(): Promise<void> {
           metadataVersion: s.metadataVersion,
           agentStateVersion: s.agentStateVersion,
         },
-        pid: 0,
+        pid: s.hostPid ?? s.metadata.hostPid ?? 0,
       });
     }
     if (Object.keys(persisted).length > 0) {
@@ -230,6 +273,7 @@ export async function startDaemon(): Promise<void> {
           metadataVersion: encryption.metadataVersion,
           agentStateVersion: encryption.agentStateVersion,
           metadata: sessionMetadata,
+          hostPid: pid,
           savedAt: Date.now(),
         });
       }
@@ -267,7 +311,15 @@ export async function startDaemon(): Promise<void> {
 
     // Spawn a new session (sessionId reserved for future --resume functionality)
     const spawnSession = async (options: SpawnSessionOptions): Promise<SpawnSessionResult> => {
-      logger.debugLargeJson('[DAEMON RUN] Spawning session', options);
+      logger.debug('[DAEMON RUN] Spawning session', {
+        agent: options.agent ?? 'codex',
+        approvedNewDirectoryCreation: options.approvedNewDirectoryCreation === true,
+        hasSessionId: typeof options.sessionId === 'string',
+        hasEnvironmentVariables: Boolean(options.environmentVariables && Object.keys(options.environmentVariables).length > 0),
+        hasToken: typeof options.token === 'string',
+        hasResumeThread: typeof options.resumeCodexThreadId === 'string',
+        isSideChat: options.isSideChat === true,
+      });
 
       const { directory, sessionId, machineId, approvedNewDirectoryCreation = true } = options;
       let spawnPlan;
@@ -532,12 +584,14 @@ export async function startDaemon(): Promise<void> {
       env,
       directoryCreated = false,
       message,
+      trackedSession: existingTrackedSession,
     }: {
       args: string[];
       cwd: string;
       env: NodeJS.ProcessEnv;
       directoryCreated?: boolean;
       message?: string;
+      trackedSession?: TrackedSession;
     }): Promise<SpawnSessionResult> => {
       const happyProcess = spawnHappyCLI(args, {
         cwd,
@@ -556,15 +610,33 @@ export async function startDaemon(): Promise<void> {
 
       logger.debug(`[DAEMON RUN] Spawned process with PID ${happyProcess.pid}`);
 
-      const trackedSession: TrackedSession = {
+      const trackedSession: TrackedSession = existingTrackedSession ?? {
         startedBy: 'daemon',
         pid: happyProcess.pid,
-        childProcess: happyProcess,
-        directoryCreated,
-        message,
       };
+      trackedSession.startedBy = 'daemon';
+      trackedSession.pid = happyProcess.pid;
+      trackedSession.childProcess = happyProcess;
+      trackedSession.directoryCreated = directoryCreated;
+      trackedSession.message = message;
 
       pidToTrackedSession.set(happyProcess.pid, trackedSession);
+      if (
+        trackedSession.happySessionId
+        && trackedSession.happySessionMetadataFromLocalWebhook
+        && trackedSession.encryption
+      ) {
+        persistSession(trackedSession.happySessionId, {
+          encryptionKey: encodeBase64(trackedSession.encryption.encryptionKey),
+          encryptionVariant: trackedSession.encryption.encryptionVariant,
+          seq: trackedSession.encryption.seq,
+          metadataVersion: trackedSession.encryption.metadataVersion,
+          agentStateVersion: trackedSession.encryption.agentStateVersion,
+          metadata: trackedSession.happySessionMetadataFromLocalWebhook,
+          hostPid: happyProcess.pid,
+          savedAt: Date.now(),
+        });
+      }
 
       happyProcess.on('exit', (code, signal) => {
         logger.debug(`[DAEMON RUN] Child PID ${happyProcess.pid} exited with code ${code}, signal ${signal}`);
@@ -610,26 +682,43 @@ export async function startDaemon(): Promise<void> {
       return sessionIdToFinishedSession.get(happySessionId);
     };
 
-    const fetchServerSessionMetadata = async (sessionId: string, encryptionKey: Uint8Array, encryptionVariant: 'legacy' | 'dataKey'): Promise<Metadata | null> => {
-      try {
-        const response = await axios.get(`${configuration.serverUrl}/v1/sessions`, {
-          headers: { Authorization: `Bearer ${credentials.token}` },
-          timeout: 10_000,
-        });
-        const sessions = (response.data as { sessions: { id: string; metadata: string }[] }).sessions;
-        const matched = sessions.find(s => s.id === sessionId);
-        if (!matched) return null;
-        const decrypted = decrypt(encryptionKey, encryptionVariant, decodeBase64(matched.metadata));
-        return decrypted as Metadata | null;
-      } catch (error) {
-        logger.debug(`[DAEMON RUN] Failed to fetch session metadata from server: ${error instanceof Error ? error.message : error}`);
-        return null;
-      }
+    const installSessionSnapshot = (snapshot: MachineSessionSnapshot): TrackedSession => {
+      const tracked = findTrackedSessionById(snapshot.id) ?? {
+        startedBy: 'persisted',
+        happySessionId: snapshot.id,
+        pid: 0,
+      };
+      tracked.happySessionId = snapshot.id;
+      tracked.happySessionMetadataFromLocalWebhook = snapshot.metadata;
+      tracked.encryption = {
+        encryptionKey: snapshot.encryptionKey,
+        encryptionVariant: snapshot.encryptionVariant,
+        seq: snapshot.seq,
+        metadataVersion: snapshot.metadataVersion,
+        agentStateVersion: snapshot.agentStateVersion,
+      };
+      sessionIdToFinishedSession.set(snapshot.id, tracked);
+      persistSession(snapshot.id, {
+        encryptionKey: encodeBase64(snapshot.encryptionKey),
+        encryptionVariant: snapshot.encryptionVariant,
+        seq: snapshot.seq,
+        metadataVersion: snapshot.metadataVersion,
+        agentStateVersion: snapshot.agentStateVersion,
+        metadata: snapshot.metadata,
+        hostPid: tracked.pid > 0 ? tracked.pid : undefined,
+        savedAt: Date.now(),
+      });
+      return tracked;
     };
 
-    const resumeSession = async (happySessionId: string, options?: { model?: string; permissionMode?: string }): Promise<SpawnSessionResult> => {
+    const resumeSession = async (happySessionId: string, options?: {
+      model?: string;
+      permissionMode?: string;
+      effort?: string;
+      skipSnapshotRefresh?: boolean;
+    }): Promise<SpawnSessionResult> => {
       try {
-        const tracked = findTrackedSessionById(happySessionId);
+        let tracked = findTrackedSessionById(happySessionId);
         if (!tracked) {
           return { type: 'error', errorMessage: `Session ${happySessionId} is not tracked by this daemon. It may have been started before the daemon or on another machine.` };
         }
@@ -640,30 +729,30 @@ export async function startDaemon(): Promise<void> {
           return { type: 'error', errorMessage: `Session ${happySessionId} has no stored encryption data. It was likely started before this feature was available. Restart the daemon and start a new session to enable resume.` };
         }
 
-        // Webhook metadata may predate the Codex thread identifier. Fetch a
-        // fresh snapshot before trying to resume it.
-        let metadata = tracked.happySessionMetadataFromLocalWebhook;
-        const needsFetch = metadata.flavor === 'codex' && !metadata.codexThreadId;
-        if (needsFetch) {
-          logger.debug(`[DAEMON RUN] Session ${happySessionId} missing agent session ID in webhook metadata, fetching from server`);
-          const serverMetadata = await fetchServerSessionMetadata(happySessionId, tracked.encryption.encryptionKey, tracked.encryption.encryptionVariant);
-          if (serverMetadata) {
-            metadata = serverMetadata;
-            tracked.happySessionMetadataFromLocalWebhook = serverMetadata;
+        if (!options?.skipSnapshotRefresh) {
+          const snapshot = await api.getMachineSessionSnapshot({
+            sessionId: happySessionId,
+            machineId,
+            encryptionKey: tracked.encryption.encryptionKey,
+            encryptionVariant: tracked.encryption.encryptionVariant,
+          });
+          if (!snapshot) {
+            return { type: 'error', errorMessage: `Session ${happySessionId} is no longer available on this machine.` };
           }
+          tracked = installSessionSnapshot(snapshot);
         }
+        const metadata = tracked.happySessionMetadataFromLocalWebhook!;
+        const encryption = tracked.encryption!;
 
         const launch = buildResumeLaunch(
           { id: happySessionId, active: true, metadata },
-          { startedBy: 'daemon' },
+          {
+            startedBy: 'daemon',
+            model: options?.model,
+            permissionMode: options?.permissionMode,
+            effort: options?.effort,
+          },
         );
-
-        if (options?.model) {
-          launch.args.push('--model', options.model);
-        }
-        if (options?.permissionMode) {
-          launch.args.push('--permission-mode', options.permissionMode);
-        }
 
         await fs.access(launch.cwd);
 
@@ -672,12 +761,13 @@ export async function startDaemon(): Promise<void> {
           cwd: launch.cwd,
           env: buildSessionChildEnvironment(ambientEnvironment, {
             HAPPY_RECONNECT_SESSION_ID: happySessionId,
-            HAPPY_RECONNECT_ENCRYPTION_KEY: encodeBase64(tracked.encryption.encryptionKey),
-            HAPPY_RECONNECT_ENCRYPTION_VARIANT: tracked.encryption.encryptionVariant,
-            HAPPY_RECONNECT_SEQ: String(tracked.encryption.seq),
-            HAPPY_RECONNECT_METADATA_VERSION: String(tracked.encryption.metadataVersion),
-            HAPPY_RECONNECT_AGENT_STATE_VERSION: String(tracked.encryption.agentStateVersion),
+            HAPPY_RECONNECT_ENCRYPTION_KEY: encodeBase64(encryption.encryptionKey),
+            HAPPY_RECONNECT_ENCRYPTION_VARIANT: encryption.encryptionVariant,
+            HAPPY_RECONNECT_SEQ: String(encryption.seq),
+            HAPPY_RECONNECT_METADATA_VERSION: String(encryption.metadataVersion),
+            HAPPY_RECONNECT_AGENT_STATE_VERSION: String(encryption.agentStateVersion),
           }),
+          trackedSession: tracked,
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : (error && typeof error === 'object' ? JSON.stringify(error) : String(error));
@@ -829,11 +919,240 @@ export async function startDaemon(): Promise<void> {
 
     // Create realtime machine session
     const apiMachine = api.machineSyncClient(machine);
+    const codexThreadHistory = new CodexThreadHistoryService();
+
+    const validateSessionThreadBinding = (
+      snapshot: MachineSessionSnapshot,
+      thread: CodexThreadHistorySummary,
+    ): void => {
+      if (snapshot.originMachineId !== machineId || snapshot.machineDeletedAt !== null) {
+        throw new Error('The Happy session does not belong to this active machine');
+      }
+      if (snapshot.metadata.flavor !== 'codex') {
+        throw new Error('The Happy session is not a Codex session');
+      }
+      if (snapshot.metadata.machineId !== machineId) {
+        throw new Error('The Happy session metadata belongs to a different machine');
+      }
+      if (snapshot.metadata.codexThreadId !== thread.threadId) {
+        throw new Error('The Happy session is bound to a different Codex thread');
+      }
+      if (resolve(snapshot.metadata.path) !== resolve(thread.cwd)) {
+        throw new Error('The Happy session is bound to a different directory');
+      }
+    };
+
+    const liveSessionForId = (sessionId: string, metadata?: Metadata): boolean => {
+      const tracked = findTrackedSessionById(sessionId);
+      if (isProcessAlive(tracked?.pid)) return true;
+      for (const tracked of pidToTrackedSession.values()) {
+        if (tracked.happySessionId === sessionId && isProcessAlive(tracked.pid)) {
+          return true;
+        }
+      }
+      return isProcessAlive(metadata?.hostPid);
+    };
+
+    const codexThreadOpen = new CodexThreadOpenCoordinator({
+      inspect: (directory, threadId) => codexThreadHistory.inspect(directory, threadId),
+      openExisting: async (request, thread): Promise<CodexOpenThreadResult> => {
+        const current = findTrackedSessionById(request.binding.sessionId);
+        if (current?.encryption?.encryptionVariant === 'legacy') {
+          return {
+            type: 'blocked',
+            reason: 'legacySession',
+            errorMessage: 'This Happy session uses legacy account encryption and cannot transfer resume material to the daemon.',
+          };
+        }
+
+        let dataKey: Uint8Array;
+        if (current?.encryption) {
+          dataKey = current.encryption.encryptionKey;
+        } else if (request.binding.dataEncryptionKey) {
+          dataKey = decodeIndependentSessionKey(request.binding.dataEncryptionKey);
+        } else {
+          return {
+            type: 'resumeMaterialRequired',
+            sessionId: request.binding.sessionId,
+          };
+        }
+
+        let snapshot: MachineSessionSnapshot | null;
+        try {
+          snapshot = await api.getMachineSessionSnapshot({
+            sessionId: request.binding.sessionId,
+            machineId,
+            encryptionKey: dataKey,
+            encryptionVariant: 'dataKey',
+          });
+        } catch {
+          return {
+            type: 'blocked',
+            reason: 'invalidBinding',
+            errorMessage: 'The Happy session could not be verified with its per-session encryption key.',
+          };
+        }
+        if (!snapshot) {
+          return {
+            type: 'blocked',
+            reason: 'invalidBinding',
+            errorMessage: 'The bound Happy session was not found on this machine.',
+          };
+        }
+        if (!snapshot.hasIndependentDataKey) {
+          return {
+            type: 'blocked',
+            reason: 'legacySession',
+            errorMessage: 'This Happy session uses legacy account encryption and cannot be resumed from the App.',
+          };
+        }
+        try {
+          validateSessionThreadBinding(snapshot, thread);
+        } catch (error) {
+          return {
+            type: 'blocked',
+            reason: 'invalidBinding',
+            errorMessage: error instanceof Error ? error.message : 'The Happy session binding is invalid.',
+          };
+        }
+
+        installSessionSnapshot(snapshot);
+        const launchDecision = resolveCodexBoundThreadLaunchDecision({
+          providerStatus: thread.status,
+          happySessionActive: snapshot.active,
+          happyProcessAlive: liveSessionForId(snapshot.id, snapshot.metadata),
+        });
+        if (launchDecision === 'existing-active') {
+          return {
+            type: 'success',
+            disposition: 'existing-active',
+            sessionId: snapshot.id,
+          };
+        }
+        if (launchDecision === 'process-transition') {
+          return {
+            type: 'error',
+            errorMessage: 'The previous Happy process is still shutting down. Retry after it exits.',
+          };
+        }
+        if (launchDecision === 'external-active') {
+          return {
+            type: 'blocked',
+            reason: 'externalThreadActive',
+            errorMessage: 'The selected Codex thread is active outside the bound Happy process. Stop it before resuming from the App.',
+          };
+        }
+        const resumed = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+        if (resumed.type !== 'success') {
+          return {
+            type: 'error',
+            errorMessage: resumed.type === 'error'
+              ? resumed.errorMessage
+              : 'Unexpected directory approval request while resuming a Codex session',
+          };
+        }
+        return {
+          type: 'success',
+          disposition: 'existing-resumed',
+          sessionId: resumed.sessionId,
+        };
+      },
+      createExternal: async (request, thread): Promise<CodexOpenThreadResult> => {
+        const dataKey = decodeIndependentSessionKey(request.externalDataEncryptionKey);
+        const permissionMode = request.defaults!.permissionMode!;
+        const modelMode = request.defaults!.modelMode!;
+        const effortLevel = request.defaults!.effortLevel!;
+        const { state, metadata } = createSessionMetadata({
+          flavor: 'codex',
+          machineId,
+          cwd: thread.cwd,
+          startedBy: 'daemon',
+          dangerouslySkipPermissions: permissionMode === 'yolo',
+        });
+        delete metadata.hostPid;
+        metadata.codexThreadId = thread.threadId;
+        metadata.codexSyncVersion = 4;
+        metadata.permissionMode = permissionMode;
+        metadata.modelMode = modelMode;
+        metadata.effortLevel = effortLevel;
+
+        const created = await api.getOrCreateSession({
+          tag: stableCodexResumeTag(dataKey),
+          metadata,
+          state,
+          dataEncryptionKey: dataKey,
+        });
+        if (!created) {
+          return {
+            type: 'error',
+            errorMessage: 'The Happy session could not be created while the relay is unavailable.',
+          };
+        }
+        const snapshot: MachineSessionSnapshot = {
+          ...created,
+          active: true,
+          originMachineId: machineId,
+          machineDeletedAt: null,
+          hasIndependentDataKey: true,
+        };
+        try {
+          validateSessionThreadBinding(snapshot, thread);
+        } catch (error) {
+          return {
+            type: 'blocked',
+            reason: 'invalidBinding',
+            errorMessage: error instanceof Error ? error.message : 'The deterministic Happy session binding is invalid.',
+          };
+        }
+        installSessionSnapshot(snapshot);
+        const launchDecision = resolveCodexBoundThreadLaunchDecision({
+          providerStatus: thread.status,
+          happySessionActive: snapshot.active,
+          happyProcessAlive: liveSessionForId(snapshot.id, snapshot.metadata),
+        });
+        if (launchDecision === 'existing-active') {
+          return {
+            type: 'success',
+            disposition: 'existing-active',
+            sessionId: snapshot.id,
+          };
+        }
+        if (launchDecision === 'external-active') {
+          return {
+            type: 'blocked',
+            reason: 'externalThreadActive',
+            errorMessage: 'The selected Codex thread became active outside Happy before it could be attached.',
+          };
+        }
+        if (launchDecision === 'process-transition') {
+          return {
+            type: 'error',
+            errorMessage: 'The previous Happy process is still shutting down. Retry after it exits.',
+          };
+        }
+        const resumed = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+        if (resumed.type !== 'success') {
+          return {
+            type: 'error',
+            errorMessage: resumed.type === 'error'
+              ? resumed.errorMessage
+              : 'Unexpected directory approval request while attaching a Codex thread',
+          };
+        }
+        return {
+          type: 'success',
+          disposition: 'created',
+          sessionId: resumed.sessionId,
+        };
+      },
+    });
 
     // Set RPC handlers
     apiMachine.setRPCHandlers({
       spawnSession,
       resumeSession,
+      listCodexThreads: (request) => codexThreadHistory.list(request),
+      openCodexThread: (request: CodexOpenThreadRequest) => codexThreadOpen.open(request),
       stopSession,
       requestShutdown: () => requestShutdown('happy-app')
     });
@@ -902,6 +1221,7 @@ export async function startDaemon(): Promise<void> {
         // `happy daemon start` reads our still-present daemon.state.json, sees
         // isDaemonRunningForCurrentProfile() === true, and exits —
         // leaving nothing running once we also exit.
+        await codexThreadHistory.close();
         apiMachine.shutdown();
         await stopControlServer();
         await cleanupDaemonState();
@@ -973,6 +1293,7 @@ export async function startDaemon(): Promise<void> {
       // Give time for metadata update to send
       await new Promise(resolve => setTimeout(resolve, 100));
 
+      await codexThreadHistory.close();
       apiMachine.shutdown();
       await stopControlServer();
       await cleanupDaemonState();

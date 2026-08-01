@@ -1,6 +1,7 @@
 import axios from 'axios'
+import { z } from 'zod';
 import { logger } from '@/ui/logger'
-import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState } from '@/api/types'
+import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState, MachineSessionSnapshot } from '@/api/types'
 import { ApiSessionClient } from './apiSession';
 import { ApiMachineClient } from './apiMachine';
 import {
@@ -41,6 +42,23 @@ function safeAxiosStatus(error: unknown): number | undefined {
     return undefined;
   }
 }
+
+const MachineSessionPageSchema = z.object({
+  sessions: z.array(z.object({
+    id: z.string().min(1).max(256),
+    seq: z.number().int().nonnegative(),
+    metadata: z.string().min(1).max(16 * 1024 * 1024),
+    metadataVersion: z.number().int().nonnegative(),
+    agentState: z.string().max(16 * 1024 * 1024).nullable(),
+    agentStateVersion: z.number().int().nonnegative(),
+    dataEncryptionKey: z.string().max(4_096).nullable(),
+    active: z.boolean(),
+    originMachineId: z.string().max(200).nullable(),
+    machineDeletedAt: z.number().nullable(),
+  }).passthrough()).max(200),
+  nextCursor: z.string().max(4_096).nullable(),
+  hasNext: z.boolean(),
+}).passthrough();
 
 export class CodexSyncV4CapabilityError extends Error {
   constructor(message: string) {
@@ -356,6 +374,70 @@ export class ApiClient {
 
       throw new Error(`Failed to get or create session: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  async getMachineSessionSnapshot(opts: {
+    sessionId: string;
+    machineId: string;
+    encryptionKey: Uint8Array;
+    encryptionVariant: 'legacy' | 'dataKey';
+  }): Promise<MachineSessionSnapshot | null> {
+    let cursor: string | null = null;
+    const seenCursors = new Set<string>();
+    for (let page = 0; page < 1_000; page += 1) {
+      const query = new URLSearchParams({
+        limit: '200',
+        originMachineId: opts.machineId,
+        ...(cursor ? { cursor } : {}),
+      });
+      let response;
+      try {
+        response = await axios.get(`${configuration.serverUrl}/v2/sessions?${query.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${this.credential.token}`,
+            'X-Happy-Client': `cli-daemon/${configuration.currentCliVersion}`,
+          },
+          timeout: 15_000,
+        });
+      } catch (error) {
+        if (safeAxiosStatus(error) === 401) {
+          throw new HappyRelayAuthenticationError('Session lookup');
+        }
+        throw error;
+      }
+
+      const parsed = MachineSessionPageSchema.safeParse(response.data);
+      if (!parsed.success) {
+        throw new Error('Session lookup returned an invalid page');
+      }
+      const body = parsed.data;
+      const matched = body.sessions.find((session) => session.id === opts.sessionId);
+      if (matched) {
+        return {
+          id: matched.id,
+          seq: matched.seq,
+          encryptionKey: new Uint8Array(opts.encryptionKey),
+          encryptionVariant: opts.encryptionVariant,
+          metadata: decrypt(opts.encryptionKey, opts.encryptionVariant, decodeBase64(matched.metadata)),
+          metadataVersion: matched.metadataVersion,
+          agentState: matched.agentState
+            ? decrypt(opts.encryptionKey, opts.encryptionVariant, decodeBase64(matched.agentState))
+            : null,
+          agentStateVersion: matched.agentStateVersion,
+          active: matched.active,
+          originMachineId: matched.originMachineId,
+          machineDeletedAt: matched.machineDeletedAt,
+          hasIndependentDataKey: matched.dataEncryptionKey !== null,
+        };
+      }
+      if (!body.hasNext || !body.nextCursor) return null;
+      if (seenCursors.has(body.nextCursor)) {
+        throw new Error('Session lookup returned a repeated cursor');
+      }
+      seenCursors.add(body.nextCursor);
+      cursor = body.nextCursor;
+    }
+    throw new Error('Session lookup exceeded 1,000 pages');
   }
 
   async unarchiveSession(sessionId: string): Promise<boolean> {

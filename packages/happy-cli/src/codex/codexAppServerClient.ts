@@ -73,6 +73,8 @@ import type {
     ThreadGoalSetResponse,
     ThreadInjectItemsParams,
     ThreadInjectItemsResponse,
+    ThreadListParams,
+    ThreadListResponse,
     ThreadReadParams,
     ThreadReadResponse,
     ThreadResumeParams,
@@ -1469,6 +1471,10 @@ export class CodexAppServerClient {
     }
 
     // ─── Thread management ──────────────────────────────────────
+
+    async listThreads(opts: ThreadListParams): Promise<ThreadListResponse> {
+        return await this.request('thread/list', opts) as ThreadListResponse;
+    }
 
     async startThread(opts: {
         model?: string;

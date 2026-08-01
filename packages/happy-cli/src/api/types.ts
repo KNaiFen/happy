@@ -101,6 +101,13 @@ export type Session = {
   agentStateVersion: number,
 }
 
+export type MachineSessionSnapshot = Session & {
+  active: boolean;
+  originMachineId: string | null;
+  machineDeletedAt: number | null;
+  hasIndependentDataKey: boolean;
+}
+
 export const CodexModelCapabilitySchema = z.object({
   code: z.string(),
   value: z.string(),
@@ -138,6 +145,7 @@ export const MachineMetadataSchema = z.object({
   }).optional(),
   resumeSupport: z.object({
     rpcAvailable: z.boolean(),
+    codexThreadHistoryRpcAvailable: z.boolean().optional(),
     requiresSameMachine: z.boolean(),
     requiresHappyAgentAuth: z.boolean(),
     happyAgentAuthenticated: z.boolean(),
@@ -310,6 +318,10 @@ export type Metadata = {
   machineId?: string,
   gitBranch?: string,
   codexThreadId?: string, // Codex app-server thread ID
+  /** Session-level Codex launch choices preserved across daemon resume. */
+  permissionMode?: string | null,
+  modelMode?: string | null,
+  effortLevel?: string | null,
   /** Canonical encrypted transport selected for this Codex session. */
   codexSyncVersion?: 4,
   tools?: string[],

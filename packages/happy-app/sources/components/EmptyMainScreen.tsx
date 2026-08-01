@@ -125,6 +125,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.button.primary.tint,
         ...Typography.default('semiBold'),
     },
+    machineDetailsButton: {
+        alignItems: 'center',
+    },
 }));
 
 export function EmptyMainScreen() {
@@ -150,22 +153,30 @@ export function EmptyMainScreen() {
         const machineName = selectedMachine.metadata?.host?.trim() || selectedMachine.id;
         return (
             <View style={styles.container}>
-                <Ionicons
-                    name="desktop-outline"
-                    size={56}
-                    color={theme.colors.textSecondary}
-                    style={styles.machineIcon}
-                />
-                <Text
-                    testID="empty-main-machine-name"
-                    style={styles.machineName}
-                    numberOfLines={2}
+                <Pressable
+                    testID="empty-main-machine-details"
+                    accessibilityRole="button"
+                    accessibilityLabel={machineName}
+                    onPress={() => router.navigate(`/machine/${selectedMachine.id}` as any)}
+                    style={({ pressed }) => [styles.machineDetailsButton, pressed ? { opacity: 0.72 } : null]}
                 >
-                    {machineName}
-                </Text>
-                <Text style={styles.machineStatus}>
-                    {selectedMachineOnline ? t('status.connected') : t('status.disconnected')}
-                </Text>
+                    <Ionicons
+                        name="desktop-outline"
+                        size={56}
+                        color={theme.colors.textSecondary}
+                        style={styles.machineIcon}
+                    />
+                    <Text
+                        testID="empty-main-machine-name"
+                        style={styles.machineName}
+                        numberOfLines={2}
+                    >
+                        {machineName}
+                    </Text>
+                    <Text style={styles.machineStatus}>
+                        {selectedMachineOnline ? t('status.connected') : t('status.disconnected')}
+                    </Text>
+                </Pressable>
                 <Pressable
                     testID="empty-main-new-session"
                     accessibilityRole="button"

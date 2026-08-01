@@ -305,6 +305,69 @@ describe("sessionRoutes terminal machine origin", () => {
         });
     });
 
+    it("filters paginated account history by machine without changing the cursor contract", async () => {
+        app = await createApp();
+        state.listSessions = [
+            row({ id: "session-2", originMachineId: "machine-1" }),
+            row({ id: "session-1", originMachineId: "machine-1" }),
+        ];
+
+        const response = await app.inject({
+            method: "GET",
+            url: "/v2/sessions?originMachineId=machine-1&cursor=cursor_v1_session-3&limit=1",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(dbMock.session.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+            where: {
+                accountId: "user-1",
+                originMachineId: "machine-1",
+                id: { lt: "session-3" },
+            },
+            take: 2,
+        }));
+        expect(response.json()).toMatchObject({
+            sessions: [expect.objectContaining({ id: "session-2" })],
+            hasNext: true,
+            nextCursor: "cursor_v1_session-2",
+        });
+    });
+
+    it("keeps deleted-machine tombstones in filtered account history", async () => {
+        app = await createApp();
+        state.listSessions = [row({
+            id: "session-deleted-machine",
+            originMachineId: "machine-1",
+            originMachine: { deletedAt: new Date("2026-01-02T00:00:00.000Z") },
+        })];
+
+        const response = await app.inject({
+            method: "GET",
+            url: "/v2/sessions?originMachineId=machine-1",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().sessions[0]).toMatchObject({
+            id: "session-deleted-machine",
+            machineDeletedAt: new Date("2026-01-02T00:00:00.000Z").getTime(),
+        });
+    });
+
+    it("rejects terminal history queries for another machine", async () => {
+        app = await createApp();
+
+        const response = await app.inject({
+            method: "GET",
+            url: "/v2/sessions?originMachineId=machine-other",
+            headers: terminalHeaders,
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(dbMock.session.findMany).not.toHaveBeenCalled();
+    });
+
     it("archives idempotently and invalidates queued activity", async () => {
         app = await createApp();
         state.existingSession = row({ id: "session-1", originMachineId: "machine-1" });

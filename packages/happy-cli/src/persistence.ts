@@ -6,7 +6,7 @@
 
 import { FileHandle } from 'node:fs/promises'
 import { readFile, writeFile, mkdir, open, unlink, rename, stat } from 'node:fs/promises'
-import { existsSync, writeFileSync, readFileSync, unlinkSync, renameSync, linkSync } from 'node:fs'
+import { chmodSync, existsSync, writeFileSync, readFileSync, unlinkSync, renameSync, linkSync } from 'node:fs'
 import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { configuration } from '@/configuration'
@@ -449,6 +449,8 @@ export type PersistedSession = {
   metadataVersion: number;
   agentStateVersion: number;
   metadata: Metadata;
+  /** Last daemon-spawned process for crash-safe resume coordination. */
+  hostPid?: number;
   savedAt: number;
 };
 
@@ -456,22 +458,13 @@ type SessionsFile = {
   sessions: Record<string, PersistedSession>;
 };
 
-const SESSION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
-
 export function readPersistedSessions(): Record<string, PersistedSession> {
   try {
     if (!existsSync(configuration.sessionsFile)) return {};
     const data = JSON.parse(readFileSync(configuration.sessionsFile, 'utf-8')) as SessionsFile;
     if (!data?.sessions || typeof data.sessions !== 'object') return {};
 
-    const now = Date.now();
-    const sessions: Record<string, PersistedSession> = {};
-    for (const [id, session] of Object.entries(data.sessions)) {
-      if (now - session.savedAt < SESSION_MAX_AGE_MS) {
-        sessions[id] = session;
-      }
-    }
-    return sessions;
+    return data.sessions;
   } catch {
     return {};
   }
@@ -482,9 +475,16 @@ export function persistSession(sessionId: string, session: PersistedSession): vo
     const existing = readPersistedSessions();
     existing[sessionId] = session;
     const tmpFile = configuration.sessionsFile + '.tmp';
-    writeFileSync(tmpFile, JSON.stringify({ sessions: existing }, null, 2), 'utf-8');
+    writeFileSync(tmpFile, JSON.stringify({ sessions: existing }, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+    chmodSync(tmpFile, 0o600);
     renameSync(tmpFile, configuration.sessionsFile);
+    chmodSync(configuration.sessionsFile, 0o600);
   } catch (error) {
-    logger.debug(`[PERSISTENCE] Failed to persist session ${sessionId}:`, error);
+    logger.debug('[PERSISTENCE] Failed to persist session', {
+      errorKind: error instanceof Error ? error.name : 'unknown',
+    });
   }
 }

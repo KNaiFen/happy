@@ -1,23 +1,25 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, ActivityIndicator, RefreshControl, Platform, Pressable, TextInput } from 'react-native';
+import React, { useState, useMemo, useRef } from 'react';
+import { View, Text, ActivityIndicator, RefreshControl, Platform, Pressable } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { Typography } from '@/constants/Typography';
-import { useSessions, useAllMachines, useMachine } from '@/sync/storage';
+import { useSessions, useAgentDefaultOverrides, useMachine } from '@/sync/storage';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import type { Session } from '@/sync/storageTypes';
 import { machineStopDaemon, machineUpdateMetadata, machineDelete } from '@/sync/ops';
 import { Modal } from '@/modal';
-import { formatPathRelativeToHome, getSessionName, getSessionSubtitle } from '@/utils/sessionUtils';
+import { formatPathRelativeToHome } from '@/utils/sessionUtils';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { sync } from '@/sync/sync';
 import { useUnistyles, StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
-import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
 import { MultiTextInput, type MultiTextInputHandle } from '@/components/MultiTextInput';
+import { CodexResumeThreadSheet } from '@/components/CodexResumeThreadSheet';
+import { resolveAbsolutePath } from '@/utils/pathUtils';
+import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
 
 const styles = StyleSheet.create((theme) => ({
     pathInputContainer: {
@@ -41,9 +43,8 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 12,
         paddingVertical: Platform.select({ web: 10, ios: 8, default: 10 }) as any,
     },
-    inlineSendButton: {
+    inlineButton: {
         position: 'absolute',
-        right: 8,
         bottom: 10,
         width: 32,
         height: 32,
@@ -51,6 +52,9 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         alignItems: 'center',
     },
+    inlineHistoryButton: { right: 48 },
+    inlineSendButton: { right: 8 },
+    inlineHistoryActive: { backgroundColor: theme.colors.surfaceHigh },
     inlineSendActive: {
         backgroundColor: theme.colors.button.primary.background,
     },
@@ -69,8 +73,8 @@ export default function MachineDetailScreen() {
     const { id: machineId } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
     const sessions = useSessions();
+    const defaultOverrides = useAgentDefaultOverrides();
     const machine = useMachine(machineId!);
-    const navigateToSession = useNavigateToSession();
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isStoppingDaemon, setIsStoppingDaemon] = useState(false);
     const [isRenamingMachine, setIsRenamingMachine] = useState(false);
@@ -89,12 +93,6 @@ export default function MachineDetailScreen() {
             return session.metadata?.machineId === machineId;
         }) as Session[];
     }, [sessions, machineId]);
-
-    const previousSessions = useMemo(() => {
-        return [...machineSessions]
-            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-            .slice(0, 5);
-    }, [machineSessions]);
 
     const recentPaths = useMemo(() => {
         const paths = new Set<string>();
@@ -243,10 +241,22 @@ export default function MachineDetailScreen() {
         router.push('/new');
     };
 
-    const pastUsedRelativePath = useCallback((session: Session) => {
-        if (!session.metadata) return 'unknown path';
-        return formatPathRelativeToHome(session.metadata.path, session.metadata.homeDir);
-    }, []);
+    const handleOpenPreviousSession = (): void => {
+        if (!machine || !machineId || !isMachineOnline(machine)) return;
+        if (machine.metadata?.resumeSupport?.codexThreadHistoryRpcAvailable !== true) {
+            Modal.alert(t('machine.resumeRequiresUpgradeTitle'), t('machine.resumeRequiresUpgradeMessage'));
+            return;
+        }
+        const directory = resolveAbsolutePath(customPath.trim(), machine.metadata?.homeDir);
+        Modal.show({
+            component: CodexResumeThreadSheet,
+            props: {
+                machineId,
+                directory,
+                defaults: resolveAgentDefaultConfig(defaultOverrides, 'codex'),
+            },
+        } as any);
+    };
 
     if (!machine) {
         return (
@@ -348,25 +358,48 @@ export default function MachineDetailScreen() {
                                 />
                             </ItemGroup>
                         )}
-                        <ItemGroup title={t('machine.launchNewSessionInDirectory')}>
+                        <ItemGroup title={t('machine.openSessionInDirectory')}>
                         <View style={{ opacity: isMachineOnline(machine) ? 1 : 0.5 }}>
                             <View style={styles.pathInputContainer}>
                                 <View style={[styles.pathInput, { paddingVertical: 8 }]}>
                                     <MultiTextInput
                                         ref={inputRef}
+                                        testID="machine-session-path"
                                         value={customPath}
                                         onChangeText={setCustomPath}
-                                        placeholder={'Enter custom path'}
+                                        placeholder={t('machine.pathPlaceholder')}
                                         maxHeight={76}
                                         paddingTop={8}
                                         paddingBottom={8}
-                                        paddingRight={48}
+                                        paddingRight={88}
                                     />
                                     <Pressable
+                                        testID="machine-resume-history"
+                                        onPress={handleOpenPreviousSession}
+                                        disabled={spawnButtonDisabled}
+                                        accessibilityLabel={t('machine.resumeThreadAction')}
+                                        accessibilityHint={t('machine.resumeThreadActionHint')}
+                                        {...(Platform.OS === 'web' ? { title: t('machine.resumeThreadAction') } as any : {})}
+                                        style={[
+                                            styles.inlineButton,
+                                            styles.inlineHistoryButton,
+                                            spawnButtonDisabled ? styles.inlineSendInactive : styles.inlineHistoryActive,
+                                        ]}
+                                    >
+                                        <Ionicons
+                                            name="time-outline"
+                                            size={17}
+                                            color={theme.colors.textSecondary}
+                                        />
+                                    </Pressable>
+                                    <Pressable
+                                        testID="machine-start-new-session"
                                         onPress={() => handleStartSession()}
                                         disabled={spawnButtonDisabled}
-                                        accessibilityLabel={t('common.continue')}
+                                        accessibilityLabel={t('machine.startNewSessionAction')}
+                                        {...(Platform.OS === 'web' ? { title: t('machine.startNewSessionAction') } as any : {})}
                                         style={[
+                                            styles.inlineButton,
                                             styles.inlineSendButton,
                                             spawnButtonDisabled ? styles.inlineSendInactive : styles.inlineSendActive
                                         ]}
@@ -526,21 +559,6 @@ export default function MachineDetailScreen() {
                             subtitle={new Date(metadata.cliAvailability.detectedAt).toLocaleString()}
                             showChevron={false}
                         />
-                    </ItemGroup>
-                )}
-
-                {/* Previous Sessions (debug view) */}
-                {previousSessions.length > 0 && (
-                    <ItemGroup title={'Previous Sessions (up to 5 most recent)'}>
-                        {previousSessions.map(session => (
-                            <Item
-                                key={session.id}
-                                title={getSessionName(session)}
-                                subtitle={getSessionSubtitle(session)}
-                                onPress={() => navigateToSession(session.id)}
-                                rightElement={<Ionicons name="chevron-forward" size={20} color="#C7C7CC" />}
-                            />
-                        ))}
                     </ItemGroup>
                 )}
 

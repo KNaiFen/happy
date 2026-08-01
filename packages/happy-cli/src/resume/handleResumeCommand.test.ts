@@ -147,6 +147,39 @@ describe('buildResumeLaunch', () => {
         });
     });
 
+    it('preserves session-level Codex permission, model, and effort choices', () => {
+        expect(buildResumeLaunch({
+            id: 'session-modes',
+            active: false,
+            metadata: {
+                path: '/tmp/repo',
+                flavor: 'codex',
+                codexThreadId: '019ccca5-726b-7c61-b914-16de27dfab6e',
+                host: 'localhost',
+                homeDir: '/tmp',
+                happyHomeDir: '/tmp/.happy',
+                happyLibDir: '/tmp/happy',
+                happyToolsDir: '/tmp/happy/tools',
+                permissionMode: 'read-only',
+                modelMode: 'gpt-5.5',
+                effortLevel: 'max',
+            },
+        })).toEqual({
+            cwd: '/tmp/repo',
+            args: [
+                'codex',
+                '--resume',
+                '019ccca5-726b-7c61-b914-16de27dfab6e',
+                '--permission-mode',
+                'read-only',
+                '--model',
+                'gpt-5.5',
+                '--effort',
+                'max',
+            ],
+        });
+    });
+
     it('rejects removed session flavors', () => {
         expect(() => buildResumeLaunch({
             id: 'session-2',

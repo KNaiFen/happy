@@ -420,16 +420,22 @@ jobs:
           src/codex/fakeCodexAppServer.test.ts
           src/codex/codexSyncV4Mapper.test.ts
           src/codex/codexV4ThreadRouter.test.ts
+          src/codex/codexThreadHistory.test.ts
+          src/codex/codexThreadOpenCoordinator.test.ts
+          src/api/apiMachine.codexFork.test.ts
           src/api/syncV4Client.test.ts
 
       - name: Exercise relay ordering, idempotency, and snapshot recovery
         run: >-
           pnpm --filter happy-server-self-host exec vitest run
+          sources/app/api/routes/sessionRoutes.machineOrigin.spec.ts
           sources/app/api/routes/v4SessionRoutes.spec.ts
 
       - name: Exercise App persistence and projection recovery
         run: >-
           pnpm --filter happy-app exec vitest run
+          sources/sync/codexThreadHistory.spec.ts
+          sources/sync/encryption/encryption.codexResume.spec.ts
           sources/sync/syncV4Client.spec.ts
           sources/sync/codexV4Projection.spec.ts
           sources/sync/codexV4Activity.spec.ts

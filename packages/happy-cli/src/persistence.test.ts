@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     acquireDaemonLock,
+    persistSession,
+    readPersistedSessions,
     readCredentials,
     releaseDaemonLock,
     SandboxConfigSchema,
@@ -141,6 +143,48 @@ describe('acquireDaemonLock', () => {
 
         expect(lockHandle).toBeNull();
         expect(readFileSync(mockConfiguration.daemonLockFile, 'utf-8')).toBe(String(process.pid));
+    });
+});
+
+describe('persisted resume sessions', () => {
+    let testDir: string;
+
+    beforeEach(() => {
+        testDir = mkdtempSync(join(tmpdir(), 'happy-sessions-'));
+        mockConfiguration.sessionsFile = join(testDir, 'sessions.json');
+    });
+
+    afterEach(() => {
+        rmSync(testDir, { recursive: true, force: true });
+    });
+
+    it('retains old resume material and stores the journal with mode 0600', () => {
+        persistSession('session-old', {
+            encryptionKey: Buffer.alloc(32, 7).toString('base64'),
+            encryptionVariant: 'dataKey',
+            seq: 42,
+            metadataVersion: 3,
+            agentStateVersion: 4,
+            metadata: {
+                path: '/tmp/repo',
+                host: 'localhost',
+                machineId: 'machine-1',
+                flavor: 'codex',
+                codexThreadId: 'thread-1',
+                homeDir: '/tmp',
+                happyHomeDir: '/tmp/.happy',
+                happyLibDir: '/tmp/happy',
+                happyToolsDir: '/tmp/happy/tools',
+            },
+            hostPid: 12345,
+            savedAt: Date.now() - (90 * 24 * 60 * 60 * 1_000),
+        });
+
+        expect(readPersistedSessions()).toMatchObject({
+            'session-old': { hostPid: 12345 },
+        });
+        expect(statSync(mockConfiguration.sessionsFile).mode & 0o777).toBe(0o600);
+        expect(existsSync(`${mockConfiguration.sessionsFile}.tmp`)).toBe(false);
     });
 });
 

@@ -156,12 +156,13 @@ export function sessionRoutes(app: Fastify) {
             querystring: z.object({
                 cursor: z.string().optional(),
                 limit: z.coerce.number().int().min(1).max(200).default(50),
-                changedSince: z.coerce.number().int().positive().optional()
+                changedSince: z.coerce.number().int().positive().optional(),
+                originMachineId: z.string().min(1).max(200).optional(),
             }).optional()
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        const { cursor, limit = 50, changedSince } = request.query || {};
+        const { cursor, limit = 50, changedSince, originMachineId } = request.query || {};
 
         // Decode cursor - simple ID-based cursor
         let cursorSessionId: string | undefined;
@@ -174,9 +175,17 @@ export function sessionRoutes(app: Fastify) {
         }
 
         // Build where clause
-        const accessWhere = buildSessionAccessWhere(
-            sessionAccessIdentityFromRequest(request),
-        );
+        const accessIdentity = sessionAccessIdentityFromRequest(request);
+        if (
+            accessIdentity.credentialId
+            && originMachineId
+            && originMachineId !== accessIdentity.machineId
+        ) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+        const accessWhere = buildSessionAccessWhere(accessIdentity, {
+            ...(originMachineId ? { originMachineId } : {}),
+        });
         if (!accessWhere) {
             return reply.code(403).send({ error: 'Machine is not authorized' });
         }

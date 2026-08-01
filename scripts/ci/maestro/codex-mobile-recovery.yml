@@ -12,6 +12,11 @@ tags:
     timeout: 45000
 - tapOn: New chat
 - scrollUntilVisible:
+    element: resume-history-from-android-e2e
+    direction: UP
+    timeout: 45000
+- assertVisible: resume-history-from-android-e2e
+- scrollUntilVisible:
     element: hello-from-android-e2e
     direction: UP
     timeout: 45000
