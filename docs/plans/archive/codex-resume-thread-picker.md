@@ -1,8 +1,8 @@
-# Codex 过往会话选择与 Resume
+# Codex 过往会话选择与 Resume（已完成）
 
 ## 状态
 
-- 状态：功能与发布构建完成；Android field 第三轮发现 resume announcement 绕过旧输出门，修复与复验中
+- 状态：完成并归档
 - 基线：`main@f371de5fd9eb3edd11eade0ffd894ea865eacc7f`
 - 目标版本：App `1.11.20`、CLI `1.4.14`、Server `1.1.33`
 - Wire 保持 `0.1.5`
@@ -74,4 +74,7 @@
 - 修复要求：v4 已启用时旧输出适配器全程只读/静默，不因在线、离线或 migration 状态回退；增加 migration-pending 在线场景回归测试，保留 field 的零 v3 强断言。
 - Android field 第三轮现场：`CodexLegacyOutput` 修复已把 v3 记录从两条降为一条，但 `resumeExistingThread` 的聊天内恢复公告直接调用 `session.sendSessionEvent`，绕过统一旧输出门；fixture 再次按零 v3 断言关闭中继，CLI 尚未 ACK 的 23 条 v4 历史 mutation 因此未到达 App。
 - 修复要求：resume 策略同时决定 legacy snapshot 与 legacy announcement；v4 任意 migration 状态下两者都必须关闭。`resumeExistingThread` 的公告参数改为必填，避免未来调用方无意默认写入 v3。
-- 待云端复验：CLI `1.4.14` 构建及 Android API 36 从零 Happy 会话选择官方历史、继续发言并在进程死亡后恢复。
+- 最终本地验收：CLI `92/92` 个源码测试文件、`881/881` 项通过，`tsc --noEmit` 与 `git diff --check` 通过；未在本地执行构建、打包、Cargo、Android 或官方 Codex 源码编译。
+- 最终云端验收：Monorepo CI `30710663462`、CLI `1.4.14` 发布 `30710663407`、Android field `30710663480` 全部通过。官方 source provenance 为 `codex-cli 0.146.0`、tag `rust-v0.146.0`、commit `e363b08c9175ac1cbe5893615dd2cb9ddf95043b`。
+- 最终 field 诊断：`v3MessageCount=0`，`commandAccepted=true`，`cliRoundTripObserved=true`；v4 snapshot 包含 1 个 command、1 个 commandResult、2 个 turn、6 个 item、5 个 part、1 个 runtime 和 1 个 thread，provider 收到 3 次请求并观察到 tool output。零机器 bootstrap、零机器 App surface、真实 resume/继续发言及进程死亡恢复四个 Maestro 流程全部零失败。
+- 发布制品：App `1.11.20`、Server `1.1.33` 和 Wire `0.1.5` 未因两次 CLI-only 修复继续推进；CLI 最终版本为 `1.4.14`。
