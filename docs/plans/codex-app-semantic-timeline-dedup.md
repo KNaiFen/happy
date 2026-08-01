@@ -2,10 +2,10 @@
 
 ## 状态
 
-- 状态：本地实现完成，等待云端验收
+- 状态：官方 namespace MCP 夹具已本地修复，等待云端复验
 - 基线：`main@a09dc569`
 - 目标版本：App `1.11.21`
-- CLI、Server、Wire 保持当前版本
+- CLI、Server、Wire 保持当前版本；本轮仅修 CI 夹具，不重复发布 App
 
 ## 实施记录
 
@@ -14,7 +14,11 @@
 - Resume、会话 composer 和新会话 picker 已复用键盘收起协调器，包含 hide 事件、420ms 兜底和 300ms 同键双击抑制。
 - 云端 Responses fixture 已修正两个假阳性：历史预热不再消耗实时 MCP 覆盖，实时回复使用独立 sentinel；Android field 会直接在键盘可见时 Resume，观察唯一 Happy MCP 卡片，执行 `/compact`，并在 App 重启后复验。
 - 本地源码验证：App 全量 Vitest `963/963`、fixture `2/2`、翻译键 `830/830`、App 与官方 Codex CI TypeScript 检查、YAML/shell 解析及 `git diff --check` 均通过。源码 HTTP relay 场景通过归档恢复、事件顺序、首命令、零 v3 回退、轮询/重连、审批、子线程、隐私、10,000+ entity、20 次 delta 和 `241.9ms` p95。
-- 待办：推送 `origin/main`，等待 Monorepo CI、官方 Codex、Android field 与 App `1.11.21` release 全部通过后归档本计划。
+- 首轮云端结果：Monorepo CI 与 App `1.11.21` Android release 已通过；官方 Codex Android field 在 Happy MCP 卡片断言失败。产物证明 CLI bridge 与 app-server MCP startup 均正常，但 provider 请求计数停在 3，MCP call/output 均为 0。
+- 根因：本次云端编译的官方 `codex-cli 0.146.0` 使用 Responses namespace 工具结构 `type=namespace -> tools[]`；夹具只识别顶层或 `function.name`，未选择 namespace 内的 `change_title`，因此错误返回普通最终回复。产品的 `thread/resume` 已正确传递 `config.mcp_servers`，无需修改 CLI。
+- 修复：夹具同时解析扁平 function 与 namespace 子工具；向官方 app-server 返回 namespaced `function_call` 时保留 `namespace` 字段，并记录不含参数/输出的 namespace 覆盖计数。单元测试分别固定扁平与 namespace 两种协议形态，Android field 仍必须完成真实 Happy MCP provider call/output、唯一 UI 卡片、compact 和重启恢复。
+- 本轮源码验证：Responses fixture `3/3`、官方 Codex CI TypeScript、field shell 语法与 `git diff --check` 均通过。
+- 待办：提交并推送 `origin/main`，等待官方 Codex Android field 复验通过后归档本计划。
 
 ## 目标
 

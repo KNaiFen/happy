@@ -27,6 +27,8 @@ export interface CodexResponsesFixtureSnapshot {
     requestCount: number;
     toolOutputObserved: boolean;
     toolOutputCount: number;
+    happyMcpOfferCount: number;
+    namespaceToolOfferCount: number;
     mcpToolCallCount: number;
     mcpToolOutputObserved: boolean;
     toolNames: string[];
@@ -46,6 +48,11 @@ export interface CodexResponsesFixture {
     close(): Promise<void>;
 }
 
+interface OfferedTool {
+    name: string;
+    namespace?: string;
+}
+
 export async function startCodexResponsesFixture(
     options: CodexResponsesFixtureOptions = {},
 ): Promise<CodexResponsesFixture> {
@@ -53,6 +60,8 @@ export async function startCodexResponsesFixture(
         requestCount: 0,
         toolOutputObserved: false,
         toolOutputCount: 0,
+        happyMcpOfferCount: 0,
+        namespaceToolOfferCount: 0,
         mcpToolCallCount: 0,
         mcpToolOutputObserved: false,
         toolNames: [],
@@ -170,14 +179,14 @@ async function handleRequest(
         return;
     }
 
-    const selectedTool = selectOfferedToolName(body, state, options);
+    const selectedTool = selectOfferedTool(body, state, options);
     if (selectedTool) {
         const callId = state.toolNames.length === 0
             ? toolCallId
             : `${toolCallId}-${state.toolNames.length + 1}`;
-        const isHappyMcp = isHappyMcpToolName(selectedTool);
+        const isHappyMcp = isHappyMcpTool(selectedTool);
         pendingTools.set(callId, { isHappyMcp });
-        state.toolNames.push(selectedTool);
+        state.toolNames.push(canonicalToolName(selectedTool));
         if (isHappyMcp) state.mcpToolCallCount += 1;
         writeEvents(response, toolCallEvents(callId, selectedTool));
         response.end();
@@ -189,9 +198,9 @@ async function handleRequest(
 
 function toolCallEvents(
     callId: string,
-    toolName: string,
+    tool: OfferedTool,
 ): Array<Record<string, unknown>> {
-    const argumentsJson = JSON.stringify(isHappyMcpToolName(toolName)
+    const argumentsJson = JSON.stringify(isHappyMcpTool(tool)
         ? { title: OFFICIAL_CODEX_MCP_SENTINEL }
         : {
             command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
@@ -205,7 +214,8 @@ function toolCallEvents(
             item: {
                 type: 'function_call',
                 call_id: callId,
-                name: toolName,
+                name: tool.name,
+                ...(tool.namespace ? { namespace: tool.namespace } : {}),
                 arguments: argumentsJson,
             },
         },
@@ -413,35 +423,62 @@ function findMatchingToolOutput(
     return null;
 }
 
-function selectOfferedToolName(
+function selectOfferedTool(
     body: unknown,
     state: CodexResponsesFixtureSnapshot,
     options: CodexResponsesFixtureOptions,
-): string | null {
-    const offeredTools = collectOfferedToolNames(body);
+): OfferedTool | null {
+    const offeredTools = collectOfferedTools(body);
+    state.happyMcpOfferCount += offeredTools.filter(isHappyMcpTool).length;
+    state.namespaceToolOfferCount += offeredTools.filter((tool) => tool.namespace).length;
     if (options.preferHappyMcpTool && state.mcpToolCallCount === 0) {
-        const happyMcp = offeredTools.find(isHappyMcpToolName);
+        const happyMcp = offeredTools.find(isHappyMcpTool);
         if (happyMcp) return happyMcp;
     }
-    if (state.toolNames.length === 0) return 'shell_command';
+    if (state.toolNames.length === 0) return { name: 'shell_command' };
     return null;
 }
 
-function collectOfferedToolNames(body: unknown): string[] {
+function collectOfferedTools(body: unknown): OfferedTool[] {
     if (!isRecord(body) || !Array.isArray(body.tools)) return [];
     return body.tools.flatMap((tool) => {
         if (!isRecord(tool)) return [];
-        if (typeof tool.name === 'string') return [tool.name];
+        if (
+            tool.type === 'namespace'
+            && typeof tool.name === 'string'
+            && Array.isArray(tool.tools)
+        ) {
+            const namespace = tool.name;
+            return tool.tools.flatMap((nestedTool): OfferedTool[] => {
+                if (!isRecord(nestedTool)) return [];
+                if (typeof nestedTool.name === 'string') {
+                    return [{ name: nestedTool.name, namespace }];
+                }
+                if (
+                    isRecord(nestedTool.function)
+                    && typeof nestedTool.function.name === 'string'
+                ) {
+                    return [{ name: nestedTool.function.name, namespace }];
+                }
+                return [];
+            });
+        }
+        if (typeof tool.name === 'string') return [{ name: tool.name }];
         if (isRecord(tool.function) && typeof tool.function.name === 'string') {
-            return [tool.function.name];
+            return [{ name: tool.function.name }];
         }
         return [];
     });
 }
 
-function isHappyMcpToolName(toolName: string): boolean {
-    const normalized = toolName.toLowerCase();
-    return normalized.includes('happy') && normalized.includes('change_title');
+function canonicalToolName(tool: OfferedTool): string {
+    if (!tool.namespace) return tool.name;
+    const separator = tool.namespace.endsWith('__') ? '' : '__';
+    return `${tool.namespace}${separator}${tool.name}`;
+}
+
+function isHappyMcpTool(tool: OfferedTool): boolean {
+    return canonicalToolName(tool).toLowerCase() === 'mcp__happy__change_title';
 }
 
 function containsString(value: unknown, expected: string): boolean {

@@ -91,6 +91,43 @@ describe('official Codex Responses fixture', () => {
 
         const snapshot = fixture.snapshot();
         assert.equal(snapshot.toolOutputCount, 1);
+        assert.equal(snapshot.happyMcpOfferCount, 1);
+        assert.equal(snapshot.namespaceToolOfferCount, 0);
+        assert.equal(snapshot.mcpToolCallCount, 1);
+        assert.equal(snapshot.mcpToolOutputObserved, true);
+        assert.deepEqual(snapshot.toolNames, ['mcp__happy__change_title']);
+    });
+
+    it('calls a Happy MCP tool offered through an official Responses namespace', async () => {
+        fixture = await startCodexResponsesFixture({ preferHappyMcpTool: true });
+
+        const first = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{ type: 'message', role: 'user' }],
+            tools: [{
+                type: 'namespace',
+                name: 'mcp__happy__',
+                description: 'Happy tools',
+                tools: [{ type: 'function', name: 'change_title' }],
+            }],
+        });
+        expect(first).toContain('"name":"change_title"');
+        expect(first).toContain('"namespace":"mcp__happy__"');
+        expect(first).toContain(OFFICIAL_CODEX_MCP_SENTINEL);
+
+        const second = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'function_call_output',
+                call_id: 'happy-official-codex-tool-call',
+                output: JSON.stringify({ content: [{ type: 'text', text: 'Title changed' }] }),
+            }],
+        });
+        expect(second).toContain(OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL);
+
+        const snapshot = fixture.snapshot();
+        assert.equal(snapshot.happyMcpOfferCount, 1);
+        assert.equal(snapshot.namespaceToolOfferCount, 1);
         assert.equal(snapshot.mcpToolCallCount, 1);
         assert.equal(snapshot.mcpToolOutputObserved, true);
         assert.deepEqual(snapshot.toolNames, ['mcp__happy__change_title']);
