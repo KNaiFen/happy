@@ -2,8 +2,8 @@
 
 ## 状态
 
-- 状态：官方 namespace MCP 夹具已本地修复，等待云端复验
-- 基线：`main@a09dc569`
+- 状态：官方 deferred MCP tool-search 夹具已本地修复，等待云端复验
+- 基线：`main@74724a98`
 - 目标版本：App `1.11.21`
 - CLI、Server、Wire 保持当前版本；本轮仅修 CI 夹具，不重复发布 App
 
@@ -21,6 +21,10 @@
 - 第二轮云端结果：提交 `091a503` 的 Monorepo CI `30718655386` 全绿；Android field `30718655368` 诊断记录 `providerNamespaceToolOfferCount=5`、`providerHappyMcpOfferCount=0`，证明 namespace 解析已生效，但严格身份匹配仍未选中 Happy 工具。
 - 根因修正：官方 `0.146.0` 默认启用 `NonPrefixedMcpToolNames` 时，Happy MCP 的模型可见 namespace 是 `happy`；旧版/旧配置才是 `mcp__happy`。子工具均为 `change_title`。夹具不得把旧 `mcp__` 前缀当成唯一合法形式。
 - 二次修复：只接受精确的 `(happy, change_title)` 与 `(mcp__happy, change_title)` namespace 组合，以及对应的扁平 `happy__change_title`/`mcp__happy__change_title`；负向用例固定拒绝裸名、子串和相似名称。新旧 namespace/扁平 fixture `6/6`、官方 Codex CI TypeScript、field shell 与 diff 检查均通过。等待下一轮官方 Codex Android field 复验通过后归档本计划。
+- 第三轮云端结果：提交 `74724a9` 的 Monorepo CI `30719878578` 全绿；Android field `30719878544` 仍记录 5 个 namespace 子工具且没有 Happy offer/call。官方源码确认这 5 个是 direct collaboration 工具，不能据此推断 Happy namespace 的具体拼写。
+- 完整根因：官方 `0.146.0` 在 `tool_search` 启用时把普通 MCP runtime 标记为 deferred。首个 Responses 请求只声明 `type=tool_search`，Happy `change_title` 仅在 provider 发出 `tool_search_call`、Codex 执行 BM25 并回传 `tool_search_output` 后可见。旧夹具既未识别 `type=tool_search`，也未处理 search output，因此前两次 namespace 修正无法触达真实 Happy 工具。
+- 三次修复：fixture 按官方事件形态执行 `tool_search_call -> tool_search_output -> namespaced function_call -> function_call_output`；优先兼容旧版直接暴露的 Happy 工具，search 仅在 direct offer 不存在时执行。诊断 schema 记录 search call/output，但最终门禁仍以真实 Happy offer、MCP call/output、唯一 App 卡片、compact 与重启恢复为准，避免把 search 本身误当业务成功。
+- 三次修复本地验证：Responses fixture `7/7`（含种子 shell 隔离和完整 deferred tool-search 往返）、官方 Codex CI TypeScript、field shell 语法与 `git diff --check` 均通过。
 
 ## 目标
 

@@ -104,7 +104,7 @@ for _ in $(seq 1 600); do
         throw new Error("Invalid mobile field verification marker");
       }
       if (
-        diagnostics.schemaVersion !== 4
+        diagnostics.schemaVersion !== 5
         || diagnostics.phase !== "verified"
         || diagnostics.machineRegistered !== true
         || diagnostics.sessionObserved !== true
@@ -122,6 +122,8 @@ for _ in $(seq 1 600); do
         || result.providerToolOutputObserved !== true
         || result.providerHappyMcpOfferCount !== diagnostics.providerHappyMcpOfferCount
         || result.providerNamespaceToolOfferCount !== diagnostics.providerNamespaceToolOfferCount
+        || result.providerToolSearchCallCount !== diagnostics.providerToolSearchCallCount
+        || result.providerToolSearchOutputObserved !== diagnostics.providerToolSearchOutputObserved
         || result.providerMcpToolCallCount !== diagnostics.providerMcpToolCallCount
         || result.providerMcpToolOutputObserved !== true
       ) {

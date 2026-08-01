@@ -17,6 +17,7 @@ export const OFFICIAL_CODEX_MCP_SENTINEL = 'MCP single-card field verification';
 const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumDecodedRequestBytes = 32 * 1024 * 1024;
 const toolCallId = 'happy-official-codex-tool-call';
+const toolSearchCallId = 'happy-official-codex-tool-search';
 
 interface RequestShape {
     contentEncoding: string;
@@ -29,6 +30,8 @@ export interface CodexResponsesFixtureSnapshot {
     toolOutputCount: number;
     happyMcpOfferCount: number;
     namespaceToolOfferCount: number;
+    toolSearchCallCount: number;
+    toolSearchOutputObserved: boolean;
     mcpToolCallCount: number;
     mcpToolOutputObserved: boolean;
     toolNames: string[];
@@ -62,6 +65,8 @@ export async function startCodexResponsesFixture(
         toolOutputCount: 0,
         happyMcpOfferCount: 0,
         namespaceToolOfferCount: 0,
+        toolSearchCallCount: 0,
+        toolSearchOutputObserved: false,
         mcpToolCallCount: 0,
         mcpToolOutputObserved: false,
         toolNames: [],
@@ -69,6 +74,7 @@ export async function startCodexResponsesFixture(
         requestShapes: [],
     };
     const pendingTools = new Map<string, { isHappyMcp: boolean }>();
+    const pendingToolSearches = new Set<string>();
     const server = createServer((request, response) => {
         void handleRequest(
             request,
@@ -76,6 +82,7 @@ export async function startCodexResponsesFixture(
             state,
             options,
             pendingTools,
+            pendingToolSearches,
         ).catch((error: unknown) => {
             const errorName = error instanceof Error ? error.name : 'UnknownError';
             if (!response.headersSent) {
@@ -132,6 +139,7 @@ async function handleRequest(
     state: CodexResponsesFixtureSnapshot,
     options: CodexResponsesFixtureOptions,
     pendingTools: Map<string, { isHappyMcp: boolean }>,
+    pendingToolSearches: Set<string>,
 ): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
     if (request.method !== 'POST' || pathname !== '/v1/responses') {
@@ -159,6 +167,11 @@ async function handleRequest(
         state.toolOutputCount += 1;
         if (completedTool.isHappyMcp) state.mcpToolOutputObserved = true;
     }
+    const completedToolSearch = findMatchingToolSearchOutput(body, pendingToolSearches);
+    if (completedToolSearch) {
+        pendingToolSearches.delete(completedToolSearch.callId);
+        state.toolSearchOutputObserved = true;
+    }
 
     response.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -179,7 +192,12 @@ async function handleRequest(
         return;
     }
 
-    const selectedTool = selectOfferedTool(body, state, options);
+    const selectedTool = selectHappyMcpTool(
+        body,
+        completedToolSearch?.tools ?? [],
+        state,
+        options,
+    );
     if (selectedTool) {
         const callId = state.toolNames.length === 0
             ? toolCallId
@@ -193,7 +211,49 @@ async function handleRequest(
         return;
     }
 
+    // Keep the seed history turn on the deterministic shell path. Tool search is
+    // reserved for the later App-driven turn, after that warm-up has completed.
+    if (state.toolNames.length === 0) {
+        pendingTools.set(toolCallId, { isHappyMcp: false });
+        state.toolNames.push('shell_command');
+        writeEvents(response, toolCallEvents(toolCallId, { name: 'shell_command' }));
+        response.end();
+        return;
+    }
+
+    if (
+        options.preferHappyMcpTool
+        && state.mcpToolCallCount === 0
+        && state.toolSearchCallCount === 0
+        && hasClientToolSearch(body)
+    ) {
+        pendingToolSearches.add(toolSearchCallId);
+        state.toolSearchCallCount += 1;
+        writeEvents(response, toolSearchEvents(toolSearchCallId));
+        response.end();
+        return;
+    }
+
     await writeFinalResponse(response, state.requestCount);
+}
+
+function toolSearchEvents(callId: string): Array<Record<string, unknown>> {
+    return [
+        responseCreated(`happy-tool-search-response-${callId}`),
+        {
+            type: 'response.output_item.done',
+            item: {
+                type: 'tool_search_call',
+                call_id: callId,
+                execution: 'client',
+                arguments: {
+                    query: 'Happy change_title change chat session title',
+                    limit: 8,
+                },
+            },
+        },
+        responseCompleted(`happy-tool-search-response-${callId}`),
+    ];
 }
 
 function toolCallEvents(
@@ -423,25 +483,54 @@ function findMatchingToolOutput(
     return null;
 }
 
-function selectOfferedTool(
+function findMatchingToolSearchOutput(
     body: unknown,
+    pendingToolSearches: Set<string>,
+): { callId: string; tools: OfferedTool[] } | null {
+    if (!isRecord(body) || !Array.isArray(body.input)) return null;
+    for (const item of body.input) {
+        if (
+            !isRecord(item)
+            || item.type !== 'tool_search_output'
+            || item.execution !== 'client'
+            || item.status !== 'completed'
+            || typeof item.call_id !== 'string'
+            || !pendingToolSearches.has(item.call_id)
+            || !Array.isArray(item.tools)
+        ) {
+            continue;
+        }
+        return {
+            callId: item.call_id,
+            tools: collectToolSpecs(item.tools),
+        };
+    }
+    return null;
+}
+
+function selectHappyMcpTool(
+    body: unknown,
+    discoveredTools: OfferedTool[],
     state: CodexResponsesFixtureSnapshot,
     options: CodexResponsesFixtureOptions,
 ): OfferedTool | null {
-    const offeredTools = collectOfferedTools(body);
+    const offeredTools = [...collectOfferedTools(body), ...discoveredTools];
     state.happyMcpOfferCount += offeredTools.filter(isHappyMcpTool).length;
     state.namespaceToolOfferCount += offeredTools.filter((tool) => tool.namespace).length;
     if (options.preferHappyMcpTool && state.mcpToolCallCount === 0) {
         const happyMcp = offeredTools.find(isHappyMcpTool);
         if (happyMcp) return happyMcp;
     }
-    if (state.toolNames.length === 0) return { name: 'shell_command' };
     return null;
 }
 
 function collectOfferedTools(body: unknown): OfferedTool[] {
     if (!isRecord(body) || !Array.isArray(body.tools)) return [];
-    return body.tools.flatMap((tool) => {
+    return collectToolSpecs(body.tools);
+}
+
+function collectToolSpecs(tools: unknown[]): OfferedTool[] {
+    return tools.flatMap((tool) => {
         if (!isRecord(tool)) return [];
         if (
             tool.type === 'namespace'
@@ -469,6 +558,15 @@ function collectOfferedTools(body: unknown): OfferedTool[] {
         }
         return [];
     });
+}
+
+function hasClientToolSearch(body: unknown): boolean {
+    if (!isRecord(body) || !Array.isArray(body.tools)) return false;
+    return body.tools.some((tool) => (
+        isRecord(tool)
+        && tool.type === 'tool_search'
+        && tool.execution === 'client'
+    ));
 }
 
 function canonicalToolName(tool: OfferedTool): string {

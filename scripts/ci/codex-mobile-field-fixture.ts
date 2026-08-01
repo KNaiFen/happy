@@ -44,7 +44,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 4;
+    schemaVersion: 5;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -57,6 +57,8 @@ interface FieldDiagnostic {
     providerToolOutputObserved: boolean;
     providerHappyMcpOfferCount: number;
     providerNamespaceToolOfferCount: number;
+    providerToolSearchCallCount: number;
+    providerToolSearchOutputObserved: boolean;
     providerMcpToolCallCount: number;
     providerMcpToolOutputObserved: boolean;
 }
@@ -145,7 +147,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 4,
+        schemaVersion: 5,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -158,13 +160,15 @@ async function main(): Promise<void> {
         providerToolOutputObserved: false,
         providerHappyMcpOfferCount: 0,
         providerNamespaceToolOfferCount: 0,
+        providerToolSearchCallCount: 0,
+        providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 4,
+            schemaVersion: 5,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -177,6 +181,8 @@ async function main(): Promise<void> {
             providerToolOutputObserved: false,
             providerHappyMcpOfferCount: 0,
             providerNamespaceToolOfferCount: 0,
+            providerToolSearchCallCount: 0,
+            providerToolSearchOutputObserved: false,
             providerMcpToolCallCount: 0,
             providerMcpToolOutputObserved: false,
         });
@@ -208,7 +214,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 4,
+        schemaVersion: 5,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -221,6 +227,8 @@ async function main(): Promise<void> {
         providerToolOutputObserved: false,
         providerHappyMcpOfferCount: 0,
         providerNamespaceToolOfferCount: 0,
+        providerToolSearchCallCount: 0,
+        providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
     });
@@ -488,7 +496,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 4,
+        schemaVersion: 5,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -501,6 +509,8 @@ async function verifyFieldRoundTrip(
         providerToolOutputObserved: false,
         providerHappyMcpOfferCount: 0,
         providerNamespaceToolOfferCount: 0,
+        providerToolSearchCallCount: 0,
+        providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
     };
@@ -511,6 +521,8 @@ async function verifyFieldRoundTrip(
         diagnostic.providerToolOutputObserved = provider?.toolOutputObserved ?? false;
         diagnostic.providerHappyMcpOfferCount = provider?.happyMcpOfferCount ?? 0;
         diagnostic.providerNamespaceToolOfferCount = provider?.namespaceToolOfferCount ?? 0;
+        diagnostic.providerToolSearchCallCount = provider?.toolSearchCallCount ?? 0;
+        diagnostic.providerToolSearchOutputObserved = provider?.toolSearchOutputObserved ?? false;
         diagnostic.providerMcpToolCallCount = provider?.mcpToolCallCount ?? 0;
         diagnostic.providerMcpToolOutputObserved = provider?.mcpToolOutputObserved ?? false;
         const serialized = JSON.stringify(diagnostic);
@@ -614,6 +626,8 @@ async function verifyFieldRoundTrip(
             providerToolOutputObserved: diagnostic.providerToolOutputObserved,
             providerHappyMcpOfferCount: diagnostic.providerHappyMcpOfferCount,
             providerNamespaceToolOfferCount: diagnostic.providerNamespaceToolOfferCount,
+            providerToolSearchCallCount: diagnostic.providerToolSearchCallCount,
+            providerToolSearchOutputObserved: diagnostic.providerToolSearchOutputObserved,
             providerMcpToolCallCount: diagnostic.providerMcpToolCallCount,
             providerMcpToolOutputObserved: diagnostic.providerMcpToolOutputObserved,
             verifiedAt: Date.now(),

@@ -172,6 +172,82 @@ describe('official Codex Responses fixture', () => {
         assert.equal(snapshot.mcpToolCallCount, 0);
         assert.deepEqual(snapshot.toolNames, ['shell_command']);
     });
+
+    it('discovers a deferred Happy MCP tool through client tool search', async () => {
+        fixture = await startCodexResponsesFixture({ preferHappyMcpTool: true });
+
+        const warmup = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{ type: 'message', role: 'user' }],
+            tools: [{ type: 'tool_search', execution: 'client' }],
+        });
+        expect(warmup).toContain('"name":"shell_command"');
+        assert.equal(fixture.snapshot().toolSearchCallCount, 0);
+
+        await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'function_call_output',
+                call_id: 'happy-official-codex-tool-call',
+                output: OFFICIAL_CODEX_TOOL_SENTINEL,
+            }],
+        });
+
+        const search = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{ type: 'message', role: 'user' }],
+            tools: [{ type: 'tool_search', execution: 'client' }],
+        });
+        expect(search).toContain('"type":"tool_search_call"');
+        expect(search).toContain('"call_id":"happy-official-codex-tool-search"');
+        expect(search).toContain('Happy change_title change chat session title');
+
+        const mcpCall = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [
+                {
+                    type: 'tool_search_call',
+                    call_id: 'happy-official-codex-tool-search',
+                    execution: 'client',
+                    arguments: { query: 'Happy change_title change chat session title' },
+                },
+                {
+                    type: 'tool_search_output',
+                    call_id: 'happy-official-codex-tool-search',
+                    status: 'completed',
+                    execution: 'client',
+                    tools: [{
+                        type: 'namespace',
+                        name: 'happy',
+                        description: 'Happy tools',
+                        tools: [{ type: 'function', name: 'change_title' }],
+                    }],
+                },
+            ],
+            tools: [{ type: 'tool_search', execution: 'client' }],
+        });
+        expect(mcpCall).toContain('"name":"change_title"');
+        expect(mcpCall).toContain('"namespace":"happy"');
+
+        const final = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'function_call_output',
+                call_id: 'happy-official-codex-tool-call-2',
+                output: JSON.stringify({ content: [{ type: 'text', text: 'Title changed' }] }),
+            }],
+        });
+        expect(final).toContain(OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL);
+
+        const snapshot = fixture.snapshot();
+        assert.equal(snapshot.requestCount, 5);
+        assert.equal(snapshot.toolSearchCallCount, 1);
+        assert.equal(snapshot.toolSearchOutputObserved, true);
+        assert.equal(snapshot.happyMcpOfferCount, 1);
+        assert.equal(snapshot.mcpToolCallCount, 1);
+        assert.equal(snapshot.mcpToolOutputObserved, true);
+        assert.deepEqual(snapshot.toolNames, ['shell_command', 'happy__change_title']);
+    });
 });
 
 async function postResponses(baseUrl: string, body: unknown): Promise<string> {
