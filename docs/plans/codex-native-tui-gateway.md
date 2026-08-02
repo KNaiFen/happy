@@ -182,8 +182,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - [x] Gateway deferred journal 持久化有序 canonical 通知和 App root handoff，截断
       尾行可恢复、raw reasoning 不入盘、超大事件降级为 snapshot 标记；Gateway seed
       确定性派生 opaque root session tag 和独立 data key。
+- [x] 真实 Sync v4 runtime factory 创建确定性 E2EE root/child session，复用
+      mapper/router/request broker，移除隐藏 prompt/Happy MCP，执行前校验 generation，
+      root 命令交给 Gateway handoff；resume lease reservation 在已知失败时回滚、结果
+      未知时保留。draining 先无阻塞判定再 flush，避免源 command 等待自身的死锁。
 - [ ] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
-      terminal detach/attach 和真实 Sync v4 runtime factory。
+      terminal detach/attach 和 relay-offline materialization。
 
 ### 3. CLI 原生命令面
 
@@ -286,3 +290,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：实现 Gateway deferred journal 与确定性 root session identity。离线
   handoff 不生成临时 Sync v4 AAD；恢复后使用同一 tag/data key 创建 session，并按
   journal FIFO 或权威 snapshot 标记回放。
+- 2026-08-02：完成在线 Sync v4 runtime factory、逐 RPC generation guard 和 root
+  reservation/handoff 接口；修复 App root 命令从源 processor 发起时 retirement flush
+  等待自身的死锁。factory 在 relay 不可达时返回 deferred 信号，由 worker journal
+  后续 materialize。

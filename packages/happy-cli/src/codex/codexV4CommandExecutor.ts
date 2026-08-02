@@ -28,6 +28,7 @@ interface CommandExecutorOptions {
         sandbox: SandboxMode;
     };
     resolveEffort?: (model: string | undefined, effort: string | undefined) => string | null | undefined;
+    beforeProviderCall?: (command: CodexCommandEntityV4) => void;
 }
 
 export interface CodexV4AttachmentReference {
@@ -50,6 +51,7 @@ export class CodexV4CommandExecutor {
         const payload = commandPayload(command.payload);
         switch (command.command) {
             case 'thread.start': {
+                this.beforeProviderCall(command);
                 const result = await this.options.client.startThread({
                     model: optionalString(payload.model) ?? undefined,
                     cwd: optionalString(payload.cwd) ?? this.options.defaultCwd,
@@ -61,6 +63,7 @@ export class CodexV4CommandExecutor {
             }
             case 'thread.resume': {
                 const threadId = commandThreadId(command, payload);
+                this.beforeProviderCall(command);
                 const result = await this.options.client.resumeThread({
                     threadId,
                     model: optionalString(payload.model) ?? undefined,
@@ -73,11 +76,13 @@ export class CodexV4CommandExecutor {
             }
             case 'thread.read': {
                 const threadId = commandThreadId(command, payload);
+                this.beforeProviderCall(command);
                 const result = await this.options.client.readThreadComplete({ threadId });
                 return { threadId: result.thread.id, result: { status: result.thread.status } };
             }
             case 'thread.fork': {
                 const threadId = commandThreadId(command, payload);
+                this.beforeProviderCall(command);
                 const result = await this.options.client.forkThread({
                     threadId,
                     model: optionalString(payload.model) ?? undefined,
@@ -93,12 +98,14 @@ export class CodexV4CommandExecutor {
                 assertNoUnsupportedInput(payload, 'thread.rollback');
                 let numTurns: number;
                 if (payload.allTurns === true) {
+                    this.beforeProviderCall(command);
                     const snapshot = await this.options.client.readThreadComplete({ threadId });
                     numTurns = snapshot.thread.turns.length;
                     if (numTurns === 0) return { threadId, result: { rolledBackTurns: 0 } };
                 } else {
                     numTurns = positiveInt(payload.numTurns, 'thread.rollback requires a positive numTurns');
                 }
+                this.beforeProviderCall(command);
                 const result = await this.options.client.rollbackThread({ threadId, numTurns });
                 return { threadId: result.thread.id, result: { rolledBackTurns: numTurns } };
             }
@@ -108,6 +115,7 @@ export class CodexV4CommandExecutor {
                 if (optionalString(payload.unsupportedPrompt)) {
                     throw new Error('thread.compact does not support a per-request prompt');
                 }
+                this.beforeProviderCall(command);
                 await this.options.client.compactThread(threadId);
                 return { threadId, result: { started: true } };
             }
@@ -119,9 +127,10 @@ export class CodexV4CommandExecutor {
                     payload.expectedTurnId,
                     'turn.steer requires expectedTurnId',
                 );
-                const extraInputItems = await this.extraInputItems(payload);
+                const extraInputItems = await this.extraInputItems(payload, command);
                 const text = optionalString(payload.text) ?? '';
                 if (!text && extraInputItems.length === 0) throw new Error('turn.steer requires input');
+                this.beforeProviderCall(command);
                 await this.options.client.steerTurnOnThread(
                     threadId,
                     expectedTurnId,
@@ -136,6 +145,7 @@ export class CodexV4CommandExecutor {
                     payload.expectedTurnId,
                     'turn.interrupt requires expectedTurnId',
                 );
+                this.beforeProviderCall(command);
                 await this.options.client.interruptTurnOnThread(threadId, expectedTurnId, {
                     propagateErrors: true,
                 });
@@ -146,6 +156,7 @@ export class CodexV4CommandExecutor {
                 assertNoUnsupportedInput(payload, 'review.start');
                 const target = reviewTarget(payload.target);
                 const delivery = reviewDelivery(payload.delivery);
+                this.beforeProviderCall(command);
                 const result = await this.options.client.startReview({ threadId, target, delivery });
                 return {
                     threadId: result.reviewThreadId,
@@ -156,6 +167,7 @@ export class CodexV4CommandExecutor {
             case 'request.resolve': {
                 const threadId = commandThreadId(command, payload);
                 const requestId = requiredString(payload.requestId, 'request.resolve requires requestId');
+                this.beforeProviderCall(command);
                 const result = await this.options.requestBroker.resolve({
                     threadId,
                     requestId,
@@ -166,6 +178,7 @@ export class CodexV4CommandExecutor {
             case 'goal.set': {
                 const threadId = commandThreadId(command, payload);
                 assertNoUnsupportedInput(payload, 'goal.set');
+                this.beforeProviderCall(command);
                 const result = await this.options.client.setGoal({
                     threadId,
                     objective: requiredString(payload.objective, 'goal.set requires objective'),
@@ -177,6 +190,7 @@ export class CodexV4CommandExecutor {
             case 'goal.clear': {
                 const threadId = commandThreadId(command, payload);
                 assertNoUnsupportedInput(payload, 'goal.clear');
+                this.beforeProviderCall(command);
                 const result = await this.options.client.clearGoal({ threadId });
                 return { threadId, result };
             }
@@ -185,6 +199,7 @@ export class CodexV4CommandExecutor {
                 if (optionalString(payload.unsupportedArguments)) {
                     throw new Error('skills.list does not accept arguments');
                 }
+                this.beforeProviderCall(command);
                 const result = await this.options.client.listSkills({
                     cwds: stringArray(payload.cwds) ?? [this.options.defaultCwd],
                     forceReload: payload.forceReload === true,
@@ -197,10 +212,12 @@ export class CodexV4CommandExecutor {
                     throw new Error('mcp.status.list does not accept arguments');
                 }
                 const threadId = command.threadId ?? optionalString(payload.threadId);
+                this.beforeProviderCall(command);
                 const result = await this.options.client.listMcpServerStatus({ threadId });
                 return { threadId, result: { servers: result } };
             }
             case 'model.list': {
+                this.beforeProviderCall(command);
                 const result = await this.options.client.listModels();
                 return { threadId: command.threadId, result: { models: result } };
             }
@@ -232,6 +249,7 @@ export class CodexV4CommandExecutor {
     ): Promise<CodexV4CommandOutcome> {
         let threadId = command.threadId ?? optionalString(payload.threadId);
         if (!threadId) {
+            this.beforeProviderCall(command);
             const started = await this.options.client.startThread({
                 model: optionalString(payload.model) ?? undefined,
                 cwd: optionalString(payload.cwd) ?? this.options.defaultCwd,
@@ -241,6 +259,7 @@ export class CodexV4CommandExecutor {
             });
             threadId = started.threadId;
         } else if (this.options.client.threadId !== threadId) {
+            this.beforeProviderCall(command);
             await this.options.client.resumeThread({
                 threadId,
                 cwd: optionalString(payload.cwd) ?? this.options.defaultCwd,
@@ -248,7 +267,7 @@ export class CodexV4CommandExecutor {
             });
         }
         const rawText = optionalString(payload.text) ?? '';
-        const extraInputItems = await this.extraInputItems(payload);
+        const extraInputItems = await this.extraInputItems(payload, command);
         if (!rawText && extraInputItems.length === 0) throw new Error('turn.start requires input');
         const prompt = this.options.preparePrompt?.(rawText, command) ?? rawText;
         const model = optionalString(payload.model) ?? undefined;
@@ -260,6 +279,7 @@ export class CodexV4CommandExecutor {
         const resolvedEffort = this.options.resolveEffort
             ? this.options.resolveEffort(model, requestedEffort)
             : requestedEffort;
+        this.beforeProviderCall(command);
         const result = await this.options.client.startTurnOnThread(threadId, prompt, {
             model,
             cwd: optionalString(payload.cwd) ?? undefined,
@@ -273,7 +293,10 @@ export class CodexV4CommandExecutor {
         return { threadId, turnId: result.turnId };
     }
 
-    private async extraInputItems(payload: Record<string, unknown>): Promise<InputItem[]> {
+    private async extraInputItems(
+        payload: Record<string, unknown>,
+        command: CodexCommandEntityV4,
+    ): Promise<InputItem[]> {
         const input: InputItem[] = [];
         const attachments = attachmentReferences(payload.attachments);
         if (attachments.length > 0) {
@@ -284,6 +307,7 @@ export class CodexV4CommandExecutor {
         const skillName = optionalString(payload.skillName);
         if (skillName) {
             const cwd = optionalString(payload.cwd) ?? this.options.defaultCwd;
+            this.beforeProviderCall(command);
             const response = await this.options.client.listSkills({ cwds: [cwd], forceReload: false });
             const skill = response.data
                 .flatMap((entry) => entry.skills)
@@ -292,6 +316,10 @@ export class CodexV4CommandExecutor {
             input.push({ type: 'skill', name: skill.name, path: skill.path });
         }
         return input;
+    }
+
+    private beforeProviderCall(command: CodexCommandEntityV4): void {
+        this.options.beforeProviderCall?.(command);
     }
 }
 

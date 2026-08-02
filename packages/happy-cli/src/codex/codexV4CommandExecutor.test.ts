@@ -94,6 +94,29 @@ describe('CodexV4CommandExecutor', () => {
         expect(result).toEqual({ threadId: 'thread-1', turnId: 'turn-1' });
     });
 
+    it('checks the binding immediately after asynchronous input preparation and before the provider call', async () => {
+        const client = fakeClient();
+        const prepareAttachments = vi.fn(async () => ([{
+            type: 'localImage' as const,
+            path: '/tmp/image.png',
+        }]));
+        const beforeProviderCall = vi.fn(() => {
+            throw new Error('binding superseded');
+        });
+
+        await expect(executor(client, {
+            prepareAttachments,
+            beforeProviderCall,
+        }).execute(command('turn.start', {
+            text: 'inspect',
+            attachments: [{ ref: 'blob-1', name: 'image.png', mimeType: 'image/png' }],
+        }))).rejects.toThrow('binding superseded');
+
+        expect(prepareAttachments).toHaveBeenCalledOnce();
+        expect(beforeProviderCall).toHaveBeenCalledOnce();
+        expect(client.startTurnOnThread).not.toHaveBeenCalled();
+    });
+
     it('uses the canonical command thread when a payload also carries a thread target', async () => {
         const client = fakeClient();
         await executor(client).execute(command('turn.start', {

@@ -1,0 +1,337 @@
+import {
+    CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+    type CodexCommandEntityV4,
+} from '@slopus/happy-wire';
+import { describe, expect, it, vi } from 'vitest';
+import type { ApiSessionClientContract } from '@/api/apiSession';
+import type { Metadata, Session as ApiSession } from '@/api/types';
+import type { SyncV4Client, SyncV4AppliedEntity } from '@/api/syncV4Client';
+import type { SyncV4CommandJournalStatus, SyncV4CodexThreadRoute } from '@/api/syncV4Journal';
+import {
+    CodexRpcOutcomeUnknownError,
+    type CodexAppServerClient,
+} from '../codexAppServerClient';
+import { CodexV4CommandCancelledError } from '../codexV4CommandProcessor';
+import type { Thread } from '../protocol';
+import {
+    CodexGatewayRuntimeFactory,
+    type CodexGatewayRuntimeFactoryApi,
+} from './codexGatewayRuntimeFactory';
+
+function command(
+    name: string,
+    payload: CodexCommandEntityV4['payload'],
+    overrides: Partial<CodexCommandEntityV4> & { bindingGeneration?: number } = {},
+): CodexCommandEntityV4 {
+    return {
+        schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+        entityType: 'codex.command',
+        providerId: `command-${name}`,
+        createdAt: 100,
+        updatedAt: 100,
+        commandId: `command-${name}`,
+        threadId: 'thread-a',
+        expectedTurnId: null,
+        command: name,
+        payload,
+        clientUserMessageId: `command-${name}`,
+        replacesCommandId: null,
+        bindingGeneration: 3,
+        ...overrides,
+    } as CodexCommandEntityV4;
+}
+
+function thread(id = 'thread-a'): Thread {
+    return {
+        id,
+        cwd: '/workspace',
+        preview: 'hello',
+        name: null,
+        parentThreadId: null,
+        status: { type: 'idle' },
+        turns: [],
+    } as unknown as Thread;
+}
+
+function createHarness(options: { relayAvailable?: boolean } = {}) {
+    const routes = new Map<string, SyncV4CodexThreadRoute>();
+    const commandStatuses = new Map<string, SyncV4CommandJournalStatus>();
+    let entityHandler: ((event: SyncV4AppliedEntity) => Promise<void>) | null = null;
+    let capturedCreateOptions: Parameters<CodexGatewayRuntimeFactoryApi['getOrCreateSession']>[0] | null = null;
+    let sessionMetadata = {} as Metadata;
+    const order: string[] = [];
+    const sync = {
+        diagnosticSessionHash: 'session-hash',
+        getCodexThreadRoutes: () => routes,
+        getPendingCodexNotifications: () => [],
+        getPendingProviderRequests: () => [],
+        getPendingCommands: () => [],
+        getCommandStatus: (commandId: string) => commandStatuses.get(commandId),
+        getMigrationState: () => 'ready',
+        setMigrationState: vi.fn(async () => undefined),
+        persistCodexThreadRoute: vi.fn(async (route: SyncV4CodexThreadRoute) => {
+            routes.set(route.threadId, route);
+        }),
+        publishEntity: vi.fn(async () => ({})),
+        publishEntities: vi.fn(async () => []),
+        publishProviderRequestTransition: vi.fn(async () => ({})),
+        persistProviderRequestTransition: vi.fn(async () => undefined),
+        publishCommandTransition: vi.fn(async (
+            pending: CodexCommandEntityV4,
+            _result: unknown,
+            status: SyncV4CommandJournalStatus,
+        ) => {
+            commandStatuses.set(pending.commandId, status);
+            return {};
+        }),
+        flushOutboundOnce: vi.fn(async () => undefined),
+        hasPendingOutbound: vi.fn(() => false),
+        close: vi.fn(async () => undefined),
+    } as unknown as SyncV4Client;
+    const session = {
+        sessionId: 'session-a',
+        syncV4SessionKey: new Uint8Array(32).fill(9),
+        skipExistingMessages: vi.fn(),
+        on: vi.fn(),
+        updateMetadataAndWait: vi.fn(async (update: (metadata: Metadata) => Metadata) => {
+            sessionMetadata = update(sessionMetadata);
+        }),
+        enableSyncV4: vi.fn(async (createHandler: (
+            client: SyncV4Client,
+        ) => (event: SyncV4AppliedEntity) => Promise<void>) => {
+            entityHandler = createHandler(sync);
+            return sync;
+        }),
+        downloadAndDecryptAttachment: vi.fn(),
+        close: vi.fn(async () => undefined),
+    } as unknown as ApiSessionClientContract;
+    const apiSession = (metadata: Metadata): ApiSession => ({
+        id: 'session-a',
+        seq: 0,
+        encryptionKey: new Uint8Array(32).fill(9),
+        encryptionVariant: 'dataKey',
+        metadata,
+        metadataVersion: 0,
+        agentState: { controlledByUser: false },
+        agentStateVersion: 0,
+    });
+    const api: CodexGatewayRuntimeFactoryApi = {
+        getOrCreateSession: vi.fn(async (createOptions) => {
+            capturedCreateOptions = createOptions;
+            sessionMetadata = createOptions.metadata;
+            return options.relayAvailable === false ? null : apiSession(createOptions.metadata);
+        }),
+        unarchiveSession: vi.fn(async () => true),
+        sessionSyncClient: vi.fn(() => session),
+        archiveSessionV4: vi.fn(async () => true),
+    };
+    const providerThread = thread();
+    const client = {
+        threadId: 'thread-a',
+        sandboxEnabled: false,
+        supportsTurnSteering: () => true,
+        readThreadComplete: vi.fn(async ({ threadId }: { threadId: string }) => ({
+            thread: threadId === 'thread-a' ? providerThread : thread(threadId),
+        })),
+        getGoal: vi.fn(async () => ({ goal: null })),
+        startTurnOnThread: vi.fn(async (_threadId, text) => {
+            order.push(`provider.turn:${text}`);
+            return { turnId: 'turn-a' };
+        }),
+        resumeThread: vi.fn(async ({ threadId }: { threadId: string }) => {
+            order.push(`provider.resume:${threadId}`);
+            return { threadId, model: 'gpt-test' };
+        }),
+    } as unknown as CodexAppServerClient;
+    const assertCurrentGeneration = vi.fn((generation: number | undefined) => {
+        order.push(`generation:${generation ?? 'missing'}`);
+        if (generation !== 3) {
+            throw new CodexV4CommandCancelledError(
+                'bindingSuperseded',
+                'stale generation',
+            );
+        }
+    });
+    const rootHandoff = {
+        reserve: vi.fn(async ({ requestedThreadId }: { requestedThreadId: string | null }) => {
+            order.push(`reserve:${requestedThreadId ?? 'new'}`);
+            return { release: vi.fn(async () => { order.push('reservation.release'); }) };
+        }),
+        bind: vi.fn(async ({ targetThreadId }: { targetThreadId: string }) => {
+            order.push(`handoff:${targetThreadId}`);
+        }),
+        reconcile: vi.fn(async () => null),
+    };
+    const reportSessionStarted = vi.fn(async () => ({}));
+    const factory = new CodexGatewayRuntimeFactory({
+        gatewayId: 'gateway-a',
+        sessionKeySeed: Buffer.alloc(32, 5).toString('base64url'),
+        origin: 'terminal',
+        machineId: 'machine-a',
+        cwd: '/workspace',
+        api,
+        client,
+        codexCliVersion: { major: 0, minor: 145, patch: 0 },
+        defaultPermissionMode: 'default',
+        defaultModel: 'gpt-test',
+        defaultEffort: 'high',
+        modelCapabilities: [],
+        terminalState: () => ({ state: 'attached', detachedAt: null }),
+        rootHandoff,
+        reportSessionStarted,
+        now: () => 200,
+    });
+    return {
+        factory,
+        api,
+        session,
+        sync,
+        client,
+        rootHandoff,
+        reportSessionStarted,
+        assertCurrentGeneration,
+        order,
+        routes,
+        commandStatuses,
+        capturedCreateOptions: () => capturedCreateOptions,
+        sessionMetadata: () => sessionMetadata,
+        emit: async (pending: CodexCommandEntityV4) => {
+            if (!entityHandler) throw new Error('Sync handler was not initialized');
+            await entityHandler({
+                op: 'upsert',
+                entity: pending,
+            } as SyncV4AppliedEntity);
+        },
+    };
+}
+
+describe('CodexGatewayRuntimeFactory', () => {
+    it('returns a deferred signal without constructing a partial Sync runtime while relay is offline', async () => {
+        const harness = createHarness({ relayAvailable: false });
+
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+
+        expect(runtime).toBeNull();
+        expect(harness.api.sessionSyncClient).not.toHaveBeenCalled();
+        expect(harness.capturedCreateOptions()).toMatchObject({
+            tag: expect.stringMatching(/^codex-gateway-root-v1-/),
+            metadata: expect.objectContaining({
+                flavor: 'codex',
+                codexSyncVersion: 4,
+                codexThreadId: 'thread-a',
+            }),
+        });
+    });
+
+    it('runs raw App text through the current root and coordinates root switches outside the source router', async () => {
+        const harness = createHarness();
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: 'session-old',
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+        expect(runtime).not.toBeNull();
+        await runtime!.activate(thread());
+
+        await harness.emit(command('turn.start', { text: 'plain user text' }));
+        await harness.emit(command('thread.resume', { threadId: 'thread-b' }, {
+            commandId: 'command-resume',
+            providerId: 'command-resume',
+            clientUserMessageId: 'command-resume',
+            threadId: 'thread-b',
+        }));
+
+        expect(harness.order).toEqual([
+            'generation:3',
+            'provider.turn:plain user text',
+            'generation:3',
+            'reserve:thread-b',
+            'generation:3',
+            'provider.resume:thread-b',
+            'handoff:thread-b',
+        ]);
+        expect(harness.client.startTurnOnThread).toHaveBeenCalledWith(
+            'thread-a',
+            'plain user text',
+            expect.objectContaining({ clientUserMessageId: 'command-turn.start' }),
+        );
+        expect(harness.rootHandoff.bind).toHaveBeenCalledWith(expect.objectContaining({
+            sourceThreadId: 'thread-a',
+            sourceGeneration: 3,
+            targetThreadId: 'thread-b',
+        }));
+        expect(harness.routes.has('thread-b')).toBe(false);
+        expect(harness.commandStatuses.get('command-resume')).toBe('succeeded');
+        expect(harness.sessionMetadata().codexGatewayBinding).toMatchObject({
+            gatewayId: 'gateway-a',
+            generation: 3,
+            role: 'recovering',
+        });
+        expect(harness.reportSessionStarted).toHaveBeenCalledOnce();
+        await runtime!.close();
+    });
+
+    it('cancels a stale command before any provider side effect', async () => {
+        const harness = createHarness();
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+        await runtime!.activate(thread());
+
+        await harness.emit(command('turn.start', { text: 'must not run' }, {
+            bindingGeneration: 2,
+        }));
+
+        expect(harness.client.startTurnOnThread).not.toHaveBeenCalled();
+        expect(harness.commandStatuses.get('command-turn.start')).toBe('cancelled');
+        await runtime!.close();
+    });
+
+    it('releases a resume reservation after a known provider rejection but keeps it for an unknown outcome', async () => {
+        const harness = createHarness();
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+        await runtime!.activate(thread());
+        vi.mocked(harness.client.resumeThread)
+            .mockRejectedValueOnce(new Error('known rejection'))
+            .mockRejectedValueOnce(new CodexRpcOutcomeUnknownError(
+                'thread/resume',
+                'transport closed after write',
+            ));
+
+        await harness.emit(command('thread.resume', { threadId: 'thread-b' }, {
+            commandId: 'command-known',
+            providerId: 'command-known',
+            clientUserMessageId: 'command-known',
+            threadId: 'thread-b',
+        }));
+        await harness.emit(command('thread.resume', { threadId: 'thread-c' }, {
+            commandId: 'command-unknown',
+            providerId: 'command-unknown',
+            clientUserMessageId: 'command-unknown',
+            threadId: 'thread-c',
+        }));
+
+        expect(harness.order.filter((entry) => entry === 'reservation.release')).toHaveLength(1);
+        expect(harness.commandStatuses.get('command-known')).toBe('failed');
+        expect(harness.commandStatuses.get('command-unknown')).toBe('resultUnknown');
+        await runtime!.close();
+    });
+});

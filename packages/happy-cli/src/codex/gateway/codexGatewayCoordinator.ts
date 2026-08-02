@@ -316,6 +316,10 @@ export class CodexGatewayCoordinator {
         });
     }
 
+    async retireDrainingRoots(): Promise<void> {
+        await this.retireEligibleDrainingRoots();
+    }
+
     private installClientHandlers(): void {
         if (this.handlersInstalled) return;
         this.handlersInstalled = true;
@@ -482,6 +486,7 @@ export class CodexGatewayCoordinator {
 
     private async maybeRetireLocked(root: ManagedRoot): Promise<void> {
         if (root.role !== 'draining' || root.rootActiveTurnId) return;
+        if (!await root.runtime.isDrained()) return;
         await root.runtime.flush();
         if (!await root.runtime.isDrained()) return;
         await root.runtime.updateBinding({

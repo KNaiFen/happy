@@ -90,6 +90,26 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.acquire).toHaveBeenCalledOnce();
     });
 
+    it('does not flush a draining source while its root handoff command is still in flight', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        const runtimeA = harness.runtimes.get('thread-a')!;
+        runtimeA.drained = false;
+
+        await harness.coordinator.bindRoot('thread-b');
+
+        expect(runtimeA.bindings.at(-1)?.role).toBe('draining');
+        expect(runtimeA.flush).not.toHaveBeenCalled();
+        runtimeA.drained = true;
+        await harness.coordinator.retireDrainingRoots();
+        expect(runtimeA.flush).toHaveBeenCalledOnce();
+        expect(runtimeA.close).toHaveBeenCalledOnce();
+    });
+
     it('cancels commands from a superseded or missing binding generation', async () => {
         const harness = createHarness({
             'thread-a': thread('thread-a', 'idle'),
