@@ -470,6 +470,14 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     官方 `mcpToolCall`、Sync v4 entity、App 单卡投影和 MCP output 均出现，同时不再把
     测试专用 server 名称或 Happy 工具名写入产品代码。该修正仅影响 CI fixture/测试，不
     改变已发布 CLI `1.4.27`、App `1.11.22` 或 Wire `0.1.6`。
+  - 第二十一轮 Android field `30768549595` 已通过零机器、历史 resume、App 到官方
+    `0.146.0` 的动态 tool-search、测试 MCP call/output、Sync v4 单卡投影、首条回复和
+    `/compact`；诊断为 `5` 个 provider request、`1` 次 namespace/tool-search/MCP call
+    与 MCP output，v3 消息为 `0`。失败只在进程死亡后的 recovery 脚本：field flow 先
+    `home` 再 kill，重启后 App 正确显示持久化会话列表，旧脚本却未打开 `New chat` 就直接
+    查找已折叠工具输出。恢复验收须先重新进入该会话，以 `codex-mcp-tool-message` 验证持久
+    工具卡、点击详情验证精确 output，再返回聊天验证历史与回复；这避免把合理的首页恢复
+    行为误报为 Sync v4 丢失，且只改 CI test。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 

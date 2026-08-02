@@ -8,9 +8,19 @@ tags:
 - launchApp:
     stopApp: false
 - extendedWaitUntil:
+    visible: New chat
+    timeout: 45000
+- tapOn: New chat
+- extendedWaitUntil:
+    visible:
+      id: codex-mcp-tool-message
+    timeout: 45000
+- tapOn:
+    id: codex-mcp-tool-message
+- extendedWaitUntil:
     visible: MCP single-card field verification
     timeout: 45000
-- tapOn: MCP single-card field verification
+- back
 - scrollUntilVisible:
     element: resume-history-from-android-e2e
     direction: UP
