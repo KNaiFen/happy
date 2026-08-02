@@ -90,6 +90,7 @@ interface GatewayDescriptorShape {
     } | null;
     createdAt: number;
     heartbeatAt: number;
+    lastError: string | null;
 }
 
 interface CommandExpectation {
@@ -330,6 +331,7 @@ async function fixtureStatus(options: {
             generation: descriptor.current?.generation ?? projection?.runtime?.gateway?.generation ?? null,
             workerAlive: isProcessAlive(descriptor.pid),
             providerAlive: descriptor.providerPid ? isProcessAlive(descriptor.providerPid) : false,
+            lastError: descriptor.lastError,
         } : null,
         sessionActive: session?.active ?? runtime?.session.active ?? null,
         projectionReady: projection?.runtime?.syncState === 'ready',

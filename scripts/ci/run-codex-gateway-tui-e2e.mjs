@@ -21,6 +21,7 @@ const workRoot = await mkdtemp(join(tmpdir(), 'happy-gateway-tui-work-'));
 const fixtureRoot = join(workRoot, 'fixture');
 const stateFile = join(workRoot, 'fixture-state.json');
 const fixtureLog = join(artifactRoot, 'fixture.log');
+const gatewayStatusSnapshot = join(artifactRoot, 'gateway-status.json');
 const traceDir = join(artifactRoot, 'tui-traces');
 
 const officialBinary = requiredEnvironment('HAPPY_SCENARIO_CODEX_BIN');
@@ -88,6 +89,7 @@ try {
     try {
         const raw = JSON.parse(await readFile(stateFile, 'utf8'));
         if (typeof raw.controlUrl === 'string') {
+            await persistSafeGatewayStatus(raw.controlUrl, gatewayStatusSnapshot);
             await fetch(`${raw.controlUrl}/shutdown`, { method: 'POST' }).catch(() => undefined);
         }
     } catch {
@@ -178,4 +180,70 @@ function requiredEnvironment(name) {
     const value = process.env[name]?.trim();
     if (!value) throw new Error(`${name} is required`);
     return value;
+}
+
+async function persistSafeGatewayStatus(controlUrl, destination) {
+    try {
+        const response = await fetch(`${controlUrl}/state`);
+        if (!response.ok) return;
+        const status = objectRecord(await response.json());
+        if (!status) return;
+        const gateway = objectRecord(status.gateway);
+        const safe = {
+            capturedAt: Date.now(),
+            gateway: gateway ? {
+                state: allowlistedString(gateway.state, [
+                    'starting', 'running', 'recovering', 'stopping', 'stopped',
+                ]),
+                terminalState: allowlistedString(gateway.terminalState, [
+                    'attached', 'pendingDetach', 'detached', 'headless',
+                ]),
+                workerAlive: booleanOrNull(gateway.workerAlive),
+                providerAlive: booleanOrNull(gateway.providerAlive),
+                lastError: safeDiagnostic(gateway.lastError),
+            } : null,
+            sessionActive: booleanOrNull(status.sessionActive),
+            projectionReady: booleanOrNull(status.projectionReady),
+            agentMessageCount: nonnegativeNumber(status.agentMessageCount),
+            reasoningSummaryCount: nonnegativeNumber(status.reasoningSummaryCount),
+            commandOutputCount: nonnegativeNumber(status.commandOutputCount),
+            officialResponseCount: nonnegativeNumber(status.officialResponseCount),
+            providerRequestCount: nonnegativeNumber(status.providerRequestCount),
+            projectionLagSamples: nonnegativeNumber(status.projectionLagSamples),
+            projectionLagP95Ms: nonnegativeNumber(status.projectionLagP95Ms),
+            rawReasoningLeak: booleanOrNull(status.rawReasoningLeak),
+            payloadLeakInLogs: booleanOrNull(status.payloadLeakInLogs),
+        };
+        await writeFile(destination, `${JSON.stringify(safe, null, 2)}\n`, {
+            encoding: 'utf8',
+            mode: 0o600,
+        });
+    } catch {
+        // The regular fixture log still records whether the control process exited early.
+    }
+}
+
+function objectRecord(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function allowlistedString(value, allowed) {
+    return typeof value === 'string' && allowed.includes(value) ? value : null;
+}
+
+function safeDiagnostic(value) {
+    if (value === null) return null;
+    return typeof value === 'string'
+        && value.length <= 128
+        && /^[A-Za-z][A-Za-z0-9]*(?::[A-Za-z][A-Za-z0-9]*)*$/.test(value)
+        ? value
+        : 'invalid';
+}
+
+function booleanOrNull(value) {
+    return typeof value === 'boolean' ? value : null;
+}
+
+function nonnegativeNumber(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }

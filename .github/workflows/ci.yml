@@ -589,6 +589,7 @@ jobs:
           name: codex-gateway-tui-diagnostics
           path: |
             ${{ runner.temp }}/happy-gateway-tui-artifacts/fixture.log
+            ${{ runner.temp }}/happy-gateway-tui-artifacts/gateway-status.json
             ${{ runner.temp }}/happy-gateway-tui-artifacts/tui-traces
           if-no-files-found: warn
           retention-days: 7

@@ -14,6 +14,28 @@ const OWNERSHIP_WAIT_MS = 5_000;
 
 export type CodexGatewayBindingRole = 'current' | 'draining' | 'inactive' | 'recovering';
 
+export type CodexGatewayRootBindingPhase =
+    | 'lease'
+    | 'runtime'
+    | 'providerSnapshot'
+    | 'runtimeProjection'
+    | 'pendingNotifications'
+    | 'sourceBinding'
+    | 'targetBinding'
+    | 'reservationRelease'
+    | 'descriptor';
+
+export class CodexGatewayRootBindingError extends Error {
+    readonly name = 'CodexGatewayRootBindingError';
+
+    constructor(
+        readonly phase: CodexGatewayRootBindingPhase,
+        readonly diagnosticCause: unknown,
+    ) {
+        super(`Codex Gateway root binding failed during ${phase}`);
+    }
+}
+
 export interface CodexGatewayRuntimeBinding {
     role: CodexGatewayBindingRole;
     generation: number;
@@ -158,7 +180,10 @@ export class CodexGatewayCoordinator {
         if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
         return await this.bindingLock.inLock(async () => {
             if (this.current?.threadId === threadId) {
-                await this.drainPending(threadId, this.current);
+                await rootBindingStep(
+                    'pendingNotifications',
+                    () => this.drainPending(threadId, this.current!),
+                );
                 return {
                     sessionId: this.current.runtime.sessionId,
                     generation: this.current.generation,
@@ -171,11 +196,14 @@ export class CodexGatewayCoordinator {
             let target = this.roots.get(threadId) ?? null;
             let created = false;
             if (!target) {
-                await this.options.leases.acquire(threadId, this.options.gatewayId);
+                await rootBindingStep(
+                    'lease',
+                    () => this.options.leases.acquire(threadId, this.options.gatewayId),
+                );
                 let managed: ManagedRoot | null = null;
                 const earlyOwnedThreads = new Set<string>();
                 try {
-                    const runtime = await this.options.createRuntime({
+                    const runtime = await rootBindingStep('runtime', () => this.options.createRuntime({
                         threadId,
                         generation: nextGeneration,
                         previousSessionId: previous?.runtime.sessionId ?? null,
@@ -199,7 +227,7 @@ export class CodexGatewayCoordinator {
                                 );
                             }
                         },
-                    });
+                    }));
                     managed = {
                         threadId,
                         generation: nextGeneration,
@@ -225,35 +253,45 @@ export class CodexGatewayCoordinator {
 
             let previousMarkedDraining = false;
             try {
-                const resumed = await this.options.client.subscribeThread(threadId);
+                const resumed = await rootBindingStep(
+                    'providerSnapshot',
+                    () => this.options.client.subscribeThread(threadId),
+                );
                 target.title = safeThreadTitle(resumed.thread);
                 target.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
-                if (created) await target.runtime.activate(resumed.thread);
-                else await target.runtime.reconcile(resumed.thread);
-                await this.drainPending(threadId, target);
+                await rootBindingStep(
+                    'runtimeProjection',
+                    () => created
+                        ? target.runtime.activate(resumed.thread)
+                        : target.runtime.reconcile(resumed.thread),
+                );
+                await rootBindingStep(
+                    'pendingNotifications',
+                    () => this.drainPending(threadId, target),
+                );
 
                 const changedAt = this.now();
                 if (previous) {
                     previous.nextSessionId = target.runtime.sessionId;
-                    await previous.runtime.updateBinding({
+                    await rootBindingStep('sourceBinding', () => previous.runtime.updateBinding({
                         role: 'draining',
                         generation: previous.generation,
                         previousSessionId: previous.previousSessionId,
                         nextSessionId: previous.nextSessionId,
                         changedAt,
-                    });
+                    }));
                     previous.role = 'draining';
                     previousMarkedDraining = true;
                 }
                 target.previousSessionId = previous?.runtime.sessionId ?? null;
                 target.nextSessionId = null;
-                await target.runtime.updateBinding({
+                await rootBindingStep('targetBinding', () => target.runtime.updateBinding({
                     role: 'current',
                     generation: nextGeneration,
                     previousSessionId: target.previousSessionId,
                     nextSessionId: null,
                     changedAt,
-                });
+                }));
                 target.role = 'current';
                 target.generation = nextGeneration;
                 this.current = target;
@@ -764,6 +802,18 @@ function nearestPriorSessionId(
         .filter((root) => root.generation < current.generation && root.runtime.sessionId !== null)
         .sort((left, right) => right.generation - left.generation)[0]
         ?.runtime.sessionId ?? null;
+}
+
+async function rootBindingStep<T>(
+    phase: CodexGatewayRootBindingPhase,
+    operation: () => Promise<T>,
+): Promise<T> {
+    try {
+        return await operation();
+    } catch (error) {
+        if (error instanceof CodexGatewayRootBindingError) throw error;
+        throw new CodexGatewayRootBindingError(phase, error);
+    }
 }
 
 function notificationThreadId(notification: ServerNotification): string | null {

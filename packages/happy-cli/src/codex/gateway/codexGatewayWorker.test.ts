@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     connectAttempts: 0,
     connectFailuresRemaining: 0,
     connectFailureCode: 'ECONNRESET',
+    subscribeFailureCode: null as string | null,
     providerStopDelayMs: 0,
 }));
 
@@ -147,6 +148,11 @@ vi.mock('../codexAppServerClient', () => ({
         setServerRequestHandler() {}
         setConnectionHandler(handler: ((event: unknown) => void) | null) { this.connectionHandler = handler; }
         async subscribeThread(threadId: string) {
+            if (mocks.subscribeFailureCode) {
+                throw Object.assign(new Error('provider payload must stay private'), {
+                    code: mocks.subscribeFailureCode,
+                });
+            }
             return { threadId, model: 'gpt-test', thread: thread(threadId) };
         }
         async readThreadComplete(options: { threadId: string }) {
@@ -176,6 +182,7 @@ afterEach(async () => {
     mocks.connectAttempts = 0;
     mocks.connectFailuresRemaining = 0;
     mocks.connectFailureCode = 'ECONNRESET';
+    mocks.subscribeFailureCode = null;
     mocks.providerStopDelayMs = 0;
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -329,6 +336,61 @@ describe('Codex Gateway worker composition', () => {
             current: null,
         });
     }, 5_000);
+
+    it('persists a payload-free root binding stage before closing the TUI transport', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.subscribeFailureCode = 'ECONNRESET';
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 10,
+        });
+        await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
+
+        await expect(mocks.proxyHooks!.rootBound?.({
+            connectionId: 'connection-a',
+            requestId: 1,
+            method: 'thread/start',
+            requestedThreadId: null,
+            threadId: 'thread-a',
+        })).rejects.toThrow('providerSnapshot');
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            state: 'running',
+            lastError: 'rootBinding:providerSnapshot:network',
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            lastError: 'rootBinding:providerSnapshot:network',
+        });
+
+        mocks.subscribeFailureCode = null;
+        await mocks.proxyHooks!.rootBound?.({
+            connectionId: 'connection-b',
+            requestId: 2,
+            method: 'thread/start',
+            requestedThreadId: null,
+            threadId: 'thread-b',
+        });
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            current: expect.objectContaining({ threadId: 'thread-b' }),
+            lastError: null,
+        });
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
 
     it('does not repeat an App thread/start after provider acceptance while relay materialization is pending', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));

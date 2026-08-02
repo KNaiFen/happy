@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.23`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.24`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -372,6 +372,14 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `CodexGatewayProxy` 转接到已有 Unix proxy；proxy start 必须返回实际绑定 URL，且
       转接器只允许一次下游 claim、上游仍携带 token。CLI `1.4.22` 打包已经运行，修复
       必须推进到 `1.4.23`。
+      第十四轮证明回环转接器已完成官方 TUI 鉴权、initialize 和首屏渲染，但首个
+      `thread/start` 响应在转发给 TUI 前被 worker 关闭，当前持久诊断仅剩通用
+      `Gateway transport closed`。下一次先在 root binding 内增加允许列表阶段码，至少
+      区分 lease、runtime 创建、provider snapshot、runtime 激活、binding 更新和 descriptor
+      同步；真实 PTY fixture 同时公开 descriptor 的脱敏 `lastError` 并在失败时落盘最终
+      安全状态，避免再等待通用 120 秒超时。拿到阶段证据前不放宽“先完成持久绑定再把
+      root RPC 响应交给 TUI”的一致性边界。CLI `1.4.23` 发布 workflow 已运行，后续产品
+      修复必须推进到 `1.4.24`。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -387,7 +395,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.23`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.24`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -406,9 +414,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.22` 的 package validation/build 已通过，实际 official app-server lifecycle
       也已通过，证明压缩协商修复有效；但真实 PTY 因官方拒绝 Unix remote 的 token 参数
       失败，因此这个已运行版本同样不得复用。
+      `1.4.23` package workflow 已通过，真实 PTY 也已确认官方 TUI 可经一次性 bearer
+      回环转接器完成鉴权、initialize 和渲染；首个 `thread/start` 在 worker 的持久 root
+      binding 阶段失败。该已运行版本不得复用，最终修复推进到 `1.4.24`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.23.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.24.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
@@ -527,3 +538,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   POSIX launcher attach 创建随机 loopback、一次性 bearer 鉴权的转接器，转接到 Unix
   upstream；不持久化临时端口或 token。由于 `1.4.22` 发布 workflow 已运行，目标推进
   `1.4.23`。
+- 2026-08-02：`1.4.23` 回环转接器已让官方 TUI 完成鉴权、initialize 和首屏渲染；
+  真实 PTY 随后在首个 `thread/start` 的 worker root binding 阶段收到通用 transport close。
+  先补 payload-free 分阶段诊断和失败状态 artifact，再依据云端证据修复；目标推进
+  `1.4.24`。

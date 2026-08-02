@@ -22,6 +22,7 @@ import type { CodexAppServerWebSocketEndpoint } from '../codexAppServerWebSocket
 import { CodexGatewayAttachmentManager } from './codexGatewayAttachment';
 import {
     CodexGatewayCoordinator,
+    CodexGatewayRootBindingError,
     type CodexGatewayRootRuntimeFactoryOptions,
 } from './codexGatewayCoordinator';
 import {
@@ -477,11 +478,31 @@ async function runCodexGatewayWorkerInternal(
         rootBound: async (binding) => {
             const reservation = rootReservations.get(rootRequestKey(binding));
             rootReservations.delete(rootRequestKey(binding));
-            await requireCoordinator().bindRoot(binding.threadId);
-            if (reservation?.release && reservation.threadId !== binding.threadId) {
-                await leases.release(reservation.threadId, options.gatewayId);
+            try {
+                await requireCoordinator().bindRoot(binding.threadId);
+            } catch (error) {
+                const diagnosed = error instanceof CodexGatewayRootBindingError
+                    ? error
+                    : new CodexGatewayRootBindingError('runtime', error);
+                await persistWorkerError(diagnosed);
+                throw diagnosed;
             }
-            await syncDescriptorBindings();
+            if (reservation?.release && reservation.threadId !== binding.threadId) {
+                try {
+                    await leases.release(reservation.threadId, options.gatewayId);
+                } catch (error) {
+                    const diagnosed = new CodexGatewayRootBindingError('reservationRelease', error);
+                    await persistWorkerError(diagnosed);
+                    throw diagnosed;
+                }
+            }
+            try {
+                await syncDescriptorBindings({ clearRootBindingError: true });
+            } catch (error) {
+                const diagnosed = new CodexGatewayRootBindingError('descriptor', error);
+                await persistWorkerError(diagnosed);
+                throw diagnosed;
+            }
         },
         rootFailed: async (request) => {
             const reservation = rootReservations.get(rootRequestKey(request));
@@ -743,7 +764,9 @@ async function runCodexGatewayWorkerInternal(
         await coordinator?.setTerminalState(state, detachedAt);
     }
 
-    async function syncDescriptorBindings(): Promise<void> {
+    async function syncDescriptorBindings(
+        options: { clearRootBindingError?: boolean } = {},
+    ): Promise<void> {
         if (!coordinator) return;
         const bindings = coordinator.bindingSnapshot();
         const current = bindings.find((binding) => binding.role === 'current') ?? null;
@@ -753,6 +776,9 @@ async function runCodexGatewayWorkerInternal(
             current: current ? descriptorBinding(current) : null,
             draining: draining.map(descriptorBinding),
             heartbeatAt: Date.now(),
+            lastError: options.clearRootBindingError && descriptor.lastError?.startsWith('rootBinding:')
+                ? null
+                : descriptor.lastError,
         }));
     }
 
@@ -773,7 +799,9 @@ async function runCodexGatewayWorkerInternal(
             await descriptorStore.update((descriptor) => ({
                 ...descriptor,
                 heartbeatAt: Date.now(),
-                lastError: null,
+                lastError: descriptor.lastError?.startsWith('rootBinding:')
+                    ? descriptor.lastError
+                    : null,
             }));
         } catch (error) {
             recordWorkerError(error);
@@ -855,12 +883,16 @@ async function runCodexGatewayWorkerInternal(
         }));
     }
 
-    function recordWorkerError(error: unknown): void {
-        void descriptorStore.update((descriptor) => ({
+    async function persistWorkerError(error: unknown): Promise<void> {
+        await descriptorStore.update((descriptor) => ({
             ...descriptor,
             lastError: safeErrorKind(error),
             heartbeatAt: Date.now(),
         }));
+    }
+
+    function recordWorkerError(error: unknown): void {
+        void persistWorkerError(error);
     }
 
     async function terminateVerifiedProvider(pid: number): Promise<void> {
@@ -1047,6 +1079,10 @@ function startupFailureKind(stage: CodexGatewayStartupStage, error: unknown): st
 }
 
 function safeErrorKind(error: unknown): string {
+    if (error instanceof CodexGatewayRootBindingError) {
+        const causeKind = classifySyncV4DiagnosticError(error.diagnosticCause);
+        return `rootBinding:${error.phase}:${causeKind}`;
+    }
     const classified = classifySyncV4DiagnosticError(error);
     return [...classified].slice(0, 128).join('');
 }

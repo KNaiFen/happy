@@ -8,6 +8,7 @@ import { CodexV4CommandCancelledError } from '../codexV4CommandProcessor';
 import type { ServerNotification, Thread } from '../protocol';
 import {
     CodexGatewayCoordinator,
+    CodexGatewayRootBindingError,
     type CodexGatewayRootRuntime,
     type CodexGatewayRootRuntimeFactoryOptions,
     type CodexGatewayRuntimeBinding,
@@ -250,13 +251,38 @@ describe('Codex Gateway coordinator', () => {
         await harness.coordinator.bindRoot('thread-a');
         harness.failBindingForThread = 'thread-b';
 
-        await expect(harness.coordinator.bindRoot('thread-b')).rejects.toThrow('binding update failed');
+        const failure = await harness.coordinator.bindRoot('thread-b').then(
+            () => null,
+            (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(CodexGatewayRootBindingError);
+        expect(failure).toMatchObject({ phase: 'targetBinding' });
 
         expect(harness.coordinator.currentThreadId).toBe('thread-a');
         expect(harness.coordinator.currentGeneration).toBe(1);
         expect(harness.runtimes.get('thread-a')!.bindings.at(-1)?.role).toBe('current');
         expect(harness.runtimes.get('thread-b')!.close).toHaveBeenCalledOnce();
         expect(harness.leases.release).toHaveBeenCalledWith('thread-b', 'gateway-1');
+    });
+
+    it('classifies a root snapshot failure without exposing provider payloads', async () => {
+        const harness = createHarness({ 'thread-a': thread('thread-a', 'idle') });
+        await harness.coordinator.connect();
+        harness.client.subscribeThread.mockRejectedValueOnce(Object.assign(
+            new Error('provider payload must remain private'),
+            { code: 'ECONNRESET' },
+        ));
+
+        const failure = await harness.coordinator.bindRoot('thread-a').then(
+            () => null,
+            (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(CodexGatewayRootBindingError);
+        expect(failure).toMatchObject({ phase: 'providerSnapshot' });
+        expect((failure as Error).message).not.toContain('provider payload');
+        expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
     });
 
     it('keeps roots and leases while graceful stop cannot persist inactive state', async () => {

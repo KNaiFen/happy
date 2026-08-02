@@ -29,6 +29,7 @@ interface GatewayStatus {
     generation: number | null;
     workerAlive: boolean;
     providerAlive: boolean;
+    lastError: string | null;
 }
 
 interface FixtureStatus {
@@ -75,8 +76,22 @@ test.describe('terminal-origin Gateway', () => {
     test('keeps terminal and App on one official provider before abnormal detach', async ({ terminal }) => {
         await expect(terminal.getByText(terminalPrompt, { full: true, strict: false }))
             .toBeVisible({ timeout: 120_000 });
-        await expect(terminal.getByText(officialResponse, { full: true, strict: false }))
-            .toBeVisible({ timeout: 120_000 });
+        const officialResponseLocator = terminal.getByText(officialResponse, {
+            full: true,
+            strict: false,
+        });
+        await waitUntil(async () => {
+            const status = await readStatus({});
+            if (status.gateway?.lastError?.startsWith('rootBinding:')) {
+                throw new Error(`Codex Gateway failed with ${status.gateway.lastError}`);
+            }
+            try {
+                await expect(officialResponseLocator).toBeVisible({ timeout: 100 });
+                return true;
+            } catch {
+                return false;
+            }
+        }, 120_000, 'official response or root binding diagnosis');
 
         const terminalState = await waitForStatus(
             { message: terminalPrompt },
