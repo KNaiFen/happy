@@ -179,6 +179,9 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       drain 条件与失败回滚。
 - [x] root Sync v4 runtime 封装 snapshot 激活、metadata/runtime 投影、terminal 状态、
       drain/flush、权威归档与中继恢复后的退场重试。
+- [x] Gateway deferred journal 持久化有序 canonical 通知和 App root handoff，截断
+      尾行可恢复、raw reasoning 不入盘、超大事件降级为 snapshot 标记；Gateway seed
+      确定性派生 opaque root session tag 和独立 data key。
 - [ ] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
       terminal detach/attach 和真实 Sync v4 runtime factory。
 
@@ -194,7 +197,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 ### 4. Wire 与持久命令处理
 
 - [x] 扩展 Wire schema 并补向后兼容测试；生成文件一致性继续由云端门禁验证。
-- [ ] CLI journal 持久化 binding/generation/handoff/worker lifecycle。
+- [ ] CLI journal 持久化 binding/generation/handoff/worker lifecycle。由于 Happy
+      session ID 只能由中继返回，relay 离线期间的新根线程先进入受保护的 Gateway
+      deferred journal；该 journal 保存 handoff intent 和待投影的 canonical provider
+      通知，中继恢复并确定性创建 session 后按原顺序回放，不能用临时 session ID
+      生成无法重绑定 AAD 的 Sync v4 mutation。
 - [x] 命令处理器改为每 binding 严格 FIFO；Gateway 接入阶段补执行前 generation 校验。
 - [ ] 已实现 cancelled reason；仍需完成草稿恢复和 accepted command 对账。
 
@@ -276,3 +283,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：增加 root Sync v4 runtime 生命周期封装；inactive 归档只有在 metadata、
   runtime entity 和 outbound mutation 刷新后执行，归档暂不可达时保留 draining 状态，
   允许后续通知或恢复流程重试。
+- 2026-08-02：实现 Gateway deferred journal 与确定性 root session identity。离线
+  handoff 不生成临时 Sync v4 AAD；恢复后使用同一 tag/data key 创建 session，并按
+  journal FIFO 或权威 snapshot 标记回放。

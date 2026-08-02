@@ -251,7 +251,7 @@ export class CodexV4ThreadRouter {
         const threadId = notificationThreadId(notification);
         if (!threadId) return;
         const task = async () => {
-            const canonical = canonicalOrphanNotification(notification);
+            const canonical = canonicalCodexNotificationForJournal(notification);
             if (this.provisionalRoutesByThread.has(threadId)) {
                 if (!canonical) return;
                 await this.persistOrphan(threadId, canonical);
@@ -1425,7 +1425,9 @@ const KNOWN_THREAD_ITEM_TYPES = new Set([
     'contextCompaction',
 ]);
 
-function canonicalOrphanNotification(notification: ServerNotification): ServerNotification | null {
+export function canonicalCodexNotificationForJournal(
+    notification: ServerNotification,
+): ServerNotification | null {
     if (!CANONICAL_ORPHAN_METHODS.has(notification.method)) return null;
     switch (notification.method) {
         case 'thread/started':

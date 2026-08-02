@@ -57,6 +57,7 @@ export const CodexGatewaySecretSchema = z.object({
     gatewayId: idSchema,
     controlToken: z.string().min(32).max(512),
     normalExitNonce: z.string().min(32).max(512),
+    sessionKeySeed: z.string().min(32).max(512),
 }).strict();
 export type CodexGatewaySecret = z.infer<typeof CodexGatewaySecretSchema>;
 
@@ -67,6 +68,7 @@ export interface CodexGatewayPaths {
     runtimeDir: string;
     descriptorPath: string;
     secretPath: string;
+    journalPath: string;
     providerSocketPath: string;
     tuiSocketPath: string;
     controlSocketPath: string;
@@ -102,6 +104,7 @@ export function codexGatewayPaths(
         runtimeDir,
         descriptorPath: join(gatewayDir, 'descriptor.json'),
         secretPath: join(gatewayDir, 'secret.json'),
+        journalPath: join(gatewayDir, 'gateway.jsonl'),
         providerSocketPath: join(runtimeDir, 'provider.sock'),
         tuiSocketPath: join(runtimeDir, 'tui.sock'),
         controlSocketPath: join(runtimeDir, 'control.sock'),
@@ -131,6 +134,7 @@ export async function createCodexGatewayFiles(options: {
         gatewayId,
         controlToken: randomBytes(32).toString('base64url'),
         normalExitNonce: randomBytes(32).toString('base64url'),
+        sessionKeySeed: randomBytes(32).toString('base64url'),
     };
     const descriptor: CodexGatewayDescriptor = {
         version: CODEX_GATEWAY_STATE_VERSION,
