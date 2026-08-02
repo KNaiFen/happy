@@ -30,6 +30,7 @@ export interface CodexGatewayRootBinding extends CodexGatewayRootRequest {
 export interface CodexGatewayProxyHooks {
     beforeRootRequest?(request: CodexGatewayRootRequest): Promise<void> | void;
     rootBound?(binding: CodexGatewayRootBinding): Promise<void> | void;
+    claimTerminal?(connectionId: string, bearerToken: string | null): boolean;
     terminalConnected?(connectionId: string): Promise<void> | void;
     terminalDisconnected?(connectionId: string): Promise<void> | void;
     protocolError?(error: unknown): void;
@@ -60,11 +61,23 @@ export class CodexGatewayProxy {
             maxPayload: CODEX_APP_SERVER_MAX_RPC_BYTES,
         });
         httpServer.on('upgrade', (request, socket, head) => {
+            const connectionId = randomUUID();
+            const bearerToken = readBearerToken(request.headers.authorization);
+            if (this.hooks.claimTerminal && !this.hooks.claimTerminal(connectionId, bearerToken)) {
+                socket.write([
+                    'HTTP/1.1 401 Unauthorized',
+                    'Connection: close',
+                    'Content-Length: 0',
+                    '',
+                    '',
+                ].join('\r\n'));
+                socket.destroy();
+                return;
+            }
             webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
-                webSocketServer.emit('connection', downstream, request);
+                this.accept(downstream, connectionId);
             });
         });
-        webSocketServer.on('connection', (downstream) => this.accept(downstream));
         await listenHttpServer(httpServer, this.listen);
         if (this.listen.socketPath && process.platform !== 'win32') {
             await chmod(this.listen.socketPath, 0o600);
@@ -91,8 +104,7 @@ export class CodexGatewayProxy {
         if (this.listen.socketPath) await rm(this.listen.socketPath, { force: true });
     }
 
-    private accept(downstream: WebSocket): void {
-        const connectionId = randomUUID();
+    private accept(downstream: WebSocket, connectionId: string): void {
         this.downstreams.add(downstream);
         const pendingRoots = new Map<JsonRpcId, PendingRootRequest>();
         const buffered: Array<{ data: Buffer; isBinary: boolean }> = [];
@@ -239,6 +251,12 @@ export class CodexGatewayProxy {
         }
         await this.hooks.rootBound?.({ ...pending, threadId });
     }
+}
+
+function readBearerToken(header: string | undefined): string | null {
+    if (!header?.startsWith('Bearer ')) return null;
+    const token = header.slice(7);
+    return token.length > 0 ? token : null;
 }
 
 export function connectCodexGatewayWebSocket(endpoint: CodexGatewayProxyEndpoint): WebSocket {

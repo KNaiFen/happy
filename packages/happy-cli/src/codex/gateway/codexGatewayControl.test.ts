@@ -17,6 +17,7 @@ describe('Codex Gateway control endpoint', () => {
         roots.push(root);
         const socketPath = join(root, 'control.sock');
         const normalExit = vi.fn(() => ({ accepted: true }));
+        const terminalAttached = vi.fn(() => ({ attached: true }));
         const server = await startCodexGatewayControlServer({
             socketPath,
             token: 'control-token-that-is-at-least-thirty-two-bytes',
@@ -24,7 +25,7 @@ describe('Codex Gateway control endpoint', () => {
                 status: () => ({ state: 'running' }),
                 normalExit,
                 stop: () => ({ stopping: true }),
-                terminalAttached: () => ({ attached: true }),
+                terminalAttached,
             },
         });
         const descriptor = { controlSocketPath: socketPath, controlPort: null } as CodexGatewayDescriptor;
@@ -38,9 +39,23 @@ describe('Codex Gateway control endpoint', () => {
             descriptor,
             token: 'control-token-that-is-at-least-thirty-two-bytes',
             path: '/normal-exit',
-            body: { nonce: 'normal-exit-nonce-that-is-at-least-thirty-two-bytes' },
+            body: {
+                attachmentId: '980bb4f1-ae97-4143-8c47-10929dcf93e2',
+                nonce: 'normal-exit-nonce-that-is-at-least-thirty-two-bytes',
+            },
         })).resolves.toEqual({ accepted: true });
         expect(normalExit).toHaveBeenCalledOnce();
+        await expect(callCodexGatewayControl<{ attached: boolean }>({
+            descriptor,
+            token: 'control-token-that-is-at-least-thirty-two-bytes',
+            path: '/terminal-attached',
+            body: {
+                attachmentId: 'f766a089-2df3-449d-a37c-ae058fef7b1c',
+                connectionToken: 'connection-token-that-is-at-least-thirty-two-bytes',
+                normalExitNonce: 'another-exit-nonce-that-is-at-least-thirty-two-bytes',
+            },
+        })).resolves.toEqual({ attached: true });
+        expect(terminalAttached).toHaveBeenCalledOnce();
         await server.close();
     });
 });

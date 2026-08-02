@@ -104,6 +104,38 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         expect(upstreamMessage).not.toHaveBeenCalled();
     });
 
+    it('rejects an unregistered terminal bearer token before upgrading', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
+        const upstreamPath = join(root, 'upstream.sock');
+        const downstreamPath = join(root, 'downstream.sock');
+        const upstreamConnection = vi.fn();
+        const upstream = await startWebSocketServer(upstreamPath, upstreamConnection);
+        const claimTerminal = vi.fn((_connectionId: string, token: string | null) => token === 'expected-token');
+        const proxy = new CodexGatewayProxy(
+            { socketPath: downstreamPath },
+            { socketPath: upstreamPath },
+            { claimTerminal },
+        );
+        await proxy.start();
+        cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
+        const rejected = connectCodexGatewayWebSocket({
+            socketPath: downstreamPath,
+            bearerToken: 'wrong-token',
+        });
+        cleanups.push(async () => { rejected.close(); });
+        await expect(opened(rejected)).rejects.toThrow('Unexpected server response: 401');
+        expect(claimTerminal).toHaveBeenCalledWith(expect.any(String), 'wrong-token');
+        expect(upstreamConnection).not.toHaveBeenCalled();
+
+        const accepted = connectCodexGatewayWebSocket({
+            socketPath: downstreamPath,
+            bearerToken: 'expected-token',
+        });
+        cleanups.push(async () => { accepted.close(); });
+        await opened(accepted);
+        await vi.waitFor(() => expect(upstreamConnection).toHaveBeenCalledOnce());
+    });
+
     it('preserves terminal request order while a root preflight is pending', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
         const upstreamPath = join(root, 'upstream.sock');

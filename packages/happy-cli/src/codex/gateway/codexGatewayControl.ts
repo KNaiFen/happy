@@ -6,9 +6,16 @@ import type { CodexGatewayDescriptor } from './codexGatewayState';
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 
-const NormalExitSchema = z.object({ nonce: z.string().min(32).max(512) }).strict();
+const NormalExitSchema = z.object({
+    attachmentId: z.string().uuid(),
+    nonce: z.string().min(32).max(512),
+}).strict();
 const StopSchema = z.object({ force: z.boolean().default(false) }).strict();
-const TerminalAttachedSchema = z.object({ attachmentId: z.string().min(1).max(256) }).strict();
+const TerminalAttachedSchema = z.object({
+    attachmentId: z.string().uuid(),
+    connectionToken: z.string().min(32).max(512),
+    normalExitNonce: z.string().min(32).max(512),
+}).strict();
 
 export interface CodexGatewayControlHandlers {
     status(): Promise<unknown> | unknown;

@@ -64,7 +64,11 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 ### 终端断开与重新附着
 
 - TUI 连接消失后进入 10 秒 `pendingDetach`，等待 launcher 的一次性正常退出确认。
-- 收到匹配 lease nonce 的正常退出确认时：terminal-origin Gateway 停止，Happy
+- launcher 为每次 TUI attach 生成独立的 attachment ID 与一次性退出 nonce，并在
+  TUI 启动前通过鉴权 control endpoint 注册。worker 只接受当前 attachment 已断开且
+  处于 `pendingDetach` 时匹配该 attachment ID 与 nonce 的正常退出确认；旧 launcher
+  的迟到确认不得停止已被新终端重新附着的 Gateway。
+- 收到匹配 attachment 与一次性 nonce 的正常退出确认时：terminal-origin Gateway 停止，Happy
   session 保留为可读的 inactive 历史；App-origin Gateway 恢复为 headless。
 - 未收到确认时进入 `terminalDetached`，不结束 app-server、turn 或 Sync bridge。
   App 保持发送、steer、interrupt、审批和 user-input 能力。
@@ -193,7 +197,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 - [ ] 将 `happy codex` 参数解析改为原生委派，保留 Happy 自有 attach/stop。
 - [ ] terminal-origin 启动时完成 auth、daemon discovery、worker spawn、官方 TUI exec。
-- [ ] 实现正常退出 nonce、异常 detach、attach picker 和 stop picker。
+- [ ] 实现按 attachment 轮换的一次性正常退出 nonce、异常 detach、attach picker 和
+      stop picker；覆盖旧 launcher 迟到确认与新 attach 并发的回归测试。
 - [ ] 裸 `happy` 改为帮助与运行状态；帮助文案不再声称自定义 Codex UI。
 - [ ] 启动新版 daemon 时只终止经过 executable、argv、home 和 descriptor 多重验证的
       旧 Happy Codex adapter，绝不终止用户直接运行的官方 Codex 或其他 provider。
@@ -249,7 +254,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 ## 本地安全边界
 
 - 所有 control payload 使用 schema 校验和长度上限。
-- capability token 使用加密随机数、常量时间比较和最小权限文件模式。
+- capability token 与每次 attachment 的退出 nonce 使用加密随机数、常量时间比较和
+  最小权限文件模式；退出 nonce 不持久化到普通 descriptor，也不得跨 attach 复用。
 - 启动 provider 只使用 argv 数组，不通过 shell 拼接用户 flags、path 或 prompt。
 - descriptor 写入采用临时文件、fsync、原子 rename；崩溃截断 journal 按既有规则恢复。
 - kill/stop 先核对 PID start time、executable、argv marker、gateway ID 和 capability；
@@ -294,3 +300,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   reservation/handoff 接口；修复 App root 命令从源 processor 发起时 retirement flush
   等待自身的死锁。factory 在 relay 不可达时返回 deferred 信号，由 worker journal
   后续 materialize。
+- 2026-08-02：将正常退出确认收紧为每次 attach 独立的 attachment ID 与一次性 nonce。
+  worker 只在对应连接已进入 `pendingDetach` 后接受确认，防止旧 launcher 的迟到消息
+  停止已经重新附着的 Gateway。

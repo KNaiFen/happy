@@ -56,7 +56,6 @@ export const CodexGatewaySecretSchema = z.object({
     version: z.literal(CODEX_GATEWAY_STATE_VERSION),
     gatewayId: idSchema,
     controlToken: z.string().min(32).max(512),
-    normalExitNonce: z.string().min(32).max(512),
     sessionKeySeed: z.string().min(32).max(512),
 }).strict();
 export type CodexGatewaySecret = z.infer<typeof CodexGatewaySecretSchema>;
@@ -133,7 +132,6 @@ export async function createCodexGatewayFiles(options: {
         version: CODEX_GATEWAY_STATE_VERSION,
         gatewayId,
         controlToken: randomBytes(32).toString('base64url'),
-        normalExitNonce: randomBytes(32).toString('base64url'),
         sessionKeySeed: randomBytes(32).toString('base64url'),
     };
     const descriptor: CodexGatewayDescriptor = {

@@ -45,6 +45,7 @@ describe('Codex Gateway state', () => {
         expect(await readCodexGatewaySecret(created.paths.secretPath)).toEqual(created.secret);
         expect(await listCodexGatewayDescriptors({ happyHomeDir })).toEqual([running]);
         expect(JSON.parse(await readFile(created.paths.secretPath, 'utf8'))).not.toHaveProperty('threadId');
+        expect(created.secret).not.toHaveProperty('normalExitNonce');
         expect(created.secret.sessionKeySeed).toHaveLength(43);
         expect(created.paths.journalPath).toBe(join(created.paths.gatewayDir, 'gateway.jsonl'));
         if (process.platform !== 'win32') {
