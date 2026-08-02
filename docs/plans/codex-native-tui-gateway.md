@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.28`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.29`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -492,12 +492,23 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     权威确认排空后才能退休。root 退休、stop 与 worker cleanup 必须终止后续尝试。该项
     改变可分发 CLI 行为，目标
     推进到 `1.4.28`，App/Wire/Server 保持不变。
+  - 第二十三轮主 CI `30771396112` 证明第二十二轮的有限退避本身不足：官方 TUI
+    trace 显示终端 prompt、工具输出和最终回复均已完成，Gateway/provider 均存活、无
+    root error，但 Sync v4 的 agent/reasoning/command/response 均为 `0`。这表明官方
+    `thread/started` 或第一条 activity 可以早于透明代理完成 `rootBound`；当时该 root
+    尚未进入 `subscriptionPending`，worker 抛弃 activity 证据，后续 root 绑定后没有
+    新事件可唤醒退避。worker 必须有界缓存早到 activity，并在每次 root bind / pending
+    集合刷新后为已有证据的 pending root 立即启动后台对账；已绑定但不再 pending 的
+    证据应清除，未知早到 ID 需有容量上限而不是依赖短超时丢弃。新增回归必须精确模拟
+    “activity 在 rootBound 前、rollout 在首次 stable resume 后才可用”，且不发送第二条
+    activity。`1.4.28` release `30771395978` 已完成并下载验证，不可复用；目标推进到
+    `1.4.29`，App/Wire/Server 保持不变。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.28`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.29`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -532,9 +543,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `30770367349` 暴露 terminal 新线程在 rollout 持久化前耗尽 activity-triggered
       resume 的竞态。该修复改变 Gateway 自动恢复行为，`1.4.27` 已运行不可复用，目标
       推进到 `1.4.28`。
+      `1.4.28` release `30771395978` 已通过、制品已下载验证，但真实 PTY `30771396112`
+      暴露 early activity 在 root bind 前被丢弃的竞态；该已运行版本不得复用，目标推进到
+      `1.4.29`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.28.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.29.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 

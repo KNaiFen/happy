@@ -66,6 +66,7 @@ const GRACEFUL_STOP_POLL_MS = 250;
 const GRACEFUL_STOP_RETRY_MS = 2_000;
 const PROVIDER_BRIDGE_RETRY_DELAYS_MS = [50, 100, 250, 500, 1_000, 2_000] as const;
 const FRESH_SUBSCRIPTION_RETRY_DELAYS_MS = [0, 50, 100, 250, 500, 1_000] as const;
+const MAX_EARLY_FRESH_SUBSCRIPTION_ACTIVITIES = 1_024;
 
 interface DeferredRoot {
     runtime: CodexGatewayDeferredRuntime;
@@ -793,19 +794,38 @@ async function runCodexGatewayWorkerInternal(
         for (const threadId of coordinator?.pendingSubscriptionThreadIds() ?? []) {
             pendingFreshSubscriptions.add(threadId);
         }
-        for (const threadId of freshSubscriptionActivity) {
-            if (!pendingFreshSubscriptions.has(threadId)) {
+        const boundThreads = new Set(
+            coordinator?.bindingSnapshot().map((binding) => binding.threadId) ?? [],
+        );
+        for (const threadId of freshSubscriptionActivity.keys()) {
+            if (boundThreads.has(threadId) && !pendingFreshSubscriptions.has(threadId)) {
                 freshSubscriptionActivity.delete(threadId);
+            }
+        }
+        for (const threadId of pendingFreshSubscriptions) {
+            if (freshSubscriptionActivity.has(threadId)) {
+                scheduleFreshSubscriptionReconciliation(threadId);
             }
         }
     }
 
     function noteFreshSubscriptionActivity(threadId: string): void {
-        if (
-            stopping
-            || freshSubscriptionRetriesClosed
-            || !pendingFreshSubscriptions.has(threadId)
-        ) return;
+        if (stopping || freshSubscriptionRetriesClosed) return;
+        const isPending = pendingFreshSubscriptions.has(threadId);
+        if (!freshSubscriptionActivity.has(threadId) && !isPending) {
+            // Preserve a pending root's only evidence; bound only unbound early activity.
+            while (freshSubscriptionActivity.size >= MAX_EARLY_FRESH_SUBSCRIPTION_ACTIVITIES) {
+                let oldestEarlyThreadId: string | undefined;
+                for (const candidate of freshSubscriptionActivity) {
+                    if (!pendingFreshSubscriptions.has(candidate)) {
+                        oldestEarlyThreadId = candidate;
+                        break;
+                    }
+                }
+                if (!oldestEarlyThreadId) return;
+                freshSubscriptionActivity.delete(oldestEarlyThreadId);
+            }
+        }
         freshSubscriptionActivity.add(threadId);
         scheduleFreshSubscriptionReconciliation(threadId);
     }
@@ -891,6 +911,7 @@ async function runCodexGatewayWorkerInternal(
     function closeFreshSubscriptionRetries(): void {
         if (freshSubscriptionRetriesClosed) return;
         freshSubscriptionRetriesClosed = true;
+        freshSubscriptionActivity.clear();
         for (const finish of [...freshSubscriptionRetryWaiters]) finish();
     }
 
@@ -942,11 +963,6 @@ async function runCodexGatewayWorkerInternal(
             await materializeDeferredRoots();
             await coordinator?.retireDrainingRoots();
             syncPendingFreshSubscriptions();
-            for (const threadId of pendingFreshSubscriptions) {
-                if (freshSubscriptionActivity.has(threadId)) {
-                    scheduleFreshSubscriptionReconciliation(threadId);
-                }
-            }
             const activeThreads = new Set(
                 coordinator?.bindingSnapshot().map((binding) => binding.threadId) ?? [],
             );

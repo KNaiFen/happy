@@ -74,6 +74,46 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         ]);
     });
 
+    it('reports thread activity that arrives before a new-root response', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
+        const upstreamPath = join(root, 'upstream.sock');
+        const downstreamPath = join(root, 'downstream.sock');
+        const upstream = await startWebSocketServer(upstreamPath, (socket) => {
+            socket.on('message', (data) => {
+                const request = JSON.parse(data.toString()) as { id: number; method: string };
+                if (request.method !== 'thread/start') return;
+                socket.send(JSON.stringify({
+                    method: 'thread/started',
+                    params: { thread: { id: 'thread-fresh' } },
+                }));
+                socket.send(JSON.stringify({
+                    id: request.id,
+                    result: { thread: { id: 'thread-fresh' } },
+                }));
+            });
+        });
+        const events: string[] = [];
+        const proxy = new CodexGatewayProxy(
+            { socketPath: downstreamPath },
+            { socketPath: upstreamPath },
+            {
+                threadMaterialized: (threadId) => { events.push(`activity:${threadId}`); },
+                rootBound: (binding) => { events.push(`root:${binding.threadId}`); },
+            },
+        );
+        await proxy.start();
+        cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
+        const client = connectCodexGatewayWebSocket({ socketPath: downstreamPath });
+        cleanups.push(async () => { client.close(); });
+        await opened(client);
+
+        client.send(JSON.stringify({ id: 3, method: 'thread/start', params: {} }));
+        await vi.waitFor(() => expect(events).toEqual([
+            'activity:thread-fresh',
+            'root:thread-fresh',
+        ]));
+    });
+
     it('rejects a conflicting resume before it reaches the provider', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
         const upstreamPath = join(root, 'upstream.sock');

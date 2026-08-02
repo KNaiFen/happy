@@ -424,6 +424,49 @@ describe('Codex Gateway worker composition', () => {
         await worker;
     }, 5_000);
 
+    it('retains terminal activity observed before root binding until the thread can be subscribed', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.unmaterializedThreads.add('thread-a');
+        mocks.materializeOnSubscriptionCall = 2;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
+
+        await mocks.proxyHooks!.threadMaterialized?.('thread-a');
+        expect(mocks.materializedSubscriptionCalls).toEqual([]);
+        await mocks.proxyHooks!.rootBound?.({
+            connectionId: 'connection-a',
+            requestId: 1,
+            method: 'thread/start',
+            requestedThreadId: null,
+            threadId: 'thread-a',
+        });
+        await vi.waitFor(() => expect(
+            mocks.materializedSubscriptionCalls,
+        ).toHaveLength(2));
+
+        const callsAfterSubscription = mocks.materializedSubscriptionCalls.length;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(mocks.materializedSubscriptionCalls).toHaveLength(callsAfterSubscription);
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    }, 5_000);
+
     it('rearms an activity-backed subscription from heartbeat after bounded retries expire', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);
