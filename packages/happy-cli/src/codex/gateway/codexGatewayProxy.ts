@@ -42,6 +42,7 @@ interface PendingRootRequest extends CodexGatewayRootRequest {}
 export class CodexGatewayProxy {
     private httpServer: HttpServer | null = null;
     private webSocketServer: WebSocketServer | null = null;
+    private boundEndpoint: CodexGatewayProxyEndpoint | null = null;
     private readonly downstreams = new Set<WebSocket>();
 
     constructor(
@@ -50,8 +51,8 @@ export class CodexGatewayProxy {
         private readonly hooks: CodexGatewayProxyHooks = {},
     ) {}
 
-    async start(): Promise<void> {
-        if (this.httpServer) return;
+    async start(): Promise<CodexGatewayProxyEndpoint> {
+        if (this.httpServer && this.boundEndpoint) return this.boundEndpoint;
         if (this.listen.socketPath) await rm(this.listen.socketPath, { force: true });
         const httpServer = createServer((_request, response) => {
             response.writeHead(426, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
@@ -79,12 +80,14 @@ export class CodexGatewayProxy {
                 this.accept(downstream, connectionId);
             });
         });
-        await listenHttpServer(httpServer, this.listen);
+        const boundEndpoint = await listenHttpServer(httpServer, this.listen);
         if (this.listen.socketPath && process.platform !== 'win32') {
             await chmod(this.listen.socketPath, 0o600);
         }
         this.httpServer = httpServer;
         this.webSocketServer = webSocketServer;
+        this.boundEndpoint = boundEndpoint;
+        return boundEndpoint;
     }
 
     async close(): Promise<void> {
@@ -95,6 +98,7 @@ export class CodexGatewayProxy {
         const httpServer = this.httpServer;
         this.webSocketServer = null;
         this.httpServer = null;
+        this.boundEndpoint = null;
         if (webSocketServer) {
             await new Promise<void>((resolve) => webSocketServer.close(() => resolve()));
         }
@@ -314,7 +318,7 @@ function isJsonRpcId(value: unknown): value is JsonRpcId {
 async function listenHttpServer(
     server: HttpServer,
     endpoint: CodexGatewayProxyEndpoint,
-): Promise<void> {
+): Promise<CodexGatewayProxyEndpoint> {
     await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
         if (endpoint.socketPath) {
@@ -334,4 +338,12 @@ async function listenHttpServer(
             resolve();
         });
     });
+    if (endpoint.socketPath) return { socketPath: endpoint.socketPath };
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+        throw new Error('Codex Gateway proxy did not expose a loopback port');
+    }
+    const boundUrl = new URL(endpoint.url!);
+    boundUrl.port = String(address.port);
+    return { url: boundUrl.toString() };
 }

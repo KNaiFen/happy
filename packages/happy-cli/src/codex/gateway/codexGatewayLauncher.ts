@@ -9,6 +9,10 @@ import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 import { assertMinimumCodexCliVersion } from '../codexCliVersion';
 import { createCodexGatewayAttachmentCredentials } from './codexGatewayAttachment';
 import {
+    startCodexGatewayTuiRelay,
+    type CodexGatewayTuiRelay,
+} from './codexGatewayTuiRelay';
+import {
     callCodexGatewayControl,
     type CodexGatewayOpenRootInput,
     type CodexGatewayOpenRootResult,
@@ -240,20 +244,30 @@ export async function delegateToOfficialCodex(args: string[]): Promise<number> {
 }
 
 export function buildCodexRemoteArgs(
-    descriptor: CodexGatewayDescriptor,
+    remoteUrl: string,
     nativeArgs: string[],
 ): string[] {
-    const endpoint = descriptor.tuiSocketPath
-        ? `unix://${descriptor.tuiSocketPath}`
-        : descriptor.tuiPort
-            ? `ws://127.0.0.1:${descriptor.tuiPort}`
-            : null;
-    if (!endpoint) {
-        throw new Error('Codex Gateway TUI endpoint is unavailable');
+    let endpoint: URL;
+    try {
+        endpoint = new URL(remoteUrl);
+    } catch {
+        throw new Error('Codex Gateway TUI endpoint is invalid');
+    }
+    if (
+        endpoint.protocol !== 'ws:'
+        || endpoint.hostname !== '127.0.0.1'
+        || !endpoint.port
+        || endpoint.username
+        || endpoint.password
+        || endpoint.pathname !== '/'
+        || endpoint.search
+        || endpoint.hash
+    ) {
+        throw new Error('Codex Gateway TUI endpoint must be authenticated loopback WebSocket');
     }
     return [
         '--remote',
-        endpoint,
+        endpoint.toString(),
         '--remote-auth-token-env',
         REMOTE_TOKEN_ENV,
         ...nativeArgs,
@@ -266,26 +280,53 @@ async function runAttachedTui(options: {
     nativeArgs: string[];
 }): Promise<number> {
     const attachment = createCodexGatewayAttachmentCredentials();
-    const registration = await callCodexGatewayControl<{ accepted: boolean }>({
-        descriptor: options.descriptor,
-        token: options.secret.controlToken,
-        path: '/terminal-attached',
-        body: attachment,
-    });
-    if (!registration.accepted) {
-        throw new Error('This Codex Gateway already has an attached terminal');
-    }
-    const result = await spawnForegroundCodex(
-        buildCodexRemoteArgs(options.descriptor, options.nativeArgs),
-        {
-            ...process.env,
-            [REMOTE_TOKEN_ENV]: attachment.connectionToken,
-        },
+    const remote = await prepareCodexGatewayTuiRemote(
+        options.descriptor,
+        attachment.connectionToken,
     );
-    if (result === 0) {
-        await confirmNormalExit(options.descriptor, options.secret, attachment);
+    try {
+        const registration = await callCodexGatewayControl<{ accepted: boolean }>({
+            descriptor: options.descriptor,
+            token: options.secret.controlToken,
+            path: '/terminal-attached',
+            body: attachment,
+        });
+        if (!registration.accepted) {
+            throw new Error('This Codex Gateway already has an attached terminal');
+        }
+        const result = await spawnForegroundCodex(
+            buildCodexRemoteArgs(remote.remoteUrl, options.nativeArgs),
+            {
+                ...process.env,
+                [REMOTE_TOKEN_ENV]: attachment.connectionToken,
+            },
+        );
+        if (result === 0) {
+            await confirmNormalExit(options.descriptor, options.secret, attachment);
+        }
+        return result;
+    } finally {
+        await remote.close();
     }
-    return result;
+}
+
+async function prepareCodexGatewayTuiRemote(
+    descriptor: CodexGatewayDescriptor,
+    bearerToken: string,
+): Promise<CodexGatewayTuiRelay> {
+    if (descriptor.tuiSocketPath) {
+        return await startCodexGatewayTuiRelay({
+            upstreamSocketPath: descriptor.tuiSocketPath,
+            bearerToken,
+        });
+    }
+    if (!descriptor.tuiPort) {
+        throw new Error('Codex Gateway TUI endpoint is unavailable');
+    }
+    return {
+        remoteUrl: `ws://127.0.0.1:${descriptor.tuiPort}/`,
+        close: async () => undefined,
+    };
 }
 
 async function confirmNormalExit(
