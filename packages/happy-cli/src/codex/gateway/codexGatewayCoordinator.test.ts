@@ -193,6 +193,43 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
     });
 
+    it('does not retire a draining root before its deferred subscription reconciles', async () => {
+        const initial = thread('thread-a', 'idle');
+        const materialized = thread('thread-a', 'idle');
+        materialized.turns = [{
+            id: 'turn-1',
+            status: 'completed',
+            items: [],
+        }] as unknown as Thread['turns'];
+        const harness = createHarness({
+            'thread-a': initial,
+            'thread-b': thread('thread-b', 'idle'),
+        });
+        harness.client.unmaterializedThreads.add('thread-a');
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a', {
+            subscription: 'deferredNewThread',
+        });
+        const runtimeA = harness.runtimes.get('thread-a')!;
+
+        await harness.coordinator.bindRoot('thread-b');
+        await harness.coordinator.retireDrainingRoots();
+
+        expect(runtimeA.bindings.at(-1)?.role).toBe('draining');
+        expect(runtimeA.close).not.toHaveBeenCalled();
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual(['thread-a']);
+
+        harness.client.unmaterializedThreads.delete('thread-a');
+        harness.client.setThread(materialized);
+        await expect(harness.coordinator.subscribeMaterializedRoot('thread-a'))
+            .resolves.toBe(true);
+        await harness.coordinator.retireDrainingRoots();
+
+        expect(runtimeA.reconcile).toHaveBeenCalledWith(materialized);
+        expect(runtimeA.bindings.at(-1)?.role).toBe('inactive');
+        expect(runtimeA.close).toHaveBeenCalledOnce();
+    });
+
     it('does not replay a bridge notification through a materialized snapshot', async () => {
         const fresh = thread('thread-fresh', 'idle');
         const harness = createHarness({ 'thread-fresh': fresh });

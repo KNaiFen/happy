@@ -802,7 +802,7 @@ export class CodexGatewayCoordinator {
     }
 
     private async maybeRetireLocked(root: ManagedRoot): Promise<void> {
-        if (root.role !== 'draining' || root.rootActiveTurnId) return;
+        if (root.role !== 'draining' || root.subscriptionPending || root.rootActiveTurnId) return;
         if (!await root.runtime.isDrained()) return;
         await root.runtime.flush();
         if (!await root.runtime.isDrained()) return;

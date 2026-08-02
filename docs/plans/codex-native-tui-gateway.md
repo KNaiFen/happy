@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.27`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.28`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -478,12 +478,26 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     查找已折叠工具输出。恢复验收须先重新进入该会话，以 `codex-mcp-tool-message` 验证持久
     工具卡、点击详情验证精确 output，再返回聊天验证历史与回复；这避免把合理的首页恢复
     行为误报为 Sync v4 丢失，且只改 CI test。
+  - 第二十二轮主 CI `30770367349` 的普通矩阵和官方 app-server lifecycle 全绿，但
+    真实 PTY 中终端已完成 `2` 次 provider request 并显示回复，Happy projection 仍为
+    ready 且 agent/reasoning/command/response 全部为 `0`，无 root error。现有代理只在
+    `turn/start` 成功响应或 provider activity 到达时立即调用 stable
+    `thread/resume`；若这些事件都先于 rollout 持久化完成，所有调用均返回精确的
+    unmaterialized，最后一条事件后再无触发源，形成时序相关的永久漏订阅。worker 必须
+    对“已观察到 activity 且仍 subscription-pending”的 thread 启动不阻塞 TUI 转发的
+    后台有限退避对账；只重试可安全重复的 stable resume/read，成功后 reconcile 权威
+    snapshot 并清除诊断，心跳只为仍有 activity 证据的 pending thread 低频续接。
+    handoff 后仍受 Gateway 管理的 draining root 继续对账，`subscriptionPending` 必须
+    阻止 runtime 因尚未投影任何 turn 而被误判为 drained 并提前退休；只有完成订阅并
+    权威确认排空后才能退休。root 退休、stop 与 worker cleanup 必须终止后续尝试。该项
+    改变可分发 CLI 行为，目标
+    推进到 `1.4.28`，App/Wire/Server 保持不变。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.27`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.28`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -514,9 +528,13 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.26` package workflow `30764952183` 已通过，制品已下载并验证；后续只修正
       云端验收与计划。第十九轮 PTY 随后定位到专用 worker 完成清理后不退出的分发行为
       缺陷；`1.4.26` 已运行不可复用，最终目标推进到 `1.4.27`。
+      `1.4.27` release `30766338252` 与主 CI `30766338313` 已通过并下载验证；后续
+      `30770367349` 暴露 terminal 新线程在 rollout 持久化前耗尽 activity-triggered
+      resume 的竞态。该修复改变 Gateway 自动恢复行为，`1.4.27` 已运行不可复用，目标
+      推进到 `1.4.28`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.27.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.28.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 

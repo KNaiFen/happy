@@ -65,6 +65,7 @@ const GRACEFUL_STOP_WAIT_MS = 10_000;
 const GRACEFUL_STOP_POLL_MS = 250;
 const GRACEFUL_STOP_RETRY_MS = 2_000;
 const PROVIDER_BRIDGE_RETRY_DELAYS_MS = [50, 100, 250, 500, 1_000, 2_000] as const;
+const FRESH_SUBSCRIPTION_RETRY_DELAYS_MS = [0, 50, 100, 250, 500, 1_000] as const;
 
 interface DeferredRoot {
     runtime: CodexGatewayDeferredRuntime;
@@ -240,9 +241,13 @@ async function runCodexGatewayWorkerInternal(
     const deferredRoots = new Map<string, DeferredRoot>();
     const rootReservations = new Map<string, { threadId: string; release: boolean }>();
     const pendingFreshSubscriptions = new Set<string>();
+    const freshSubscriptionActivity = new Set<string>();
+    const freshSubscriptionTasks = new Map<string, Promise<void>>();
+    const freshSubscriptionRetryWaiters = new Set<() => void>();
     let runtimeFactory: CodexGatewayRuntimeFactory | null = null;
     let coordinator: CodexGatewayCoordinator | null = null;
     let stopping = false;
+    let freshSubscriptionRetriesClosed = false;
     let forceShutdownRequested = false;
     let shutdownPromise: Promise<void> | null = null;
     let wakeShutdownRetry: (() => void) | null = null;
@@ -525,20 +530,8 @@ async function runCodexGatewayWorkerInternal(
                 throw diagnosed;
             }
         },
-        threadMaterialized: async (threadId) => {
-            if (!pendingFreshSubscriptions.has(threadId)) return;
-            try {
-                const subscribed = await requireCoordinator().subscribeMaterializedRoot(threadId);
-                syncPendingFreshSubscriptions();
-                if (subscribed) {
-                    await syncDescriptorBindings({ clearRootBindingError: true });
-                }
-            } catch (error) {
-                const diagnosed = error instanceof CodexGatewayRootBindingError
-                    ? error
-                    : new CodexGatewayRootBindingError('providerSnapshot', error);
-                await persistWorkerError(diagnosed);
-            }
+        threadMaterialized: (threadId) => {
+            noteFreshSubscriptionActivity(threadId);
         },
         rootFailed: async (request) => {
             const reservation = rootReservations.get(rootRequestKey(request));
@@ -614,6 +607,7 @@ async function runCodexGatewayWorkerInternal(
         process.off('SIGTERM', stopSignal);
         process.off('SIGINT', stopSignal);
         if (heartbeat) clearInterval(heartbeat);
+        closeFreshSubscriptionRetries();
         terminal.dispose();
         const coordinatorAtShutdown = coordinator as CodexGatewayCoordinator | null;
         preserveProviderEndpoint ||= provider.requiresConservativeRecovery;
@@ -625,6 +619,7 @@ async function runCodexGatewayWorkerInternal(
             coordinatorAtShutdown?.stop({ force: true }) ?? Promise.resolve(),
             providerShutdown,
         ]);
+        await Promise.allSettled([...freshSubscriptionTasks.values()]);
         await syncDescriptorBindings().catch(() => undefined);
         await controlServer?.close().catch(() => undefined);
         await journal.close().catch(() => undefined);
@@ -798,6 +793,105 @@ async function runCodexGatewayWorkerInternal(
         for (const threadId of coordinator?.pendingSubscriptionThreadIds() ?? []) {
             pendingFreshSubscriptions.add(threadId);
         }
+        for (const threadId of freshSubscriptionActivity) {
+            if (!pendingFreshSubscriptions.has(threadId)) {
+                freshSubscriptionActivity.delete(threadId);
+            }
+        }
+    }
+
+    function noteFreshSubscriptionActivity(threadId: string): void {
+        if (
+            stopping
+            || freshSubscriptionRetriesClosed
+            || !pendingFreshSubscriptions.has(threadId)
+        ) return;
+        freshSubscriptionActivity.add(threadId);
+        scheduleFreshSubscriptionReconciliation(threadId);
+    }
+
+    function scheduleFreshSubscriptionReconciliation(threadId: string): void {
+        if (
+            stopping
+            || freshSubscriptionRetriesClosed
+            || !pendingFreshSubscriptions.has(threadId)
+            || !freshSubscriptionActivity.has(threadId)
+            || freshSubscriptionTasks.has(threadId)
+        ) return;
+        const task = reconcileFreshSubscription(threadId);
+        freshSubscriptionTasks.set(threadId, task);
+        const finish = () => {
+            if (freshSubscriptionTasks.get(threadId) === task) {
+                freshSubscriptionTasks.delete(threadId);
+            }
+        };
+        void task.then(finish, (error) => {
+            finish();
+            if (!freshSubscriptionRetriesClosed) recordWorkerError(error);
+        });
+    }
+
+    async function reconcileFreshSubscription(threadId: string): Promise<void> {
+        for (const delayMs of FRESH_SUBSCRIPTION_RETRY_DELAYS_MS) {
+            await waitForFreshSubscriptionRetry(delayMs);
+            if (
+                stopping
+                || freshSubscriptionRetriesClosed
+                || !pendingFreshSubscriptions.has(threadId)
+                || !freshSubscriptionActivity.has(threadId)
+            ) return;
+
+            let subscribed: boolean;
+            try {
+                subscribed = await requireCoordinator().subscribeMaterializedRoot(threadId);
+            } catch (error) {
+                syncPendingFreshSubscriptions();
+                if (!pendingFreshSubscriptions.has(threadId) || freshSubscriptionRetriesClosed) return;
+                const diagnosed = error instanceof CodexGatewayRootBindingError
+                    ? error
+                    : new CodexGatewayRootBindingError('providerSnapshot', error);
+                await persistWorkerError(diagnosed).catch(() => undefined);
+                continue;
+            }
+
+            syncPendingFreshSubscriptions();
+            if (!subscribed) continue;
+            if (stopping || freshSubscriptionRetriesClosed) return;
+            try {
+                await syncDescriptorBindings({ clearRootBindingError: true });
+            } catch (error) {
+                const diagnosed = error instanceof CodexGatewayRootBindingError
+                    ? error
+                    : new CodexGatewayRootBindingError('descriptor', error);
+                await persistWorkerError(diagnosed).catch(() => undefined);
+            }
+            return;
+        }
+    }
+
+    async function waitForFreshSubscriptionRetry(delayMs: number): Promise<void> {
+        if (delayMs === 0 || freshSubscriptionRetriesClosed) {
+            await Promise.resolve();
+            return;
+        }
+        await new Promise<void>((resolveRetry) => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                freshSubscriptionRetryWaiters.delete(finish);
+                resolveRetry();
+            };
+            const timer = setTimeout(finish, delayMs);
+            freshSubscriptionRetryWaiters.add(finish);
+        });
+    }
+
+    function closeFreshSubscriptionRetries(): void {
+        if (freshSubscriptionRetriesClosed) return;
+        freshSubscriptionRetriesClosed = true;
+        for (const finish of [...freshSubscriptionRetryWaiters]) finish();
     }
 
     async function updateGatewayLifecycle(
@@ -848,6 +942,11 @@ async function runCodexGatewayWorkerInternal(
             await materializeDeferredRoots();
             await coordinator?.retireDrainingRoots();
             syncPendingFreshSubscriptions();
+            for (const threadId of pendingFreshSubscriptions) {
+                if (freshSubscriptionActivity.has(threadId)) {
+                    scheduleFreshSubscriptionReconciliation(threadId);
+                }
+            }
             const activeThreads = new Set(
                 coordinator?.bindingSnapshot().map((binding) => binding.threadId) ?? [],
             );
@@ -879,6 +978,7 @@ async function runCodexGatewayWorkerInternal(
             return await shutdownPromise;
         }
         stopping = true;
+        closeFreshSubscriptionRetries();
         shutdownPromise = (async () => {
             await updateGatewayLifecycle('stopping').catch(() => undefined);
             if (!forceShutdownRequested) {
