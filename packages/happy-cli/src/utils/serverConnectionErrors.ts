@@ -247,7 +247,7 @@ export function startOfflineReconnection<TSession>(
 /** All network error codes that trigger offline mode */
 export const NETWORK_ERROR_CODES = [
     'ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT',
-    'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH'
+    'ECONNRESET', 'ECONNABORTED', 'EHOSTUNREACH', 'ENETUNREACH'
 ] as const;
 
 /** Check if error code indicates server unreachable */
@@ -262,6 +262,7 @@ export const ERROR_DESCRIPTIONS: Record<string, string> = {
     ENOTFOUND: 'server hostname not found',
     ETIMEDOUT: 'connection timed out',
     ECONNRESET: 'connection reset by server',
+    ECONNABORTED: 'request timed out',
     EHOSTUNREACH: 'server host unreachable',
     ENETUNREACH: 'network unreachable',
     // HTTP errors

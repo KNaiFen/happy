@@ -14,6 +14,42 @@ import {
 } from './codexGatewayCoordinator';
 
 describe('Codex Gateway coordinator', () => {
+    it('restores exact current and draining generations before accepting new work', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'active', 'turn-a'),
+            'thread-b': thread('thread-b', 'idle'),
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.restoreBindings([
+            { threadId: 'thread-a', sessionId: 'session-thread-a', generation: 4, role: 'draining' },
+            { threadId: 'thread-b', sessionId: 'session-thread-b', generation: 5, role: 'current' },
+        ]);
+
+        expect(harness.coordinator.currentThreadId).toBe('thread-b');
+        expect(harness.coordinator.currentGeneration).toBe(5);
+        expect(harness.coordinator.bindingSnapshot()).toEqual([
+            expect.objectContaining({ threadId: 'thread-b', generation: 5, role: 'current' }),
+            expect.objectContaining({ threadId: 'thread-a', generation: 4, role: 'draining' }),
+        ]);
+        await expect(harness.coordinator.bindRoot('thread-b')).resolves.toEqual({
+            sessionId: 'session-thread-b',
+            generation: 5,
+            changed: false,
+        });
+    });
+
+    it('rejects a recovered binding set whose current root is not newest', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+        });
+        await expect(harness.coordinator.restoreBindings([
+            { threadId: 'thread-a', sessionId: 'session-a', generation: 1, role: 'current' },
+            { threadId: 'thread-b', sessionId: 'session-b', generation: 2, role: 'draining' },
+        ])).rejects.toThrow('newest generation');
+        expect(harness.leases.acquire).not.toHaveBeenCalled();
+    });
+
     it('keeps the prior root draining until its authoritative turn completes', async () => {
         const harness = createHarness({
             'thread-a': thread('thread-a', 'active', 'turn-a'),

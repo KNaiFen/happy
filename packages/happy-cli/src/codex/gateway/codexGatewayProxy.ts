@@ -30,6 +30,7 @@ export interface CodexGatewayRootBinding extends CodexGatewayRootRequest {
 export interface CodexGatewayProxyHooks {
     beforeRootRequest?(request: CodexGatewayRootRequest): Promise<void> | void;
     rootBound?(binding: CodexGatewayRootBinding): Promise<void> | void;
+    rootFailed?(request: CodexGatewayRootRequest): Promise<void> | void;
     claimTerminal?(connectionId: string, bearerToken: string | null): boolean;
     terminalConnected?(connectionId: string): Promise<void> | void;
     terminalDisconnected?(connectionId: string): Promise<void> | void;
@@ -192,6 +193,9 @@ export class CodexGatewayProxy {
         });
         downstream.on('close', () => {
             this.downstreams.delete(downstream);
+            for (const pending of pendingRoots.values()) {
+                void this.hooks.rootFailed?.(pending);
+            }
             pendingRoots.clear();
             if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
                 upstream.close(1000, 'Terminal disconnected');
@@ -244,7 +248,10 @@ export class CodexGatewayProxy {
         const pending = pendingRoots.get(parsed.id);
         if (!pending) return;
         pendingRoots.delete(parsed.id);
-        if ('error' in parsed) return;
+        if ('error' in parsed) {
+            await this.hooks.rootFailed?.(pending);
+            return;
+        }
         const threadId = responseThreadId(parsed.result);
         if (!threadId) {
             throw new Error(`${pending.method} response omitted the thread ID`);

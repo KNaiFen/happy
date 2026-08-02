@@ -165,11 +165,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 2. Gateway 核心
 
-- [ ] 将 app-server process/transport ownership 从旧 `runCodex` 拆到独立 worker。
-- [ ] 实现 Unix/loopback 透明代理、官方 WS 鉴权和多订阅连接管理。
+- [x] 将 app-server process/transport ownership 从旧 `runCodex` 拆到独立 worker。
+- [ ] Unix 透明代理、官方 WS 鉴权和多订阅连接管理已接入；Windows loopback
+      endpoint 与动态端口仍待完成。
 - [ ] 实现受保护的 worker descriptor、control token、heartbeat 和 daemon discovery。
-- [ ] 实现 provider thread lease、generation、current/draining registry 和冲突预检。
-- [ ] 实现 app-server crash recovery、snapshot reconciliation 和 payload-free diagnostics。
+- [x] 实现 provider thread lease、generation、current/draining registry 和冲突预检。
+- [x] 实现 app-server crash recovery、snapshot reconciliation 和 payload-free diagnostics。
 - [ ] 保留并复用 Sync v4 mapper/router/request broker；删除 selected-thread 全局假设。
 
 组件进度（不等同于 worker 接线或端到端验收）：
@@ -195,14 +196,16 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       也不与 TUI 竞速自动拒绝审批；恢复后原位物化、FIFO 回放并补齐 handoff 链接。
 - [ ] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
       terminal detach/attach 和 relay-offline materialization。
+  - worker、heartbeat、按 attachment detach/attach、relay-offline materialization 和
+    descriptor exact-generation 恢复已接通；daemon 扫描/重启 worker 尚未接入。
 
 ### 3. CLI 原生命令面
 
-- [ ] 将 `happy codex` 参数解析改为原生委派，保留 Happy 自有 attach/stop。
-- [ ] terminal-origin 启动时完成 auth、daemon discovery、worker spawn、官方 TUI exec。
-- [ ] 实现按 attachment 轮换的一次性正常退出 nonce、异常 detach、attach picker 和
+- [x] 将 `happy codex` 参数解析改为原生委派，保留 Happy 自有 attach/stop。
+- [x] terminal-origin 启动时完成 auth、daemon discovery、worker spawn、官方 TUI exec。
+- [x] 实现按 attachment 轮换的一次性正常退出 nonce、异常 detach、attach picker 和
       stop picker；覆盖旧 launcher 迟到确认与新 attach 并发的回归测试。
-- [ ] 裸 `happy` 改为帮助与运行状态；帮助文案不再声称自定义 Codex UI。
+- [x] 裸 `happy` 改为帮助与运行状态；帮助文案不再声称自定义 Codex UI。
 - [ ] 启动新版 daemon 时只终止经过 executable、argv、home 和 descriptor 多重验证的
       旧 Happy Codex adapter，绝不终止用户直接运行的官方 Codex 或其他 provider。
 
@@ -309,3 +312,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：增加可原位物化的 deferred root runtime。provider request 在离线期间
   保持无响应，由已附着 TUI first-win；收到 `serverRequest/resolved` 后被动结束，或在
   relay 恢复后交给真实 request broker，避免 bridge 发送错误/拒绝响应。
+- 2026-08-02：接通 terminal-origin worker 与官方 `codex --remote` 命令面。worker
+  组合 provider、独立 bridge、proxy、control、heartbeat、journal、lease 和恢复；
+  native new/resume/fork 走 Gateway，attach 在同一 app-server 上 native resume，其他
+  官方子命令直接委派。descriptor 恢复保留精确 generation，不伪造一次新 handoff。

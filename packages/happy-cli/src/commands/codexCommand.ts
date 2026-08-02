@@ -1,14 +1,45 @@
-import { authAndSetupMachineIfNeeded } from '@/ui/auth'
-import { runCodex } from '@/codex/runCodex'
-import { extractCodexResumeFlag } from '@/codex/cliArgs'
-import { extractNoSandboxFlag } from '@/utils/sandboxFlags'
-import { ensureDaemonRunning } from '@/daemon/ensureDaemonRunning'
-import type { PermissionMode } from '@/api/types'
-import type { ReasoningEffort } from '@/codex/protocol'
-import { configuration } from '@/configuration'
+import {
+  attachCodexGateway,
+  delegateToOfficialCodex,
+  launchCodexGatewayTui,
+  stopCodexGateway,
+} from '@/codex/gateway/codexGatewayLauncher'
 
-const CODEX_PERMISSION_MODES = new Set<PermissionMode>(['default', 'read-only', 'safe-yolo', 'yolo'])
-const REMOVED_LEGACY_FLAGS = new Set([
+const OFFICIAL_DELEGATED_SUBCOMMANDS = new Set([
+  'exec',
+  'review',
+  'login',
+  'logout',
+  'mcp',
+  'plugin',
+  'mcp-server',
+  'app-server',
+  'remote-control',
+  'app',
+  'completion',
+  'update',
+  'doctor',
+  'sandbox',
+  'debug',
+  'apply',
+  'archive',
+  'delete',
+  'unarchive',
+  'cloud',
+  'exec-server',
+  'features',
+  'help',
+])
+
+const REMOVED_HAPPY_OPTIONS = new Set([
+  '--resume',
+  '-r',
+  '--effort',
+  '--permission-mode',
+  '--yolo',
+  '--no-sandbox',
+  '--started-by',
+  '--happy-starting-mode',
   '--chrome',
   '--no-chrome',
   '--claude-env',
@@ -16,130 +47,65 @@ const REMOVED_LEGACY_FLAGS = new Set([
   '--settings',
 ])
 
-export type ParsedCodexCommand = {
-  showHelp: boolean
-  showVersion: boolean
-  startedBy: 'daemon' | 'terminal' | undefined
-  permissionMode: PermissionMode | undefined
-  model: string | undefined
-  effort: ReasoningEffort | undefined
-  noSandbox: boolean
-  resumeThreadId: string | undefined
-}
+export type CodexCommandPlan =
+  | { kind: 'gateway'; args: string[] }
+  | { kind: 'attach'; selector?: string }
+  | { kind: 'stop'; selector?: string; force: boolean }
+  | { kind: 'delegate'; args: string[] }
 
-function requiredValue(args: string[], index: number, flag: string): string {
-  const value = args[index + 1]
-  if (!value || value.startsWith('-')) {
-    throw new Error(`${flag} requires a value.`)
-  }
-  return value
-}
-
-export function parseCodexCommandArgs(args: string[]): ParsedCodexCommand {
-  let startedBy: 'daemon' | 'terminal' | undefined
-  let permissionMode: PermissionMode | undefined
-  let model: string | undefined
-  let effort: ReasoningEffort | undefined
-  let showHelp = false
-  let showVersion = false
-  const sandboxArgs = extractNoSandboxFlag(args)
-  const codexArgs = extractCodexResumeFlag(sandboxArgs.args)
-
-  for (let i = 0; i < codexArgs.args.length; i += 1) {
-    const arg = codexArgs.args[i]
-    if (arg === '--started-by') {
-      const value = requiredValue(codexArgs.args, i, arg)
-      if (value !== 'daemon' && value !== 'terminal') {
-        throw new Error('--started-by must be daemon or terminal.')
-      }
-      startedBy = value
-      i += 1
-    } else if (arg === '--happy-starting-mode') {
-      const value = requiredValue(codexArgs.args, i, arg)
-      if (value !== 'local' && value !== 'remote') {
-        throw new Error('--happy-starting-mode must be local or remote.')
-      }
-      i += 1
-    } else if (arg === '--permission-mode') {
-      const value = requiredValue(codexArgs.args, i, arg) as PermissionMode
-      if (!CODEX_PERMISSION_MODES.has(value)) {
-        throw new Error(`Unsupported Codex permission mode: ${value}`)
-      }
-      permissionMode = value
-      i += 1
-    } else if (arg === '--model') {
-      model = requiredValue(codexArgs.args, i, arg)
-      i += 1
-    } else if (arg === '--effort') {
-      effort = requiredValue(codexArgs.args, i, arg)
-      i += 1
-    } else if (arg === '--yolo') {
-      permissionMode = 'yolo'
-    } else if (arg === '--help' || arg === '-h') {
-      showHelp = true
-    } else if (arg === '--version' || arg === '-v') {
-      showVersion = true
-    } else if (REMOVED_LEGACY_FLAGS.has(arg)) {
-      throw new Error(`${arg} is a removed legacy-provider option and is no longer supported.`)
-    } else {
-      throw new Error(`Unknown Codex option: ${arg}`)
+export function planCodexCommand(args: string[]): CodexCommandPlan {
+  for (const arg of args) {
+    if (arg === '--remote' || arg.startsWith('--remote=')) {
+      throw new Error('--remote is controlled by Happy Gateway and cannot be supplied manually.')
+    }
+    if (arg === '--remote-auth-token-env' || arg.startsWith('--remote-auth-token-env=')) {
+      throw new Error('--remote-auth-token-env is controlled by Happy Gateway and cannot be supplied manually.')
+    }
+    if (REMOVED_HAPPY_OPTIONS.has(arg)) {
+      throw new Error(`${arg} is an obsolete Happy adapter option; use the equivalent official Codex option or subcommand.`)
     }
   }
 
-  return {
-    showHelp,
-    showVersion,
-    startedBy,
-    permissionMode,
-    model,
-    effort,
-    noSandbox: sandboxArgs.noSandbox,
-    resumeThreadId: codexArgs.resumeThreadId ?? undefined,
+  const first = args[0]
+  if (first === 'attach') {
+    if (args.length > 2) throw new Error('Usage: happy codex attach [gateway-or-thread-id]')
+    return { kind: 'attach', ...(args[1] ? { selector: args[1] } : {}) }
   }
-}
-
-function printCodexHelp(): void {
-  console.log(`
-happy - Codex remote control
-
-Usage:
-  happy [options]         Start Codex
-  happy codex [options]   Explicit Codex alias
-
-Options:
-  --resume, -r <thread>   Resume a Codex thread
-  --model <model>         Select the Codex model
-  --effort <level>        Select reasoning effort
-  --permission-mode <mode>
-                          default, read-only, safe-yolo, or yolo
-  --yolo                  Shortcut for --permission-mode yolo
-  --no-sandbox            Disable the Happy sandbox
-  --help, -h              Show this help
-  --version, -v           Show the Happy CLI version
-`)
+  if (first === 'stop') {
+    let selector: string | undefined
+    let force = false
+    for (const arg of args.slice(1)) {
+      if (arg === '--force') force = true
+      else if (!selector) selector = arg
+      else throw new Error('Usage: happy codex stop [gateway-or-thread-id] [--force]')
+    }
+    return { kind: 'stop', ...(selector ? { selector } : {}), force }
+  }
+  if (first === '--help' || first === '-h' || first === '--version' || first === '-V') {
+    return { kind: 'delegate', args }
+  }
+  if (first && OFFICIAL_DELEGATED_SUBCOMMANDS.has(first)) {
+    return { kind: 'delegate', args }
+  }
+  return { kind: 'gateway', args }
 }
 
 export async function handleCodexCommand(args: string[]): Promise<void> {
-  const parsed = parseCodexCommandArgs(args)
-  if (parsed.showHelp) {
-    printCodexHelp()
-    return
+  const plan = planCodexCommand(args)
+  let exitCode = 0
+  switch (plan.kind) {
+    case 'gateway':
+      exitCode = await launchCodexGatewayTui(plan.args)
+      break
+    case 'attach':
+      exitCode = await attachCodexGateway(plan.selector)
+      break
+    case 'stop':
+      await stopCodexGateway(plan)
+      break
+    case 'delegate':
+      exitCode = await delegateToOfficialCodex(plan.args)
+      break
   }
-  if (parsed.showVersion) {
-    console.log(`happy version: ${configuration.currentCliVersion}`)
-    return
-  }
-
-  const { credentials } = await authAndSetupMachineIfNeeded()
-  await ensureDaemonRunning()
-
-  await runCodex({
-    credentials,
-    startedBy: parsed.startedBy,
-    noSandbox: parsed.noSandbox,
-    resumeThreadId: parsed.resumeThreadId,
-    permissionMode: parsed.permissionMode,
-    model: parsed.model,
-    effort: parsed.effort,
-  })
+  if (exitCode !== 0) process.exitCode = exitCode
 }

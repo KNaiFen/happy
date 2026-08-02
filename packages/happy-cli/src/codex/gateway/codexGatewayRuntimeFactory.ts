@@ -69,7 +69,7 @@ const GATEWAY_PERMISSION_MODES = new Set<PermissionMode>([
 
 export interface CodexGatewayRuntimeFactoryApi {
     getOrCreateSession(options: Parameters<ApiClient['getOrCreateSession']>[0]): Promise<ApiSession | null>;
-    unarchiveSession(sessionId: string): Promise<boolean>;
+    unarchiveSession(sessionId: string, timeoutMs?: number): Promise<boolean>;
     sessionSyncClient(session: ApiSession): ApiSessionClientContract;
     archiveSessionV4(sessionId: string): Promise<boolean>;
 }
@@ -119,6 +119,7 @@ export interface CodexGatewayRuntimeFactoryOptions {
     }) => Promise<void> | void;
     onSessionArchived?: (sessionId: string) => void;
     reportSessionStarted?: typeof notifyDaemonSessionStarted;
+    relayRequestTimeoutMs?: number;
 }
 
 /** Creates fully materialized Sync v4 runtimes. Relay-offline roots stay in the worker journal. */
@@ -176,9 +177,13 @@ export class CodexGatewayRuntimeFactory {
             metadata: created.metadata,
             state: created.state,
             dataEncryptionKey: identity.sessionKey,
+            timeoutMs: this.options.relayRequestTimeoutMs,
         });
         if (!session) return null;
-        if (!await this.options.api.unarchiveSession(session.id)) return null;
+        if (!await this.options.api.unarchiveSession(
+            session.id,
+            this.options.relayRequestTimeoutMs,
+        )) return null;
 
         const target = this.options.api.sessionSyncClient(session);
         target.skipExistingMessages();
@@ -281,9 +286,13 @@ export class CodexGatewayRuntimeFactory {
             metadata: child.metadata,
             state: child.state,
             dataEncryptionKey: identity.sessionKey,
+            timeoutMs: this.options.relayRequestTimeoutMs,
         });
         if (!response) throw new Error('Happy relay is unavailable while creating a Codex child session');
-        if (!await this.options.api.unarchiveSession(response.id)) {
+        if (!await this.options.api.unarchiveSession(
+            response.id,
+            this.options.relayRequestTimeoutMs,
+        )) {
             throw new Error('Happy relay is unavailable while restoring a Codex child session');
         }
         const target = this.options.api.sessionSyncClient(response);

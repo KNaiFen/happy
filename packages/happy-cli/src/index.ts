@@ -30,6 +30,8 @@ import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
 import { configuration } from './configuration'
 import { getInsecureRelayWarning, isInsecureHttpUrl } from './utils/serverUrl'
+import { runCodexGatewayWorker } from './codex/gateway/codexGatewayWorker'
+import { listCodexGatewayDescriptors } from './codex/gateway/codexGatewayState'
 
 
 (async () => {
@@ -40,6 +42,12 @@ import { getInsecureRelayWarning, isInsecureHttpUrl } from './utils/serverUrl'
     && (args[0] === '--version' || args[0] === '-v')
   ) {
     console.log(`happy version: ${packageJson.version}`)
+    return
+  }
+
+  if (args[0] === '__codex-gateway-worker') {
+    if (args.length !== 2) throw new Error('Invalid Codex Gateway worker invocation')
+    await runCodexGatewayWorker({ gatewayId: args[1] })
     return
   }
 
@@ -612,17 +620,41 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
       console.error(chalk.red('Error: This removed command is no longer supported. Run `happy` or `happy codex` to start Codex.'))
       process.exit(1)
     }
-    try {
-      await handleCodexCommand(args)
-    } catch (error) {
-      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
-      if (process.env.DEBUG) {
-        console.error(error)
-      }
-      process.exit(1)
+    if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+      await printHappyOverview()
+      return
     }
+    console.error(chalk.red(`Error: Unknown Happy command: ${args[0]}`))
+    console.error('Run `happy --help` for usage, or `happy codex` to start Codex.')
+    process.exit(1)
   }
 })();
+
+async function printHappyOverview(): Promise<void> {
+  const daemon = await readDaemonState()
+  const gateways = (await listCodexGatewayDescriptors())
+    .filter((gateway) => gateway.state !== 'stopped')
+  console.log(`
+${chalk.bold('Happy')} - Remote control for Codex
+
+${chalk.bold('Usage:')}
+  happy codex [official Codex options or prompt]
+  happy codex resume [official resume options]
+  happy codex fork [official fork options]
+  happy codex attach [gateway-or-thread-id]
+  happy codex stop [gateway-or-thread-id] [--force]
+  happy daemon <start|stop|status|list>
+  happy auth <login|logout|status>
+  happy doctor
+
+Daemon: ${daemon ? `running (pid ${daemon.pid})` : 'stopped'}
+Codex Gateways: ${gateways.length}
+`)
+  for (const gateway of gateways) {
+    const title = gateway.current?.title || 'Untitled Codex session'
+    console.log(`  ${gateway.gatewayId.slice(0, 8)}  ${gateway.state}/${gateway.terminalState}  ${title}`)
+  }
+}
 
 
 /**

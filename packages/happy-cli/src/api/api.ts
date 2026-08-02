@@ -248,6 +248,7 @@ export class ApiClient {
     state: AgentState | null,
     /** Stable per-session key used by recoverable child sessions. */
     dataEncryptionKey?: Uint8Array,
+    timeoutMs?: number,
   }): Promise<Session | null> {
 
     // Resolve encryption key
@@ -301,7 +302,7 @@ export class ApiClient {
             'Content-Type': 'application/json',
             'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`
           },
-          timeout: 60000 // 1 minute timeout for very bad network connections
+          timeout: opts.timeoutMs ?? 60_000,
         }
       )
 
@@ -440,7 +441,7 @@ export class ApiClient {
     throw new Error('Session lookup exceeded 1,000 pages');
   }
 
-  async unarchiveSession(sessionId: string): Promise<boolean> {
+  async unarchiveSession(sessionId: string, timeoutMs: number = 60_000): Promise<boolean> {
     const url = `${configuration.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/unarchive`;
     try {
       await axios.post(
@@ -452,7 +453,7 @@ export class ApiClient {
             'Content-Type': 'application/json',
             'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`,
           },
-          timeout: 60_000,
+          timeout: timeoutMs,
         },
       );
       logger.debug('[API] Session unarchived', {

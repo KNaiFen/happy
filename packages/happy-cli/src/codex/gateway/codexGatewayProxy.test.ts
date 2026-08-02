@@ -104,6 +104,44 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         expect(upstreamMessage).not.toHaveBeenCalled();
     });
 
+    it('releases root preflight state after the provider rejects the RPC', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
+        const upstreamPath = join(root, 'upstream.sock');
+        const downstreamPath = join(root, 'downstream.sock');
+        const upstream = await startWebSocketServer(upstreamPath, (socket) => {
+            socket.on('message', (data) => {
+                const request = JSON.parse(data.toString()) as { id: number; method: string };
+                if (request.method === 'thread/resume') {
+                    socket.send(JSON.stringify({
+                        id: request.id,
+                        error: { code: -32001, message: 'thread unavailable' },
+                    }));
+                }
+            });
+        });
+        const rootFailed = vi.fn();
+        const proxy = new CodexGatewayProxy(
+            { socketPath: downstreamPath },
+            { socketPath: upstreamPath },
+            { rootFailed },
+        );
+        await proxy.start();
+        cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
+        const client = connectCodexGatewayWebSocket({ socketPath: downstreamPath });
+        cleanups.push(async () => { client.close(); });
+        await opened(client);
+
+        client.send(JSON.stringify({ id: 8, method: 'thread/resume', params: { threadId: 'thread-a' } }));
+        expect(JSON.parse(await nextMessage(client))).toMatchObject({
+            id: 8,
+            error: { code: -32001 },
+        });
+        await vi.waitFor(() => expect(rootFailed).toHaveBeenCalledWith(expect.objectContaining({
+            requestId: 8,
+            requestedThreadId: 'thread-a',
+        })));
+    });
+
     it('rejects an unregistered terminal bearer token before upgrading', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
         const upstreamPath = join(root, 'upstream.sock');

@@ -60,6 +60,7 @@ interface ManagedRoot {
     role: CodexGatewayBindingRole;
     previousSessionId: string | null;
     nextSessionId: string | null;
+    title: string | null;
     rootActiveTurnId: string | null;
     runtime: CodexGatewayRootRuntime;
 }
@@ -73,6 +74,21 @@ export interface CodexGatewayCoordinatorOptions {
     now?: () => number;
     onError?: (error: unknown) => void;
     ownershipWaitMs?: number;
+}
+
+export interface CodexGatewayCoordinatorBindingSnapshot {
+    threadId: string;
+    sessionId: string | null;
+    generation: number;
+    role: CodexGatewayBindingRole;
+    title: string | null;
+}
+
+export interface CodexGatewayRecoveredBinding {
+    threadId: string;
+    sessionId: string | null;
+    generation: number;
+    role: 'current' | 'draining';
 }
 
 export class CodexGatewayCoordinator {
@@ -102,6 +118,16 @@ export class CodexGatewayCoordinator {
 
     get currentSessionId(): string | null {
         return this.current?.runtime.sessionId ?? null;
+    }
+
+    bindingSnapshot(): CodexGatewayCoordinatorBindingSnapshot[] {
+        return this.orderedRoots().map((root) => ({
+            threadId: root.threadId,
+            sessionId: root.runtime.sessionId,
+            generation: root.generation,
+            role: root.role,
+            title: root.title,
+        }));
     }
 
     async connect(recovered = false): Promise<void> {
@@ -180,6 +206,7 @@ export class CodexGatewayCoordinator {
                         role: 'recovering',
                         previousSessionId: previous?.runtime.sessionId ?? null,
                         nextSessionId: null,
+                        title: null,
                         rootActiveTurnId: null,
                         runtime,
                     };
@@ -199,6 +226,7 @@ export class CodexGatewayCoordinator {
             let previousMarkedDraining = false;
             try {
                 const resumed = await this.options.client.subscribeThread(threadId);
+                target.title = safeThreadTitle(resumed.thread);
                 target.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
                 if (created) await target.runtime.activate(resumed.thread);
                 else await target.runtime.reconcile(resumed.thread);
@@ -258,6 +286,101 @@ export class CodexGatewayCoordinator {
                 generation: nextGeneration,
                 changed: true,
             };
+        });
+    }
+
+    async restoreBindings(bindings: readonly CodexGatewayRecoveredBinding[]): Promise<void> {
+        if (bindings.length === 0) return;
+        validateRecoveredBindings(bindings);
+        if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
+        await this.bindingLock.inLock(async () => {
+            if (this.roots.size > 0 || this.current) {
+                throw new Error('Codex Gateway bindings can only be restored into an empty coordinator');
+            }
+            const ordered = [...bindings].sort((left, right) => left.generation - right.generation);
+            const restored: ManagedRoot[] = [];
+            const acquiredThreadIds: string[] = [];
+            this.generation = Math.max(this.generation, ...ordered.map((binding) => binding.generation));
+            try {
+                for (const binding of ordered) {
+                    await this.options.leases.acquire(binding.threadId, this.options.gatewayId);
+                    acquiredThreadIds.push(binding.threadId);
+                    let managed: ManagedRoot | null = null;
+                    const earlyOwnedThreads = new Set<string>();
+                    const previousSessionId = [...ordered]
+                        .filter((candidate) => candidate.generation < binding.generation)
+                        .sort((left, right) => right.generation - left.generation)[0]
+                        ?.sessionId ?? null;
+                    const runtime = await this.options.createRuntime({
+                        threadId: binding.threadId,
+                        generation: binding.generation,
+                        previousSessionId,
+                        registerThreadOwnership: (ownedThreadId) => {
+                            if (!managed) earlyOwnedThreads.add(ownedThreadId);
+                            else this.registerOwnership(ownedThreadId, managed);
+                        },
+                        assertCurrentGeneration: (bindingGeneration) => {
+                            if (
+                                !managed
+                                || this.current !== managed
+                                || managed.role !== 'current'
+                                || bindingGeneration !== managed.generation
+                            ) {
+                                throw new CodexV4CommandCancelledError(
+                                    'bindingSuperseded',
+                                    'The Codex Gateway binding changed before this command reached the provider',
+                                );
+                            }
+                        },
+                    });
+                    managed = {
+                        threadId: binding.threadId,
+                        generation: binding.generation,
+                        role: binding.role,
+                        previousSessionId,
+                        nextSessionId: null,
+                        title: null,
+                        rootActiveTurnId: null,
+                        runtime,
+                    };
+                    this.roots.set(binding.threadId, managed);
+                    this.registerOwnership(binding.threadId, managed);
+                    for (const ownedThreadId of earlyOwnedThreads) {
+                        this.registerOwnership(ownedThreadId, managed);
+                    }
+                    if (binding.role === 'current') this.current = managed;
+                    restored.push(managed);
+
+                    const resumed = await this.options.client.subscribeThread(binding.threadId);
+                    managed.title = safeThreadTitle(resumed.thread);
+                    managed.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
+                    await runtime.activate(resumed.thread);
+                    await this.drainPending(binding.threadId, managed);
+                }
+                const current = this.current!;
+                const changedAt = this.now();
+                for (const root of restored) {
+                    root.previousSessionId ??= nearestPriorSessionId(this.roots, root);
+                    root.nextSessionId = root.role === 'draining' ? current.runtime.sessionId : null;
+                    await root.runtime.updateBinding({
+                        role: root.role,
+                        generation: root.generation,
+                        previousSessionId: root.previousSessionId,
+                        nextSessionId: root.nextSessionId,
+                        changedAt,
+                    });
+                }
+            } catch (error) {
+                this.current = null;
+                for (const root of restored) this.removeRoot(root);
+                await Promise.allSettled([
+                    ...restored.map((root) => root.runtime.close()),
+                    ...acquiredThreadIds.map((threadId) => (
+                        this.options.leases.release(threadId, this.options.gatewayId)
+                    )),
+                ]);
+                throw error;
+            }
         });
     }
 
@@ -392,6 +515,7 @@ export class CodexGatewayCoordinator {
         }
         this.registerOwnership(threadId, owner);
         trackRootActivity(owner, notification);
+        trackRootTitle(owner, notification);
         await owner.runtime.handleNotification(notification);
         await this.drainNewlyOwnedPending(owner);
         if (owner.role === 'draining') {
@@ -595,6 +719,30 @@ function validateThreadId(threadId: string): void {
     if (threadId.length === 0 || threadId.length > 512) throw new Error('Invalid Codex thread ID');
 }
 
+function validateRecoveredBindings(bindings: readonly CodexGatewayRecoveredBinding[]): void {
+    if (bindings.length > 1_024) throw new Error('Too many recovered Codex Gateway bindings');
+    if (bindings.filter((binding) => binding.role === 'current').length !== 1) {
+        throw new Error('Recovered Codex Gateway bindings require exactly one current root');
+    }
+    const currentGeneration = bindings.find((binding) => binding.role === 'current')!.generation;
+    if (bindings.some((binding) => binding.generation > currentGeneration)) {
+        throw new Error('Recovered Codex Gateway current binding must have the newest generation');
+    }
+    const threadIds = new Set<string>();
+    const generations = new Set<number>();
+    for (const binding of bindings) {
+        validateThreadId(binding.threadId);
+        if (!Number.isSafeInteger(binding.generation) || binding.generation < 1) {
+            throw new Error('Invalid recovered Codex Gateway generation');
+        }
+        if (threadIds.has(binding.threadId) || generations.has(binding.generation)) {
+            throw new Error('Recovered Codex Gateway bindings must be unique');
+        }
+        threadIds.add(binding.threadId);
+        generations.add(binding.generation);
+    }
+}
+
 function nearestPriorSessionId(
     roots: Map<string, ManagedRoot>,
     current: ManagedRoot,
@@ -657,4 +805,23 @@ function trackRootActivity(root: ManagedRoot, notification: ServerNotification):
     ) {
         root.rootActiveTurnId = null;
     }
+}
+
+function trackRootTitle(root: ManagedRoot, notification: ServerNotification): void {
+    if (notification.method === 'thread/started' && notification.params.thread.id === root.threadId) {
+        root.title = safeThreadTitle(notification.params.thread);
+        return;
+    }
+    if (notification.method === 'thread/name/updated' && notification.params.threadId === root.threadId) {
+        root.title = safeTitle(notification.params.threadName);
+    }
+}
+
+function safeThreadTitle(thread: Thread): string | null {
+    return safeTitle(thread.name?.trim() || thread.preview?.trim());
+}
+
+function safeTitle(title: string | null | undefined): string | null {
+    if (!title) return null;
+    return [...title].slice(0, 200).join('');
 }

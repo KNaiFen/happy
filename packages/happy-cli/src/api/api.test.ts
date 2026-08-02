@@ -444,6 +444,25 @@ describe('Api server error handling', () => {
             consoleSpy.mockRestore();
         });
 
+        it('treats an axios ECONNABORTED deadline as an offline retry', async () => {
+            connectionState.reset();
+            mockPost.mockRejectedValue({ code: 'ECONNABORTED' });
+
+            const result = await api.getOrCreateSession({
+                tag: 'test-tag',
+                metadata: testMetadata,
+                state: null,
+                timeoutMs: 1_500,
+            });
+
+            expect(result).toBeNull();
+            expect(mockPost).toHaveBeenCalledWith(
+                expect.stringContaining('/v1/sessions'),
+                expect.anything(),
+                expect.objectContaining({ timeout: 1_500 }),
+            );
+        });
+
         it('should return null when session endpoint returns 404', async () => {
             connectionState.reset();
             const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -683,6 +702,17 @@ describe('Api server error handling', () => {
                 expect.stringContaining('Session unarchive'),
             );
             consoleSpy.mockRestore();
+        });
+
+        it('uses a bounded Gateway deadline without treating it as a rejection', async () => {
+            mockPost.mockRejectedValueOnce({ code: 'ECONNABORTED' });
+
+            await expect(api.unarchiveSession('session-1', 1_500)).resolves.toBe(false);
+            expect(mockPost).toHaveBeenCalledWith(
+                expect.stringContaining('/v4/sessions/session-1/unarchive'),
+                {},
+                expect.objectContaining({ timeout: 1_500 }),
+            );
         });
 
         it('does not hide an ownership rejection as an offline retry', async () => {

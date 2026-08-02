@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 export type CodexGatewayTerminalState =
     | 'attached'
@@ -10,6 +10,14 @@ export interface CodexGatewayAttachmentRegistration {
     attachmentId: string;
     connectionToken: string;
     normalExitNonce: string;
+}
+
+export function createCodexGatewayAttachmentCredentials(): CodexGatewayAttachmentRegistration {
+    return {
+        attachmentId: randomUUID(),
+        connectionToken: randomBytes(32).toString('base64url'),
+        normalExitNonce: randomBytes(32).toString('base64url'),
+    };
 }
 
 export type CodexGatewayNormalExitResult =

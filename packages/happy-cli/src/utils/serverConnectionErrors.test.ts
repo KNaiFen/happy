@@ -577,10 +577,11 @@ describe('isNetworkError', () => {
         expect(isNetworkError('')).toBe(false);
     });
 
-    it('should have exactly 6 network error codes', () => {
-        expect(NETWORK_ERROR_CODES).toHaveLength(6);
+    it('should include every supported network and client-timeout code', () => {
+        expect(NETWORK_ERROR_CODES).toHaveLength(7);
         expect(NETWORK_ERROR_CODES).toContain('ECONNREFUSED');
         expect(NETWORK_ERROR_CODES).toContain('ENOTFOUND');
+        expect(NETWORK_ERROR_CODES).toContain('ECONNABORTED');
         expect(NETWORK_ERROR_CODES).toContain('ETIMEDOUT');
         expect(NETWORK_ERROR_CODES).toContain('ECONNRESET');
         expect(NETWORK_ERROR_CODES).toContain('EHOSTUNREACH');
