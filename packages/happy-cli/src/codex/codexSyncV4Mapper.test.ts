@@ -690,6 +690,48 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.close();
     });
 
+    it('preserves gateway and terminal state across runtime lifecycle updates', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            gateway: {
+                gatewayId: 'gateway-1',
+                generation: 1,
+                origin: 'terminal',
+                role: 'recovering',
+                state: 'starting',
+            },
+            terminal: { state: 'attached', detachedAt: null },
+        });
+        mapper.importThreadState(thread('thread-gateway'));
+        await mapper.flush();
+
+        await mapper.setGatewayState({
+            gateway: {
+                gatewayId: 'gateway-1',
+                generation: 2,
+                origin: 'terminal',
+                role: 'current',
+                state: 'running',
+            },
+            terminal: { state: 'detached', detachedAt: 1_700_000_100 },
+        });
+        await mapper.setConnection('disconnected', { statusUnknown: true });
+
+        expect(publisher.latest('codex.runtime')[0]).toMatchObject({
+            gateway: {
+                gatewayId: 'gateway-1',
+                generation: 2,
+                role: 'current',
+                state: 'running',
+            },
+            terminal: { state: 'detached', detachedAt: 1_700_000_100 },
+            connection: 'disconnected',
+            statusUnknown: true,
+        });
+        await mapper.close();
+    });
+
     it('chunks UTF-8 without splitting code points and never rewrites a frozen chunk', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });

@@ -48,6 +48,19 @@ type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string
 type ThreadTokenUsage = NonNullable<CodexThreadEntityV4['tokenUsage']>;
 type TokenUsageBreakdown = ThreadTokenUsage['total'];
 
+export type CodexGatewayRuntimeProjection = {
+    gatewayId: string;
+    generation: number;
+    origin: 'terminal' | 'app';
+    role: 'current' | 'draining' | 'inactive' | 'recovering';
+    state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped';
+};
+
+export type CodexTerminalRuntimeProjection = {
+    state: 'attached' | 'pendingDetach' | 'detached' | 'headless';
+    detachedAt: number | null;
+};
+
 interface MapperOptions {
     codexCliVersion: string;
     protocolVersion?: string;
@@ -59,6 +72,8 @@ interface MapperOptions {
     onError?: (error: unknown) => void;
     diagnostics?: SyncV4DiagnosticSink;
     diagnosticSessionHash?: string;
+    gateway?: CodexGatewayRuntimeProjection;
+    terminal?: CodexTerminalRuntimeProjection;
 }
 
 interface StreamChunk {
@@ -142,12 +157,16 @@ export class CodexSyncV4Mapper {
     private connectionStatusUnknown = false;
     private connectionError: string | null = null;
     private syncState: CodexRuntimeEntityV4['syncState'];
+    private gateway: CodexGatewayRuntimeProjection | undefined;
+    private terminal: CodexTerminalRuntimeProjection | undefined;
 
     constructor(
         private readonly publisher: SyncPublisher,
         private readonly options: MapperOptions,
     ) {
         this.syncState = options.initialSyncState ?? 'ready';
+        this.gateway = options.gateway;
+        this.terminal = options.terminal;
     }
 
     handleNotification(
@@ -236,6 +255,29 @@ export class CodexSyncV4Mapper {
                 state: syncState,
                 pending: updates.length,
             });
+        });
+    }
+
+    async setGatewayState(input: {
+        gateway?: CodexGatewayRuntimeProjection;
+        terminal?: CodexTerminalRuntimeProjection;
+    }): Promise<void> {
+        if (this.closed) return;
+        await this.enqueue(async () => {
+            if (input.gateway !== undefined) this.gateway = input.gateway;
+            if (input.terminal !== undefined) this.terminal = input.terminal;
+            const now = this.now();
+            const updates = [...this.runtimes.values()].map((current): CodexRuntimeEntityV4 => ({
+                ...current,
+                ...(this.gateway ? { gateway: this.gateway } : {}),
+                ...(this.terminal ? { terminal: this.terminal } : {}),
+                updatedAt: now,
+                lastKnownAt: now,
+            }));
+            if (updates.length > 0) {
+                await this.publisher.publishEntities(updates.map((entity) => ({ entity })));
+                for (const runtime of updates) this.runtimes.set(runtime.threadId, runtime);
+            }
         });
     }
 
@@ -1415,6 +1457,8 @@ export class CodexSyncV4Mapper {
             pendingApprovalCount: previous?.pendingApprovalCount ?? 0,
             pendingUserInputCount: previous?.pendingUserInputCount ?? 0,
             activeSubagentCount: previous?.activeSubagentCount ?? 0,
+            ...(this.gateway ? { gateway: this.gateway } : {}),
+            ...(this.terminal ? { terminal: this.terminal } : {}),
             lastError: execution.type === 'systemError'
                 ? previous?.lastError ?? 'systemError'
                 : this.connectionError,
