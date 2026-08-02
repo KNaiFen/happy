@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { connect as connectUnixSocket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import WebSocket from 'ws';
@@ -290,6 +292,17 @@ const SAFE_TRANSPORT_ERROR_CODES = new Set([
 ]);
 
 const MAX_OFFICIAL_PROVIDER_STDERR_DIAGNOSTIC_BYTES = 16 * 1024;
+const MAX_OFFICIAL_WEBSOCKET_HANDSHAKE_RESPONSE_BYTES = 8 * 1024;
+const RFC_6455_HANDSHAKE_REQUEST = Buffer.from([
+    'GET / HTTP/1.1',
+    'Host: localhost',
+    'Connection: Upgrade',
+    'Upgrade: websocket',
+    'Sec-WebSocket-Version: 13',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+    '',
+    '',
+].join('\r\n'), 'ascii');
 
 const OFFICIAL_WEBSOCKET_REJECTION_PATTERNS = [
     ['methodNotGet', 'Unsupported HTTP method used - only GET is allowed'],
@@ -321,6 +334,9 @@ async function exerciseOfficialUnixWebSocket(options: {
     cwd: string;
     socketPath: string;
 }): Promise<void> {
+    await runOfficialUnixWebSocketProbe(options, 'rfc6455Handshake', async (socketPath) => {
+        await waitForRfc6455WebSocketUpgrade(socketPath);
+    });
     await runOfficialUnixWebSocketProbe(options, 'websocketOpen', async (socketPath) => {
         const socket = options.connectCodexAppServerWebSocket({ socketPath });
         try {
@@ -349,7 +365,10 @@ async function exerciseOfficialUnixWebSocket(options: {
     });
 }
 
-type OfficialUnixWebSocketProbePhase = 'websocketOpen' | 'initialize';
+type OfficialUnixWebSocketProbePhase =
+    | 'rfc6455Handshake'
+    | 'websocketOpen'
+    | 'initialize';
 
 async function runOfficialUnixWebSocketProbe(
     options: {
@@ -406,6 +425,43 @@ async function runOfficialUnixWebSocketProbe(
     } finally {
         await stopChildProcess(provider);
         await rm(options.socketPath, { force: true });
+    }
+}
+
+async function waitForRfc6455WebSocketUpgrade(socketPath: string): Promise<void> {
+    const socket = connectUnixSocket({ path: socketPath });
+    socket.setNoDelay(true);
+    try {
+        await withTimeout((async () => {
+            await once(socket, 'connect');
+            socket.write(RFC_6455_HANDSHAKE_REQUEST);
+            let response = Buffer.alloc(0);
+            for await (const chunk of socket) {
+                const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                if (
+                    response.byteLength + buffer.byteLength
+                    > MAX_OFFICIAL_WEBSOCKET_HANDSHAKE_RESPONSE_BYTES
+                ) {
+                    throw new Error('Official Unix WebSocket handshake response exceeded limit');
+                }
+                response = Buffer.concat([response, buffer]);
+                const headersEnd = response.indexOf('\r\n\r\n');
+                if (headersEnd < 0) continue;
+                const statusLineEnd = response.indexOf('\r\n');
+                if (statusLineEnd < 0) {
+                    throw new Error('Official Unix WebSocket returned an invalid HTTP response');
+                }
+                const statusLine = response.subarray(0, statusLineEnd).toString('ascii');
+                if (!/^HTTP\/1\.[01] 101(?: |$)/.test(statusLine)) {
+                    throw new Error('Official Unix WebSocket did not return HTTP 101');
+                }
+                return;
+            }
+            throw new Error('Official Unix WebSocket closed before returning HTTP 101');
+        })(), 10_000, 'official RFC 6455 Unix WebSocket upgrade');
+    } finally {
+        socket.on('error', () => undefined);
+        socket.destroy();
     }
 }
 

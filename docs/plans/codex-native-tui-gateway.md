@@ -343,6 +343,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       worker 编排和 provider 启动等待均已排除。下一门禁只允许对最多 16 KiB stderr 在内存
       中匹配官方 tungstenite 固定握手错误字符串并输出枚举分类，不得输出原文、路径或
       payload。分类前不得改用 TCP、关闭协议能力或继续扩大重试窗口。
+      第十轮分类得到 `noUpgradeRejection`：stderr 中没有官方 upgrade 拒绝前缀或任何固定
+      tungstenite 握手错误，不能据此认定某个 header 被拒。下一次在第三个全新 provider
+      上先经 Unix stream 发送固定 RFC 6455 握手，只记录是否收到 HTTP 101 或允许列表连接
+      错误；随后两个新 provider 继续分别验证 Node `ws` open 和 Happy initialize。固定
+      握手成功才允许把问题归因到 Node 客户端构造，固定握手也失败则继续核对官方 listener
+      构建和启动契约；两种结果都不得输出响应头、key、socket 路径或 provider stderr 原文。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -482,3 +488,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：真实官方 Unix 诊断在独立 provider 上将失败收敛到 WebSocket 握手本身：
   Happy 客户端尚未触发 `open` 就收到 `ECONNRESET`，provider 未退出。下一步仅通过
   tungstenite 固定错误白名单分类握手拒绝原因，在拿到分类证据前不改变产品传输架构。
+- 2026-08-02：官方 stderr 白名单分类返回 `noUpgradeRejection`，没有证据支持缺失或错误
+  WebSocket header。验收增加一个全新 provider 的固定 RFC 6455 握手对照，仅比较 HTTP
+  101，再与 Node `ws` 和 Happy initialize 的独立 provider 结果交叉定位。
