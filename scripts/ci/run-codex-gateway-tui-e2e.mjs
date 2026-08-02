@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const cliRoot = join(repoRoot, 'packages', 'happy-cli');
 const tsxEntrypoint = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const fixtureTsconfig = join(repoRoot, 'scripts', 'ci', 'tsconfig.codex-gateway-tui.json');
 const fixtureEntrypoint = join(repoRoot, 'scripts', 'ci', 'codex-gateway-tui-fixture.ts');
 const tuiTestEntrypoint = join(cliRoot, 'node_modules', '.bin', 'tui-test');
 const artifactRoot = process.env.HAPPY_GATEWAY_TUI_ARTIFACT_DIR
@@ -34,7 +35,7 @@ await writeFile(fixtureLog, '', { encoding: 'utf8', mode: 0o600 });
 const fixtureOutput = openSync(fixtureLog, 'a', 0o600);
 let fixture;
 try {
-    fixture = spawn(process.execPath, [tsxEntrypoint, fixtureEntrypoint], {
+    fixture = spawn(process.execPath, [tsxEntrypoint, '--tsconfig', fixtureTsconfig, fixtureEntrypoint], {
         cwd: repoRoot,
         env: {
             ...process.env,

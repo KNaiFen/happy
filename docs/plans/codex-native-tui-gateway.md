@@ -306,6 +306,9 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       交互式 `happy codex attach` 恢复同一 Gateway。每次失败上传 TUI trace 与脱敏
       fixture 日志；含 token、会话密钥、Gateway capability 和数据库的临时工作目录
       必须与 Artifact 目录隔离并在结束后删除。
+      首轮云端执行在 fixture 引导期发现 `tsx` 未加载该场景专用 tsconfig，导致生产
+      `@/` 路径别名无法解析；启动器必须显式传入同一 tsconfig，使类型检查与运行时
+      使用完全相同的解析规则。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
