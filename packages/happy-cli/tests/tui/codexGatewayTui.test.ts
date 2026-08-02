@@ -220,9 +220,12 @@ test.describe('Gateway attach', () => {
         assert.equal(attached.gateway?.sessionId, initialGateway.sessionId);
         assert.equal(attached.gateway?.generation, initialGateway.generation);
 
-        terminal.submit(attachPrompt);
+        await expect(terminal.getByText(officialResponse, { full: true, strict: false }))
+            .toBeVisible({ timeout: 60_000 });
+        terminal.write(attachPrompt);
         await expect(terminal.getByText(attachPrompt, { full: true, strict: false }))
             .toBeVisible({ timeout: 60_000 });
+        terminal.submit();
         const attachState = await waitForStatus(
             { message: attachPrompt },
             (status) => Boolean(

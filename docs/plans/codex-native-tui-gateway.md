@@ -428,6 +428,17 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       root hooks，导致测试可在 runtime factory 初始化前伪造一个生产中不可达的请求，
       并在失败后提前删除临时目录。测试替身改为仅在 `start()` 时公开 hooks，保持与
       真实监听边界一致；该修正不改变 Gateway 产品时序。
+      第十八轮主 CI `30764952285` 的安全计数证明 latest stable `0.146.0` 最终
+      `thread/read` snapshot 含 `userMessage`、`reasoning` 和 `agentMessage`，但不含已经
+      完成的 `commandExecution`；同一 observer 的 live methods 明确包含 command output、
+      reasoning summary 和 agent delta。官方 snapshot 门禁因此分别验证三类 live stream，
+      最终 snapshot 只验证官方实际持久化的 reasoning/assistant 内容；工具输出的历史恢复
+      继续由首轮 PTY 中已经通过的 Happy Sync v4 持久 entity 断言负责。
+      同轮 PTY 首轮完整通过，attach 也恢复同一 Gateway/provider/thread/session；trace
+      显示测试在官方 TUI 首屏出现后约 2 ms 即把整段 prompt 与回车写入同一 PTY chunk，
+      文本已进入 composer，但初始化期吞掉回车，provider 请求数未增加。attach 测试改为
+      先写文本并等待 composer 确认渲染，再单独提交回车，模拟真实用户输入边界。两项均为
+      验收修正，不改变可分发代码，也不再推进 `1.4.26` 版本。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -444,7 +455,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.26`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [x] CLI 升至 `1.4.26`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -472,9 +483,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.25` package workflow 已通过并下载验证，真实 observer 与 PTY 已证明首轮
       订阅和投影恢复；PTY 同时定位到 CLI 入口原始 argv 日志泄漏。该已运行版本不得
       复用，日志修复与 snapshot 安全诊断推进到 `1.4.26`。
+      `1.4.26` package workflow `30764952183` 已通过，制品已下载并验证；后续只修正
+      云端验收与计划，不改变分发行为或复用版本发布。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.26.tgz` 到
+- [x] CLI workflow 成功后下载并验证 `happy-1.4.26.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
@@ -614,3 +627,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：修正 worker 测试替身的 proxy 可用边界。hooks 只在 mock `start()` 后
   暴露，与真实 listener 一致，避免完整并发套件在 worker 尚未 ready 时注入不可能发生
   的 root 请求并把后续异步清理误报为产品竞态。
+- 2026-08-02：主 CI `30764952285` 证明官方完整 snapshot 不保留已完成 command item，
+  而 live observer 和 Happy Sync v4 已分别覆盖命令流与持久恢复；删除错误的官方工具
+  snapshot 断言并把三类 live method 改为逐项要求。真实 PTY trace 同时证明 attach prompt
+  的原子文本+回车发生在 TUI 首屏后约 2 ms，改为渲染确认后的独立回车。两项均不修改
+  产品代码，CLI 保持已发布并验证的 `1.4.26`。

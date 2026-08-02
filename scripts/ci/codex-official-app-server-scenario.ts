@@ -426,14 +426,16 @@ async function exerciseOfficialUnixWebSocket(options: {
             ]), 90_000, 'materialized thread observer lifecycle');
             assert.equal(turn.aborted, false, 'fresh thread observer turn was aborted');
             assert(observedMethods.has('turn/completed'), 'materialized observer omitted turn/completed');
-            assert(
-                [
-                    'item/commandExecution/outputDelta',
-                    'item/reasoning/summaryTextDelta',
-                    'item/agentMessage/delta',
-                ].some((method) => observedMethods.has(method)),
-                'materialized observer received no streamed item activity',
-            );
+            for (const method of [
+                'item/commandExecution/outputDelta',
+                'item/reasoning/summaryTextDelta',
+                'item/agentMessage/delta',
+            ]) {
+                assert(
+                    observedMethods.has(method),
+                    `materialized observer omitted ${method}`,
+                );
+            }
 
             const finalSnapshot = await observer.readThreadComplete({
                 threadId: started.threadId,
@@ -451,10 +453,6 @@ async function exerciseOfficialUnixWebSocket(options: {
                 }
             }
             const serializedSnapshot = JSON.stringify(finalSnapshot.thread);
-            assert(
-                serializedSnapshot.includes(OFFICIAL_CODEX_TOOL_SENTINEL),
-                'materialized observer snapshot omitted command output',
-            );
             assert(
                 serializedSnapshot.includes('official app-server tool round trip'),
                 'materialized observer snapshot omitted reasoning summary',
