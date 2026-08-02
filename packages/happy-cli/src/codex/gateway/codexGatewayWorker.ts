@@ -63,6 +63,7 @@ const EXISTING_SESSION_LOOKUP_TIMEOUT_MS = 15_000;
 const GRACEFUL_STOP_WAIT_MS = 10_000;
 const GRACEFUL_STOP_POLL_MS = 250;
 const GRACEFUL_STOP_RETRY_MS = 2_000;
+const PROVIDER_BRIDGE_RETRY_DELAYS_MS = [50, 100, 250, 500] as const;
 
 interface DeferredRoot {
     runtime: CodexGatewayDeferredRuntime;
@@ -359,10 +360,13 @@ async function runCodexGatewayWorkerInternal(
                                 : 'starting';
                 void updateGatewayLifecycle(lifecycle);
             },
-            ready: async ({ recovered }) => {
+            ready: async ({ epoch, recovered }) => {
                 markStartupStage('bridge');
                 if (!coordinator) {
-                    await client.connect();
+                    await connectCodexGatewayProviderBridge(
+                        client,
+                        () => provider.currentEpoch === epoch && provider.pid !== null,
+                    );
                     const models = await loadCodexModelCapabilities(client) ?? [];
                     const defaultModel = models.find((model) => model.isDefault) ?? models[0];
                     const modelCode = defaultModel?.code ?? 'gpt-5.5';
@@ -986,6 +990,30 @@ function activeTurnId(thread: Thread): string | null {
 
 function relayTransportSecurity(): 'https' | 'insecureHttp' {
     return new URL(configuration.serverUrl).protocol === 'http:' ? 'insecureHttp' : 'https';
+}
+
+async function connectCodexGatewayProviderBridge(
+    client: Pick<CodexAppServerClient, 'connect'>,
+    isCurrentProvider: () => boolean,
+): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            await client.connect();
+            return;
+        } catch (error) {
+            const kind = classifySyncV4DiagnosticError(error);
+            const delayMs = PROVIDER_BRIDGE_RETRY_DELAYS_MS[attempt];
+            if (
+                delayMs === undefined
+                || (kind !== 'network' && kind !== 'timeout')
+                || !isCurrentProvider()
+            ) {
+                throw error;
+            }
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+            if (!isCurrentProvider()) throw error;
+        }
+    }
 }
 
 async function persistCodexGatewayStartupFailure(

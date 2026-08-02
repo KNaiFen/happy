@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
     startThread: vi.fn(async () => ({ threadId: 'thread-app', model: 'gpt-test' })),
     relayAvailable: false,
     credentialsAvailable: true,
+    connectAttempts: 0,
+    connectFailuresRemaining: 0,
 }));
 
 vi.mock('@/api/api', () => ({
@@ -76,16 +78,24 @@ vi.mock('./codexGatewayRuntimeFactory', () => ({
 }));
 vi.mock('./codexGatewayProvider', () => ({
     CodexGatewayProvider: class {
+        currentEpoch = 0;
+        pid: number | null = null;
+
         constructor(private readonly options: { hooks?: {
             stateChanged?(state: string): void;
             ready?(event: { epoch: number; recovered: boolean }): Promise<void>;
         } }) {}
         async start() {
+            this.currentEpoch += 1;
+            this.pid = 123;
             this.options.hooks?.stateChanged?.('starting');
-            await this.options.hooks?.ready?.({ epoch: 1, recovered: false });
+            await this.options.hooks?.ready?.({ epoch: this.currentEpoch, recovered: false });
             this.options.hooks?.stateChanged?.('running');
         }
-        async stop() { this.options.hooks?.stateChanged?.('stopped'); }
+        async stop() {
+            this.pid = null;
+            this.options.hooks?.stateChanged?.('stopped');
+        }
     },
 }));
 vi.mock('./codexGatewayProxy', () => ({
@@ -113,8 +123,20 @@ vi.mock('./codexGatewayControl', () => ({
 vi.mock('../codexAppServerClient', () => ({
     CodexAppServerClient: class {
         private connectionHandler: ((event: unknown) => void) | null = null;
-        async connect() { this.connectionHandler?.({ connection: 'connected', statusUnknown: false, error: null }); }
-        async disconnect() {}
+        private connected = false;
+        async connect() {
+            if (this.connected) return;
+            mocks.connectAttempts += 1;
+            if (mocks.connectFailuresRemaining > 0) {
+                mocks.connectFailuresRemaining -= 1;
+                throw Object.assign(new Error('transient provider connection failure'), {
+                    code: 'ECONNRESET',
+                });
+            }
+            this.connected = true;
+            this.connectionHandler?.({ connection: 'connected', statusUnknown: false, error: null });
+        }
+        async disconnect() { this.connected = false; }
         async reconnectExternalTransportPreservingThreads() {}
         setStableNotificationHandler() {}
         setServerRequestHandler() {}
@@ -146,6 +168,8 @@ afterEach(async () => {
     mocks.startThread.mockClear();
     mocks.relayAvailable = false;
     mocks.credentialsAvailable = true;
+    mocks.connectAttempts = 0;
+    mocks.connectFailuresRemaining = 0;
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -179,6 +203,34 @@ describe('Codex Gateway worker composition', () => {
             path: created.paths.journalPath,
         });
         await reopenedJournal.close();
+    });
+
+    it('retries a transient initial provider bridge failure in the same worker', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.connectFailuresRemaining = 1;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
+
+        expect(mocks.connectAttempts).toBe(2);
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
     });
 
     it('persists an offline root and exits only after the matching terminal confirms normal exit', async () => {

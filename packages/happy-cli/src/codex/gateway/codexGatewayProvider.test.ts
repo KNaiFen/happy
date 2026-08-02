@@ -1,9 +1,11 @@
 import { EventEmitter } from 'node:events';
+import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
+import { WebSocketServer } from 'ws';
 import { describe, expect, it, vi } from 'vitest';
 import {
     buildCodexGatewayProviderArgs,
@@ -76,6 +78,40 @@ describe('Codex Gateway provider supervisor', () => {
         await rm(root, { recursive: true, force: true });
         expect(provider.currentState).toBe('stopped');
         expect(spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it('requires a real WebSocket upgrade before declaring the provider ready', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-provider-test-'));
+        const socketPath = join(root, 'provider.sock');
+        const processHandle = fakeProcess(151, true);
+        const server = createServer();
+        const webSocketServer = new WebSocketServer({ noServer: true });
+        let upgradeCount = 0;
+        server.on('upgrade', (request, socket, head) => {
+            upgradeCount += 1;
+            webSocketServer.handleUpgrade(request, socket, head, (client) => {
+                webSocketServer.emit('connection', client, request);
+            });
+        });
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            spawn: () => {
+                server.listen(socketPath);
+                return processHandle;
+            },
+            readyTimeoutMs: 2_000,
+        });
+
+        await provider.start();
+        expect(upgradeCount).toBe(1);
+        await provider.stop();
+        await new Promise<void>((resolve) => webSocketServer.close(() => resolve()));
+        await new Promise<void>((resolve, reject) => {
+            server.close((error) => error ? reject(error) : resolve());
+        });
+        await rm(root, { recursive: true, force: true });
     });
 
     it('rejects unauthenticated or non-loopback TCP listeners', () => {

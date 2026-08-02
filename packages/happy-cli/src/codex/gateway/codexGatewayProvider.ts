@@ -1,16 +1,20 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { stat, rm } from 'node:fs/promises';
-import { connect as connectTcp } from 'node:net';
 import { isAbsolute } from 'node:path';
 import { spawn as crossSpawn } from 'cross-spawn';
+import WebSocket from 'ws';
 import {
     assertMinimumCodexCliVersion,
     readCodexCliVersion,
     type CodexCliVersion,
 } from '../codexCliVersion';
-import type { CodexAppServerWebSocketEndpoint } from '../codexAppServerWebSocket';
+import {
+    connectCodexAppServerWebSocket,
+    type CodexAppServerWebSocketEndpoint,
+} from '../codexAppServerWebSocket';
 
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
+const PROVIDER_PROBE_TIMEOUT_MS = 500;
 const DEFAULT_STOP_TIMEOUT_MS = 2_000;
 const DEFAULT_RECOVERY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 5_000] as const;
 
@@ -544,16 +548,11 @@ async function waitForProviderEndpoint(
     while (Date.now() < deadline) {
         if (!isCurrent()) throw new Error('Codex app-server startup was cancelled');
         try {
-            if (endpoint.socketPath) {
-                if (!(await stat(endpoint.socketPath)).isSocket()) {
-                    throw new Error('Codex app-server endpoint is not a Unix socket');
-                }
-                await probeUnixEndpoint(endpoint.socketPath);
-                return;
-            } else if (endpoint.url) {
-                await probeLoopbackEndpoint(endpoint.url);
-                return;
+            if (endpoint.socketPath && !(await stat(endpoint.socketPath)).isSocket()) {
+                throw new Error('Codex app-server endpoint is not a Unix socket');
             }
+            await probeWebSocketEndpoint(endpoint);
+            return;
         } catch (error) {
             lastError = error;
         }
@@ -563,31 +562,41 @@ async function waitForProviderEndpoint(
     throw new Error(`Codex app-server did not become ready within ${timeoutMs}ms (${kind})`);
 }
 
-async function probeUnixEndpoint(path: string): Promise<void> {
+async function probeWebSocketEndpoint(endpoint: CodexAppServerWebSocketEndpoint): Promise<void> {
+    const socket = connectCodexAppServerWebSocket(endpoint);
     await new Promise<void>((resolve, reject) => {
-        const socket = connectTcp(path);
-        socket.setTimeout(250);
-        socket.once('connect', () => {
-            socket.destroy();
-            resolve();
-        });
-        socket.once('timeout', () => socket.destroy(new Error('Unix provider probe timed out')));
-        socket.once('error', reject);
-    });
-}
-
-async function probeLoopbackEndpoint(url: string): Promise<void> {
-    const parsed = new URL(url);
-    const port = Number(parsed.port || 80);
-    await new Promise<void>((resolve, reject) => {
-        const socket = connectTcp({ host: parsed.hostname, port });
-        socket.setTimeout(250);
-        socket.once('connect', () => {
-            socket.destroy();
-            resolve();
-        });
-        socket.once('timeout', () => socket.destroy(new Error('Loopback provider probe timed out')));
-        socket.once('error', reject);
+        let opened = false;
+        let settled = false;
+        const finish = (error?: Error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.off('open', onOpen);
+            socket.off('close', onClose);
+            socket.off('error', onError);
+            if (error) {
+                socket.on('error', () => undefined);
+                if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+                reject(error);
+            } else {
+                resolve();
+            }
+        };
+        const onOpen = () => {
+            opened = true;
+            socket.close(1000, 'readiness');
+        };
+        const onClose = () => finish(opened
+            ? undefined
+            : new Error('Codex app-server WebSocket closed before readiness'));
+        const onError = (error: Error) => finish(error);
+        const timer = setTimeout(
+            () => finish(new Error('Codex app-server WebSocket readiness probe timed out')),
+            PROVIDER_PROBE_TIMEOUT_MS,
+        );
+        socket.once('open', onOpen);
+        socket.once('close', onClose);
+        socket.once('error', onError);
     });
 }
 
