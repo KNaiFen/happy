@@ -88,7 +88,12 @@ interface DaemonToServerEvents {
 
 type MachineRpcHandlers = {
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
-    resumeSession?: (sessionId: string, options?: { model?: string; permissionMode?: string; effort?: string }) => Promise<SpawnSessionResult>;
+    resumeSession?: (sessionId: string, options?: {
+        operationId?: string;
+        model?: string;
+        permissionMode?: string;
+        effort?: string;
+    }) => Promise<SpawnSessionResult>;
     listCodexThreads: (request: CodexListThreadsRequest) => Promise<CodexListThreadsResult>;
     openCodexThread: (request: CodexOpenThreadRequest) => Promise<CodexOpenThreadResult>;
     stopSession: (sessionId: string) => Promise<boolean> | boolean;
@@ -108,6 +113,15 @@ function requireBoundedNonEmptyString(value: unknown, name: string, maxLength: n
     const result = requireNonEmptyString(value, name);
     if (result.trim().length === 0 || result.length > maxLength) {
         throw new Error(`${name} must contain between 1 and ${maxLength} characters`);
+    }
+    return result;
+}
+
+function optionalUuidString(value: unknown, name: string): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    const result = requireBoundedNonEmptyString(value, name, 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result)) {
+        throw new Error(`${name} must be a UUID`);
     }
     return result;
 }
@@ -135,7 +149,12 @@ export class ApiMachineClient {
     private lastKnownCLIAvailability: CLIAvailability | null = null;
     private lastKnownResumeSupport: ResumeSupport | null = null;
     private rpcHandlerManager: RpcHandlerManager;
-    private resumeSessionHandler: ((sessionId: string, options?: { model?: string; permissionMode?: string; effort?: string }) => Promise<SpawnSessionResult>) | null = null;
+    private resumeSessionHandler: ((sessionId: string, options?: {
+        operationId?: string;
+        model?: string;
+        permissionMode?: string;
+        effort?: string;
+    }) => Promise<SpawnSessionResult>) | null = null;
     private reconnectInterval: NodeJS.Timeout | null = null;
 
     constructor(
@@ -168,6 +187,7 @@ export class ApiMachineClient {
         // Register spawn session handler
         this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
             const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = params || {};
+            const operationId = optionalUuidString(params?.operationId, 'operationId');
             logger.debug('[API MACHINE] Spawning session', {
                 agent: typeof agent === 'string' ? agent : 'default',
                 approvedNewDirectoryCreation: approvedNewDirectoryCreation === true,
@@ -175,6 +195,7 @@ export class ApiMachineClient {
                 hasEnvironmentVariables: Boolean(environmentVariables && Object.keys(environmentVariables).length > 0),
                 hasToken: typeof token === 'string',
                 hasResumeThread: typeof resumeCodexThreadId === 'string',
+                hasOperationId: operationId !== undefined,
                 isSideChat: isSideChat === true,
             });
 
@@ -182,7 +203,7 @@ export class ApiMachineClient {
                 throw new Error('Directory is required');
             }
 
-            const result = await spawnSession({ directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat });
+            const result = await spawnSession({ operationId, directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat });
 
             switch (result.type) {
                 case 'success':
@@ -367,6 +388,7 @@ export class ApiMachineClient {
             if (!this.rpcHandlerManager.hasHandler(method)) {
                 this.rpcHandlerManager.registerHandler(method, async (params: any) => {
                     const { sessionId, model, permissionMode, effort } = params || {};
+                    const operationId = optionalUuidString(params?.operationId, 'operationId');
 
                     if (!sessionId || typeof sessionId !== 'string') {
                         throw new Error('Session ID is required');
@@ -377,7 +399,12 @@ export class ApiMachineClient {
                         throw new Error('Resume session handler not available');
                     }
 
-                    const result = await handler(sessionId, { model, permissionMode, effort });
+                    const result = await handler(sessionId, {
+                        operationId,
+                        model,
+                        permissionMode,
+                        effort,
+                    });
                     switch (result.type) {
                         case 'success':
                             return { type: 'success', sessionId: result.sessionId };

@@ -30,6 +30,7 @@ const NORMAL_EXIT_RETRY_MS = 50;
 const REMOTE_TOKEN_ENV = 'HAPPY_CODEX_GATEWAY_REMOTE_TOKEN';
 
 export interface CodexGatewayHeadlessLaunchOptions {
+    operationId?: string;
     cwd: string;
     env: NodeJS.ProcessEnv;
     action: 'start' | 'resume';
@@ -96,39 +97,54 @@ export async function launchCodexGatewayHeadless(
     options: CodexGatewayHeadlessLaunchOptions,
 ): Promise<CodexGatewayHeadlessLaunchResult> {
     assertMinimumCodexCliVersion();
-    const created = await createCodexGatewayFiles({
-        cwd: options.cwd,
-        origin: 'app',
-    });
-    const worker = spawnHappyCLI(
-        ['__codex-gateway-worker', created.descriptor.gatewayId],
-        {
-            cwd: options.cwd,
-            detached: true,
-            stdio: 'ignore',
-            env: sanitizeSessionEnvironment(options.env),
-        },
-    );
-    if (!worker.pid) throw new Error('Codex Gateway worker did not start');
-    worker.unref();
-
+    const operationId = options.operationId ?? randomUUID();
     let descriptor: CodexGatewayDescriptor;
-    try {
-        descriptor = await waitForGatewayReady(created.descriptor, created.secret);
-    } catch (error) {
-        const latest = await readCodexGatewayDescriptor(created.paths.descriptorPath)
-            ?? created.descriptor;
-        await callCodexGatewayControl({
-            descriptor: latest,
-            token: created.secret.controlToken,
-            path: '/stop',
-            body: { force: true },
-            timeoutMs: 1_000,
-        }).catch(() => undefined);
-        throw error;
+    let secret: CodexGatewaySecret;
+    const existing = (await listCodexGatewayDescriptors()).filter((candidate) => (
+        candidate.origin === 'app'
+        && candidate.bootstrapOperationId === operationId
+        && candidate.state !== 'stopped'
+    ));
+    if (existing.length > 1) {
+        throw new Error('More than one Codex Gateway matched the App operation');
+    }
+    if (existing[0]) {
+        if (existing[0].cwd !== options.cwd) {
+            throw new Error('Codex Gateway App operation changed its working directory');
+        }
+        const paths = codexGatewayPaths(existing[0].gatewayId);
+        const recoveredSecret = await readCodexGatewaySecret(paths.secretPath);
+        if (!recoveredSecret) throw new Error('Codex Gateway recovery secret is unavailable');
+        secret = recoveredSecret;
+        descriptor = await ensureCodexGatewayRunning({
+            descriptor: existing[0],
+            secret,
+            env: options.env,
+        });
+    } else {
+        const created = await createCodexGatewayFiles({
+            cwd: options.cwd,
+            origin: 'app',
+            bootstrapOperationId: operationId,
+        });
+        secret = created.secret;
+        spawnCodexGatewayWorker(created.descriptor, options.env);
+        try {
+            descriptor = await waitForGatewayReady(created.descriptor, created.secret);
+        } catch (error) {
+            const latest = await readCodexGatewayDescriptor(created.paths.descriptorPath)
+                ?? created.descriptor;
+            await callCodexGatewayControl({
+                descriptor: latest,
+                token: created.secret.controlToken,
+                path: '/stop',
+                body: { force: true },
+                timeoutMs: 1_000,
+            }).catch(() => undefined);
+            throw error;
+        }
     }
 
-    const operationId = randomUUID();
     const request: CodexGatewayOpenRootInput = {
         operationId,
         action: options.action,
@@ -149,7 +165,7 @@ export async function launchCodexGatewayHeadless(
         try {
             opened = await callCodexGatewayControl<CodexGatewayOpenRootResult>({
                 descriptor,
-                token: created.secret.controlToken,
+                token: secret.controlToken,
                 path: '/root/open',
                 body: request,
                 timeoutMs: 30_000,
@@ -163,9 +179,33 @@ export async function launchCodexGatewayHeadless(
     if (!opened) throw lastError instanceof Error ? lastError : new Error('Codex Gateway root did not open');
     return {
         ...opened,
-        pid: worker.pid,
+        pid: descriptor.pid,
         descriptor,
     };
+}
+
+export async function ensureCodexGatewayRunning(options: {
+    descriptor: CodexGatewayDescriptor;
+    secret: CodexGatewaySecret;
+    env?: NodeJS.ProcessEnv;
+}): Promise<CodexGatewayDescriptor> {
+    if (options.descriptor.gatewayId !== options.secret.gatewayId) {
+        throw new Error('Codex Gateway recovery identity is inconsistent');
+    }
+    if (options.descriptor.state === 'stopped') {
+        throw new Error('A stopped Codex Gateway cannot be recovered');
+    }
+    try {
+        return await callCodexGatewayControl<CodexGatewayDescriptor>({
+            descriptor: options.descriptor,
+            token: options.secret.controlToken,
+            path: '/status',
+            timeoutMs: 500,
+        });
+    } catch {
+        spawnCodexGatewayWorker(options.descriptor, options.env ?? process.env);
+        return await waitForGatewayReady(options.descriptor, options.secret);
+    }
 }
 
 export async function attachCodexGateway(selector?: string): Promise<number> {
@@ -309,7 +349,8 @@ async function selectGateway(
     operation: 'attach' | 'stop',
     selector?: string,
 ): Promise<{ descriptor: CodexGatewayDescriptor; secret: CodexGatewaySecret }> {
-    const gateways = await discoverLiveCodexGateways();
+    const gateways = (await discoverLiveCodexGateways({ recover: true }))
+        .filter(({ descriptor }) => operation === 'stop' || descriptor.state !== 'stopping');
     if (gateways.length === 0) throw new Error('No live Codex Gateways were found');
     if (selector) {
         const exact = gateways.filter(({ descriptor }) => (
@@ -344,17 +385,22 @@ async function selectGateway(
     }
 }
 
-export async function discoverLiveCodexGateways(): Promise<Array<{
+export async function discoverLiveCodexGateways(options: {
+    recover?: boolean;
+    env?: NodeJS.ProcessEnv;
+} = {}): Promise<Array<{
     descriptor: CodexGatewayDescriptor;
     secret: CodexGatewaySecret;
 }>> {
     const descriptors = await listCodexGatewayDescriptors();
-    const live: Array<{ descriptor: CodexGatewayDescriptor; secret: CodexGatewaySecret }> = [];
-    for (const descriptor of descriptors) {
-        if (descriptor.state === 'stopped' || descriptor.state === 'stopping') continue;
+    const discovered = await Promise.all(descriptors.map(async (descriptor): Promise<{
+        descriptor: CodexGatewayDescriptor;
+        secret: CodexGatewaySecret;
+    } | null> => {
+        if (descriptor.state === 'stopped' || (descriptor.state === 'stopping' && !options.recover)) return null;
         const paths = codexGatewayPaths(descriptor.gatewayId);
         const secret = await readCodexGatewaySecret(paths.secretPath);
-        if (!secret) continue;
+        if (!secret) return null;
         try {
             const status = await callCodexGatewayControl<CodexGatewayDescriptor>({
                 descriptor,
@@ -362,12 +408,52 @@ export async function discoverLiveCodexGateways(): Promise<Array<{
                 path: '/status',
                 timeoutMs: 500,
             });
-            live.push({ descriptor: status, secret });
+            if (
+                status.state !== 'stopped'
+                && (status.state !== 'stopping' || options.recover)
+            ) {
+                return { descriptor: status, secret };
+            }
+            return null;
         } catch {
-            // Stale or inaccessible descriptors are excluded from the selector.
+            if (!options.recover) return null;
+            try {
+                const recovered = await ensureCodexGatewayRunning({
+                    descriptor,
+                    secret,
+                    env: options.env,
+                });
+                return recovered.state !== 'stopped'
+                    ? { descriptor: recovered, secret }
+                    : null;
+            } catch {
+                // A live lease owner or an unrecoverable descriptor remains untouched.
+                return null;
+            }
         }
-    }
-    return live;
+    }));
+    return discovered.filter((entry): entry is {
+        descriptor: CodexGatewayDescriptor;
+        secret: CodexGatewaySecret;
+    } => entry !== null);
+}
+
+function spawnCodexGatewayWorker(
+    descriptor: CodexGatewayDescriptor,
+    env: NodeJS.ProcessEnv,
+): number {
+    const worker = spawnHappyCLI(
+        ['__codex-gateway-worker', descriptor.gatewayId],
+        {
+            cwd: descriptor.cwd,
+            detached: true,
+            stdio: 'ignore',
+            env: sanitizeSessionEnvironment(env),
+        },
+    );
+    if (!worker.pid) throw new Error('Codex Gateway worker did not start');
+    worker.unref();
+    return worker.pid;
 }
 
 async function spawnForegroundCodex(args: string[], env: NodeJS.ProcessEnv): Promise<number> {

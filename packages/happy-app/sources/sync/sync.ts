@@ -133,6 +133,10 @@ type SendMessageOptions = {
 };
 
 class Sync {
+    generateOperationId(): string {
+        return randomUUID();
+    }
+
     private static readonly BACKGROUND_SEND_TIMEOUT_MS = 30_000;
     encryption!: Encryption;
     serverID!: string;

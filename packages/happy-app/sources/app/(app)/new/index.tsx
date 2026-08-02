@@ -784,6 +784,7 @@ function NewSessionScreen() {
     const [mobileConfigHeight, setMobileConfigHeight] = React.useState(0);
     const [nativePickerMeasuredHeight, setNativePickerMeasuredHeight] = React.useState<number | null>(null);
     const autoSubmitStartedRef = React.useRef(false);
+    const pendingSpawnOperationRef = React.useRef<{ id: string; fingerprint: string } | null>(null);
     const composerInputRef = React.useRef<import('@/components/MultiTextInput').MultiTextInputHandle>(null);
     const pickerCoordinator = useKeyboardDismissCoordinator<PickerType>();
 
@@ -1292,8 +1293,23 @@ function NewSessionScreen() {
                 // Existing worktree — use its path directly
                 spawnDirectory = worktreeKey;
             }
+            const operationFingerprint = JSON.stringify({
+                machineId: selectedMachineId,
+                directory: spawnDirectory,
+                agent: selectedAgent,
+                permissionMode: resolvedSessionConfig.permissionMode,
+                modelMode: resolvedSessionConfig.modelMode,
+                effortLevel: resolvedSessionConfig.effortLevel ?? null,
+            });
+            if (pendingSpawnOperationRef.current?.fingerprint !== operationFingerprint) {
+                pendingSpawnOperationRef.current = {
+                    id: sync.generateOperationId(),
+                    fingerprint: operationFingerprint,
+                };
+            }
 
             const result = await machineSpawnNewSession({
+                operationId: pendingSpawnOperationRef.current.id,
                 machineId: selectedMachineId,
                 directory: spawnDirectory,
                 approvedNewDirectoryCreation,
@@ -1312,6 +1328,7 @@ function NewSessionScreen() {
 
             switch (result.type) {
                 case 'success':
+                    pendingSpawnOperationRef.current = null;
                     await sync.refreshSessions();
 
                     // Store only per-session overrides. Matching the effective

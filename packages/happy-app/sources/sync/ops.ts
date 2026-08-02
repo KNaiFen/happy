@@ -175,6 +175,7 @@ export type SpawnSessionResult =
 
 // Options for spawning a session
 export interface SpawnSessionOptions {
+    operationId?: string;
     machineId: string;
     directory: string;
     approvedNewDirectoryCreation?: boolean;
@@ -219,6 +220,7 @@ export type CodexListRewindPointsResult =
     | { type: 'error'; errorMessage: string };
 
 export interface ResumeSessionOptions {
+    operationId?: string;
     machineId: string;
     sessionId: string;
 }
@@ -231,12 +233,14 @@ export interface ResumeSessionOptions {
 export async function machineSpawnNewSession(options: SpawnSessionOptions): Promise<SpawnSessionResult> {
 
     const { machineId, directory, approvedNewDirectoryCreation = false, token, agent, permissionMode, modelMode, effortLevel, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = options;
+    const operationId = options.operationId ?? sync.generateOperationId();
 
     try {
         const result = await apiSocket.machineRPC<SpawnSessionResult, {
             type: 'spawn-in-directory'
             directory: string
             approvedNewDirectoryCreation?: boolean,
+            operationId: string,
             token?: string,
             agent?: 'codex' | 'gemini' | 'openclaw' | 'agy',
             permissionMode?: string,
@@ -249,7 +253,7 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
         }>(
             machineId,
             'spawn-happy-session',
-            { type: 'spawn-in-directory', directory, approvedNewDirectoryCreation, token, agent, permissionMode, modelMode, effortLevel, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat }
+            { type: 'spawn-in-directory', operationId, directory, approvedNewDirectoryCreation, token, agent, permissionMode, modelMode, effortLevel, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat }
         );
         return result;
     } catch (error) {
@@ -331,10 +335,16 @@ export async function machineResumeSession(options: ResumeSessionOptions & { mod
 
     try {
         assertSessionInteractionAllowed(sessionId);
-        const result = await apiSocket.machineRPC<SpawnSessionResult, { sessionId: string; model?: string; permissionMode?: string }>(
+        const operationId = options.operationId ?? sync.generateOperationId();
+        const result = await apiSocket.machineRPC<SpawnSessionResult, {
+            operationId: string;
+            sessionId: string;
+            model?: string;
+            permissionMode?: string;
+        }>(
             machineId,
             'resume-happy-session',
-            { sessionId, model, permissionMode },
+            { operationId, sessionId, model, permissionMode },
         );
         return result;
     } catch (error) {

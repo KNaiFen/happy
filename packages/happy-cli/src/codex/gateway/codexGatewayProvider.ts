@@ -21,6 +21,19 @@ export type CodexGatewayProviderState =
     | 'stopping'
     | 'stopped';
 
+export type CodexGatewayProviderOwnership =
+    | 'expected'
+    | 'absent'
+    | 'unexpected'
+    | 'unverified';
+
+export class CodexGatewayProviderOwnershipUnknownError extends Error {
+    constructor() {
+        super('Codex app-server ownership cannot be verified; preserving the existing endpoint');
+        this.name = 'CodexGatewayProviderOwnershipUnknownError';
+    }
+}
+
 export interface CodexGatewayProviderHooks {
     stateChanged?(state: CodexGatewayProviderState, attempt: number): void;
     ready?(event: { epoch: number; recovered: boolean }): Promise<void> | void;
@@ -31,10 +44,14 @@ export interface CodexGatewayProviderHooks {
         unexpected: boolean;
     }): void;
     stderr?(event: { epoch: number; bytes: number }): void;
+    processChanged?(event: { pid: number | null; adopted: boolean }): Promise<void> | void;
 }
 
 interface SpawnedProvider {
-    process: ChildProcess;
+    process: ChildProcess | null;
+    pid: number;
+    adopted: boolean;
+    monitor: ReturnType<typeof setInterval> | null;
     epoch: number;
     ready: boolean;
     terminated: boolean;
@@ -59,6 +76,12 @@ export interface CodexGatewayProviderOptions {
         isCurrent: () => boolean,
     ) => Promise<void>;
     sleep?: (milliseconds: number) => Promise<void>;
+    adoptExisting?: {
+        pid: number;
+        inspect(pid: number): CodexGatewayProviderOwnership;
+        terminate(pid: number): Promise<void>;
+        pollIntervalMs?: number;
+    };
 }
 
 export class CodexGatewayProvider {
@@ -68,6 +91,7 @@ export class CodexGatewayProvider {
     private stopping = false;
     private recoveryPromise: Promise<void> | null = null;
     private recoveryWake: (() => void) | null = null;
+    private preserveEndpointOnFailure = false;
 
     constructor(private readonly options: CodexGatewayProviderOptions) {
         validateProviderEndpoint(options.endpoint, options.tokenFilePath);
@@ -82,7 +106,19 @@ export class CodexGatewayProvider {
     }
 
     get pid(): number | null {
-        return this.current?.process.pid ?? null;
+        return this.current?.pid ?? null;
+    }
+
+    get isAdopted(): boolean {
+        return this.current?.adopted === true;
+    }
+
+    get mustPreserveEndpoint(): boolean {
+        return this.isAdopted || this.preserveEndpointOnFailure;
+    }
+
+    get requiresConservativeRecovery(): boolean {
+        return this.preserveEndpointOnFailure;
     }
 
     async start(): Promise<void> {
@@ -94,11 +130,34 @@ export class CodexGatewayProvider {
         await assertProviderCredentialFile(this.options.tokenFilePath);
         this.setState('starting', 0);
         try {
+            if (await this.tryAdoptExisting()) return;
             await this.launch(false);
         } catch (error) {
-            this.setState('stopped', 0);
+            if (this.mustPreserveEndpoint) this.setState('recovering', 1);
+            else {
+                this.clearCurrentWithoutTerminating();
+                this.setState('stopped', 0);
+            }
             throw error;
         }
+    }
+
+    releaseAdopted(): void {
+        const current = this.current;
+        if (!current?.adopted) return;
+        if (current.monitor) clearInterval(current.monitor);
+        current.terminated = true;
+        this.current = null;
+        this.state = 'stopped';
+    }
+
+    releaseForWorkerRecovery(): void {
+        const current = this.current;
+        if (current?.monitor) clearInterval(current.monitor);
+        if (current) current.terminated = true;
+        this.current = null;
+        this.preserveEndpointOnFailure = false;
+        this.state = 'stopped';
     }
 
     async stop(): Promise<void> {
@@ -111,11 +170,18 @@ export class CodexGatewayProvider {
         const spawned = this.current;
         this.current = null;
         if (spawned && !spawned.terminated) {
-            await stopOwnedProcess(
-                spawned.process,
-                this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
-            );
+            spawned.terminated = true;
+            if (spawned.monitor) clearInterval(spawned.monitor);
+            if (spawned.adopted) {
+                await this.options.adoptExisting?.terminate(spawned.pid);
+            } else if (spawned.process) {
+                await stopOwnedProcess(
+                    spawned.process,
+                    this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
+                );
+            }
         }
+        await this.options.hooks?.processChanged?.({ pid: null, adopted: false });
         await this.recoveryPromise?.catch(() => undefined);
         if (this.options.endpoint.socketPath) {
             await rm(this.options.endpoint.socketPath, { force: true });
@@ -145,10 +211,17 @@ export class CodexGatewayProvider {
         });
         const spawned: SpawnedProvider = {
             process: processHandle,
+            pid: processHandle.pid ?? 0,
+            adopted: false,
+            monitor: null,
             epoch,
             ready: false,
             terminated: false,
         };
+        if (!spawned.pid) {
+            processHandle.once('error', () => undefined);
+            throw new Error('Codex app-server process did not start');
+        }
         this.current = spawned;
 
         let rejectBeforeReady!: (error: Error) => void;
@@ -162,7 +235,9 @@ export class CodexGatewayProvider {
         }) => {
             if (spawned.terminated) return;
             spawned.terminated = true;
+            if (spawned.monitor) clearInterval(spawned.monitor);
             if (this.current === spawned) this.current = null;
+            void this.options.hooks?.processChanged?.({ pid: null, adopted: false });
             const unexpected = !this.stopping;
             this.options.hooks?.exited?.({ epoch, code: event.code, signal: event.signal, unexpected });
             if (!spawned.ready) {
@@ -183,6 +258,7 @@ export class CodexGatewayProvider {
 
         const waitUntilReady = this.options.waitUntilReady ?? waitForProviderEndpoint;
         try {
+            await this.options.hooks?.processChanged?.({ pid: spawned.pid, adopted: false });
             await Promise.race([
                 waitUntilReady(
                     this.options.endpoint,
@@ -208,12 +284,118 @@ export class CodexGatewayProvider {
                 spawned.terminated = true;
                 this.current = null;
                 await stopOwnedProcess(
-                    spawned.process,
+                    spawned.process!,
                     this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
                 );
+                await this.options.hooks?.processChanged?.({ pid: null, adopted: false });
             }
             throw error;
         }
+    }
+
+    private async tryAdoptExisting(): Promise<boolean> {
+        const candidate = this.options.adoptExisting;
+        if (!candidate) return false;
+        const initialOwnership = candidate.inspect(candidate.pid);
+        if (initialOwnership === 'unverified' || initialOwnership === 'unexpected') {
+            this.preserveEndpointOnFailure = true;
+            throw new CodexGatewayProviderOwnershipUnknownError();
+        }
+        if (initialOwnership === 'absent') {
+            if (await this.isEndpointReachable()) {
+                this.preserveEndpointOnFailure = true;
+                throw new CodexGatewayProviderOwnershipUnknownError();
+            }
+            return false;
+        }
+        const waitUntilReady = this.options.waitUntilReady ?? waitForProviderEndpoint;
+        try {
+            await waitUntilReady(
+                this.options.endpoint,
+                Math.min(1_000, this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
+                () => !this.stopping && candidate.inspect(candidate.pid) === 'expected',
+            );
+        } catch {
+            const ownership = candidate.inspect(candidate.pid);
+            if (ownership === 'expected') {
+                await candidate.terminate(candidate.pid);
+                await this.options.hooks?.processChanged?.({ pid: null, adopted: false });
+                return false;
+            }
+            if (ownership === 'absent' && !(await this.isEndpointReachable())) return false;
+            this.preserveEndpointOnFailure = true;
+            throw new CodexGatewayProviderOwnershipUnknownError();
+        }
+        if (this.stopping) return false;
+        if (candidate.inspect(candidate.pid) !== 'expected') {
+            this.preserveEndpointOnFailure = true;
+            throw new CodexGatewayProviderOwnershipUnknownError();
+        }
+        const epoch = ++this.epoch;
+        const spawned: SpawnedProvider = {
+            process: null,
+            pid: candidate.pid,
+            adopted: true,
+            monitor: null,
+            epoch,
+            ready: false,
+            terminated: false,
+        };
+        this.current = spawned;
+        await this.options.hooks?.processChanged?.({ pid: candidate.pid, adopted: true });
+        await this.options.hooks?.ready?.({ epoch, recovered: true });
+        if (this.current !== spawned || spawned.terminated || this.stopping) {
+            throw new Error('Codex app-server stopped during bridge recovery');
+        }
+        spawned.ready = true;
+        spawned.monitor = setInterval(() => {
+            if (this.current !== spawned || spawned.terminated || this.stopping) return;
+            const ownership = candidate.inspect(candidate.pid);
+            if (ownership === 'expected') {
+                if (this.state !== 'running') this.setState('running', 0);
+                return;
+            }
+            if (ownership !== 'absent') {
+                this.preserveEndpointOnFailure = true;
+                if (this.state !== 'recovering') this.setState('recovering', 1);
+                return;
+            }
+            spawned.terminated = true;
+            if (spawned.monitor) clearInterval(spawned.monitor);
+            if (this.current === spawned) this.current = null;
+            void this.options.hooks?.processChanged?.({ pid: null, adopted: false });
+            this.options.hooks?.exited?.({
+                epoch,
+                code: null,
+                signal: null,
+                unexpected: true,
+            });
+            this.beginRecovery();
+        }, candidate.pollIntervalMs ?? 1_000);
+        spawned.monitor.unref();
+        this.setState('running', 0);
+        return true;
+    }
+
+    private async isEndpointReachable(): Promise<boolean> {
+        const waitUntilReady = this.options.waitUntilReady ?? waitForProviderEndpoint;
+        try {
+            await waitUntilReady(
+                this.options.endpoint,
+                Math.min(1_000, this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
+                () => !this.stopping,
+            );
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private clearCurrentWithoutTerminating(): void {
+        const current = this.current;
+        if (!current) return;
+        if (current.monitor) clearInterval(current.monitor);
+        this.current = null;
     }
 
     private beginRecovery(): void {
@@ -363,7 +545,11 @@ async function waitForProviderEndpoint(
         if (!isCurrent()) throw new Error('Codex app-server startup was cancelled');
         try {
             if (endpoint.socketPath) {
-                if ((await stat(endpoint.socketPath)).isSocket()) return;
+                if (!(await stat(endpoint.socketPath)).isSocket()) {
+                    throw new Error('Codex app-server endpoint is not a Unix socket');
+                }
+                await probeUnixEndpoint(endpoint.socketPath);
+                return;
             } else if (endpoint.url) {
                 await probeLoopbackEndpoint(endpoint.url);
                 return;
@@ -375,6 +561,19 @@ async function waitForProviderEndpoint(
     }
     const kind = lastError instanceof Error ? lastError.name : 'unknown';
     throw new Error(`Codex app-server did not become ready within ${timeoutMs}ms (${kind})`);
+}
+
+async function probeUnixEndpoint(path: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+        const socket = connectTcp(path);
+        socket.setTimeout(250);
+        socket.once('connect', () => {
+            socket.destroy();
+            resolve();
+        });
+        socket.once('timeout', () => socket.destroy(new Error('Unix provider probe timed out')));
+        socket.once('error', reject);
+    });
 }
 
 async function probeLoopbackEndpoint(url: string): Promise<void> {

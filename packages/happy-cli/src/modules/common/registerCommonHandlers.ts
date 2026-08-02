@@ -116,6 +116,7 @@ interface DifftasticResponse {
 */
 
 export interface SpawnSessionOptions {
+    operationId?: string;
     machineId?: string;
     directory: string;
     sessionId?: string;

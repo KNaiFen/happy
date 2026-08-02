@@ -55,6 +55,20 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 - worker 独立拥有 app-server、透明本地代理、Sync v4 bridge、持久 journal、
   thread lease、control endpoint、心跳和恢复描述符。
 - daemon 重启后扫描描述符、control endpoint 和心跳，重新发现仍存活的 worker。
+- worker 自身退出但 descriptor 未进入 `stopped` 时，daemon 或下一次
+  `happy codex attach|stop` 使用同一 gateway ID 重启 worker；恢复沿用原 journal、
+  session key seed、thread lease 和精确 generation。journal lease 必须先于 descriptor
+  PID 改写取得，仍存活的旧 worker 会拒绝第二个 owner；PID 重用通过 Happy worker
+  argv marker 校验，不把无关进程当成 journal owner。
+- descriptor 同时保存官方 app-server PID。worker 重启先核对该 PID 的 Codex
+  `app-server --listen <Happy 专属 endpoint>` argv 与 endpoint 可达性：可达时接管原
+  provider，保留正在运行的 turn；不可达时只终止这个已严格验证的孤儿，再启动新的
+  app-server 并读取权威 snapshot。不得因 POSIX socket unlink 或 Windows 端口占用
+  静默形成两个 provider。
+- PID 检查必须区分 `expected`、`unexpected` 与“进程仍存活但 argv 暂时不可读”。最后
+  一种是 ownership 未知：保留 descriptor 与 endpoint、进入可重试 recovering，既不得
+  unlink socket，也不得终止或替换 provider；只有 `expected` 且 endpoint 不可达时才可
+  复核后终止。
 - app-server 崩溃时 worker 有限退避重启，重新订阅 current 和 draining thread，
   读取权威 snapshot；未知的非幂等 RPC 不自动重放。
 - POSIX 使用私有目录和 Unix socket，目录与 socket 权限为 `0700`；Windows 使用
@@ -196,10 +210,10 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - [x] coordinator 支持 session ID 为空的 deferred root runtime：relay 离线时只落
       snapshot marker、canonical 通知和待决 provider request，不创建伪 session/AAD，
       也不与 TUI 竞速自动拒绝审批；恢复后原位物化、FIFO 回放并补齐 handoff 链接。
-- [ ] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
+- [x] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
       terminal detach/attach 和 relay-offline materialization。
-  - worker、heartbeat、按 attachment detach/attach、relay-offline materialization 和
-    descriptor exact-generation 恢复已接通；daemon 扫描/重启 worker 尚未接入。
+  - worker、heartbeat、按 attachment detach/attach、relay-offline materialization、
+    descriptor exact-generation 恢复、daemon 扫描重启与健康 provider 原位接管均已接通。
 
 ### 3. CLI 原生命令面
 
@@ -208,8 +222,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - [x] 实现按 attachment 轮换的一次性正常退出 nonce、异常 detach、attach picker 和
       stop picker；覆盖旧 launcher 迟到确认与新 attach 并发的回归测试。
 - [x] 裸 `happy` 改为帮助与运行状态；帮助文案不再声称自定义 Codex UI。
-- [ ] 启动新版 daemon 时只终止经过 executable、argv、home 和 descriptor 多重验证的
+- [x] 启动新版 daemon 时只终止经过 executable、argv、home 和 descriptor 多重验证的
       旧 Happy Codex adapter，绝不终止用户直接运行的官方 Codex 或其他 provider。
+  - 候选必须来自本机 `sessions.json` 恢复出的 persisted session，而不是启动时为空的
+    live-child map；发送信号前再次读取 PID argv 复核。清退只停止匹配进程，不删除
+    Happy 历史或密钥记录，无法读取或任一字段不匹配时直接跳过。
 
 ### 4. Wire 与持久命令处理
 
@@ -243,6 +260,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     中继读取并 unarchive 原 Sync v4 session，而不是用新 Gateway seed 创建重复 session。
     外部官方 thread 仍先以 App 生成的独立 data key 创建 Happy session，再由 Gateway
     接管同一 session。身份材料只允许写入 `0600` Gateway journal，不进入日志。
+  - App 为一次新建意图生成 operation ID，并在目录确认、RPC 超时、daemon 重启和用户
+    原参数重试时复用。该 ID 写入受保护 descriptor；launcher 先查找并恢复同一 worker，
+    再重放相同 `/root/open`，不得因本机或中继响应丢失创建第二个 provider thread。
+    `spawn-happy-session` 与 `resume-happy-session` 两条 App 入口必须使用同一规则，不能
+    只保护新建而遗漏恢复已有 Happy session。
 - [ ] App 命令附带当前 generation；同步期间禁发但保留草稿。
 - [ ] 展示 attached/detached/headless/recovering，并保持 execution 独立。
 - [ ] handoff 成功后按 gateway/generation 自动跟随，避免旧通知把页面拉回。
@@ -258,7 +280,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 7. 测试与云端验收
 
-- [ ] 本地仅运行 source-level Vitest/tsx/`tsc --noEmit`、翻译和静态检查。
+- [x] 本地仅运行 source-level Vitest/tsx/`tsc --noEmit`、翻译和静态检查。
 - [ ] CI 从最新 stable 官方源码构建 Codex，并保留 `0.145.0` schema drift 门禁。
 - [ ] 使用 `@microsoft/tui-test` 驱动真实 PTY 和官方 TUI，Responses fixture 提供
       无 OpenAI 凭据的真实 app-server 生命周期。
@@ -349,3 +371,20 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   worker 保持 `stopping`、持续心跳并可由重复 stop 唤醒重试，只有 `--force` 会跳过。
   旧 Happy session 分页读取使用独立 15 秒总时限；Windows launcher 从 descriptor
   等待真实 control 端口，禁止未发布端口时误连默认端口。
+- 2026-08-02：锁定 worker crash 与 App RPC 重试恢复方式。非 `stopped` descriptor
+  可用同一 gateway ID 重启；journal lease 在写新 PID 前取得并以 Happy worker argv
+  marker 识别 PID 重用。App 新建意图的稳定 operation ID 同时进入 machine RPC、
+  descriptor 和 bootstrap journal，所有重试先找回原 worker，再继续同一 provider
+  acceptance 记录。
+- 2026-08-02：补充 provider orphan 恢复约束。descriptor 持久化 app-server PID；
+  worker crash 后优先接管 endpoint 仍健康且 argv 与 Happy 专属 listen 地址完全匹配
+  的原 provider，以保留 active turn。只有已验证 provider 不可达时才终止并重启，
+  禁止直接 unlink socket 或在占用端口上盲目再起一份。
+- 2026-08-02：完成 worker/daemon crash 恢复和 App 启动幂等。journal lease 先于 PID
+  改写，daemon、attach 与 stop 可恢复同一 descriptor；App 新建与恢复 RPC 都携带稳定
+  operation ID。provider PID 检查采用 expected/absent/unexpected/unverified 四态，存活
+  但不可验证或 endpoint 被未知 owner 占用时保留现场，不 unlink、不终止、不替换。
+- 2026-08-02：修复旧 adapter 清退候选表错误。新版 daemon 从本机 persisted session
+  记录筛选旧 Codex adapter，核对 profile、host PID、无 Gateway binding、Happy runtime
+  argv，并在 SIGTERM 前二次复核；清退不删除历史与加密材料。完整 CLI `941/941`、App
+  `965/965` 源码测试及两端 TypeScript 检查通过。

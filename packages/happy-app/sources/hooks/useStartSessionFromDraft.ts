@@ -35,6 +35,7 @@ export function useStartSessionFromDraft() {
     const navigateToSession = useNavigateToSession();
     const [isStarting, setIsStarting] = React.useState(false);
     const isStartingRef = React.useRef(false);
+    const pendingOperationRef = React.useRef<{ id: string; fingerprint: string } | null>(null);
 
     const startSession = React.useCallback(async (): Promise<boolean> => {
         if (isStartingRef.current) return false;
@@ -102,9 +103,25 @@ export function useStartSessionFromDraft() {
             } else if (worktreeSelection !== '__none__') {
                 spawnDirectory = worktreeSelection;
             }
+            const operationFingerprint = JSON.stringify({
+                machineId: machine.id,
+                directory: spawnDirectory,
+                agent: draft.agentType,
+                permissionMode: config.permissionMode,
+                modelMode: config.modelMode,
+                effortLevel: config.effortLevel ?? null,
+            });
+            if (pendingOperationRef.current?.fingerprint !== operationFingerprint) {
+                pendingOperationRef.current = {
+                    id: sync.generateOperationId(),
+                    fingerprint: operationFingerprint,
+                };
+            }
+            const operationId = pendingOperationRef.current.id;
 
             const spawn = async (approvedNewDirectoryCreation = false): Promise<string | null> => {
                 const result = await machineSpawnNewSession({
+                    operationId,
                     machineId: machine.id,
                     directory: spawnDirectory,
                     approvedNewDirectoryCreation,
@@ -132,6 +149,7 @@ export function useStartSessionFromDraft() {
 
             const sessionId = await spawn();
             if (!sessionId) return false;
+            pendingOperationRef.current = null;
 
             await sync.refreshSessions();
 

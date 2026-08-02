@@ -130,6 +130,10 @@ export function useSessionQuickActions(
     const machineDeleted = useIsSessionMachineDeleted(session.id);
     const machineId = session.metadata?.machineId ?? '';
     const machine = useMachine(machineId);
+    const pendingResumeOperationRef = React.useRef<{
+        id: string;
+        fingerprint: string;
+    } | null>(null);
     const devModeEnabled = useLocalSetting('devModeEnabled');
     const expResumeSession = useSetting('expResumeSession');
     const resumeAvailability = React.useMemo(
@@ -194,7 +198,20 @@ export function useSessionQuickActions(
         const modeMeta = resolveMessageModeMeta(session, {
             agentDefaultOverrides: storage.getState().localSettings.agentDefaultOverrides,
         });
+        const operationFingerprint = JSON.stringify({
+            machineId,
+            sessionId: session.id,
+            model: modeMeta.model ?? null,
+            permissionMode: modeMeta.permissionMode,
+        });
+        if (pendingResumeOperationRef.current?.fingerprint !== operationFingerprint) {
+            pendingResumeOperationRef.current = {
+                id: sync.generateOperationId(),
+                fingerprint: operationFingerprint,
+            };
+        }
         const result = await machineResumeSession({
+            operationId: pendingResumeOperationRef.current.id,
             machineId,
             sessionId: session.id,
             model: modeMeta.model ?? undefined,
@@ -203,6 +220,7 @@ export function useSessionQuickActions(
 
         switch (result.type) {
             case 'success': {
+                pendingResumeOperationRef.current = null;
                 // Session reconnects to the same ID, so messages are preserved.
                 // Refresh to pick up the updated session state.
                 await sync.refreshSessions();

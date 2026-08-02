@@ -128,7 +128,11 @@ vi.mock('../codexAppServerClient', () => ({
     },
 }));
 
-import { createCodexGatewayFiles, readCodexGatewayDescriptor } from './codexGatewayState';
+import {
+    createCodexGatewayFiles,
+    readCodexGatewayDescriptor,
+    writeCodexGatewayDescriptor,
+} from './codexGatewayState';
 import { createCodexGatewayAttachmentCredentials } from './codexGatewayAttachment';
 import { runCodexGatewayWorker } from './codexGatewayWorker';
 
@@ -309,6 +313,35 @@ describe('Codex Gateway worker composition', () => {
         expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
             state: 'stopped',
             current: null,
+        });
+    }, 5_000);
+
+    it('continues a durable graceful stop after the worker itself restarts', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        await writeCodexGatewayDescriptor(created.paths, {
+            ...created.descriptor,
+            state: 'stopping',
+        });
+        mocks.relayAvailable = true;
+
+        await runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            state: 'stopped',
         });
     }, 5_000);
 });

@@ -110,6 +110,171 @@ describe('Codex Gateway provider supervisor', () => {
         expect(provider.currentState).toBe('stopped');
         await rm(root, { recursive: true, force: true });
     });
+
+    it('terminates the owned child when persisting its PID fails', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-provider-test-'));
+        const processHandle = fakeProcess(211, true);
+        const processChanged = vi.fn(async ({ pid }: { pid: number | null }) => {
+            if (pid !== null) throw new Error('descriptor write failed');
+        });
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath: join(root, 'provider.sock') },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            spawn: () => processHandle,
+            waitUntilReady: async () => undefined,
+            hooks: { processChanged },
+        });
+
+        await expect(provider.start()).rejects.toThrow('descriptor write failed');
+        expect(processHandle.kill).toHaveBeenCalledWith('SIGTERM');
+        expect(processChanged).toHaveBeenLastCalledWith({ pid: null, adopted: false });
+        expect(provider.pid).toBeNull();
+        await rm(root, { recursive: true, force: true });
+    });
+
+    it('adopts a verified reachable app-server after the worker restarts', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-provider-test-'));
+        const processChanged = vi.fn();
+        const ready = vi.fn();
+        const terminate = vi.fn(async () => undefined);
+        const spawn = vi.fn(() => fakeProcess(302));
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath: join(root, 'provider.sock') },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            spawn,
+            waitUntilReady: async () => undefined,
+            adoptExisting: {
+                pid: 301,
+                inspect: () => 'expected',
+                terminate,
+                pollIntervalMs: 60_000,
+            },
+            hooks: { processChanged, ready },
+        });
+
+        await provider.start();
+        expect(provider.pid).toBe(301);
+        expect(spawn).not.toHaveBeenCalled();
+        expect(processChanged).toHaveBeenCalledWith({ pid: 301, adopted: true });
+        expect(ready).toHaveBeenCalledWith({ epoch: 1, recovered: true });
+
+        await provider.stop();
+        expect(terminate).toHaveBeenCalledWith(301);
+        expect(processChanged).toHaveBeenLastCalledWith({ pid: null, adopted: false });
+        await rm(root, { recursive: true, force: true });
+    });
+
+    it('terminates a verified but unreachable orphan before starting one replacement', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-provider-test-'));
+        const replacement = fakeProcess(402);
+        const spawn = vi.fn(() => replacement);
+        const terminate = vi.fn(async () => undefined);
+        let readinessAttempt = 0;
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath: join(root, 'provider.sock') },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            spawn,
+            waitUntilReady: async () => {
+                readinessAttempt += 1;
+                if (readinessAttempt === 1) throw new Error('orphan endpoint unavailable');
+            },
+            adoptExisting: {
+                pid: 401,
+                inspect: () => 'expected',
+                terminate,
+            },
+        });
+
+        await provider.start();
+        expect(terminate).toHaveBeenCalledWith(401);
+        expect(spawn).toHaveBeenCalledOnce();
+        expect(provider.pid).toBe(402);
+
+        const stopped = provider.stop();
+        await vi.waitFor(() => expect(replacement.kill).toHaveBeenCalledWith('SIGTERM'));
+        replacement.emit('exit', 0, 'SIGTERM');
+        await stopped;
+        await rm(root, { recursive: true, force: true });
+    });
+
+    it('releases rather than kills an adopted provider when bridge recovery fails', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-provider-test-'));
+        const terminate = vi.fn(async () => undefined);
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath: join(root, 'provider.sock') },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            waitUntilReady: async () => undefined,
+            adoptExisting: {
+                pid: 501,
+                inspect: () => 'expected',
+                terminate,
+                pollIntervalMs: 60_000,
+            },
+            hooks: {
+                ready: () => { throw new Error('bridge recovery failed'); },
+            },
+        });
+
+        await expect(provider.start()).rejects.toThrow('bridge recovery failed');
+        expect(provider.isAdopted).toBe(true);
+        expect(provider.currentState).toBe('recovering');
+        provider.releaseAdopted();
+        expect(provider.pid).toBeNull();
+        expect(terminate).not.toHaveBeenCalled();
+        await rm(root, { recursive: true, force: true });
+    });
+
+    it('preserves the endpoint when a live provider PID cannot be verified', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-provider-test-'));
+        const terminate = vi.fn(async () => undefined);
+        const spawn = vi.fn(() => fakeProcess(602));
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath: join(root, 'provider.sock') },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            spawn,
+            adoptExisting: {
+                pid: 601,
+                inspect: () => 'unverified',
+                terminate,
+            },
+        });
+
+        await expect(provider.start()).rejects.toThrow('ownership cannot be verified');
+        expect(provider.currentState).toBe('recovering');
+        expect(provider.requiresConservativeRecovery).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+        expect(terminate).not.toHaveBeenCalled();
+        provider.releaseForWorkerRecovery();
+        await rm(root, { recursive: true, force: true });
+    });
+
+    it('does not replace an absent recorded PID while its private endpoint remains reachable', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-provider-test-'));
+        const spawn = vi.fn(() => fakeProcess(702));
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath: join(root, 'provider.sock') },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            spawn,
+            waitUntilReady: async () => undefined,
+            adoptExisting: {
+                pid: 701,
+                inspect: () => 'absent',
+                terminate: vi.fn(async () => undefined),
+            },
+        });
+
+        await expect(provider.start()).rejects.toThrow('ownership cannot be verified');
+        expect(provider.currentState).toBe('recovering');
+        expect(spawn).not.toHaveBeenCalled();
+        provider.releaseForWorkerRecovery();
+        await rm(root, { recursive: true, force: true });
+    });
 });
 
 function fakeProcess(

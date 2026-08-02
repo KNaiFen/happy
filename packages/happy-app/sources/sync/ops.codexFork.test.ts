@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { machineRPC, refreshSessions, getState } = vi.hoisted(() => ({
+const { machineRPC, refreshSessions, getState, generateOperationId } = vi.hoisted(() => ({
     machineRPC: vi.fn(),
     refreshSessions: vi.fn(),
     getState: vi.fn(() => ({ sessions: {} })),
+    generateOperationId: vi.fn(() => '9e32e76b-b5b1-47f0-b261-3744f13a41ca'),
 }));
 
 vi.mock('./apiSocket', () => ({
@@ -11,7 +12,7 @@ vi.mock('./apiSocket', () => ({
 }));
 
 vi.mock('./sync', () => ({
-    sync: { refreshSessions },
+    sync: { refreshSessions, generateOperationId },
 }));
 
 // ops.ts imports storage (for sessionSetAgentModes), which transitively pulls
@@ -46,11 +47,43 @@ describe('codex fork ops', () => {
             'spawn-happy-session',
             expect.objectContaining({
                 directory: '/tmp/project',
+                operationId: '9e32e76b-b5b1-47f0-b261-3744f13a41ca',
                 agent: 'codex',
                 permissionMode: 'yolo',
                 modelMode: 'gpt-5.6-sol',
                 effortLevel: 'max',
             }),
+        );
+    });
+
+    it('passes a stable operation ID through the Happy resume RPC', async () => {
+        machineRPC.mockResolvedValue({ type: 'success', sessionId: 'happy-existing' });
+        getState.mockReturnValue({
+            sessions: {
+                'happy-existing': {
+                    metadata: { flavor: 'codex', codexSyncVersion: 4 },
+                },
+            },
+        });
+
+        const { machineResumeSession } = await import('./ops');
+        const result = await machineResumeSession({
+            operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
+            machineId: 'machine-1',
+            sessionId: 'happy-existing',
+            model: 'gpt-5.6-sol',
+        });
+
+        expect(result).toEqual({ type: 'success', sessionId: 'happy-existing' });
+        expect(machineRPC).toHaveBeenCalledWith(
+            'machine-1',
+            'resume-happy-session',
+            {
+                operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
+                sessionId: 'happy-existing',
+                model: 'gpt-5.6-sol',
+                permissionMode: undefined,
+            },
         );
     });
 

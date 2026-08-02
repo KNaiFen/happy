@@ -35,11 +35,13 @@ export const CodexGatewayDescriptorSchema = z.object({
     version: z.literal(CODEX_GATEWAY_STATE_VERSION),
     gatewayId: idSchema,
     pid: z.number().int().positive(),
+    providerPid: z.number().int().positive().nullable().default(null),
     processStartedAt: timestampSchema,
     createdAt: timestampSchema,
     heartbeatAt: timestampSchema,
     cwd: pathSchema,
     origin: z.enum(['terminal', 'app']),
+    bootstrapOperationId: z.string().uuid().nullable().default(null),
     state: z.enum(['starting', 'running', 'recovering', 'stopping', 'stopped']),
     terminalState: z.enum(['attached', 'pendingDetach', 'detached', 'headless']),
     terminalDetachedAt: timestampSchema.nullable(),
@@ -122,6 +124,7 @@ export async function createCodexGatewayFiles(options: {
     happyHomeDir?: string;
     runtimeRoot?: string;
     now?: number;
+    bootstrapOperationId?: string;
 }): Promise<{
     descriptor: CodexGatewayDescriptor;
     secret: CodexGatewaySecret;
@@ -148,11 +151,15 @@ export async function createCodexGatewayFiles(options: {
         version: CODEX_GATEWAY_STATE_VERSION,
         gatewayId,
         pid: process.pid,
+        providerPid: null,
         processStartedAt: now,
         createdAt: now,
         heartbeatAt: now,
         cwd: options.cwd,
         origin: options.origin,
+        bootstrapOperationId: options.bootstrapOperationId
+            ? z.string().uuid().parse(options.bootstrapOperationId)
+            : null,
         state: 'starting',
         terminalState: options.origin === 'terminal' ? 'attached' : 'headless',
         terminalDetachedAt: null,

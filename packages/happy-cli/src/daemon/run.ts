@@ -55,6 +55,7 @@ import {
   launchCodexGatewayHeadless,
 } from '@/codex/gateway/codexGatewayLauncher';
 import { callCodexGatewayControl } from '@/codex/gateway/codexGatewayControl';
+import { retireVerifiedLegacyCodexAdapters } from './legacyCodexAdapterRetirement';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
@@ -241,7 +242,10 @@ export async function startDaemon(): Promise<void> {
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
 
     const refreshLiveCodexGateways = async (): Promise<void> => {
-      const live = await discoverLiveCodexGateways();
+      const live = await discoverLiveCodexGateways({
+        recover: true,
+        env: ambientEnvironment,
+      });
       const liveGatewayIds = new Set(live.map(({ descriptor }) => descriptor.gatewayId));
       for (const [pid, tracked] of pidToTrackedSession) {
         if (tracked.codexGatewayId && !liveGatewayIds.has(tracked.codexGatewayId)) {
@@ -274,6 +278,19 @@ export async function startDaemon(): Promise<void> {
     };
 
     await refreshLiveCodexGateways();
+
+    const retiredLegacyCodexAdapters = retireVerifiedLegacyCodexAdapters(
+      sessionIdToFinishedSession.values(),
+      {
+        happyHomeDir: configuration.happyHomeDir,
+        happyLibDir: projectPath(),
+      },
+    );
+    if (retiredLegacyCodexAdapters > 0) {
+      logger.debug('[DAEMON RUN] Retired verified legacy Codex adapters', {
+        count: retiredLegacyCodexAdapters,
+      });
+    }
 
     // Helper functions
     const getCurrentChildren = () => Array.from(pidToTrackedSession.values());
@@ -473,6 +490,7 @@ export async function startDaemon(): Promise<void> {
         if (spawnPlan.agent === 'codex') {
           const permissionMode = resolveGatewayPermissionMode(options.permissionMode);
           const launch = await launchCodexGatewayHeadless({
+            operationId: options.operationId,
             cwd: directory,
             env: buildSessionChildEnvironment(ambientEnvironment, extraEnv),
             action: options.resumeCodexThreadId ? 'resume' : 'start',
@@ -772,6 +790,7 @@ export async function startDaemon(): Promise<void> {
     };
 
     const resumeSession = async (happySessionId: string, options?: {
+      operationId?: string;
       model?: string;
       permissionMode?: string;
       effort?: string;
@@ -815,7 +834,10 @@ export async function startDaemon(): Promise<void> {
               errorMessage: 'This Codex session does not have an independent Sync v4 data key.',
             };
           }
-          const liveGateway = (await discoverLiveCodexGateways()).find(({ descriptor }) => (
+          const liveGateway = (await discoverLiveCodexGateways({
+            recover: true,
+            env: ambientEnvironment,
+          })).find(({ descriptor }) => (
             descriptor.current?.sessionId === happySessionId
           ));
           if (liveGateway) return { type: 'success', sessionId: happySessionId };
@@ -824,6 +846,7 @@ export async function startDaemon(): Promise<void> {
           );
           const requestedModel = options?.model ?? metadata.modelMode ?? undefined;
           const launched = await launchCodexGatewayHeadless({
+            operationId: options?.operationId,
             cwd: metadata.path,
             env: buildSessionChildEnvironment(ambientEnvironment, {}),
             action: 'resume',
@@ -891,7 +914,10 @@ export async function startDaemon(): Promise<void> {
     const stopSession = async (sessionId: string): Promise<boolean> => {
       logger.debug(`[DAEMON RUN] Attempting to stop session ${sessionId}`);
 
-      const gateways = await discoverLiveCodexGateways();
+      const gateways = await discoverLiveCodexGateways({
+        recover: true,
+        env: ambientEnvironment,
+      });
       const gateway = gateways.find(({ descriptor }) => (
         descriptor.current?.sessionId === sessionId
         || descriptor.draining.some((binding) => binding.sessionId === sessionId)

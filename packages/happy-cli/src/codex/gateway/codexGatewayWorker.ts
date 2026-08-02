@@ -35,6 +35,11 @@ import { CodexGatewayJournal, type CodexGatewayBootstrap } from './codexGatewayJ
 import { CodexGatewayThreadLeaseRegistry } from './codexGatewayLease';
 import { CodexGatewayProvider } from './codexGatewayProvider';
 import {
+    inspectCodexGatewayProviderProcess,
+    isExpectedCodexGatewayProviderProcess,
+    isExpectedCodexGatewayWorkerProcess,
+} from './codexGatewayProcessIdentity';
+import {
     CodexGatewayProxy,
     type CodexGatewayRootRequest,
 } from './codexGatewayProxy';
@@ -92,6 +97,9 @@ export async function runCodexGatewayWorker(options: {
     if (!initialDescriptor || !secret || initialDescriptor.gatewayId !== secret.gatewayId) {
         throw new Error('Codex Gateway state is unavailable or inconsistent');
     }
+    if (initialDescriptor.state === 'stopped') {
+        throw new Error('A stopped Codex Gateway cannot be restarted');
+    }
     if (
         !initialDescriptor.providerSocketPath
         && (!initialDescriptor.providerPort || !secret.providerToken)
@@ -103,6 +111,15 @@ export async function runCodexGatewayWorker(options: {
     }
     const gatewayOrigin = initialDescriptor.origin;
     const gatewayCwd = initialDescriptor.cwd;
+    const resumeGracefulStop = initialDescriptor.state === 'stopping';
+
+    const journal = await CodexGatewayJournal.open({
+        path: paths.journalPath,
+        isProcessAlive: (pid) => isExpectedCodexGatewayWorkerProcess({
+            pid,
+            gatewayId: options.gatewayId,
+        }),
+    });
 
     const descriptorStore = new CodexGatewayDescriptorStore(paths, {
         ...initialDescriptor,
@@ -116,7 +133,6 @@ export async function runCodexGatewayWorker(options: {
     });
     await descriptorStore.persist();
 
-    const journal = await CodexGatewayJournal.open({ path: paths.journalPath });
     const rootSessionConfigs = new Map<string, RootSessionBootstrapConfig>();
     for (const bootstrap of journal.pendingBootstraps()) {
         rootSessionConfigs.set(bootstrap.resolvedThreadId, rootConfigFromBootstrap(bootstrap));
@@ -149,6 +165,10 @@ export async function runCodexGatewayWorker(options: {
     const tuiEndpoint: CodexAppServerWebSocketEndpoint = initialDescriptor.tuiSocketPath
         ? { socketPath: initialDescriptor.tuiSocketPath }
         : { url: `ws://127.0.0.1:${initialDescriptor.tuiPort}` };
+    const providerListenEndpoint = initialDescriptor.providerSocketPath
+        ? `unix://${initialDescriptor.providerSocketPath}`
+        : `ws://127.0.0.1:${initialDescriptor.providerPort}`;
+    const providerTokenFilePath = providerEndpoint.url ? paths.providerTokenPath : undefined;
     const client = new CodexAppServerClient(
         settings.sandboxConfig,
         codexCliVersion,
@@ -168,6 +188,8 @@ export async function runCodexGatewayWorker(options: {
     let wakeShutdownRetry: (() => void) | null = null;
     let controlServer: Awaited<ReturnType<typeof startCodexGatewayControlServer>> | null = null;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let providerStarted = false;
+    let preserveProviderEndpoint = false;
     const rootOpenLock = new AsyncLock();
 
     const terminal = new CodexGatewayAttachmentManager({
@@ -253,9 +275,27 @@ export async function runCodexGatewayWorker(options: {
     const provider = new CodexGatewayProvider({
         cwd: initialDescriptor.cwd,
         endpoint: providerEndpoint,
-        tokenFilePath: providerEndpoint.url ? paths.providerTokenPath : undefined,
+        tokenFilePath: providerTokenFilePath,
         codexCliVersion,
+        ...(initialDescriptor.providerPid ? {
+            adoptExisting: {
+                pid: initialDescriptor.providerPid,
+                inspect: (pid: number) => inspectCodexGatewayProviderProcess({
+                    pid,
+                    listenEndpoint: providerListenEndpoint,
+                    tokenFilePath: providerTokenFilePath,
+                }),
+                terminate: (pid: number) => terminateVerifiedProvider(pid),
+            },
+        } : {}),
         hooks: {
+            processChanged: async ({ pid }) => {
+                await descriptorStore.update((descriptor) => ({
+                    ...descriptor,
+                    providerPid: pid,
+                    heartbeatAt: Date.now(),
+                }));
+            },
             stateChanged: (state) => {
                 const lifecycle = state === 'recovering' ? 'recovering'
                     : state === 'stopping' ? 'stopping'
@@ -420,9 +460,11 @@ export async function runCodexGatewayWorker(options: {
             controlPort: controlServer!.port,
         }));
         await provider.start();
+        providerStarted = true;
         await proxy.start();
         await updateGatewayLifecycle('running');
         heartbeat = setInterval(() => { void heartbeatOnce(); }, options.heartbeatMs ?? HEARTBEAT_MS);
+        if (resumeGracefulStop) void requestShutdown(false);
         await new Promise<void>((resolve, reject) => {
             const poll = setInterval(() => {
                 if (!shutdownPromise) return;
@@ -432,9 +474,14 @@ export async function runCodexGatewayWorker(options: {
             poll.unref();
         });
     } catch (error) {
+        preserveProviderEndpoint = provider.mustPreserveEndpoint || (
+            !providerStarted
+            && initialDescriptor.providerPid !== null
+            && descriptorStore.snapshot().providerPid === initialDescriptor.providerPid
+        );
         await descriptorStore.update((descriptor) => ({
             ...descriptor,
-            state: 'stopped',
+            state: preserveProviderEndpoint ? 'recovering' : 'stopped',
             lastError: safeErrorKind(error),
             heartbeatAt: Date.now(),
         })).catch(() => undefined);
@@ -445,25 +492,31 @@ export async function runCodexGatewayWorker(options: {
         if (heartbeat) clearInterval(heartbeat);
         terminal.dispose();
         const coordinatorAtShutdown = coordinator as CodexGatewayCoordinator | null;
+        preserveProviderEndpoint ||= provider.requiresConservativeRecovery;
+        const providerShutdown = preserveProviderEndpoint
+            ? Promise.resolve(provider.releaseForWorkerRecovery())
+            : provider.stop();
         await Promise.allSettled([
             proxy.close(),
             coordinatorAtShutdown?.stop({ force: true }) ?? Promise.resolve(),
-            provider.stop(),
+            providerShutdown,
         ]);
         await syncDescriptorBindings().catch(() => undefined);
         await controlServer?.close().catch(() => undefined);
         await journal.close().catch(() => undefined);
         await descriptorStore.update((descriptor) => ({
             ...descriptor,
-            state: 'stopped',
+            state: preserveProviderEndpoint ? 'recovering' : 'stopped',
             terminalState: descriptor.origin === 'app' ? 'headless' : descriptor.terminalState,
             heartbeatAt: Date.now(),
         })).catch(() => undefined);
         await Promise.all([
-            rm(paths.providerSocketPath, { force: true }),
             rm(paths.tuiSocketPath, { force: true }),
             rm(paths.controlSocketPath, { force: true }),
-            rm(paths.providerTokenPath, { force: true }),
+            ...(preserveProviderEndpoint ? [] : [
+                rm(paths.providerSocketPath, { force: true }),
+                rm(paths.providerTokenPath, { force: true }),
+            ]),
         ]).catch(() => undefined);
     }
 
@@ -742,6 +795,30 @@ export async function runCodexGatewayWorker(options: {
             heartbeatAt: Date.now(),
         }));
     }
+
+    async function terminateVerifiedProvider(pid: number): Promise<void> {
+        const isExpected = () => isExpectedCodexGatewayProviderProcess({
+            pid,
+            listenEndpoint: providerListenEndpoint,
+            tokenFilePath: providerTokenFilePath,
+        });
+        if (!isExpected()) {
+            throw new Error('Refusing to terminate an unverified Codex app-server process');
+        }
+        try {
+            process.kill(pid, 'SIGTERM');
+        } catch (error) {
+            if (!processAlive(pid)) return;
+            throw error;
+        }
+        const deadline = Date.now() + 2_000;
+        while (Date.now() < deadline) {
+            if (!processAlive(pid)) return;
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+        }
+        if (!isExpected()) return;
+        process.kill(pid, 'SIGKILL');
+    }
 }
 
 class CodexGatewayDescriptorStore {
@@ -853,4 +930,13 @@ function relayTransportSecurity(): 'https' | 'insecureHttp' {
 function safeErrorKind(error: unknown): string {
     const classified = classifySyncV4DiagnosticError(error);
     return [...classified].slice(0, 128).join('');
+}
+
+function processAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
 }

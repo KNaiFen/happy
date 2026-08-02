@@ -80,6 +80,7 @@ describe('ApiMachineClient Codex fork RPCs', () => {
         });
 
         const result = await handlersFrom(client).get('machine-1:spawn-happy-session')?.({
+            operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
             directory: '/tmp/project',
             agent: 'codex',
             resumeCodexThreadId: 'thread-forked',
@@ -89,10 +90,68 @@ describe('ApiMachineClient Codex fork RPCs', () => {
         expect(result).toEqual({ type: 'success', sessionId: 'happy-forked' });
         expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
             directory: '/tmp/project',
+            operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
             agent: 'codex',
             resumeCodexThreadId: 'thread-forked',
             parentSessionId: 'happy-source',
         }));
+    });
+
+    it('rejects a malformed App operation ID before spawning', async () => {
+        const spawnSession = vi.fn();
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession,
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession: vi.fn(),
+            requestShutdown: vi.fn(),
+        });
+
+        await expect(handlersFrom(client).get('machine-1:spawn-happy-session')?.({
+            operationId: 'not-a-uuid',
+            directory: '/tmp/project',
+            agent: 'codex',
+        })).rejects.toThrow('operationId must be a UUID');
+        expect(spawnSession).not.toHaveBeenCalled();
+    });
+
+    it('validates and forwards the App operation ID when resuming a Happy session', async () => {
+        const resumeSession = vi.fn().mockResolvedValue({
+            type: 'success',
+            sessionId: 'happy-existing',
+        });
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            resumeSession,
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession: vi.fn(),
+            requestShutdown: vi.fn(),
+        });
+        const handler = handlersFrom(client).get('machine-1:resume-happy-session');
+
+        const result = await handler?.({
+            operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
+            sessionId: 'happy-existing',
+            model: 'gpt-5.6-sol',
+        });
+        expect(result).toEqual({ type: 'success', sessionId: 'happy-existing' });
+        expect(resumeSession).toHaveBeenCalledWith('happy-existing', {
+            operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
+            model: 'gpt-5.6-sol',
+            permissionMode: undefined,
+            effort: undefined,
+        });
+
+        await expect(handler?.({
+            operationId: 'not-a-uuid',
+            sessionId: 'happy-existing',
+        })).rejects.toThrow('operationId must be a UUID');
+        expect(resumeSession).toHaveBeenCalledOnce();
     });
 
     it('forwards encrypted Codex history list and open requests to daemon handlers', async () => {

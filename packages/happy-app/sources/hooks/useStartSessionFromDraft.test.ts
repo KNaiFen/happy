@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     sessionSetAgentModes: vi.fn(),
     refreshSessions: vi.fn(),
     sendMessage: vi.fn(),
+    generateOperationId: vi.fn(() => 'a32d5b89-f2ae-4bd9-bab2-4e6f21bbac95'),
     createWorktree: vi.fn(),
     alert: vi.fn(),
     confirm: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('@/sync/sync', () => ({
     sync: {
         refreshSessions: mocks.refreshSessions,
         sendMessage: mocks.sendMessage,
+        generateOperationId: mocks.generateOperationId,
     },
 }));
 
@@ -136,6 +138,7 @@ describe('useStartSessionFromDraft', () => {
         await expect(startSession()).resolves.toBe(true);
 
         expect(mocks.machineSpawnNewSession).toHaveBeenCalledWith({
+            operationId: 'a32d5b89-f2ae-4bd9-bab2-4e6f21bbac95',
             machineId: 'machine-1',
             directory: '/absolute/project',
             approvedNewDirectoryCreation: false,
@@ -174,6 +177,11 @@ describe('useStartSessionFromDraft', () => {
         expect(mocks.machineSpawnNewSession).toHaveBeenNthCalledWith(2, expect.objectContaining({
             approvedNewDirectoryCreation: true,
         }));
+        expect(mocks.machineSpawnNewSession.mock.calls.map(([options]) => options.operationId))
+            .toEqual([
+                'a32d5b89-f2ae-4bd9-bab2-4e6f21bbac95',
+                'a32d5b89-f2ae-4bd9-bab2-4e6f21bbac95',
+            ]);
         expect(mocks.navigateToSession).toHaveBeenCalledWith('session-2');
     });
 

@@ -32,6 +32,7 @@ describe('Codex Gateway state', () => {
             happyHomeDir,
             runtimeRoot,
             now: 100,
+            bootstrapOperationId: '6e997fc4-bf4c-4ca0-a36d-c59e2f79ba37',
         });
         const running = {
             ...created.descriptor,
@@ -47,6 +48,8 @@ describe('Codex Gateway state', () => {
         expect(JSON.parse(await readFile(created.paths.secretPath, 'utf8'))).not.toHaveProperty('threadId');
         expect(created.secret).not.toHaveProperty('normalExitNonce');
         expect(created.secret.sessionKeySeed).toHaveLength(43);
+        expect(created.descriptor.bootstrapOperationId).toBe('6e997fc4-bf4c-4ca0-a36d-c59e2f79ba37');
+        expect(created.descriptor.providerPid).toBeNull();
         expect(created.paths.journalPath).toBe(join(created.paths.gatewayDir, 'gateway.jsonl'));
         if (process.platform !== 'win32') {
             await assertPrivateFile(created.paths.descriptorPath);
