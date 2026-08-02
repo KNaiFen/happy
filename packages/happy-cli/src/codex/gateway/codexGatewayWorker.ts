@@ -298,7 +298,11 @@ async function runCodexGatewayWorkerInternal(
                 state: 'providerAccepted',
                 updatedAt: Date.now(),
             });
-            const bound = await requireCoordinator().bindRoot(input.targetThreadId);
+            const bound = await requireCoordinator().bindRoot(input.targetThreadId, {
+                subscription: input.command.command === 'thread.start'
+                    ? 'autoAttachedNewThread'
+                    : 'resume',
+            });
             await journal.recordHandoff({
                 commandId: input.command.commandId,
                 sourceThreadId: input.sourceThreadId,
@@ -316,7 +320,11 @@ async function runCodexGatewayWorkerInternal(
                 return { action: 'succeeded' as const, threadId: handoff.targetThreadId };
             }
             try {
-                const bound = await requireCoordinator().bindRoot(handoff.targetThreadId);
+                const bound = await requireCoordinator().bindRoot(handoff.targetThreadId, {
+                    subscription: command.command === 'thread.start'
+                        ? 'autoAttachedNewThread'
+                        : 'resume',
+                });
                 await journal.recordHandoff({
                     ...handoff,
                     generation: bound.generation,
@@ -479,7 +487,11 @@ async function runCodexGatewayWorkerInternal(
             const reservation = rootReservations.get(rootRequestKey(binding));
             rootReservations.delete(rootRequestKey(binding));
             try {
-                await requireCoordinator().bindRoot(binding.threadId);
+                await requireCoordinator().bindRoot(binding.threadId, {
+                    subscription: binding.method === 'thread/start'
+                        ? 'autoAttachedNewThread'
+                        : 'resume',
+                });
             } catch (error) {
                 const diagnosed = error instanceof CodexGatewayRootBindingError
                     ? error
@@ -700,7 +712,11 @@ async function runCodexGatewayWorkerInternal(
             rootSessionConfigs.set(threadId, rootConfigFromBootstrap(accepted));
         }
 
-        const bound = await activeCoordinator.bindRoot(threadId);
+        const bound = await activeCoordinator.bindRoot(threadId, {
+            subscription: input.action === 'start'
+                ? 'autoAttachedNewThread'
+                : 'resume',
+        });
         await journal.recordBootstrap({
             ...bootstrapRecordInput(input, threadId),
             state: 'bound',

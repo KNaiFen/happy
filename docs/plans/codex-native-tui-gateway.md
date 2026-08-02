@@ -380,11 +380,26 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       安全状态，避免再等待通用 120 秒超时。拿到阶段证据前不放宽“先完成持久绑定再把
       root RPC 响应交给 TUI”的一致性边界。CLI `1.4.23` 发布 workflow 已运行，后续产品
       修复必须推进到 `1.4.24`。
+      第十五轮的 payload-free 诊断将失败精确定位为
+      `rootBinding:providerSnapshot:protocol`。官方 Codex `0.146.0` 源码测试
+      `thread_resume_rejects_unmaterialized_thread` 明确规定：`thread/start` 返回后、首条
+      用户消息写入 rollout 前，`thread/resume` 必须以 `no rollout found` 拒绝。与此同时，
+      官方 WebSocket app-server 在 `thread/start` 创建线程时会把所有已初始化连接自动
+      订阅到新线程，因此 Happy bridge 对新根已经是合法订阅者，不得再次 resume。
+      产品绑定必须按根方法区分：`thread/start` 使用稳定的
+      `thread/read(includeTurns=false)` 读取 live、未物化 snapshot；真正的
+      `thread/resume`、恢复绑定和可物化 history 继续通过 resume 取得完整 snapshot 与
+      订阅。runtime 激活必须直接迁移 coordinator 已取得的同一份 snapshot，不得内部再
+      发一次 `thread/read(includeTurns=true)`。官方 app-server 门禁新增双连接场景，证明
+      第二个已初始化 bridge 在首条消息前能读取新线程、无需 resume，并能收到随后真实
+      tool、reasoning summary、stream 和 `turn/completed`；PTY 首屏等待同时轮询脱敏
+      `lastError`，阶段失败立即结束而不是空等 120 秒。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
   - official app-server 门禁：stable-v2 生命周期、resume/list/read、tool、reasoning
-    summary、stream 与完成。
+    summary、stream 与完成；另以两个真实 WebSocket 连接验证未物化新线程的自动订阅、
+    metadata-only read 和首 turn 通知回流。
   - Android field 门禁：真实 App UI 到 relay、CLI、官方 Codex 的新建/resume、MCP
     与回复回流。
   - source/transport 门禁：new/fork、审批 first-win、active handoff/drain、queue
@@ -542,3 +557,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   真实 PTY 随后在首个 `thread/start` 的 worker root binding 阶段收到通用 transport close。
   先补 payload-free 分阶段诊断和失败状态 artifact，再依据云端证据修复；目标推进
   `1.4.24`。
+- 2026-08-02：主 CI `30761151549` 将根绑定失败精确分类为
+  `providerSnapshot:protocol`。官方 `0.146.0` 源码确认未物化新线程不能 resume，同时
+  app-server 会把所有已初始化连接自动订阅到新建线程。新线程绑定改为 metadata-only
+  live read，并把同一 snapshot 直接交给 runtime 迁移；恢复/真实 resume 仍使用完整
+  resume。新增官方双连接验收和 PTY 阶段快速失败。

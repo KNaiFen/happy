@@ -155,6 +155,14 @@ vi.mock('../codexAppServerClient', () => ({
             }
             return { threadId, model: 'gpt-test', thread: thread(threadId) };
         }
+        async readThread(options: { threadId: string }) {
+            if (mocks.subscribeFailureCode) {
+                throw Object.assign(new Error('provider payload must stay private'), {
+                    code: mocks.subscribeFailureCode,
+                });
+            }
+            return { thread: thread(options.threadId) };
+        }
         async readThreadComplete(options: { threadId: string }) {
             return { thread: thread(options.threadId) };
         }

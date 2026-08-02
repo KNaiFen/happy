@@ -182,12 +182,15 @@ export class CodexV4ThreadRouter {
         await this.retryPendingForThread(threadId);
     }
 
-    async migrateRootSnapshot(threadId: string): Promise<void> {
+    async migrateRootSnapshot(threadId: string, acquiredSnapshot?: Thread): Promise<void> {
+        if (acquiredSnapshot && acquiredSnapshot.id !== threadId) {
+            throw new Error('Codex root snapshot did not match the requested thread');
+        }
         const sink = this.migrationSinkForRoot();
         this.options.rootBinding.mapper.prepareSnapshotBarrier(threadId);
         const state = sink.getMigrationState(threadId);
         if (state === 'ready' || state === 'activating') {
-            const snapshot = await this.options.readThread(threadId);
+            const snapshot = acquiredSnapshot ?? await this.options.readThread(threadId);
             const goal = this.options.readGoal ? await this.options.readGoal(threadId) : null;
             this.options.rootBinding.mapper.importThreadState(snapshot);
             this.options.rootBinding.mapper.importGoal(threadId, goal);
@@ -211,7 +214,7 @@ export class CodexV4ThreadRouter {
             resolveChildSink: (route) => this.migrationSinkForChild(route),
         });
         await migrator.prepareRoot(threadId);
-        await migrator.migrate(await this.options.readThread(threadId));
+        await migrator.migrate(acquiredSnapshot ?? await this.options.readThread(threadId));
     }
 
     async recoverPendingNotifications(): Promise<void> {

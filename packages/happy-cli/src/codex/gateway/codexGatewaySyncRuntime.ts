@@ -70,7 +70,7 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
     async activate(snapshot: Thread): Promise<void> {
         this.assertOpen();
         await this.options.router.registerRootThread(this.options.rootThreadId);
-        await this.options.router.migrateRootSnapshot(this.options.rootThreadId);
+        await this.options.router.migrateRootSnapshot(this.options.rootThreadId, snapshot);
         await this.options.rootBinding.recover();
         await this.options.router.recoverPendingNotifications();
         await this.options.router.recoverActiveThreads();
@@ -80,7 +80,7 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
     async reconcile(snapshot: Thread): Promise<void> {
         this.assertOpen();
         await this.options.router.registerRootThread(this.options.rootThreadId);
-        await this.options.router.migrateRootSnapshot(this.options.rootThreadId);
+        await this.options.router.migrateRootSnapshot(this.options.rootThreadId, snapshot);
         await this.options.rootBinding.recover();
         await this.options.router.recoverPendingNotifications();
         await this.options.router.recoverActiveThreads();

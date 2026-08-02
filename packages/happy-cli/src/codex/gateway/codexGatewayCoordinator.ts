@@ -113,6 +113,10 @@ export interface CodexGatewayRecoveredBinding {
     role: 'current' | 'draining';
 }
 
+export interface CodexGatewayBindRootOptions {
+    subscription?: 'resume' | 'autoAttachedNewThread';
+}
+
 export class CodexGatewayCoordinator {
     private readonly bindingLock = new AsyncLock();
     private readonly roots = new Map<string, ManagedRoot>();
@@ -171,7 +175,10 @@ export class CodexGatewayCoordinator {
         }
     }
 
-    async bindRoot(threadId: string): Promise<{
+    async bindRoot(
+        threadId: string,
+        options: CodexGatewayBindRootOptions = {},
+    ): Promise<{
         sessionId: string | null;
         generation: number;
         changed: boolean;
@@ -253,17 +260,23 @@ export class CodexGatewayCoordinator {
 
             let previousMarkedDraining = false;
             try {
-                const resumed = await rootBindingStep(
+                const providerSnapshot = await rootBindingStep(
                     'providerSnapshot',
-                    () => this.options.client.subscribeThread(threadId),
+                    async () => options.subscription === 'autoAttachedNewThread'
+                        ? (await this.options.client.readThread({
+                            threadId,
+                            includeTurns: false,
+                            emitSnapshot: false,
+                        })).thread
+                        : (await this.options.client.subscribeThread(threadId)).thread,
                 );
-                target.title = safeThreadTitle(resumed.thread);
-                target.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
+                target.title = safeThreadTitle(providerSnapshot);
+                target.rootActiveTurnId = activeTurnIdFromSnapshot(providerSnapshot);
                 await rootBindingStep(
                     'runtimeProjection',
                     () => created
-                        ? target.runtime.activate(resumed.thread)
-                        : target.runtime.reconcile(resumed.thread),
+                        ? target.runtime.activate(providerSnapshot)
+                        : target.runtime.reconcile(providerSnapshot),
                 );
                 await rootBindingStep(
                     'pendingNotifications',

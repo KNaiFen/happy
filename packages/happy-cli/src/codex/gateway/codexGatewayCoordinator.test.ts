@@ -148,6 +148,24 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.acquire).toHaveBeenCalledOnce();
     });
 
+    it('binds a newly started unmaterialized thread without issuing thread/resume', async () => {
+        const fresh = thread('thread-fresh', 'idle');
+        const harness = createHarness({ 'thread-fresh': fresh });
+        await harness.coordinator.connect();
+
+        await expect(harness.coordinator.bindRoot('thread-fresh', {
+            subscription: 'autoAttachedNewThread',
+        })).resolves.toMatchObject({ generation: 1, changed: true });
+
+        expect(harness.client.subscribeThread).not.toHaveBeenCalled();
+        expect(harness.client.readThread).toHaveBeenCalledWith({
+            threadId: 'thread-fresh',
+            includeTurns: false,
+            emitSnapshot: false,
+        });
+        expect(harness.runtimes.get('thread-fresh')!.activatedSnapshots).toEqual([fresh]);
+    });
+
     it('does not flush a draining source while its root handoff command is still in flight', async () => {
         const harness = createHarness({
             'thread-a': thread('thread-a', 'idle'),
@@ -346,6 +364,7 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     readonly bindings: CodexGatewayRuntimeBinding[] = [];
     readonly notifications: ServerNotification[] = [];
     readonly ownedThreads = new Set<string>();
+    readonly activatedSnapshots: Thread[] = [];
     drained = true;
     onNotification: ((notification: ServerNotification) => Promise<void>) | null = null;
     readonly close = vi.fn<() => Promise<void>>(async () => undefined);
@@ -376,7 +395,9 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     }
 
     setConnection(_event: CodexConnectionEvent): void {}
-    async activate(_snapshot: Thread): Promise<void> {}
+    async activate(snapshot: Thread): Promise<void> {
+        this.activatedSnapshots.push(snapshot);
+    }
     async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
         this.bindings.push(binding);
     }
@@ -409,6 +430,9 @@ class FakeClient {
         threadId,
         model: 'gpt-test',
         thread: this.threads.get(threadId)!,
+    }));
+    readonly readThread = vi.fn(async (options: { threadId: string }) => ({
+        thread: this.threads.get(options.threadId)!,
     }));
     readonly readThreadComplete = vi.fn(async (options: { threadId: string }) => ({
         thread: this.threads.get(options.threadId)!,

@@ -74,8 +74,22 @@ test.describe('terminal-origin Gateway', () => {
     });
 
     test('keeps terminal and App on one official provider before abnormal detach', async ({ terminal }) => {
-        await expect(terminal.getByText(terminalPrompt, { full: true, strict: false }))
-            .toBeVisible({ timeout: 120_000 });
+        const terminalPromptLocator = terminal.getByText(terminalPrompt, {
+            full: true,
+            strict: false,
+        });
+        await waitUntil(async () => {
+            const status = await readStatus({});
+            if (status.gateway?.lastError?.startsWith('rootBinding:')) {
+                throw new Error(`Codex Gateway failed with ${status.gateway.lastError}`);
+            }
+            try {
+                await expect(terminalPromptLocator).toBeVisible({ timeout: 100 });
+                return true;
+            } catch {
+                return false;
+            }
+        }, 120_000, 'terminal prompt or root binding diagnosis');
         const officialResponseLocator = terminal.getByText(officialResponse, {
             full: true,
             strict: false,

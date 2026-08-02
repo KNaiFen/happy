@@ -109,7 +109,8 @@ describe('CodexGatewaySyncRuntime', () => {
     it('hydrates the authoritative snapshot before publishing thread metadata', async () => {
         const harness = createHarness();
 
-        await harness.runtime.activate(thread({ name: 'Official thread name' }));
+        const snapshot = thread({ name: 'Official thread name' });
+        await harness.runtime.activate(snapshot);
 
         expect(harness.calls).toEqual([
             'router.register',
@@ -124,6 +125,7 @@ describe('CodexGatewaySyncRuntime', () => {
             name: 'Official thread name',
             codexThreadId: 'thread-1',
         });
+        expect(harness.router.migrateRootSnapshot).toHaveBeenCalledWith('thread-1', snapshot);
     });
 
     it('persists the binding, publishes it, flushes it, and only then archives inactive history', async () => {

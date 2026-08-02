@@ -440,6 +440,31 @@ describe('CodexV4ThreadRouter', () => {
         );
     });
 
+    it('migrates an acquired live root snapshot without reading the provider twice', async () => {
+        const root = binding('happy-root');
+        const snapshot = thread('thread-root', null);
+        const readThread = vi.fn(async () => {
+            throw new Error('unexpected duplicate provider read');
+        });
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread,
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+        });
+
+        await router.registerRootThread('thread-root');
+        await router.migrateRootSnapshot('thread-root', snapshot);
+
+        expect(readThread).not.toHaveBeenCalled();
+        expect(root.mapper.snapshots).toEqual([snapshot]);
+        expect(root.value.syncClient.setMigrationState).toHaveBeenLastCalledWith(
+            'thread-root',
+            'ready',
+        );
+    });
+
     it('hydrates an unknown child and never projects its lifecycle into the parent mapper', async () => {
         const root = binding('happy-root');
         const child = binding('happy-child');

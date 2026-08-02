@@ -363,12 +363,72 @@ async function exerciseOfficialUnixWebSocket(options: {
             await client.disconnect().catch(() => undefined);
         }
     });
+    await runOfficialUnixWebSocketProbe(options, 'freshThreadObserver', async (socketPath) => {
+        const parsedVersion = parseCodexCliVersion(options.version);
+        assert(parsedVersion, 'validated official Codex version did not parse');
+        const endpoint = { webSocketEndpoint: { socketPath } } as const;
+        const observer = new options.CodexAppServerClient(undefined, parsedVersion, endpoint);
+        const creator = new options.CodexAppServerClient(undefined, parsedVersion, endpoint);
+        const observedMethods = new Set<string>();
+        let resolveObservedCompletion!: () => void;
+        const observedCompletion = new Promise<void>((resolve) => {
+            resolveObservedCompletion = resolve;
+        });
+        observer.setStableNotificationHandler((notification) => {
+            observedMethods.add(notification.method);
+            if (notification.method === 'turn/completed') resolveObservedCompletion();
+        });
+        try {
+            // The bridge is initialized before another connection creates the root.
+            // Official app-server auto-subscribes it through the thread-created event.
+            await observer.connect();
+            await creator.connect();
+            const started = await creator.startThread({
+                cwd: options.cwd,
+                approvalPolicy: 'never',
+                sandbox: 'read-only',
+            });
+            const live = await observer.readThread({
+                threadId: started.threadId,
+                includeTurns: false,
+                emitSnapshot: false,
+            });
+            assert.equal(live.thread.id, started.threadId);
+            assert.equal(live.thread.turns.length, 0);
+
+            const [turn] = await withTimeout(Promise.all([
+                creator.sendTurnAndWait('verify a second initialized connection observes the first turn', {
+                    clientUserMessageId: 'official-fresh-thread-observer-command',
+                }),
+                observedCompletion,
+            ]), 90_000, 'fresh thread observer lifecycle');
+            assert.equal(turn.aborted, false, 'fresh thread observer turn was aborted');
+            for (const method of [
+                'turn/started',
+                'item/commandExecution/outputDelta',
+                'item/reasoning/summaryTextDelta',
+                'item/agentMessage/delta',
+                'turn/completed',
+            ]) {
+                assert(
+                    observedMethods.has(method),
+                    `auto-subscribed observer omitted ${method}`,
+                );
+            }
+        } finally {
+            await Promise.allSettled([
+                observer.disconnect(),
+                creator.disconnect(),
+            ]);
+        }
+    });
 }
 
 type OfficialUnixWebSocketProbePhase =
     | 'rfc6455Handshake'
     | 'websocketOpen'
-    | 'initialize';
+    | 'initialize'
+    | 'freshThreadObserver';
 
 async function runOfficialUnixWebSocketProbe(
     options: {
