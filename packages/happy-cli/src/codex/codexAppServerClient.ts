@@ -212,7 +212,7 @@ export interface CodexManagedServerResponse {
 
 export type CodexServerRequestHandler = (
     request: CodexServerRequest,
-) => Promise<CodexManagedServerResponse>;
+) => Promise<CodexManagedServerResponse | null>;
 
 export interface CodexConnectionEvent {
     connection: 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -2986,7 +2986,7 @@ export class CodexAppServerClient {
         sourceEpoch: number,
     ): Promise<void> {
         if (this.serverRequestHandler && isStableServerRequestMethod(method)) {
-            let managed: CodexManagedServerResponse;
+            let managed: CodexManagedServerResponse | null;
             try {
                 managed = await this.serverRequestHandler({
                     requestId: String(id),
@@ -2998,6 +2998,9 @@ export class CodexAppServerClient {
                 await this.respondError(id, -32000, 'Server request handler failed', sourceEpoch);
                 return;
             }
+            // A passive Gateway subscriber may deliberately leave the request
+            // unanswered while another attached TUI owns the first response.
+            if (!managed) return;
             if (!await this.respond(id, managed.response, sourceEpoch)) {
                 await managed.markAbandoned();
                 return;

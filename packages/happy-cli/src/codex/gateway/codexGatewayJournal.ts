@@ -171,6 +171,19 @@ export class CodexGatewayJournal {
         return entry;
     }
 
+    async enqueueSnapshotRequired(threadId: string): Promise<CodexGatewayDeferredEntry> {
+        this.assertOpen();
+        validateThreadId(threadId);
+        const entry: CodexGatewayDeferredEntry = {
+            id: randomUUID(),
+            kind: 'snapshotRequired',
+            threadId,
+            receivedAt: this.now(),
+        };
+        await this.append({ version: JOURNAL_VERSION, kind: 'deferred', entry });
+        return entry;
+    }
+
     async completeEntry(entryId: string): Promise<void> {
         this.assertOpen();
         if (!this.deferred.has(entryId)) return;

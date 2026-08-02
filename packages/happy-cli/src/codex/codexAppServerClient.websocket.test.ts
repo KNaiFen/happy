@@ -109,6 +109,39 @@ describe('CodexAppServerClient external WebSocket transport', () => {
         await expect(pending).rejects.toBeInstanceOf(CodexRpcOutcomeUnknownError);
         expect(connectionStates.at(-1)).toBe('disconnected');
     });
+
+    it('keeps a passive stable server request unanswered for another subscriber', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-codex-client-ws-'));
+        const socketPath = join(root, 'provider.sock');
+        const messages: Array<Record<string, unknown>> = [];
+        const provider = await startProvider(socketPath, (socket, message) => {
+            messages.push(message);
+            if (message.method === 'initialize') {
+                socket.send(JSON.stringify({ id: message.id, result: { userAgent: 'test' } }));
+            }
+        });
+        cleanups.push(async () => {
+            await provider.close();
+            await rm(root, { recursive: true, force: true });
+        });
+        const client = new CodexAppServerClient(
+            undefined,
+            { major: 0, minor: 145, patch: 0 },
+            { webSocketEndpoint: { socketPath } },
+        );
+        client.setServerRequestHandler(async () => null);
+        cleanups.push(async () => client.disconnect());
+        await client.connect();
+
+        provider.clients()[0]?.send(JSON.stringify({
+            id: 99,
+            method: 'item/commandExecution/requestApproval',
+            params: { threadId: 'thread-a', turnId: 'turn-a', itemId: 'item-a' },
+        }));
+        await new Promise((resolve) => setTimeout(resolve, 25));
+
+        expect(messages.some((message) => message.id === 99)).toBe(false);
+    });
 });
 
 async function startProvider(

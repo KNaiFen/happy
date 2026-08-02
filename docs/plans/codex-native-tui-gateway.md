@@ -190,6 +190,9 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       mapper/router/request broker，移除隐藏 prompt/Happy MCP，执行前校验 generation，
       root 命令交给 Gateway handoff；resume lease reservation 在已知失败时回滚、结果
       未知时保留。draining 先无阻塞判定再 flush，避免源 command 等待自身的死锁。
+- [x] coordinator 支持 session ID 为空的 deferred root runtime：relay 离线时只落
+      snapshot marker、canonical 通知和待决 provider request，不创建伪 session/AAD，
+      也不与 TUI 竞速自动拒绝审批；恢复后原位物化、FIFO 回放并补齐 handoff 链接。
 - [ ] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
       terminal detach/attach 和 relay-offline materialization。
 
@@ -303,3 +306,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：将正常退出确认收紧为每次 attach 独立的 attachment ID 与一次性 nonce。
   worker 只在对应连接已进入 `pendingDetach` 后接受确认，防止旧 launcher 的迟到消息
   停止已经重新附着的 Gateway。
+- 2026-08-02：增加可原位物化的 deferred root runtime。provider request 在离线期间
+  保持无响应，由已附着 TUI first-win；收到 `serverRequest/resolved` 后被动结束，或在
+  relay 恢复后交给真实 request broker，避免 bridge 发送错误/拒绝响应。

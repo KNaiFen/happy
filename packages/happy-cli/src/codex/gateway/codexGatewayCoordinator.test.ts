@@ -78,6 +78,27 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
     });
 
+    it('fills the source handoff link after an offline target materializes', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'active', 'turn-a'),
+            'thread-b': thread('thread-b', 'idle'),
+        }, {
+            sessionIdForThread: (threadId) => threadId === 'thread-b' ? null : `session-${threadId}`,
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        await harness.coordinator.bindRoot('thread-b');
+        const source = harness.runtimes.get('thread-a')!;
+        const target = harness.runtimes.get('thread-b')!;
+        expect(source.bindings.at(-1)?.nextSessionId).toBeNull();
+
+        target.sessionId = 'session-thread-b';
+        await harness.coordinator.refreshBindingLinks();
+
+        expect(source.bindings.at(-1)?.nextSessionId).toBe('session-thread-b');
+        expect(target.bindings.at(-1)?.previousSessionId).toBe('session-thread-a');
+    });
+
     it('does not create a new generation when attach resumes the current root', async () => {
         const harness = createHarness({ 'thread-a': thread('thread-a', 'idle') });
         await harness.coordinator.connect();
@@ -248,7 +269,7 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     readonly reconcile = vi.fn(async (_snapshot: Thread) => undefined);
 
     constructor(
-        readonly sessionId: string,
+        public sessionId: string | null,
         readonly registerThreadOwnership: (threadId: string) => void,
         readonly assertCurrentGeneration: (generation: number | undefined) => void,
         rootThreadId: string,
@@ -332,6 +353,7 @@ function createHarness(
     options: {
         onError?: (error: unknown) => void;
         registerDuringCreation?: string;
+        sessionIdForThread?: (threadId: string) => string | null;
     } = {},
 ) {
     const client = new FakeClient(new Map(Object.entries(threads)));
@@ -348,7 +370,9 @@ function createHarness(
         onError: options.onError,
         createRuntime: async (factoryOptions: CodexGatewayRootRuntimeFactoryOptions) => {
             const runtime = new FakeRuntime(
-                `session-${factoryOptions.threadId}`,
+                options.sessionIdForThread
+                    ? options.sessionIdForThread(factoryOptions.threadId)
+                    : `session-${factoryOptions.threadId}`,
                 factoryOptions.registerThreadOwnership,
                 factoryOptions.assertCurrentGeneration,
                 factoryOptions.threadId,

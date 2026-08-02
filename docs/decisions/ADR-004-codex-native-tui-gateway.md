@@ -56,7 +56,7 @@ terminal-origin worker 由前台 launcher 继承当前终端环境后脱离启�
 区分二者。launcher 因此为每次 attach 生成独立 attachment ID 和一次性 nonce，在
 启动官方 TUI 前通过鉴权 control endpoint 注册，并只在该 TUI 正常返回后向 worker
 确认。worker 仅接受当前 attachment 已断开且处于 `pendingDetach` 时匹配的 ID 与
-nonce；旧 launcher 的迟到确认不能影响后来附着的 TUI。连接关闭后 worker等待 10 秒：
+nonce；旧 launcher 的迟到确认不能影响后来附着的 TUI。连接关闭后 worker 等待 10 秒：
 
 - nonce 确认成功时，terminal-origin worker 正常停止；App-origin worker 回到 headless；
 - 没有确认时，worker 进入 `terminalDetached`，保留 app-server、turn、bridge 和 App

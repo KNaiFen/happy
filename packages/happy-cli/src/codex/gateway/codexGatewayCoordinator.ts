@@ -23,9 +23,9 @@ export interface CodexGatewayRuntimeBinding {
 }
 
 export interface CodexGatewayRootRuntime {
-    readonly sessionId: string;
+    readonly sessionId: string | null;
     handleNotification(notification: ServerNotification): Promise<void>;
-    handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse>;
+    handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse | null>;
     setConnection(event: CodexConnectionEvent): void;
     activate(snapshot: Thread): Promise<void>;
     reconcile(snapshot: Thread): Promise<void>;
@@ -58,6 +58,8 @@ interface ManagedRoot {
     threadId: string;
     generation: number;
     role: CodexGatewayBindingRole;
+    previousSessionId: string | null;
+    nextSessionId: string | null;
     rootActiveTurnId: string | null;
     runtime: CodexGatewayRootRuntime;
 }
@@ -122,7 +124,7 @@ export class CodexGatewayCoordinator {
     }
 
     async bindRoot(threadId: string): Promise<{
-        sessionId: string;
+        sessionId: string | null;
         generation: number;
         changed: boolean;
     }> {
@@ -176,6 +178,8 @@ export class CodexGatewayCoordinator {
                         threadId,
                         generation: nextGeneration,
                         role: 'recovering',
+                        previousSessionId: previous?.runtime.sessionId ?? null,
+                        nextSessionId: null,
                         rootActiveTurnId: null,
                         runtime,
                     };
@@ -202,20 +206,23 @@ export class CodexGatewayCoordinator {
 
                 const changedAt = this.now();
                 if (previous) {
+                    previous.nextSessionId = target.runtime.sessionId;
                     await previous.runtime.updateBinding({
                         role: 'draining',
                         generation: previous.generation,
-                        previousSessionId: null,
-                        nextSessionId: target.runtime.sessionId,
+                        previousSessionId: previous.previousSessionId,
+                        nextSessionId: previous.nextSessionId,
                         changedAt,
                     });
                     previous.role = 'draining';
                     previousMarkedDraining = true;
                 }
+                target.previousSessionId = previous?.runtime.sessionId ?? null;
+                target.nextSessionId = null;
                 await target.runtime.updateBinding({
                     role: 'current',
                     generation: nextGeneration,
-                    previousSessionId: previous?.runtime.sessionId ?? null,
+                    previousSessionId: target.previousSessionId,
                     nextSessionId: null,
                     changedAt,
                 });
@@ -226,10 +233,11 @@ export class CodexGatewayCoordinator {
             } catch (error) {
                 if (previousMarkedDraining && previous) {
                     previous.role = 'current';
+                    previous.nextSessionId = null;
                     await previous.runtime.updateBinding({
                         role: 'current',
                         generation: previous.generation,
-                        previousSessionId: null,
+                        previousSessionId: previous.previousSessionId,
                         nextSessionId: null,
                         changedAt: this.now(),
                     }).catch((rollbackError) => this.options.onError?.(rollbackError));
@@ -318,6 +326,34 @@ export class CodexGatewayCoordinator {
 
     async retireDrainingRoots(): Promise<void> {
         await this.retireEligibleDrainingRoots();
+    }
+
+    async refreshBindingLinks(): Promise<void> {
+        await this.bindingLock.inLock(async () => {
+            const current = this.current;
+            if (!current) return;
+            const changedAt = this.now();
+            current.previousSessionId ??= nearestPriorSessionId(this.roots, current);
+            await current.runtime.updateBinding({
+                role: 'current',
+                generation: current.generation,
+                previousSessionId: current.previousSessionId,
+                nextSessionId: null,
+                changedAt,
+            });
+            await Promise.all([...this.roots.values()]
+                .filter((root) => root.role === 'draining')
+                .map((root) => {
+                    root.nextSessionId ??= current.runtime.sessionId;
+                    return root.runtime.updateBinding({
+                        role: 'draining',
+                        generation: root.generation,
+                        previousSessionId: root.previousSessionId,
+                        nextSessionId: root.nextSessionId,
+                        changedAt,
+                    });
+                }));
+        });
     }
 
     private installClientHandlers(): void {
@@ -557,6 +593,16 @@ export class CodexGatewayCoordinator {
 
 function validateThreadId(threadId: string): void {
     if (threadId.length === 0 || threadId.length > 512) throw new Error('Invalid Codex thread ID');
+}
+
+function nearestPriorSessionId(
+    roots: Map<string, ManagedRoot>,
+    current: ManagedRoot,
+): string | null {
+    return [...roots.values()]
+        .filter((root) => root.generation < current.generation && root.runtime.sessionId !== null)
+        .sort((left, right) => right.generation - left.generation)[0]
+        ?.runtime.sessionId ?? null;
 }
 
 function notificationThreadId(notification: ServerNotification): string | null {
