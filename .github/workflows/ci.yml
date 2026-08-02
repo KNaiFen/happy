@@ -517,7 +517,6 @@ jobs:
     timeout-minutes: 25
     env:
       HAPPY_SCENARIO_CODEX_VERSION: ${{ needs.official_codex.outputs.version }}
-      HAPPY_GATEWAY_TUI_ARTIFACT_DIR: ${{ runner.temp }}/happy-gateway-tui-artifacts
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -580,6 +579,8 @@ jobs:
 
       - name: Exercise terminal, App, detach, attach, and normal stop through a real PTY
         run: pnpm --filter happy test:codex-gateway-tui
+        env:
+          HAPPY_GATEWAY_TUI_ARTIFACT_DIR: ${{ runner.temp }}/happy-gateway-tui-artifacts
 
       - name: Upload TUI traces and fixture diagnostics
         if: always()
