@@ -82,12 +82,62 @@ type RootSessionBootstrapConfig = Pick<
     | 'dataEncryptionKey'
 >;
 
+type CodexGatewayStartupStage =
+    | 'state'
+    | 'journal'
+    | 'authentication'
+    | 'configuration'
+    | 'relay'
+    | 'control'
+    | 'provider'
+    | 'bridge'
+    | 'proxy'
+    | 'ready';
+
 export async function runCodexGatewayWorker(options: {
     gatewayId: string;
     happyHomeDir?: string;
     runtimeRoot?: string;
     heartbeatMs?: number;
 }): Promise<void> {
+    const startup: {
+        stage: CodexGatewayStartupStage;
+        earlyCleanup: (() => Promise<void>) | null;
+    } = {
+        stage: 'state',
+        earlyCleanup: null,
+    };
+    const markStartupStage = (stage: CodexGatewayStartupStage): void => {
+        if (startup.stage !== 'ready') startup.stage = stage;
+    };
+    try {
+        await runCodexGatewayWorkerInternal(
+            options,
+            markStartupStage,
+            (cleanup) => { startup.earlyCleanup = cleanup; },
+        );
+    } catch (error) {
+        const cleanup = startup.earlyCleanup;
+        startup.earlyCleanup = null;
+        if (cleanup) await cleanup().catch(() => undefined);
+        if (startup.stage !== 'ready') {
+            await persistCodexGatewayStartupFailure(options, startup.stage, error)
+                .catch(() => undefined);
+        }
+        throw error;
+    }
+}
+
+async function runCodexGatewayWorkerInternal(
+    options: {
+        gatewayId: string;
+        happyHomeDir?: string;
+        runtimeRoot?: string;
+        heartbeatMs?: number;
+    },
+    markStartupStage: (stage: CodexGatewayStartupStage) => void,
+    setEarlyCleanup: (cleanup: (() => Promise<void>) | null) => void,
+): Promise<void> {
     const paths = codexGatewayPaths(options.gatewayId, {
         happyHomeDir: options.happyHomeDir,
         runtimeRoot: options.runtimeRoot,
@@ -113,6 +163,7 @@ export async function runCodexGatewayWorker(options: {
     const gatewayCwd = initialDescriptor.cwd;
     const resumeGracefulStop = initialDescriptor.state === 'stopping';
 
+    markStartupStage('journal');
     const journal = await CodexGatewayJournal.open({
         path: paths.journalPath,
         isProcessAlive: (pid) => isExpectedCodexGatewayWorkerProcess({
@@ -120,6 +171,7 @@ export async function runCodexGatewayWorker(options: {
             gatewayId: options.gatewayId,
         }),
     });
+    setEarlyCleanup(() => journal.close());
 
     const descriptorStore = new CodexGatewayDescriptorStore(paths, {
         ...initialDescriptor,
@@ -137,14 +189,17 @@ export async function runCodexGatewayWorker(options: {
     for (const bootstrap of journal.pendingBootstraps()) {
         rootSessionConfigs.set(bootstrap.resolvedThreadId, rootConfigFromBootstrap(bootstrap));
     }
+    markStartupStage('authentication');
     const credentials = await readCredentials();
     if (!credentials) throw new Error('Happy authentication is required before starting Codex Gateway');
     const scopedCredentials = await scopeCredentialsToCurrentRelay(credentials, {
         skipProbeForBoundOrigin: true,
     });
+    markStartupStage('configuration');
     const settings = await readSettings();
     if (!settings.machineId) throw new Error('Happy machine registration is missing');
     const codexCliVersion = assertMinimumCodexCliVersion(readCodexCliVersion());
+    markStartupStage('relay');
     const api = await ApiClient.create(scopedCredentials);
     await api.getOrCreateMachine({
         machineId: settings.machineId,
@@ -305,6 +360,7 @@ export async function runCodexGatewayWorker(options: {
                 void updateGatewayLifecycle(lifecycle);
             },
             ready: async ({ recovered }) => {
+                markStartupStage('bridge');
                 if (!coordinator) {
                     await client.connect();
                     const models = await loadCodexModelCapabilities(client) ?? [];
@@ -448,6 +504,8 @@ export async function runCodexGatewayWorker(options: {
     process.once('SIGINT', stopSignal);
 
     try {
+        setEarlyCleanup(null);
+        markStartupStage('control');
         controlServer = await startCodexGatewayControlServer({
             socketPath: initialDescriptor.controlSocketPath ?? undefined,
             port: initialDescriptor.controlSocketPath ? undefined : 0,
@@ -459,10 +517,13 @@ export async function runCodexGatewayWorker(options: {
             controlSocketPath: controlServer!.socketPath,
             controlPort: controlServer!.port,
         }));
+        markStartupStage('provider');
         await provider.start();
         providerStarted = true;
+        markStartupStage('proxy');
         await proxy.start();
         await updateGatewayLifecycle('running');
+        markStartupStage('ready');
         heartbeat = setInterval(() => { void heartbeatOnce(); }, options.heartbeatMs ?? HEARTBEAT_MS);
         if (resumeGracefulStop) void requestShutdown(false);
         await new Promise<void>((resolve, reject) => {
@@ -925,6 +986,29 @@ function activeTurnId(thread: Thread): string | null {
 
 function relayTransportSecurity(): 'https' | 'insecureHttp' {
     return new URL(configuration.serverUrl).protocol === 'http:' ? 'insecureHttp' : 'https';
+}
+
+async function persistCodexGatewayStartupFailure(
+    options: {
+        gatewayId: string;
+        happyHomeDir?: string;
+        runtimeRoot?: string;
+    },
+    stage: Exclude<CodexGatewayStartupStage, 'ready'>,
+    error: unknown,
+): Promise<void> {
+    const paths = codexGatewayPaths(options.gatewayId, {
+        happyHomeDir: options.happyHomeDir,
+        runtimeRoot: options.runtimeRoot,
+    });
+    const descriptor = await readCodexGatewayDescriptor(paths.descriptorPath);
+    if (!descriptor || descriptor.state === 'running' || descriptor.state === 'stopping') return;
+    await writeCodexGatewayDescriptor(paths, {
+        ...descriptor,
+        state: descriptor.state === 'starting' ? 'stopped' : descriptor.state,
+        lastError: `startup:${stage}:${safeErrorKind(error)}`,
+        heartbeatAt: Date.now(),
+    });
 }
 
 function safeErrorKind(error: unknown): string {

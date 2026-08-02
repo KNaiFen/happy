@@ -36,6 +36,7 @@ vi.mock('./codexGatewayState', () => ({
 import {
     ensureCodexGatewayRunning,
     launchCodexGatewayHeadless,
+    waitForGatewayReady,
 } from './codexGatewayLauncher';
 
 describe('Codex Gateway App bootstrap launcher', () => {
@@ -164,5 +165,26 @@ describe('Codex Gateway App bootstrap launcher', () => {
             ['__codex-gateway-worker', mocks.secret.gatewayId],
             expect.objectContaining({ cwd: '/workspace/project', detached: true }),
         );
+    });
+
+    it('surfaces a persisted startup failure without calling a dead control endpoint', async () => {
+        const descriptor = {
+            gatewayId: mocks.secret.gatewayId,
+            cwd: '/workspace/project',
+            state: 'stopped',
+            lastError: 'startup:authentication:unknown',
+            controlSocketPath: '/tmp/control.sock',
+            controlPort: null,
+        } as any;
+        mocks.descriptors = [descriptor];
+
+        await expect(waitForGatewayReady(
+            descriptor,
+            mocks.secret as any,
+            { timeoutMs: 20, pollMs: 1 },
+        )).rejects.toThrow(
+            'Codex Gateway stopped during startup (startup:authentication:unknown)',
+        );
+        expect(mocks.callControl).not.toHaveBeenCalled();
     });
 });

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     proxyHooks: null as CodexGatewayProxyHooks | null,
     startThread: vi.fn(async () => ({ threadId: 'thread-app', model: 'gpt-test' })),
     relayAvailable: false,
+    credentialsAvailable: true,
 }));
 
 vi.mock('@/api/api', () => ({
@@ -24,10 +25,10 @@ vi.mock('@/api/api', () => ({
 }));
 vi.mock('@/daemon/initialMachineMetadata', () => ({ initialMachineMetadata: { host: 'test' } }));
 vi.mock('@/persistence', () => ({
-    readCredentials: vi.fn(async () => ({
+    readCredentials: vi.fn(async () => mocks.credentialsAvailable ? ({
         token: 'token',
         encryption: { type: 'dataKey', publicKey: new Uint8Array(32) },
-    })),
+    }) : null),
     readSettings: vi.fn(async () => ({ machineId: 'machine-a' })),
 }));
 vi.mock('@/ui/auth', () => ({
@@ -134,6 +135,7 @@ import {
     writeCodexGatewayDescriptor,
 } from './codexGatewayState';
 import { createCodexGatewayAttachmentCredentials } from './codexGatewayAttachment';
+import { CodexGatewayJournal } from './codexGatewayJournal';
 import { runCodexGatewayWorker } from './codexGatewayWorker';
 
 const roots: string[] = [];
@@ -143,10 +145,42 @@ afterEach(async () => {
     mocks.proxyHooks = null;
     mocks.startThread.mockClear();
     mocks.relayAvailable = false;
+    mocks.credentialsAvailable = true;
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe('Codex Gateway worker composition', () => {
+    it('persists a payload-free stage when startup fails before the control server', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.credentialsAvailable = false;
+
+        await expect(runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+        })).rejects.toThrow('Happy authentication is required');
+
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            state: 'stopped',
+            lastError: 'startup:authentication:unknown',
+        });
+        expect(mocks.controlHandlers).toBeNull();
+
+        const reopenedJournal = await CodexGatewayJournal.open({
+            path: created.paths.journalPath,
+        });
+        await reopenedJournal.close();
+    });
+
     it('persists an offline root and exits only after the matching terminal confirms normal exit', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);

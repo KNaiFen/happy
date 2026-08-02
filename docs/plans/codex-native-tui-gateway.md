@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.17`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.18`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -314,6 +314,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       第三轮云端执行确认固定版本会递归转换整个 runner cwd，并被 CLI 根目录中指向
       未跟踪文件的旧 `.cursorrules` 链接阻断；专用 config 与测试应共同放在
       `tests/tui/`，以这个最小目录运行，避免复制无关配置和 200 MiB 以上工具归档。
+      第四轮云端执行已进入真实 PTY，但 worker 早期异常会在 control server 建立前
+      直接退出，descriptor 留在 `starting`；launcher 又只在 control RPC 成功后检查
+      `stopped`，最终把真实错误掩盖成 20 秒通用超时。worker 必须持久化脱敏启动阶段码，
+      launcher 必须先检查持久状态并在超时中携带最后状态，不以 control 存活为前提。
+      早期异常还必须释放已打开的 journal 句柄与 lease，使同一 Gateway 能由恢复流程接管。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -329,16 +334,18 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [x] CLI 升至 `1.4.17`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
+- [x] CLI 升至 `1.4.18`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
       每个失败输出独立诊断。
+      `1.4.17` 发布制品已通过并下载，但真实 PTY 暴露 worker 早期失败不可诊断的产品
+      缺陷；修复属于可分发 CLI 行为，因此继续推进且不复用该版本。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.17.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.18.tgz` 到
       `dist/release-artifacts`。
-- [ ] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
+- [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
 ## 本地安全边界
 

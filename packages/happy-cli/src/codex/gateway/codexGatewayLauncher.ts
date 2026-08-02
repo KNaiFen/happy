@@ -313,17 +313,21 @@ async function confirmNormalExit(
     }
 }
 
-async function waitForGatewayReady(
+export async function waitForGatewayReady(
     descriptor: CodexGatewayDescriptor,
     secret: CodexGatewaySecret,
+    timing: { timeoutMs?: number; pollMs?: number } = {},
 ): Promise<CodexGatewayDescriptor> {
-    const deadline = Date.now() + WORKER_READY_TIMEOUT_MS;
+    const timeoutMs = timing.timeoutMs ?? WORKER_READY_TIMEOUT_MS;
+    const pollMs = timing.pollMs ?? WORKER_READY_POLL_MS;
+    const deadline = Date.now() + timeoutMs;
     let latest = descriptor;
     const descriptorPath = codexGatewayPaths(descriptor.gatewayId).descriptorPath;
     while (Date.now() < deadline) {
         latest = await readCodexGatewayDescriptor(descriptorPath) ?? latest;
+        assertGatewayDidNotStopDuringStartup(latest);
         if (!latest.controlSocketPath && !latest.controlPort) {
-            await new Promise((resolve) => setTimeout(resolve, WORKER_READY_POLL_MS));
+            await new Promise((resolve) => setTimeout(resolve, pollMs));
             continue;
         }
         try {
@@ -334,15 +338,21 @@ async function waitForGatewayReady(
                 timeoutMs: 1_000,
             });
             if (latest.state === 'running') return latest;
-            if (latest.state === 'stopped') {
-                throw new Error(`Codex Gateway stopped during startup (${latest.lastError ?? 'unknown'})`);
-            }
+            assertGatewayDidNotStopDuringStartup(latest);
         } catch (error) {
             if (error instanceof Error && error.message.startsWith('Codex Gateway stopped')) throw error;
         }
-        await new Promise((resolve) => setTimeout(resolve, WORKER_READY_POLL_MS));
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
-    throw new Error(`Codex Gateway did not become ready within ${WORKER_READY_TIMEOUT_MS}ms`);
+    throw new Error(
+        `Codex Gateway did not become ready within ${timeoutMs}ms `
+        + `(state=${latest.state}, error=${latest.lastError ?? 'none'})`,
+    );
+}
+
+function assertGatewayDidNotStopDuringStartup(descriptor: CodexGatewayDescriptor): void {
+    if (descriptor.state !== 'stopped') return;
+    throw new Error(`Codex Gateway stopped during startup (${descriptor.lastError ?? 'unknown'})`);
 }
 
 async function selectGateway(
