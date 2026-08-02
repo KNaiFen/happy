@@ -1,0 +1,22 @@
+{
+  "extends": "../../packages/happy-cli/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "declaration": false,
+    "rootDir": "../..",
+    "paths": {
+      "@/*": [
+        "packages/happy-cli/src/*"
+      ],
+      "@slopus/happy-wire": [
+        "packages/happy-wire/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "codex-gateway-tui-fixture.ts",
+    "codex-responses-fixture.ts",
+    "../../packages/happy-cli/tests/tui/codexGatewayTui.test.ts",
+    "../../packages/happy-cli/tui-test.config.ts"
+  ]
+}

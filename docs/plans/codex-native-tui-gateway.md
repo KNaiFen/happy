@@ -178,7 +178,10 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - [x] 确认 clean `main`、基线版本和云端构建边界。
 - [x] 落盘本权威计划并记录本地 memory。
 - [x] 新增 ADR，记录官方 TUI、独立 worker、attach 语义、thread lease 和 handoff。
-- [ ] 固化当前自定义 TUI、静态 thread 绑定和 daemon 生命周期的失败测试。
+- [x] 固化旧自定义 TUI、静态 thread 绑定和 daemon 生命周期的失败边界：
+      `codexCommand`、Gateway launcher/worker/coordinator、daemon discovery 和
+      App Gateway manager 的 source-level 回归测试共同锁定原生委派、动态 binding、
+      异常 detach 与 daemon 重发现语义。
 
 ### 2. Gateway 核心
 
@@ -288,23 +291,37 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - [x] 删除 Codex 自定义 Ink UI 和 raw stdin 交互层。
 - [x] 删除 Happy `change_title` MCP、隐藏 `codexPrompt` 标题指令和 Codex XML system prompt。
 - [x] 标题使用官方 thread name，缺失时退回官方 preview 的安全截断。
-- [ ] 保留 Gemini/ACP 仍使用的共享 server/MCP 基础设施，不以名称误删。
+- [x] 保留 Gemini/ACP 仍使用的共享 server/MCP 基础设施；Codex-only provider
+      allowlist 门禁只拒绝已删除的 Claude 活跃入口，不按 vendor 名称误删共享依赖。
 
 ### 7. 测试与云端验收
 
 - [x] 本地仅运行 source-level Vitest/tsx/`tsc --noEmit`、翻译和静态检查。
-- [ ] CI 从最新 stable 官方源码构建 Codex，并保留 `0.145.0` schema drift 门禁。
-- [ ] 使用 `@microsoft/tui-test` 驱动真实 PTY 和官方 TUI，Responses fixture 提供
-      无 OpenAI 凭据的真实 app-server 生命周期。
-- [ ] 覆盖 terminal/App 双向消息、resume/new/fork、tool/MCP/reasoning、审批 first-win、
-      active handoff/drain、queue restore、SSH/kill detach+attach、app-server crash、
-      daemon restart、thread lock、多窗口、relay offline journal 和 10k snapshot。
+- [x] CI 从最新 stable 官方源码构建 Codex，并保留 `0.145.0` schema drift 门禁；
+      后续 PTY job 必须复用同一份已校验 provenance 的官方 artifact，禁止另装 npm
+      Codex 或以 fake provider 代替验收。
+- [ ] 使用 `@microsoft/tui-test@0.0.4` 驱动真实 PTY 和官方 TUI。独立 fixture 进程
+      启动真实 PGlite relay、CLI 身份、Responses API 和 AppSync v4 模拟器；测试一
+      通过 `happy codex --no-alt-screen` 建立 terminal-origin Gateway，测试二通过
+      交互式 `happy codex attach` 恢复同一 Gateway。每次失败上传 TUI trace 与脱敏
+      fixture 日志；含 token、会话密钥、Gateway capability 和数据库的临时工作目录
+      必须与 Artifact 目录隔离并在结束后删除。
+- [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
+  - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
+    十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
+  - official app-server 门禁：stable-v2 生命周期、resume/list/read、tool、reasoning
+    summary、stream 与完成。
+  - Android field 门禁：真实 App UI 到 relay、CLI、官方 Codex 的新建/resume、MCP
+    与回复回流。
+  - source/transport 门禁：new/fork、审批 first-win、active handoff/drain、queue
+    restore、app-server crash、daemon restart、thread lock、多窗口、relay offline
+    journal 和 10k snapshot。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.15`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
+- [x] CLI 升至 `1.4.15`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
 - [ ] CLI workflow 成功后下载并验证 `happy-1.4.15.tgz` 到

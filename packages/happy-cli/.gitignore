@@ -5,6 +5,8 @@
 /dist
 /tmp
 /node_modules
+/.tui-test
+/tui-traces
 oclif.manifest.json
 
 # Unpacked binaries (keep archives)

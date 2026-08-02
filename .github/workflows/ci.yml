@@ -510,6 +510,88 @@ jobs:
       - name: Exercise project instructions, tool, reasoning, stream, and completion lifecycle
         run: pnpm --filter happy test:codex-official-app-server
 
+  codex_gateway_tui:
+    name: Official Codex TUI Gateway round trip
+    needs: official_codex
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HAPPY_SCENARIO_CODEX_VERSION: ${{ needs.official_codex.outputs.version }}
+      HAPPY_GATEWAY_TUI_ARTIFACT_DIR: ${{ runner.temp }}/happy-gateway-tui-artifacts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Wire and CLI runtime
+        run: |
+          pnpm --filter @slopus/happy-wire build
+          pnpm --filter happy build
+
+      - name: Generate relay Prisma client
+        run: pnpm --filter happy-server-self-host generate
+
+      - name: Typecheck TUI fixture and PTY tests from source
+        run: node node_modules/typescript/bin/tsc --project scripts/ci/tsconfig.codex-gateway-tui.json
+
+      - name: Download source-built official Codex
+        uses: actions/download-artifact@v4
+        with:
+          name: official-codex-linux-x64
+          path: ${{ runner.temp }}/official-codex
+
+      - name: Verify official Codex provenance
+        run: |
+          CODEX_BIN="$RUNNER_TEMP/official-codex/bin/codex"
+          CODE_MODE_HOST="$RUNNER_TEMP/official-codex/bin/codex-code-mode-host"
+          BWRAP="$RUNNER_TEMP/official-codex/bin/codex-resources/bwrap"
+          chmod 0755 "$CODEX_BIN" "$CODE_MODE_HOST" "$BWRAP"
+          test -x "$CODEX_BIN"
+          test -x "$CODE_MODE_HOST"
+          test -x "$BWRAP"
+          test "$(timeout 15s "$CODEX_BIN" --version)" = \
+            "codex-cli $HAPPY_SCENARIO_CODEX_VERSION"
+          test "$(jq -r '.commit' "$RUNNER_TEMP/official-codex/source.json")" = \
+            "${{ needs.official_codex.outputs.commit }}"
+          test "$(jq -r '.runtimeBundleVersion' "$RUNNER_TEMP/official-codex/source.json")" = 2
+          test "$(jq -r '.bwrapSha256' "$RUNNER_TEMP/official-codex/source.json")" = \
+            "$(sha256sum "$BWRAP" | cut -d' ' -f1)"
+          printf 'HAPPY_SCENARIO_CODEX_BIN=%s\n' "$CODEX_BIN" >> "$GITHUB_ENV"
+
+      - name: Enable official Linux sandbox user namespaces
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Exercise terminal, App, detach, attach, and normal stop through a real PTY
+        run: pnpm --filter happy test:codex-gateway-tui
+
+      - name: Upload TUI traces and fixture diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-gateway-tui-diagnostics
+          path: |
+            ${{ runner.temp }}/happy-gateway-tui-artifacts/fixture.log
+            ${{ runner.temp }}/happy-gateway-tui-artifacts/tui-traces
+          if-no-files-found: warn
+          retention-days: 7
+
   dependency-audit:
     name: Production dependency critical audit
     runs-on: ubuntu-latest
@@ -567,6 +649,7 @@ jobs:
       - protocol-drift
       - codex_transport_scenarios
       - codex_official_app_server
+      - codex_gateway_tui
       - dependency-audit
       - codex_provider_boundary
     runs-on: ubuntu-latest
@@ -586,6 +669,7 @@ jobs:
           PROTOCOL_RESULT: ${{ needs.protocol-drift.result }}
           SCENARIOS_RESULT: ${{ needs.codex_transport_scenarios.result }}
           OFFICIAL_APP_SERVER_RESULT: ${{ needs.codex_official_app_server.result }}
+          CODEX_GATEWAY_TUI_RESULT: ${{ needs.codex_gateway_tui.result }}
           AUDIT_RESULT: ${{ needs.dependency-audit.result }}
           CODEX_BOUNDARY_RESULT: ${{ needs.codex_provider_boundary.result }}
         run: |
@@ -602,5 +686,6 @@ jobs:
           test "$PROTOCOL_RESULT" = success
           test "$SCENARIOS_RESULT" = success
           test "$OFFICIAL_APP_SERVER_RESULT" = success
+          test "$CODEX_GATEWAY_TUI_RESULT" = success
           test "$AUDIT_RESULT" = success
           test "$CODEX_BOUNDARY_RESULT" = success

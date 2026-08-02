@@ -1,6 +1,6 @@
 {
   "name": "happy",
-  "version": "1.4.14",
+  "version": "1.4.15",
   "description": "Mobile and Web remote control for Codex and retained agent runtimes",
   "author": "Kirill Dubovitskiy",
   "license": "MIT",
@@ -54,6 +54,7 @@
     "codex:fake-app-server": "node scripts/fake-codex-app-server.cjs",
     "test:codex-http-relay": "tsx --tsconfig tsconfig.json ../../scripts/ci/codex-http-relay-scenario.ts",
     "test:codex-official-app-server": "tsx --tsconfig tsconfig.json ../../scripts/ci/codex-official-app-server-scenario.ts",
+    "test:codex-gateway-tui": "node ../../scripts/ci/run-codex-gateway-tui-e2e.mjs",
     "bundle:server": "node scripts/bundle-server.cjs",
     "bundle:server:all": "node scripts/bundle-server.cjs --all-platforms",
     "bundle:webapp": "node scripts/bundle-webapp.cjs",
@@ -102,6 +103,7 @@
   },
   "devDependencies": {
     "@eslint/compat": "^1",
+    "@microsoft/tui-test": "0.0.4",
     "@slopus/happy-wire": "workspace:*",
     "@types/inquirer": "^9.0.9",
     "@types/node": ">=20",
