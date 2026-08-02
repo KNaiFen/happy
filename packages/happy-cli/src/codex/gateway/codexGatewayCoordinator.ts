@@ -30,6 +30,11 @@ export interface CodexGatewayRootRuntime {
     activate(snapshot: Thread): Promise<void>;
     reconcile(snapshot: Thread): Promise<void>;
     updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void>;
+    setGatewayLifecycle(state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped'): Promise<void>;
+    setTerminalState(
+        state: 'attached' | 'pendingDetach' | 'detached' | 'headless',
+        detachedAt: number | null,
+    ): Promise<void>;
     ownsThread(threadId: string): boolean;
     isDrained(): Promise<boolean>;
     flush(): Promise<void>;
@@ -290,6 +295,27 @@ export class CodexGatewayCoordinator {
         await Promise.all([...this.roots.values()].map((root) => root.runtime.flush()));
     }
 
+    async setGatewayLifecycle(
+        state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped',
+    ): Promise<void> {
+        await this.bindingLock.inLock(async () => {
+            await Promise.all([...this.roots.values()].map((root) => (
+                root.runtime.setGatewayLifecycle(state)
+            )));
+        });
+    }
+
+    async setTerminalState(
+        state: 'attached' | 'pendingDetach' | 'detached' | 'headless',
+        detachedAt: number | null,
+    ): Promise<void> {
+        await this.bindingLock.inLock(async () => {
+            await Promise.all([...this.roots.values()].map((root) => (
+                root.runtime.setTerminalState(state, detachedAt)
+            )));
+        });
+    }
+
     private installClientHandlers(): void {
         if (this.handlersInstalled) return;
         this.handlersInstalled = true;
@@ -458,7 +484,6 @@ export class CodexGatewayCoordinator {
         if (root.role !== 'draining' || root.rootActiveTurnId) return;
         await root.runtime.flush();
         if (!await root.runtime.isDrained()) return;
-        root.role = 'inactive';
         await root.runtime.updateBinding({
             role: 'inactive',
             generation: root.generation,
@@ -466,6 +491,7 @@ export class CodexGatewayCoordinator {
             nextSessionId: null,
             changedAt: this.now(),
         });
+        root.role = 'inactive';
         this.removeRoot(root);
         await root.runtime.close();
         await this.options.leases.release(root.threadId, this.options.gatewayId);

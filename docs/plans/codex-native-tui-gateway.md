@@ -177,6 +177,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - [x] provider 崩溃有限退避、bridge transport 重连和 current/draining snapshot 重订阅。
 - [x] root coordinator 的 generation、事务化 handoff、child ownership、严格通知顺序、
       drain 条件与失败回滚。
+- [x] root Sync v4 runtime 封装 snapshot 激活、metadata/runtime 投影、terminal 状态、
+      drain/flush、权威归档与中继恢复后的退场重试。
 - [ ] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
       terminal detach/attach 和真实 Sync v4 runtime factory。
 
@@ -271,3 +273,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：完成 Gateway state/control/lease/proxy、外部 stable-v2 subscriber、
   provider supervisor 与 handoff coordinator 的组件实现；明确这些组件在 worker 和
   Sync v4 runtime 接线完成前不构成可用产品或端到端验收。
+- 2026-08-02：增加 root Sync v4 runtime 生命周期封装；inactive 归档只有在 metadata、
+  runtime entity 和 outbound mutation 刷新后执行，归档暂不可达时保留 draining 状态，
+  允许后续通知或恢复流程重试。

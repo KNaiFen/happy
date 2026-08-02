@@ -42,6 +42,42 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.coordinator.currentThreadId).toBe('thread-b');
     });
 
+    it('retries retirement when the first authoritative archive attempt is offline', async () => {
+        const errors: unknown[] = [];
+        const harness = createHarness(
+            {
+                'thread-a': thread('thread-a', 'idle'),
+                'thread-b': thread('thread-b', 'idle'),
+            },
+            { onError: (error) => errors.push(error) },
+        );
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        const runtimeA = harness.runtimes.get('thread-a')!;
+        const updateBinding = runtimeA.updateBinding.bind(runtimeA);
+        let failArchiveOnce = true;
+        runtimeA.updateBinding = async (binding) => {
+            if (binding.role === 'inactive' && failArchiveOnce) {
+                failArchiveOnce = false;
+                throw new Error('relay offline');
+            }
+            await updateBinding(binding);
+        };
+
+        await harness.coordinator.bindRoot('thread-b');
+
+        expect(errors).toEqual([expect.objectContaining({ message: 'relay offline' })]);
+        expect(runtimeA.bindings.at(-1)?.role).toBe('draining');
+        expect(runtimeA.close).not.toHaveBeenCalled();
+
+        harness.client.emitNotification(threadStatus('thread-a', 'idle'));
+        await harness.coordinator.flush();
+
+        expect(runtimeA.bindings.at(-1)?.role).toBe('inactive');
+        expect(runtimeA.close).toHaveBeenCalledOnce();
+        expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
+    });
+
     it('does not create a new generation when attach resumes the current root', async () => {
         const harness = createHarness({ 'thread-a': thread('thread-a', 'idle') });
         await harness.coordinator.connect();
@@ -219,6 +255,11 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
         this.bindings.push(binding);
     }
+    async setGatewayLifecycle(_state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped'): Promise<void> {}
+    async setTerminalState(
+        _state: 'attached' | 'pendingDetach' | 'detached' | 'headless',
+        _detachedAt: number | null,
+    ): Promise<void> {}
     ownsThread(threadId: string): boolean {
         return this.ownedThreads.has(threadId);
     }
