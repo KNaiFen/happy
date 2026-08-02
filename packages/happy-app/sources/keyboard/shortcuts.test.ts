@@ -118,6 +118,7 @@ describe('session action shortcuts', () => {
             'duplicate',
             'copy-metadata',
             'copy-metadata-and-logs',
+            'stop-gateway',
             'archive',
         ]);
     });
@@ -125,6 +126,7 @@ describe('session action shortcuts', () => {
     it('formats Mac and non-Mac shortcut chords', () => {
         expect(formatShortcutChord('meta', SESSION_ACTION_SHORTCUTS.details)).toBe('⌥⌘O');
         expect(formatShortcutChord('meta', SESSION_ACTION_SHORTCUTS['copy-metadata-and-logs'])).toBe('⌥⇧⌘M');
+        expect(formatShortcutChord('meta', SESSION_ACTION_SHORTCUTS['stop-gateway'])).toBe('⇧⌘G');
         expect(formatShortcutChord('meta', SESSION_ACTION_SHORTCUTS.archive)).toBe('⇧⌘A');
         expect(formatShortcutChord('control', SESSION_ACTION_SHORTCUTS.details)).toBe('Ctrl+Alt+O');
         expect(formatShortcutChord('control', SESSION_ACTION_SHORTCUTS.archive)).toBe('Ctrl+Shift+A');

@@ -85,6 +85,16 @@ export const zhHant: TranslationStructure = {
         activeNow: '目前活躍',
         unknown: '未知',
         unread: '新結果',
+        gatewayStarting: 'Gateway 正在啟動',
+        gatewayRecovering: 'Gateway 正在恢復',
+        gatewayStopping: 'Gateway 正在停止',
+        gatewayStopped: 'Gateway 已停止',
+        gatewaySwitching: '正在切換工作階段',
+        gatewaySyncing: 'Gateway 正在同步',
+        terminalAttached: '終端已連線',
+        terminalPendingDetach: '終端正在重新連線',
+        terminalDetached: '終端已中斷連線',
+        gatewayHeadless: 'App 控制',
     },
 
     time: {
@@ -376,6 +386,9 @@ export const zhHant: TranslationStructure = {
         // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
         killSession: '終止工作階段',
         killSessionConfirm: '您確定要終止此工作階段嗎？',
+        stopGateway: '停止 Gateway',
+        stopGatewayConfirm: '確定停止此 Codex Gateway 嗎？對話記錄仍會保留。',
+        stopGatewayFailed: '無法停止 Codex Gateway。',
         archiveSession: '封存工作階段',
         archiveSessionConfirm: '您確定要封存此工作階段嗎？',
         happySessionIdCopied: 'Happy 工作階段 ID 已複製到剪貼簿',

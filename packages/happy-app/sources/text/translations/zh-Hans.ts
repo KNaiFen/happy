@@ -86,6 +86,16 @@ export const zhHans: TranslationStructure = {
         activeNow: '当前活跃',
         unknown: '未知',
         unread: '新结果',
+        gatewayStarting: 'Gateway 正在启动',
+        gatewayRecovering: 'Gateway 正在恢复',
+        gatewayStopping: 'Gateway 正在停止',
+        gatewayStopped: 'Gateway 已停止',
+        gatewaySwitching: '正在切换会话',
+        gatewaySyncing: 'Gateway 正在同步',
+        terminalAttached: '终端已连接',
+        terminalPendingDetach: '终端正在重连',
+        terminalDetached: '终端已断开',
+        gatewayHeadless: 'App 控制',
     },
 
     time: {
@@ -377,6 +387,9 @@ export const zhHans: TranslationStructure = {
         // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
         killSession: '终止会话',
         killSessionConfirm: '您确定要终止此会话吗？',
+        stopGateway: '停止 Gateway',
+        stopGatewayConfirm: '确定停止此 Codex Gateway 吗？对话历史仍会保留。',
+        stopGatewayFailed: '无法停止 Codex Gateway。',
         archiveSession: '归档会话',
         archiveSessionConfirm: '您确定要归档此会话吗？',
         happySessionIdCopied: 'Happy 会话 ID 已复制到剪贴板',

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useHappyAction } from '@/hooks/useHappyAction';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
-import { machineResumeSession, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
+import { machineResumeSession, sessionKill, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
 import { archiveSession as archiveSessionAuthoritatively } from '@/sync/sessionArchiveCoordinator';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useIsSessionMachineDeleted, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
@@ -20,6 +20,7 @@ import { useSession } from '@/sync/storage';
 import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
 import { isRigMetadata } from '@/sync/rig';
+import { canStopCodexGatewaySession } from '@/sync/codexV4Capabilities';
 
 export interface SessionActionItem {
     id: SessionActionShortcutId;
@@ -130,6 +131,7 @@ export function useSessionQuickActions(
     const machineDeleted = useIsSessionMachineDeleted(session.id);
     const machineId = session.metadata?.machineId ?? '';
     const machine = useMachine(machineId);
+    const canStopGateway = canStopCodexGatewaySession(session.metadata, { machineDeleted });
     const pendingResumeOperationRef = React.useRef<{
         id: string;
         fingerprint: string;
@@ -258,6 +260,32 @@ export function useSessionQuickActions(
         performArchive();
     }, [performArchive]);
 
+    const [stoppingGateway, performStopGateway] = useHappyAction(async () => {
+        if (!canStopGateway) {
+            throw new HappyError(t('sessionInfo.stopGatewayFailed'), false);
+        }
+        const result = await sessionKill(session.id);
+        if (!result.success) {
+            throw new HappyError(result.message || t('sessionInfo.stopGatewayFailed'), false);
+        }
+        await sync.refreshSessions().catch(() => undefined);
+    });
+
+    const stopGateway = React.useCallback(() => {
+        Modal.alert(
+            t('sessionInfo.stopGateway'),
+            t('sessionInfo.stopGatewayConfirm'),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('sessionInfo.stopGateway'),
+                    style: 'destructive',
+                    onPress: performStopGateway,
+                },
+            ],
+        );
+    }, [performStopGateway]);
+
     const resumeSession = React.useCallback(() => {
         performResume();
     }, [performResume]);
@@ -310,6 +338,16 @@ export function useSessionQuickActions(
             items.push({ id: 'copy-metadata-and-logs', icon: 'document-text-outline', label: t('sessionInfo.copyMetadata') + ' & Client Logs', onPress: copySessionMetadataAndLogs });
         }
 
+        if (canStopGateway) {
+            items.push({
+                id: 'stop-gateway',
+                icon: 'stop-circle-outline',
+                label: t('sessionInfo.stopGateway'),
+                onPress: stopGateway,
+                destructive: true,
+            });
+        }
+
         if (!isCodexReadOnly) {
             items.push({ id: 'archive', icon: 'archive-outline', label: 'Archive', onPress: archiveSession, destructive: true });
         }
@@ -319,6 +357,7 @@ export function useSessionQuickActions(
         archiveSession,
         canCopySessionMetadata,
         canFork,
+        canStopGateway,
         copySessionMetadata,
         copySessionMetadataAndLogs,
         forkSource,
@@ -328,6 +367,7 @@ export function useSessionQuickActions(
         openDuplicateSheet,
         resumeAvailability.canShowResume,
         resumeSession,
+        stopGateway,
     ]);
 
     const showActionAlert = React.useCallback(() => {
@@ -349,6 +389,7 @@ export function useSessionQuickActions(
         canCopySessionMetadata,
         canResume: resumeAvailability.canResume,
         canShowResume: resumeAvailability.canShowResume,
+        canStopGateway,
         canFork,
         copySessionMetadata,
         copySessionMetadataAndLogs,
@@ -359,6 +400,8 @@ export function useSessionQuickActions(
         resumeSession,
         resumeSessionSubtitle: resumeAvailability.subtitle,
         resumingSession,
+        stopGateway,
+        stoppingGateway,
     };
 }
 

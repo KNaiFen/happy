@@ -163,6 +163,49 @@ describe('Codex queued message ops', () => {
         );
     });
 
+    it('stops a Codex Gateway through the authenticated machine RPC', async () => {
+        getState.mockReturnValue({
+            sessions: {
+                'session-gateway': {
+                    metadata: {
+                        path: '/workspace',
+                        host: 'host',
+                        flavor: 'codex',
+                        codexSyncVersion: 4,
+                        machineId: 'machine-1',
+                        codexGatewayBinding: {
+                            gatewayId: 'gateway-1',
+                            generation: 2,
+                            origin: 'app',
+                            role: 'current',
+                            terminal: 'unattached',
+                            changedAt: 10,
+                        },
+                    },
+                },
+            },
+        });
+        machineRPC.mockResolvedValueOnce({ message: 'Session stopped' });
+        const { sessionKill } = await import('./ops');
+
+        await expect(sessionKill('session-gateway', { timeoutMs: 5_000 })).resolves.toEqual({
+            success: true,
+            message: 'Session stopped',
+        });
+
+        expect(machineRPC).toHaveBeenCalledWith(
+            'machine-1',
+            'stop-session',
+            {
+                sessionId: 'session-gateway',
+                expectedGatewayId: 'gateway-1',
+                bindingGeneration: 2,
+            },
+            { timeoutMs: 5_000 },
+        );
+        expect(sessionRPC).not.toHaveBeenCalled();
+    });
+
     it('resolves a repeated provider request id only on the metadata-owned thread', async () => {
         isCodexV4Eligible.mockReturnValue(true);
         getState.mockReturnValue({

@@ -96,7 +96,10 @@ type MachineRpcHandlers = {
     }) => Promise<SpawnSessionResult>;
     listCodexThreads: (request: CodexListThreadsRequest) => Promise<CodexListThreadsResult>;
     openCodexThread: (request: CodexOpenThreadRequest) => Promise<CodexOpenThreadResult>;
-    stopSession: (sessionId: string) => Promise<boolean> | boolean;
+    stopSession: (sessionId: string, expectation?: {
+        gatewayId: string;
+        generation: number;
+    }) => Promise<boolean> | boolean;
     requestShutdown: () => void;
 }
 
@@ -311,7 +314,20 @@ export class ApiMachineClient {
                 throw new Error('Session ID is required');
             }
 
-            const success = await stopSession(sessionId);
+            const expectedGatewayId = requireBoundedNonEmptyString(
+                params?.expectedGatewayId,
+                'expectedGatewayId',
+                256,
+            );
+            const bindingGeneration = params?.bindingGeneration;
+            if (!Number.isSafeInteger(bindingGeneration) || bindingGeneration < 0) {
+                throw new Error('bindingGeneration must be a non-negative integer');
+            }
+
+            const success = await stopSession(sessionId, {
+                gatewayId: expectedGatewayId,
+                generation: bindingGeneration,
+            });
             if (!success) {
                 throw new Error('Session not found or failed to stop');
             }

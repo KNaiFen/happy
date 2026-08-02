@@ -84,6 +84,16 @@ export const es: TranslationStructure = {
         activeNow: 'Activo ahora',
         unknown: 'desconocido',
         unread: 'nuevos resultados',
+        gatewayStarting: 'Iniciando Gateway',
+        gatewayRecovering: 'Recuperando Gateway',
+        gatewayStopping: 'Deteniendo Gateway',
+        gatewayStopped: 'Gateway detenido',
+        gatewaySwitching: 'Cambiando de sesión',
+        gatewaySyncing: 'Sincronizando Gateway',
+        terminalAttached: 'Terminal conectado',
+        terminalPendingDetach: 'Reconectando terminal',
+        terminalDetached: 'Terminal desconectado',
+        gatewayHeadless: 'Control desde la app',
     },
 
     time: {
@@ -376,6 +386,9 @@ export const es: TranslationStructure = {
         // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
         killSession: 'Terminar sesión',
         killSessionConfirm: '¿Seguro que quieres terminar esta sesión?',
+        stopGateway: 'Detener Gateway',
+        stopGatewayConfirm: '¿Detener este Gateway de Codex? El historial de la conversación seguirá disponible.',
+        stopGatewayFailed: 'No se pudo detener el Gateway de Codex.',
         archiveSession: 'Archivar sesión',
         archiveSessionConfirm: '¿Seguro que quieres archivar esta sesión?',
         happySessionIdCopied: 'ID de sesión de Happy copiado al portapapeles',

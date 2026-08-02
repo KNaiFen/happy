@@ -86,6 +86,16 @@ export const ja: TranslationStructure = {
         activeNow: 'アクティブ',
         unknown: '不明',
         unread: '新しい結果',
+        gatewayStarting: 'Gateway を起動中',
+        gatewayRecovering: 'Gateway を復旧中',
+        gatewayStopping: 'Gateway を停止中',
+        gatewayStopped: 'Gateway は停止しました',
+        gatewaySwitching: 'セッションを切り替え中',
+        gatewaySyncing: 'Gateway を同期中',
+        terminalAttached: 'ターミナル接続済み',
+        terminalPendingDetach: 'ターミナルを再接続中',
+        terminalDetached: 'ターミナル切断済み',
+        gatewayHeadless: 'アプリから制御中',
     },
 
     time: {
@@ -377,6 +387,9 @@ export const ja: TranslationStructure = {
         // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
         killSession: 'セッションを終了',
         killSessionConfirm: 'このセッションを終了してもよろしいですか？',
+        stopGateway: 'Gateway を停止',
+        stopGatewayConfirm: 'この Codex Gateway を停止しますか？会話履歴は引き続き利用できます。',
+        stopGatewayFailed: 'Codex Gateway を停止できませんでした。',
         archiveSession: 'セッションをアーカイブ',
         archiveSessionConfirm: 'このセッションをアーカイブしてもよろしいですか？',
         happySessionIdCopied: 'Happy Session IDがクリップボードにコピーされました',

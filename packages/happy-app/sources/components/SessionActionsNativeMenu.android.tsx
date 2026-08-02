@@ -22,9 +22,11 @@ export function SessionActionsNativeMenu({
         canArchive,
         canCopySessionMetadata,
         canShowResume,
+        canStopGateway,
         copySessionMetadata,
         openDetails,
         resumeSession,
+        stopGateway,
     } = useSessionQuickActions(session, {
         onAfterArchive,
         onAfterDelete,
@@ -44,6 +46,11 @@ export function SessionActionsNativeMenu({
                 {canShowResume && (
                     <DropdownMenuItem onClick={resumeSession}>
                         <DropdownMenuItem.Text>Resume</DropdownMenuItem.Text>
+                    </DropdownMenuItem>
+                )}
+                {canStopGateway && (
+                    <DropdownMenuItem onClick={stopGateway}>
+                        <DropdownMenuItem.Text>{t('sessionInfo.stopGateway')}</DropdownMenuItem.Text>
                     </DropdownMenuItem>
                 )}
                 {canCopySessionMetadata && (

@@ -29,6 +29,25 @@ function session(overrides: Record<string, unknown> = {}) {
     } as any;
 }
 
+function gatewaySession(overrides: Record<string, unknown> = {}) {
+    return session({
+        metadata: {
+            flavor: 'codex',
+            codexSyncVersion: 4,
+            machineId: 'machine-1',
+            codexGatewayBinding: {
+                gatewayId: 'gateway-1',
+                generation: 2,
+                origin: 'app',
+                role: 'current',
+                terminal: 'unattached',
+                changedAt: 10,
+            },
+        },
+        ...overrides,
+    });
+}
+
 describe('session archive coordinator', () => {
     let current: ReturnType<typeof session>;
     let applySessions: ReturnType<typeof vi.fn>;
@@ -95,5 +114,66 @@ describe('session archive coordinator', () => {
         await Promise.resolve();
         expect(mocks.sessionArchive).toHaveBeenCalledOnce();
         expect(mocks.sessionKill).not.toHaveBeenCalled();
+    });
+
+    it('keeps a Gateway visible until graceful stop is accepted, then archives it', async () => {
+        current = gatewaySession();
+        mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
+        let acceptStop!: (result: { success: boolean; message: string }) => void;
+        mocks.sessionKill.mockImplementationOnce(() => new Promise((resolve) => {
+            acceptStop = resolve;
+        }));
+
+        const pending = archiveSession('session-1');
+        await Promise.resolve();
+        expect(current.active).toBe(true);
+        expect(mocks.sessionArchive).not.toHaveBeenCalled();
+
+        acceptStop({ success: true, message: 'stopping' });
+        await pending;
+
+        expect(mocks.sessionKill).toHaveBeenCalledWith('session-1', { timeoutMs: 5_000 });
+        expect(mocks.sessionKill.mock.invocationCallOrder[0]).toBeLessThan(
+            mocks.sessionArchive.mock.invocationCallOrder[0],
+        );
+        expect(current).toMatchObject({ active: false, activeAt: 100 });
+    });
+
+    it('does not hide or archive a Gateway when graceful stop is rejected', async () => {
+        current = gatewaySession();
+        mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
+        mocks.sessionKill.mockResolvedValueOnce({ success: false, message: 'gateway unavailable' });
+
+        await expect(archiveSession('session-1')).rejects.toThrow('gateway unavailable');
+
+        expect(current.active).toBe(true);
+        expect(applySessions).not.toHaveBeenCalled();
+        expect(mocks.sessionArchive).not.toHaveBeenCalled();
+        expect(isSessionArchivePending('session-1')).toBe(false);
+    });
+
+    it('restores Gateway visibility when stop was accepted but relay archive fails', async () => {
+        current = gatewaySession();
+        mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
+        mocks.sessionArchive.mockResolvedValueOnce({ success: false, message: 'relay unavailable' });
+
+        await expect(archiveSession('session-1')).rejects.toThrow('relay unavailable');
+
+        expect(mocks.sessionKill).toHaveBeenCalledOnce();
+        expect(applySessions).toHaveBeenCalledTimes(2);
+        expect(current.active).toBe(true);
+    });
+
+    it('archives inactive Gateway history without trying to stop a missing worker', async () => {
+        const inactive = gatewaySession();
+        inactive.metadata.codexGatewayBinding.role = 'inactive';
+        current = inactive;
+        mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
+
+        await archiveSession('session-1');
+
+        expect(mocks.sessionKill).not.toHaveBeenCalled();
+        expect(mocks.sessionArchive).toHaveBeenCalledOnce();
+        expect(current).toMatchObject({ active: false, activeAt: 100 });
     });
 });

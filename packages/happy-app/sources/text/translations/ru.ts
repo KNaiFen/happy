@@ -324,6 +324,9 @@ export const ru: TranslationStructure = {
     },
 
     sessionInfo: {
+        stopGateway: 'Остановить Gateway',
+        stopGatewayConfirm: 'Остановить этот Codex Gateway? История разговора останется доступной.',
+        stopGatewayFailed: 'Не удалось остановить Codex Gateway.',
         // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
         killSession: 'Завершить сессию',
         killSessionConfirm: 'Вы уверены, что хотите завершить эту сессию?',
@@ -424,6 +427,16 @@ export const ru: TranslationStructure = {
 
 
     status: {
+        gatewayStarting: 'Запуск Gateway',
+        gatewayRecovering: 'Восстановление Gateway',
+        gatewayStopping: 'Остановка Gateway',
+        gatewayStopped: 'Gateway остановлен',
+        gatewaySwitching: 'Переключение сессии',
+        gatewaySyncing: 'Синхронизация Gateway',
+        terminalAttached: 'Терминал подключен',
+        terminalPendingDetach: 'Переподключение терминала',
+        terminalDetached: 'Терминал отключен',
+        gatewayHeadless: 'Управление из приложения',
         connected: 'подключено',
         connecting: 'подключение',
         disconnected: 'отключено',

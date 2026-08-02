@@ -8,8 +8,10 @@ import type { Metadata } from './storageTypes';
 import { createCodexV4Projection } from './codexV4Projection';
 import {
     assertCodexV4CommandPublishAllowed,
+    canStopCodexGatewaySession,
     codexV4CommandTargetThreadId,
     isCodexSessionReadOnly,
+    resolveCodexGatewayBinding,
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
 
@@ -86,6 +88,40 @@ describe('Codex v4 App capabilities', () => {
             providerReadOnly: false,
             machineDeleted: true,
         });
+    });
+
+    it('requires a complete writable current Gateway binding for App stop', () => {
+        const binding = {
+            gatewayId: 'gateway-1',
+            generation: 4,
+            origin: 'terminal',
+            role: 'current',
+            terminal: 'attached',
+            changedAt: 10,
+        } as const;
+        const gateway = metadata({
+            machineId: 'machine-1',
+            codexGatewayBinding: binding,
+        });
+        expect(resolveCodexGatewayBinding(gateway)).toMatchObject({
+            gatewayId: 'gateway-1',
+            generation: 4,
+        });
+        expect(canStopCodexGatewaySession(gateway)).toBe(true);
+        expect(canStopCodexGatewaySession(gateway, { machineDeleted: true })).toBe(false);
+        expect(canStopCodexGatewaySession(metadata({
+            ...gateway,
+            codexGatewayBinding: {
+                ...binding,
+                role: 'draining',
+            },
+        }))).toBe(false);
+        expect(resolveCodexGatewayBinding(metadata({
+            codexGatewayBinding: {
+                ...binding,
+                generation: -1,
+            },
+        }))).toBeNull();
     });
 
     it('rejects every App command from a provider-created child session', () => {

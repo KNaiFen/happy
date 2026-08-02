@@ -56,6 +56,11 @@ import {
 } from '@/codex/gateway/codexGatewayLauncher';
 import { callCodexGatewayControl } from '@/codex/gateway/codexGatewayControl';
 import { retireVerifiedLegacyCodexAdapters } from './legacyCodexAdapterRetirement';
+import {
+  findCodexGatewayStopBinding,
+  matchesCodexGatewayStopExpectation,
+  type CodexGatewayStopExpectation,
+} from './codexGatewayStopGuard';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
@@ -911,7 +916,10 @@ export async function startDaemon(): Promise<void> {
     };
 
     // Stop a session by sessionId or PID fallback
-    const stopSession = async (sessionId: string): Promise<boolean> => {
+    const stopSession = async (
+      sessionId: string,
+      expectation?: CodexGatewayStopExpectation,
+    ): Promise<boolean> => {
       logger.debug(`[DAEMON RUN] Attempting to stop session ${sessionId}`);
 
       const gateways = await discoverLiveCodexGateways({
@@ -919,10 +927,14 @@ export async function startDaemon(): Promise<void> {
         env: ambientEnvironment,
       });
       const gateway = gateways.find(({ descriptor }) => (
-        descriptor.current?.sessionId === sessionId
-        || descriptor.draining.some((binding) => binding.sessionId === sessionId)
+        findCodexGatewayStopBinding(descriptor, sessionId) !== null
       ));
       if (gateway) {
+        const binding = findCodexGatewayStopBinding(gateway.descriptor, sessionId)!;
+        if (!matchesCodexGatewayStopExpectation(gateway.descriptor, binding, expectation)) {
+          logger.debug('[DAEMON RUN] Rejected stale Codex Gateway stop request');
+          return false;
+        }
         try {
           await callCodexGatewayControl({
             descriptor: gateway.descriptor,

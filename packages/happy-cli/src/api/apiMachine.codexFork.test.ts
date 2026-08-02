@@ -344,4 +344,45 @@ describe('ApiMachineClient Codex fork RPCs', () => {
             }],
         });
     });
+
+    it('forwards the expected Gateway generation through stop-session', async () => {
+        const stopSession = vi.fn().mockResolvedValue(true);
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession,
+            requestShutdown: vi.fn(),
+        });
+
+        await expect(handlersFrom(client).get('machine-1:stop-session')?.({
+            sessionId: 'session-current',
+            expectedGatewayId: 'gateway-1',
+            bindingGeneration: 4,
+        })).resolves.toEqual({ message: 'Session stopped' });
+        expect(stopSession).toHaveBeenCalledWith('session-current', {
+            gatewayId: 'gateway-1',
+            generation: 4,
+        });
+    });
+
+    it('rejects stop-session without a complete Gateway expectation', async () => {
+        const stopSession = vi.fn();
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession,
+            requestShutdown: vi.fn(),
+        });
+
+        await expect(handlersFrom(client).get('machine-1:stop-session')?.({
+            sessionId: 'session-current',
+        })).rejects.toThrow('expectedGatewayId');
+        expect(stopSession).not.toHaveBeenCalled();
+    });
 });

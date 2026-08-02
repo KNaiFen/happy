@@ -32,7 +32,15 @@ import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat } 
 import { archiveSession } from '@/sync/sessionArchiveCoordinator';
 import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
-import { resolveCodexV4SessionCapabilities } from '@/sync/codexV4Capabilities';
+import {
+    resolveCodexGatewayBinding,
+    resolveCodexV4SessionCapabilities,
+} from '@/sync/codexV4Capabilities';
+import {
+    resolveCodexGatewayHandoffTarget,
+    resolveCodexGatewayUiState,
+    type CodexGatewayDisplayPhase,
+} from '@/sync/codexGatewayUiState';
 import { isSupportedExistingSession } from '@/sync/sessionFlavor';
 import { useSession } from '@/sync/storage';
 import { getSessionForkSource } from '@/utils/sessionFork';
@@ -82,6 +90,49 @@ import {
     rigCanUseShell,
 } from '@/sync/rig';
 import { RigActivityBar } from '@/components/RigActivityBar';
+
+function codexGatewayStatusPresentation(phase: CodexGatewayDisplayPhase) {
+    switch (phase) {
+        case 'starting':
+            return transientGatewayStatus(t('status.gatewayStarting'));
+        case 'recovering':
+            return transientGatewayStatus(t('status.gatewayRecovering'));
+        case 'stopping':
+            return transientGatewayStatus(t('status.gatewayStopping'));
+        case 'switching':
+            return transientGatewayStatus(t('status.gatewaySwitching'));
+        case 'syncing':
+            return transientGatewayStatus(t('status.gatewaySyncing'));
+        case 'stopped':
+            return {
+                text: t('status.gatewayStopped'),
+                color: '#FF3B30',
+                dotColor: '#FF3B30',
+                isPulsing: false,
+            };
+        case 'attached':
+            return connectedGatewayStatus(t('status.terminalAttached'));
+        case 'headless':
+            return connectedGatewayStatus(t('status.gatewayHeadless'));
+        case 'pendingDetach':
+            return transientGatewayStatus(t('status.terminalPendingDetach'));
+        case 'detached':
+            return {
+                text: t('status.terminalDetached'),
+                color: '#999',
+                dotColor: '#999',
+                isPulsing: false,
+            };
+    }
+}
+
+function transientGatewayStatus(text: string) {
+    return { text, color: '#FF9500', dotColor: '#FF9500', isPulsing: true };
+}
+
+function connectedGatewayStatus(text: string) {
+    return { text, color: '#34C759', dotColor: '#34C759', isPulsing: false };
+}
 
 export const SessionView = React.memo((props: { id: string }) => {
     const sessionId = props.id;
@@ -730,6 +781,57 @@ export function SessionViewLoaded({
     const { canResume, resumeSession, resumingSession } = useSessionQuickActions(session);
     const isDisconnected = !sessionStatus.isConnected;
     const resumeCommandBlock = getResumeCommandBlock(session);
+    const gatewayUiState = React.useMemo(() => resolveCodexGatewayUiState({
+        session,
+        runtime: codexV4Session?.runtime,
+        syncReady: codexV4Session?.syncHealth?.type === 'ready',
+    }), [session.metadata, codexV4Session?.runtime, codexV4Session?.syncHealth?.type]);
+
+    const followedHandoffRef = React.useRef<string | null>(null);
+    const sourceGatewayBinding = resolveCodexGatewayBinding(session.metadata);
+    const handoffTargetHint = sourceGatewayBinding?.role === 'draining'
+        ? sourceGatewayBinding.nextSessionId ?? null
+        : null;
+    const handoffGatewayId = sourceGatewayBinding?.gatewayId ?? null;
+    const handoffGeneration = sourceGatewayBinding?.generation ?? null;
+    React.useEffect(() => {
+        if (
+            !handoffTargetHint
+            || !handoffGatewayId
+            || handoffGeneration === null
+            || embedded
+        ) return;
+        let cancelled = false;
+        const followIfReady = (sessions: Readonly<Record<string, Session>>) => {
+            if (cancelled) return;
+            const targetId = resolveCodexGatewayHandoffTarget({
+                sessionId: session.id,
+                gatewayId: handoffGatewayId,
+                generation: handoffGeneration,
+                nextSessionId: handoffTargetHint,
+            }, sessions);
+            if (!targetId) return;
+            const key = `${session.id}:${targetId}`;
+            if (followedHandoffRef.current === key) return;
+            followedHandoffRef.current = key;
+            router.replace(`/session/${encodeURIComponent(targetId)}`);
+        };
+
+        followIfReady(storage.getState().sessions);
+        const unsubscribe = storage.subscribe((state) => followIfReady(state.sessions));
+        void sync.refreshSessions().catch(() => undefined);
+        return () => {
+            cancelled = true;
+            unsubscribe();
+        };
+    }, [
+        embedded,
+        handoffGatewayId,
+        handoffGeneration,
+        handoffTargetHint,
+        router,
+        session.id,
+    ]);
 
     // Image attachment state (expImageUpload feature flag)
     const expImageUpload = useSetting('expImageUpload');
@@ -847,6 +949,20 @@ export function SessionViewLoaded({
             && runtime?.connection === 'connected'
             && runtime.statusUnknown !== true
             && codexV4Session?.syncHealth?.type === 'ready';
+        const gatewayStatus = gatewayUiState.phase
+            ? codexGatewayStatusPresentation(gatewayUiState.phase)
+            : null;
+        if (gatewayStatus) {
+            return isConnected
+                ? gatewayStatus
+                : {
+                    ...gatewayStatus,
+                    text: `${gatewayStatus.text} · ${t('status.unknown')}`,
+                    color: '#999',
+                    dotColor: '#999',
+                    isPulsing: false,
+                };
+        }
         return isConnected
             ? {
                 text: t('status.online'),
@@ -869,6 +985,7 @@ export function SessionViewLoaded({
         session.presence,
         codexV4Session?.runtime,
         codexV4Session?.syncHealth?.type,
+        gatewayUiState.phase,
     ]);
 
     const usageData = React.useMemo(() => {
@@ -1042,7 +1159,7 @@ export function SessionViewLoaded({
             onEffortLevelChange={isRigReasoningSelectionEnabled(session.metadata) ? updateEffortLevel : undefined}
             metadata={session.metadata}
             connectionStatus={connectionStatus}
-            blockSend={(isCodexV4Active && !sessionStatus.isConnected)
+            blockSend={(isCodexV4Active && (!sessionStatus.isConnected || !gatewayUiState.canSend))
                 || (isRig && isSessionExecuting && session.metadata?.capabilities?.steering !== true)}
             onSend={handleSend}
             onMicPress={(embedded || isDisconnected) ? undefined : micButtonState.onMicPress}

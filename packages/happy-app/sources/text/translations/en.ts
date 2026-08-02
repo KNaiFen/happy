@@ -99,6 +99,16 @@ export const en: TranslationStructure = {
         activeNow: 'Active now',
         unknown: 'unknown',
         unread: 'new results',
+        gatewayStarting: 'Gateway starting',
+        gatewayRecovering: 'Gateway recovering',
+        gatewayStopping: 'Gateway stopping',
+        gatewayStopped: 'Gateway stopped',
+        gatewaySwitching: 'Switching session',
+        gatewaySyncing: 'Gateway syncing',
+        terminalAttached: 'Terminal attached',
+        terminalPendingDetach: 'Terminal reconnecting',
+        terminalDetached: 'Terminal detached',
+        gatewayHeadless: 'App control',
     },
 
     time: {
@@ -390,6 +400,9 @@ export const en: TranslationStructure = {
         // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
         killSession: 'Kill Session',
         killSessionConfirm: 'Are you sure you want to terminate this session?',
+        stopGateway: 'Stop Gateway',
+        stopGatewayConfirm: 'Stop this Codex Gateway? The conversation history will remain available.',
+        stopGatewayFailed: 'Failed to stop the Codex Gateway.',
         archiveSession: 'Archive Session',
         archiveSessionConfirm: 'Are you sure you want to archive this session?',
         happySessionIdCopied: 'Happy Session ID copied to clipboard',

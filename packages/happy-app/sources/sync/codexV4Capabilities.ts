@@ -9,6 +9,17 @@ export interface CodexV4SessionCapabilities {
     ownedThreadId: string | null;
 }
 
+export interface CodexGatewayBinding {
+    gatewayId: string;
+    generation: number;
+    origin: 'terminal' | 'app';
+    role: 'current' | 'draining' | 'inactive' | 'recovering';
+    terminal: 'attached' | 'unattached';
+    previousSessionId?: string;
+    nextSessionId?: string;
+    changedAt: number;
+}
+
 const GLOBAL_READ_COMMANDS = new Set([
     'skills.list',
     'model.list',
@@ -22,6 +33,52 @@ const COMMANDS_ALLOWED_BEFORE_THREAD_OWNERSHIP = new Set([
 
 export function isCodexSessionReadOnly(metadata: Metadata | null | undefined): boolean {
     return metadata?.codexReadOnly === true;
+}
+
+export function isCodexGatewaySession(metadata: Metadata | null | undefined): boolean {
+    return metadata?.flavor === 'codex'
+        && metadata.codexSyncVersion === 4
+        && resolveCodexGatewayBinding(metadata) !== null;
+}
+
+export function resolveCodexGatewayBinding(
+    metadata: Metadata | null | undefined,
+): CodexGatewayBinding | null {
+    const binding = metadata?.codexGatewayBinding;
+    if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return null;
+    const value = binding as Record<string, unknown>;
+    if (
+        typeof value.gatewayId !== 'string'
+        || value.gatewayId.length === 0
+        || typeof value.generation !== 'number'
+        || !Number.isSafeInteger(value.generation)
+        || value.generation < 0
+        || (value.origin !== 'terminal' && value.origin !== 'app')
+        || !['current', 'draining', 'inactive', 'recovering'].includes(String(value.role))
+        || (value.terminal !== 'attached' && value.terminal !== 'unattached')
+        || typeof value.changedAt !== 'number'
+        || !Number.isFinite(value.changedAt)
+        || (value.previousSessionId !== undefined && typeof value.previousSessionId !== 'string')
+        || (value.nextSessionId !== undefined && typeof value.nextSessionId !== 'string')
+    ) {
+        return null;
+    }
+    return value as unknown as CodexGatewayBinding;
+}
+
+export function canStopCodexGatewaySession(
+    metadata: Metadata | null | undefined,
+    options: { machineDeleted?: boolean } = {},
+): boolean {
+    const binding = resolveCodexGatewayBinding(metadata);
+    return Boolean(
+        binding
+        && !isCodexSessionReadOnly(metadata)
+        && options.machineDeleted !== true
+        && typeof metadata?.machineId === 'string'
+        && metadata.machineId.length > 0
+        && (binding.role === 'current' || binding.role === 'recovering'),
+    );
 }
 
 export function assertCodexSessionWritable(metadata: Metadata | null | undefined): void {

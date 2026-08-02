@@ -21,7 +21,9 @@ import {
 import { codexV4RequestResponse, findActiveCodexV4Turn } from './codexV4Commands';
 import {
     assertCodexSessionWritable,
+    isCodexGatewaySession,
     isCodexSessionReadOnly,
+    resolveCodexGatewayBinding,
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
@@ -953,7 +955,8 @@ export async function sessionRipgrep(
 }
 
 /**
- * Kill the session process immediately
+ * Stop the session runtime. Codex Gateway sessions use the machine-scoped,
+ * authenticated graceful-stop RPC; legacy sessions retain killSession.
  */
 export async function sessionKill(
     sessionId: string,
@@ -961,6 +964,36 @@ export async function sessionKill(
 ): Promise<SessionKillResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
+        const metadata = storage.getState().sessions[sessionId]?.metadata;
+        if (isCodexGatewaySession(metadata)) {
+            if (!metadata?.machineId) {
+                throw new Error('Codex Gateway session is missing its machine identity');
+            }
+            const binding = resolveCodexGatewayBinding(metadata);
+            if (!binding) {
+                throw new Error('Codex Gateway session is missing its binding identity');
+            }
+            const response = await apiSocket.machineRPC<{
+                message: string;
+            }, {
+                sessionId: string;
+                expectedGatewayId: string;
+                bindingGeneration: number;
+            }>(
+                metadata.machineId,
+                'stop-session',
+                {
+                    sessionId,
+                    expectedGatewayId: binding.gatewayId,
+                    bindingGeneration: binding.generation,
+                },
+                options,
+            );
+            return {
+                success: true,
+                message: response.message,
+            };
+        }
         const response = await apiSocket.sessionRPC<SessionKillResponse, {}>(
             sessionId,
             'killSession',

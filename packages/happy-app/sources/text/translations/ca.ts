@@ -84,6 +84,16 @@ export const ca: TranslationStructure = {
         activeNow: 'Actiu ara',
         unknown: 'desconegut',
         unread: 'nous resultats',
+        gatewayStarting: 'Gateway iniciant-se',
+        gatewayRecovering: 'Gateway recuperant-se',
+        gatewayStopping: 'Gateway aturant-se',
+        gatewayStopped: 'Gateway aturat',
+        gatewaySwitching: 'Canviant de sessió',
+        gatewaySyncing: 'Gateway sincronitzant-se',
+        terminalAttached: 'Terminal connectat',
+        terminalPendingDetach: 'Terminal reconnectant-se',
+        terminalDetached: 'Terminal desconnectat',
+        gatewayHeadless: 'Control des de l\'app',
     },
 
     time: {
@@ -376,6 +386,9 @@ export const ca: TranslationStructure = {
         // Used by Session Info screen (app/(app)/session/[id]/info.tsx)
         killSession: 'Finalitza la sessió',
         killSessionConfirm: 'Segur que vols finalitzar aquesta sessió?',
+        stopGateway: 'Atura el Gateway',
+        stopGatewayConfirm: 'Vols aturar aquest Gateway de Codex? L\'historial de la conversa continuarà disponible.',
+        stopGatewayFailed: 'No s\'ha pogut aturar el Gateway de Codex.',
         archiveSession: 'Arxiva la sessió',
         archiveSessionConfirm: 'Segur que vols arxivar aquesta sessió?',
         happySessionIdCopied: 'ID de la sessió de Happy copiat al porta-retalls',

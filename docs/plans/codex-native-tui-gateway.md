@@ -120,6 +120,9 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 - 正常 stop 遇到 active turn 时先发送带 expected turn ID 的 `turn/interrupt`，等待
   权威状态；等待超时只标记 result unknown，然后停止，不伪造 completed/idle。
 - App 的 session 菜单提供 Gateway stop；archive 等价于 stop 后隐藏，历史保留。
+- App 的 machine-scoped stop 请求必须携带 metadata 中的 gateway ID 与 binding
+  generation；daemon 在受理前同时核对 session、gateway、generation 且目标仍是
+  descriptor 的 current binding，拒绝 handoff 前旧页面发出的迟到停止请求。
 
 ## 数据模型变更
 
@@ -231,7 +234,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 ### 4. Wire 与持久命令处理
 
 - [x] 扩展 Wire schema 并补向后兼容测试；生成文件一致性继续由云端门禁验证。
-- [ ] CLI journal 持久化 binding/generation/handoff/worker lifecycle。由于 Happy
+- [x] CLI journal 与受保护 descriptor 持久化 binding/generation/handoff/worker lifecycle。由于 Happy
       session ID 只能由中继返回，relay 离线期间的新根线程先进入受保护的 Gateway
       deferred journal；该 journal 保存 handoff intent 和待投影的 canonical provider
       通知，中继恢复并确定性创建 session 后按原顺序回放，不能用临时 session ID
@@ -265,11 +268,15 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     再重放相同 `/root/open`，不得因本机或中继响应丢失创建第二个 provider thread。
     `spawn-happy-session` 与 `resume-happy-session` 两条 App 入口必须使用同一规则，不能
     只保护新建而遗漏恢复已有 Happy session。
-- [ ] App 命令附带当前 generation；同步期间禁发但保留草稿。
-- [ ] 展示 attached/detached/headless/recovering，并保持 execution 独立。
-- [ ] handoff 成功后按 gateway/generation 自动跟随，避免旧通知把页面拉回。
-- [ ] session 菜单加入 stop；archive 先 stop 后隐藏。
-- [ ] 更新所有 locale，设置和错误说明完整换行显示。
+- [x] App Codex v4 命令从 runtime 附带当前 generation，CLI 在 provider 调用前校验。
+- [x] handoff 目标处于 recovering/syncing 时禁发但保留草稿。
+- [x] 展示 attached/detached/headless/recovering，并保持 execution 独立。
+- [x] handoff 成功后按 gateway/generation 自动跟随，避免旧通知把页面拉回。
+- [x] session 菜单加入 stop；Gateway stop 使用 machine-scoped `stop-session`，不调用旧
+      adapter 的 session `killSession`。current/recovering Gateway archive 先确认 stop
+      已受理再写 tombstone 和隐藏；draining/inactive 只归档目标历史，不停止新的 current
+      binding。停止失败时保留可见状态并允许重试。
+- [x] 更新所有 locale，设置和错误说明完整换行显示。
 
 ### 6. 删除旧交互层
 
@@ -388,3 +395,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   记录筛选旧 Codex adapter，核对 profile、host PID、无 Gateway binding、Happy runtime
   argv，并在 SIGTERM 前二次复核；清退不删除历史与加密材料。完整 CLI `941/941`、App
   `965/965` 源码测试及两端 TypeScript 检查通过。
+- 2026-08-02：完成 App Gateway 状态与控制。composer 仅在 current generation 完成
+  同步后允许发送并保留禁发期间草稿；终端与 Gateway 生命周期独立于 provider execution
+  展示。handoff 只在同一 gateway 的下一 generation 校验成功后跟随。stop 改走带
+  gateway/generation guard 的 machine RPC，且只允许 descriptor current binding；归档
+  在 stop 受理后才隐藏。App `972/972`、CLI `947/947` 源码测试通过。
