@@ -311,6 +311,9 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       使用完全相同的解析规则。
       第二轮云端执行确认 pnpm 未在 package-local `.bin` 放置 `tui-test`；启动器必须
       使用 Node 模块解析得到官方包入口，不依赖包管理器的可执行文件布局。
+      第三轮云端执行确认固定版本会递归转换整个 runner cwd，并被 CLI 根目录中指向
+      未跟踪文件的旧 `.cursorrules` 链接阻断；专用 config 与测试应共同放在
+      `tests/tui/`，以这个最小目录运行，避免复制无关配置和 200 MiB 以上工具归档。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。

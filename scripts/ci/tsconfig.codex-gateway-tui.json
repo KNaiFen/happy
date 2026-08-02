@@ -17,6 +17,6 @@
     "codex-gateway-tui-fixture.ts",
     "codex-responses-fixture.ts",
     "../../packages/happy-cli/tests/tui/codexGatewayTui.test.ts",
-    "../../packages/happy-cli/tui-test.config.ts"
+    "../../packages/happy-cli/tests/tui/tui-test.config.ts"
   ]
 }

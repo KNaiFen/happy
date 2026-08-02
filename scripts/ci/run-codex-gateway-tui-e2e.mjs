@@ -12,6 +12,7 @@ const cliRoot = join(repoRoot, 'packages', 'happy-cli');
 const tsxEntrypoint = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const fixtureTsconfig = join(repoRoot, 'scripts', 'ci', 'tsconfig.codex-gateway-tui.json');
 const fixtureEntrypoint = join(repoRoot, 'scripts', 'ci', 'codex-gateway-tui-fixture.ts');
+const tuiTestRoot = join(cliRoot, 'tests', 'tui');
 const tuiTestEntrypoint = createRequire(import.meta.url).resolve('@microsoft/tui-test');
 const artifactRoot = process.env.HAPPY_GATEWAY_TUI_ARTIFACT_DIR
     ? resolve(process.env.HAPPY_GATEWAY_TUI_ARTIFACT_DIR)
@@ -60,9 +61,9 @@ try {
     const runner = spawn(process.execPath, [
         tuiTestEntrypoint,
         '--trace',
-        'tests/tui/codexGatewayTui.test.ts',
+        'codexGatewayTui.test.ts',
     ], {
-        cwd: cliRoot,
+        cwd: tuiTestRoot,
         env: {
             ...process.env,
             PATH: officialPath,
