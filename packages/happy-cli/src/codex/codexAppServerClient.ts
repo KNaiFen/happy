@@ -1631,6 +1631,7 @@ export class CodexAppServerClient {
         mcpServers?: Record<string, unknown>;
         emitSnapshot?: boolean;
         selectThread?: boolean;
+        preserveConfiguration?: boolean;
     }): Promise<{ threadId: string; model: string; thread: ProtocolThread }> {
         const threadId = opts?.threadId ?? this.threadId;
         if (!threadId) {
@@ -1638,17 +1639,30 @@ export class CodexAppServerClient {
         }
 
         const defaults = this.threadDefaults.get(threadId) ?? {};
-        const params: ThreadResumeParams = {
-            threadId,
-            model: opts?.model ?? defaults.model ?? null,
-            modelProvider: null,
-            cwd: opts?.cwd ?? defaults.cwd ?? process.cwd(),
-            approvalPolicy: opts?.approvalPolicy ?? defaults.approvalPolicy ?? null,
-            sandbox: opts?.sandbox ?? defaults.sandbox ?? null,
-            config: this.buildThreadConfig(opts?.mcpServers ?? defaults.mcpServers),
-            baseInstructions: null,
-            developerInstructions: null,
-        };
+        const preserveConfiguration = opts?.preserveConfiguration === true;
+        const params: ThreadResumeParams = preserveConfiguration
+            ? {
+                threadId,
+                model: null,
+                modelProvider: null,
+                cwd: null,
+                approvalPolicy: null,
+                sandbox: null,
+                config: null,
+                baseInstructions: null,
+                developerInstructions: null,
+            }
+            : {
+                threadId,
+                model: opts?.model ?? defaults.model ?? null,
+                modelProvider: null,
+                cwd: opts?.cwd ?? defaults.cwd ?? process.cwd(),
+                approvalPolicy: opts?.approvalPolicy ?? defaults.approvalPolicy ?? null,
+                sandbox: opts?.sandbox ?? defaults.sandbox ?? null,
+                config: this.buildThreadConfig(opts?.mcpServers ?? defaults.mcpServers),
+                baseInstructions: null,
+                developerInstructions: null,
+            };
 
         const nextDefaults = {
             model: opts?.model ?? defaults.model,
@@ -1666,12 +1680,25 @@ export class CodexAppServerClient {
                 opts?.emitSnapshot !== false,
             );
             if (opts?.selectThread !== false) this.threads.selectThread(response.thread.id);
-            this.rememberThreadDefaults(response.thread.id, nextDefaults);
+            if (!preserveConfiguration) this.rememberThreadDefaults(response.thread.id, nextDefaults);
         }) as ThreadResumeResponse;
         const thread = resumedSnapshot ?? this.normalizeProtocolThread(result.thread);
         if (!thread) throw new Error('thread/resume returned an invalid thread snapshot');
         logger.debug('[CodexAppServer] Thread resumed');
         return { threadId: thread.id, model: result.model, thread };
+    }
+
+    async subscribeThread(threadId: string): Promise<{
+        threadId: string;
+        model: string;
+        thread: ProtocolThread;
+    }> {
+        return await this.resumeThread({
+            threadId,
+            emitSnapshot: false,
+            selectThread: false,
+            preserveConfiguration: true,
+        });
     }
 
     async forkThread(opts: {

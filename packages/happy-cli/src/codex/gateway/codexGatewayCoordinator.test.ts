@@ -50,7 +50,7 @@ describe('Codex Gateway coordinator', () => {
 
         expect(first.generation).toBe(1);
         expect(attached).toMatchObject({ generation: 1, changed: false });
-        expect(harness.client.resumeThread).toHaveBeenCalledOnce();
+        expect(harness.client.subscribeThread).toHaveBeenCalledOnce();
         expect(harness.leases.acquire).toHaveBeenCalledOnce();
     });
 
@@ -80,12 +80,12 @@ describe('Codex Gateway coordinator', () => {
         await harness.coordinator.connect();
         await harness.coordinator.bindRoot('thread-a');
         await harness.coordinator.bindRoot('thread-b');
-        harness.client.resumeThread.mockClear();
+        harness.client.subscribeThread.mockClear();
 
         await harness.coordinator.connect(true);
 
         expect(harness.client.reconnectExternalTransportPreservingThreads).toHaveBeenCalledOnce();
-        expect(harness.client.resumeThread.mock.calls.map(([options]) => options.threadId)).toEqual([
+        expect(harness.client.subscribeThread.mock.calls.map(([threadId]) => threadId)).toEqual([
             'thread-b',
             'thread-a',
         ]);
@@ -239,10 +239,10 @@ class FakeClient {
     readonly reconnectExternalTransportPreservingThreads = vi.fn(async () => {
         this.connectionHandler?.({ connection: 'connected', statusUnknown: true, error: null });
     });
-    readonly resumeThread = vi.fn(async (options: { threadId: string }) => ({
-        threadId: options.threadId,
+    readonly subscribeThread = vi.fn(async (threadId: string) => ({
+        threadId,
         model: 'gpt-test',
-        thread: this.threads.get(options.threadId)!,
+        thread: this.threads.get(threadId)!,
     }));
     readonly readThreadComplete = vi.fn(async (options: { threadId: string }) => ({
         thread: this.threads.get(options.threadId)!,

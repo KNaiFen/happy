@@ -56,12 +56,7 @@ describe('CodexAppServerClient external WebSocket transport', () => {
         );
         cleanups.push(async () => client.disconnect());
         await client.connect();
-        const resumed = await client.resumeThread({
-            threadId: 'thread-websocket',
-            cwd: '/tmp/project',
-            approvalPolicy: 'on-request',
-            sandbox: 'read-only',
-        });
+        const resumed = await client.subscribeThread('thread-websocket');
 
         expect(resumed.threadId).toBe('thread-websocket');
         expect(messages.map((message) => message.method)).toEqual([
@@ -71,6 +66,17 @@ describe('CodexAppServerClient external WebSocket transport', () => {
         ]);
         expect(messages[0]).toMatchObject({
             params: { capabilities: { experimentalApi: false } },
+        });
+        expect(messages[2]).toMatchObject({
+            method: 'thread/resume',
+            params: {
+                threadId: 'thread-websocket',
+                model: null,
+                cwd: null,
+                approvalPolicy: null,
+                sandbox: null,
+                config: null,
+            },
         });
     });
 

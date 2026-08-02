@@ -106,11 +106,7 @@ export class CodexGatewayCoordinator {
 
         if (recovered) {
             for (const root of this.orderedRoots()) {
-                const resumed = await this.options.client.resumeThread({
-                    threadId: root.threadId,
-                    emitSnapshot: false,
-                    selectThread: false,
-                });
+                const resumed = await this.options.client.subscribeThread(root.threadId);
                 root.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
                 await root.runtime.reconcile(resumed.thread);
                 await this.drainPending(root.threadId, root);
@@ -193,11 +189,7 @@ export class CodexGatewayCoordinator {
 
             let previousMarkedDraining = false;
             try {
-                const resumed = await this.options.client.resumeThread({
-                    threadId,
-                    emitSnapshot: false,
-                    selectThread: false,
-                });
+                const resumed = await this.options.client.subscribeThread(threadId);
                 target.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
                 if (created) await target.runtime.activate(resumed.thread);
                 else await target.runtime.reconcile(resumed.thread);
