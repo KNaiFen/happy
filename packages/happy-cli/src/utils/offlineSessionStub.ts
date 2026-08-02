@@ -221,6 +221,15 @@ class OfflineApiSessionClient
         if (this.metadata) this.metadata = handler(this.metadata);
     };
 
+    readonly updateMetadataAndWait:
+        ApiSessionClientContract['updateMetadataAndWait'] = async (handler) => {
+            if (this.target) {
+                await this.target.updateMetadataAndWait(handler);
+                return;
+            }
+            if (this.metadata) this.metadata = handler(this.metadata);
+        };
+
     readonly updateAgentState: ApiSessionClientContract['updateAgentState'] = (handler) => {
         if (this.target) {
             this.target.updateAgentState(handler);

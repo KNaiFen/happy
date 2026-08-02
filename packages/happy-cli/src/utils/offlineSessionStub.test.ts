@@ -30,8 +30,13 @@ describe('createOfflineSessionStub', () => {
             .not.toThrow();
 
         session.updateMetadata((metadata) => ({ ...metadata, name: 'offline title' }));
+        await session.updateMetadataAndWait((metadata) => ({
+            ...metadata,
+            lifecycleState: 'recovering',
+        }));
         session.updateAgentState((state) => ({ ...state, controlledByUser: true }));
         expect(session.getMetadata()?.name).toBe('offline title');
+        expect(session.getMetadata()?.lifecycleState).toBe('recovering');
         expect(session.getAgentState()?.controlledByUser).toBe(true);
 
         const attachment = {

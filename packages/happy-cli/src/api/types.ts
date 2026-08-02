@@ -288,6 +288,17 @@ export const MessageContentSchema = z.union([UserMessageSchema, AgentMessageSche
 
 export type MessageContent = z.infer<typeof MessageContentSchema>
 
+export type CodexGatewayBindingMetadata = {
+  gatewayId: string
+  generation: number
+  origin: 'terminal' | 'app'
+  role: 'current' | 'draining' | 'inactive' | 'recovering'
+  terminal: 'attached' | 'unattached'
+  previousSessionId?: string
+  nextSessionId?: string
+  changedAt: number
+}
+
 export type Metadata = {
   /**
    * ACP session config option value (normalized for UI metadata consumers).
@@ -324,6 +335,8 @@ export type Metadata = {
   effortLevel?: string | null,
   /** Canonical encrypted transport selected for this Codex session. */
   codexSyncVersion?: 4,
+  /** Encrypted root-session ownership for a persistent native Codex Gateway. */
+  codexGatewayBinding?: CodexGatewayBindingMetadata,
   tools?: string[],
   slashCommands?: string[],
   mcpServers?: Array<{ name: string; status: string }>,

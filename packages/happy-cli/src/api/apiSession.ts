@@ -934,7 +934,15 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     updateMetadata(handler: (metadata: Metadata) => Metadata) {
-        this.metadataLock.inLock(async () => {
+        void this.updateMetadataAndWait(handler).catch((error) => {
+            logger.debug('[API] Deferred metadata update failed', {
+                errorKind: classifySyncV4DiagnosticError(error),
+            });
+        });
+    }
+
+    async updateMetadataAndWait(handler: (metadata: Metadata) => Metadata): Promise<void> {
+        await this.metadataLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.metadata!); // Weird state if metadata is null - should never happen but here we are
                 const answer = await this.socket.emitWithAck('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(this.encryptionKey, this.encryptionVariant, updated)) });
