@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.15`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.16`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -321,10 +321,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [x] CLI 升至 `1.4.15`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
+- [x] CLI 升至 `1.4.16`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
+      `1.4.15` 的制品安装成功，但发布冒烟测试用小写字符串匹配实际首字母大写的
+      removed-command 错误，工作流因此误报失败；按不可复用已运行版本的规则推进补丁版。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.15.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.16.tgz` 到
       `dist/release-artifacts`。
 - [ ] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 

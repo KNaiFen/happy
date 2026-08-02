@@ -132,7 +132,7 @@ jobs:
           STATUS=$?
           set -e
           test "$STATUS" -ne 0
-          grep -Fq 'removed command is no longer supported' "$RUNNER_TEMP/happy-removed-command.err"
+          grep -Fq 'This removed command is no longer supported' "$RUNNER_TEMP/happy-removed-command.err"
 
       - name: Upload CLI package
         uses: actions/upload-artifact@v4
