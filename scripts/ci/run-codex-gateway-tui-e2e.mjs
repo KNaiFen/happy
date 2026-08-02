@@ -213,6 +213,9 @@ async function persistSafeGatewayStatus(controlUrl, destination) {
             projectionLagP95Ms: nonnegativeNumber(status.projectionLagP95Ms),
             rawReasoningLeak: booleanOrNull(status.rawReasoningLeak),
             payloadLeakInLogs: booleanOrNull(status.payloadLeakInLogs),
+            payloadLeakSources: allowlistedStringArray(status.payloadLeakSources, [
+                'fixture', 'relay', 'migration', 'happy',
+            ]),
         };
         await writeFile(destination, `${JSON.stringify(safe, null, 2)}\n`, {
             encoding: 'utf8',
@@ -242,6 +245,11 @@ function safeDiagnostic(value) {
 
 function booleanOrNull(value) {
     return typeof value === 'boolean' ? value : null;
+}
+
+function allowlistedStringArray(value, allowed) {
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry) => typeof entry === 'string' && allowed.includes(entry));
 }
 
 function nonnegativeNumber(value) {

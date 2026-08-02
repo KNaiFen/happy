@@ -148,22 +148,68 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.acquire).toHaveBeenCalledOnce();
     });
 
-    it('binds a newly started unmaterialized thread without issuing thread/resume', async () => {
+    it('binds a bridge-started thread without issuing thread/resume', async () => {
         const fresh = thread('thread-fresh', 'idle');
         const harness = createHarness({ 'thread-fresh': fresh });
         await harness.coordinator.connect();
 
         await expect(harness.coordinator.bindRoot('thread-fresh', {
-            subscription: 'autoAttachedNewThread',
+            subscription: 'bridgeStartedNewThread',
         })).resolves.toMatchObject({ generation: 1, changed: true });
 
         expect(harness.client.subscribeThread).not.toHaveBeenCalled();
+        expect(harness.client.subscribeThreadIfMaterialized).not.toHaveBeenCalled();
         expect(harness.client.readThread).toHaveBeenCalledWith({
             threadId: 'thread-fresh',
             includeTurns: false,
             emitSnapshot: false,
         });
         expect(harness.runtimes.get('thread-fresh')!.activatedSnapshots).toEqual([fresh]);
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
+    });
+
+    it('reconciles a terminal-started root after its first turn materializes', async () => {
+        const fresh = thread('thread-fresh', 'idle');
+        const materialized = thread('thread-fresh', 'active', 'turn-1');
+        const harness = createHarness({ 'thread-fresh': fresh });
+        harness.client.unmaterializedThreads.add('thread-fresh');
+        await harness.coordinator.connect();
+
+        await harness.coordinator.bindRoot('thread-fresh', {
+            subscription: 'deferredNewThread',
+        });
+
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual(['thread-fresh']);
+        await expect(harness.coordinator.subscribeMaterializedRoot('thread-fresh'))
+            .resolves.toBe(false);
+        expect(harness.runtimes.get('thread-fresh')!.reconcile).not.toHaveBeenCalled();
+
+        harness.client.unmaterializedThreads.delete('thread-fresh');
+        harness.client.setThread(materialized);
+        await expect(harness.coordinator.subscribeMaterializedRoot('thread-fresh'))
+            .resolves.toBe(true);
+
+        expect(harness.runtimes.get('thread-fresh')!.reconcile).toHaveBeenCalledWith(materialized);
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
+    });
+
+    it('does not replay a bridge notification through a materialized snapshot', async () => {
+        const fresh = thread('thread-fresh', 'idle');
+        const harness = createHarness({ 'thread-fresh': fresh });
+        harness.client.unmaterializedThreads.add('thread-fresh');
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-fresh', {
+            subscription: 'deferredNewThread',
+        });
+
+        harness.client.emitNotification(threadStatus('thread-fresh', 'active'));
+        await harness.coordinator.flush();
+
+        expect(harness.client.subscribeThreadIfMaterialized).not.toHaveBeenCalled();
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
+        expect(harness.runtimes.get('thread-fresh')!.notifications).toEqual([
+            threadStatus('thread-fresh', 'active'),
+        ]);
     });
 
     it('does not flush a draining source while its root handoff command is still in flight', async () => {
@@ -431,6 +477,12 @@ class FakeClient {
         model: 'gpt-test',
         thread: this.threads.get(threadId)!,
     }));
+    readonly unmaterializedThreads = new Set<string>();
+    readonly subscribeThreadIfMaterialized = vi.fn(async (threadId: string) => (
+        this.unmaterializedThreads.has(threadId)
+            ? null
+            : await this.subscribeThread(threadId)
+    ));
     readonly readThread = vi.fn(async (options: { threadId: string }) => ({
         thread: this.threads.get(options.threadId)!,
     }));
@@ -439,6 +491,10 @@ class FakeClient {
     }));
 
     constructor(private readonly threads: Map<string, Thread>) {}
+
+    setThread(value: Thread): void {
+        this.threads.set(value.id, value);
+    }
 
     setStableNotificationHandler(handler: ((notification: ServerNotification) => void) | null): void {
         this.notificationHandler = handler;

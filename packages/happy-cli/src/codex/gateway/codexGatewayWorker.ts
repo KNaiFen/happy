@@ -239,6 +239,7 @@ async function runCodexGatewayWorkerInternal(
     });
     const deferredRoots = new Map<string, DeferredRoot>();
     const rootReservations = new Map<string, { threadId: string; release: boolean }>();
+    const pendingFreshSubscriptions = new Set<string>();
     let runtimeFactory: CodexGatewayRuntimeFactory | null = null;
     let coordinator: CodexGatewayCoordinator | null = null;
     let stopping = false;
@@ -300,9 +301,10 @@ async function runCodexGatewayWorkerInternal(
             });
             const bound = await requireCoordinator().bindRoot(input.targetThreadId, {
                 subscription: input.command.command === 'thread.start'
-                    ? 'autoAttachedNewThread'
+                    ? 'bridgeStartedNewThread'
                     : 'resume',
             });
+            syncPendingFreshSubscriptions();
             await journal.recordHandoff({
                 commandId: input.command.commandId,
                 sourceThreadId: input.sourceThreadId,
@@ -311,7 +313,7 @@ async function runCodexGatewayWorkerInternal(
                 state: 'bound',
                 updatedAt: Date.now(),
             });
-            await syncDescriptorBindings();
+            await syncDescriptorBindings({ clearRootBindingError: true });
         },
         reconcile: async (command: CodexCommandEntityV4) => {
             const handoff = journal.handoff(command.commandId);
@@ -322,18 +324,23 @@ async function runCodexGatewayWorkerInternal(
             try {
                 const bound = await requireCoordinator().bindRoot(handoff.targetThreadId, {
                     subscription: command.command === 'thread.start'
-                        ? 'autoAttachedNewThread'
+                        ? 'deferredNewThread'
                         : 'resume',
                 });
+                if (command.command === 'thread.start') {
+                    await requireCoordinator().subscribeMaterializedRoot(handoff.targetThreadId);
+                }
+                syncPendingFreshSubscriptions();
                 await journal.recordHandoff({
                     ...handoff,
                     generation: bound.generation,
                     state: 'bound',
                     updatedAt: Date.now(),
                 });
-                await syncDescriptorBindings();
+                await syncDescriptorBindings({ clearRootBindingError: true });
                 return { action: 'succeeded' as const, threadId: handoff.targetThreadId };
-            } catch {
+            } catch (error) {
+                recordWorkerError(error);
                 return { action: 'pending' as const };
             }
         },
@@ -462,6 +469,7 @@ async function runCodexGatewayWorkerInternal(
                 } else if (recovered) {
                     await coordinator.connect(true);
                 }
+                syncPendingFreshSubscriptions();
                 await coordinator.setGatewayLifecycle('running');
                 await coordinator.setTerminalState(terminal.state, terminal.detachedAt);
                 await materializeDeferredRoots();
@@ -489,9 +497,10 @@ async function runCodexGatewayWorkerInternal(
             try {
                 await requireCoordinator().bindRoot(binding.threadId, {
                     subscription: binding.method === 'thread/start'
-                        ? 'autoAttachedNewThread'
+                        ? 'deferredNewThread'
                         : 'resume',
                 });
+                syncPendingFreshSubscriptions();
             } catch (error) {
                 const diagnosed = error instanceof CodexGatewayRootBindingError
                     ? error
@@ -514,6 +523,21 @@ async function runCodexGatewayWorkerInternal(
                 const diagnosed = new CodexGatewayRootBindingError('descriptor', error);
                 await persistWorkerError(diagnosed);
                 throw diagnosed;
+            }
+        },
+        threadMaterialized: async (threadId) => {
+            if (!pendingFreshSubscriptions.has(threadId)) return;
+            try {
+                const subscribed = await requireCoordinator().subscribeMaterializedRoot(threadId);
+                syncPendingFreshSubscriptions();
+                if (subscribed) {
+                    await syncDescriptorBindings({ clearRootBindingError: true });
+                }
+            } catch (error) {
+                const diagnosed = error instanceof CodexGatewayRootBindingError
+                    ? error
+                    : new CodexGatewayRootBindingError('providerSnapshot', error);
+                await persistWorkerError(diagnosed);
             }
         },
         rootFailed: async (request) => {
@@ -663,6 +687,7 @@ async function runCodexGatewayWorkerInternal(
         if (input.dataEncryptionKey) decodeRootSessionKey(input.dataEncryptionKey);
         const activeCoordinator = requireCoordinator();
         const existing = journal.bootstrap(input.operationId);
+        let bridgeStartedNewThread = false;
         let threadId: string;
         if (existing) {
             await journal.recordBootstrap({
@@ -697,6 +722,7 @@ async function runCodexGatewayWorkerInternal(
                         emitSnapshot: false,
                     });
                 threadId = opened.threadId;
+                bridgeStartedNewThread = input.action === 'start';
             } catch (error) {
                 if (releaseResumeLease && !(error instanceof CodexRpcOutcomeUnknownError)) {
                     await leases.release(input.threadId!, options.gatewayId).catch(() => false);
@@ -714,16 +740,27 @@ async function runCodexGatewayWorkerInternal(
 
         const bound = await activeCoordinator.bindRoot(threadId, {
             subscription: input.action === 'start'
-                ? 'autoAttachedNewThread'
+                ? bridgeStartedNewThread
+                    ? 'bridgeStartedNewThread'
+                    : 'deferredNewThread'
                 : 'resume',
         });
+        if (input.action === 'start' && !bridgeStartedNewThread) {
+            try {
+                await activeCoordinator.subscribeMaterializedRoot(threadId);
+            } catch (error) {
+                await persistWorkerError(error);
+                throw error;
+            }
+        }
+        syncPendingFreshSubscriptions();
         await journal.recordBootstrap({
             ...bootstrapRecordInput(input, threadId),
             state: 'bound',
             updatedAt: Date.now(),
         });
         await materializeDeferredRoots();
-        await syncDescriptorBindings();
+        await syncDescriptorBindings({ clearRootBindingError: true });
         const current = activeCoordinator.bindingSnapshot().find((binding) => (
             binding.threadId === threadId && binding.role === 'current'
         ));
@@ -754,6 +791,13 @@ async function runCodexGatewayWorkerInternal(
         }
         await coordinator.refreshBindingLinks();
         await syncDescriptorBindings();
+    }
+
+    function syncPendingFreshSubscriptions(): void {
+        pendingFreshSubscriptions.clear();
+        for (const threadId of coordinator?.pendingSubscriptionThreadIds() ?? []) {
+            pendingFreshSubscriptions.add(threadId);
+        }
     }
 
     async function updateGatewayLifecycle(
@@ -803,6 +847,7 @@ async function runCodexGatewayWorkerInternal(
         try {
             await materializeDeferredRoots();
             await coordinator?.retireDrainingRoots();
+            syncPendingFreshSubscriptions();
             const activeThreads = new Set(
                 coordinator?.bindingSnapshot().map((binding) => binding.threadId) ?? [],
             );

@@ -249,6 +249,64 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         ]));
     });
 
+    it('observes turn materialization without changing traffic or closing on hook failure', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
+        const upstreamPath = join(root, 'upstream.sock');
+        const downstreamPath = join(root, 'downstream.sock');
+        const upstreamMessages: string[] = [];
+        const response = '{"id":11,"result":{"turn":{"id":"turn-a"}}}';
+        const notification = '{"method":"item/started","params":{"threadId":"thread-a","turnId":"turn-a","item":{"id":"item-a"}}}';
+        const rejection = '{"id":12,"error":{"code":-32001,"message":"turn rejected"}}';
+        const upstream = await startWebSocketServer(upstreamPath, (socket) => {
+            socket.on('message', (data) => {
+                const text = data.toString();
+                upstreamMessages.push(text);
+                const request = JSON.parse(text) as { id: number; method: string };
+                if (request.id === 11) {
+                    socket.send(response);
+                    socket.send(notification);
+                } else if (request.id === 12) {
+                    socket.send(rejection);
+                }
+            });
+        });
+        let rejectHookOnce = true;
+        const threadMaterialized = vi.fn(async () => {
+            if (!rejectHookOnce) return;
+            rejectHookOnce = false;
+            throw new Error('transient bridge subscription failure');
+        });
+        const protocolError = vi.fn();
+        const proxy = new CodexGatewayProxy(
+            { socketPath: downstreamPath },
+            { socketPath: upstreamPath },
+            { threadMaterialized, protocolError },
+        );
+        await proxy.start();
+        cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
+        const client = connectCodexGatewayWebSocket({ socketPath: downstreamPath });
+        cleanups.push(async () => { client.close(); });
+        await opened(client);
+        const received: string[] = [];
+        client.on('message', (data) => received.push(data.toString()));
+
+        const turnStart = '{"id":11,"method":"turn/start","params":{"threadId":"thread-a","input":[]}}';
+        client.send(turnStart);
+        await vi.waitFor(() => expect(received).toEqual([response, notification]));
+        await vi.waitFor(() => expect(threadMaterialized).toHaveBeenCalledTimes(2));
+        expect(threadMaterialized).toHaveBeenNthCalledWith(1, 'thread-a');
+        expect(threadMaterialized).toHaveBeenNthCalledWith(2, 'thread-a');
+        expect(protocolError).toHaveBeenCalledWith(expect.objectContaining({
+            message: 'transient bridge subscription failure',
+        }));
+
+        const rejectedTurn = '{"id":12,"method":"turn/start","params":{"threadId":"thread-a","input":[]}}';
+        client.send(rejectedTurn);
+        await vi.waitFor(() => expect(received).toEqual([response, notification, rejection]));
+        expect(threadMaterialized).toHaveBeenCalledTimes(2);
+        expect(upstreamMessages).toEqual([turnStart, rejectedTurn]);
+    });
+
     it('passes binary frames through without coercing their payload', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
         const upstreamPath = join(root, 'upstream.sock');

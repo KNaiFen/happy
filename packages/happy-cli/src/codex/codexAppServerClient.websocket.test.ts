@@ -82,6 +82,97 @@ describe('CodexAppServerClient external WebSocket transport', () => {
         expect(provider.extensionOffers()).toEqual([undefined]);
     });
 
+    it('treats only the exact stable no-rollout resume error as not materialized', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-codex-client-ws-'));
+        const socketPath = join(root, 'provider.sock');
+        let materialized = false;
+        const provider = await startProvider(socketPath, (socket, message) => {
+            if (message.method === 'initialize') {
+                socket.send(JSON.stringify({ id: message.id, result: { userAgent: 'test' } }));
+            }
+            if (message.method !== 'thread/resume') return;
+            if (!materialized) {
+                socket.send(JSON.stringify({
+                    id: message.id,
+                    error: {
+                        code: -32600,
+                        message: 'no rollout found for thread id thread-fresh',
+                    },
+                }));
+                return;
+            }
+            socket.send(JSON.stringify({
+                id: message.id,
+                result: {
+                    thread: {
+                        id: 'thread-fresh',
+                        turns: [{ id: 'turn-1', items: [], status: 'completed', error: null }],
+                        status: { type: 'idle' },
+                    },
+                    model: 'gpt-test',
+                    modelProvider: 'openai',
+                    cwd: '/tmp/project',
+                    approvalPolicy: 'never',
+                    sandbox: { type: 'readOnly' },
+                    reasoningEffort: null,
+                },
+            }));
+        });
+        cleanups.push(async () => {
+            await provider.close();
+            await rm(root, { recursive: true, force: true });
+        });
+
+        const client = new CodexAppServerClient(
+            undefined,
+            { major: 0, minor: 145, patch: 0 },
+            { webSocketEndpoint: { socketPath } },
+        );
+        cleanups.push(async () => client.disconnect());
+        await client.connect();
+
+        await expect(client.subscribeThreadIfMaterialized('thread-fresh')).resolves.toBeNull();
+        materialized = true;
+        await expect(client.subscribeThreadIfMaterialized('thread-fresh')).resolves.toMatchObject({
+            threadId: 'thread-fresh',
+            thread: { turns: [expect.objectContaining({ id: 'turn-1' })] },
+        });
+    });
+
+    it('does not suppress a different thread/resume protocol error', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-codex-client-ws-'));
+        const socketPath = join(root, 'provider.sock');
+        const provider = await startProvider(socketPath, (socket, message) => {
+            if (message.method === 'initialize') {
+                socket.send(JSON.stringify({ id: message.id, result: { userAgent: 'test' } }));
+            }
+            if (message.method === 'thread/resume') {
+                socket.send(JSON.stringify({
+                    id: message.id,
+                    error: {
+                        code: -32600,
+                        message: 'no rollout found for thread id another-thread',
+                    },
+                }));
+            }
+        });
+        cleanups.push(async () => {
+            await provider.close();
+            await rm(root, { recursive: true, force: true });
+        });
+
+        const client = new CodexAppServerClient(
+            undefined,
+            { major: 0, minor: 145, patch: 0 },
+            { webSocketEndpoint: { socketPath } },
+        );
+        cleanups.push(async () => client.disconnect());
+        await client.connect();
+
+        await expect(client.subscribeThreadIfMaterialized('thread-fresh'))
+            .rejects.toThrow('thread/resume failed (code=-32600)');
+    });
+
     it('does not offer compression on loopback WebSocket endpoints', async () => {
         const provider = await startLoopbackUpgradeRecorder();
         cleanups.push(provider.close);

@@ -58,6 +58,8 @@ const appVersion = packageVersion(join(repoRoot, 'packages', 'happy-app', 'packa
 const cliVersion = packageVersion(join(cliRoot, 'package.json'));
 const rawReasoningCanary = Buffer.from('b'.repeat(550)).toString('base64');
 
+type PayloadLeakSource = 'fixture' | 'relay' | 'migration' | 'happy';
+
 interface FixtureStateFile {
     controlUrl: string;
     serverUrl: string;
@@ -318,6 +320,7 @@ async function fixtureStatus(options: {
         ? await readV3MessageCount(runtime.session.id).catch(() => -1)
         : 0;
     const provider = responsesFixture?.snapshot() ?? null;
+    const payloadLeakSources = await logPayloadLeakSources([...payloadCanaries]);
 
     return {
         gateway: descriptor ? {
@@ -366,7 +369,8 @@ async function fixtureStatus(options: {
         v3MessageCount,
         projectionLagSamples: projectionLags.length,
         projectionLagP95Ms: percentile(projectionLags, 0.95),
-        payloadLeakInLogs: await logsContainPayload([...payloadCanaries]),
+        payloadLeakInLogs: payloadLeakSources.length > 0,
+        payloadLeakSources,
     };
 }
 
@@ -546,35 +550,39 @@ async function readV3MessageCount(sessionId: string): Promise<number> {
     return body.messages?.length ?? 0;
 }
 
-async function logsContainPayload(canaries: string[]): Promise<boolean> {
+async function logPayloadLeakSources(canaries: string[]): Promise<PayloadLeakSource[]> {
     const filtered = canaries.filter((value) => value.length > 0);
-    if (filtered.length === 0) return false;
-    const roots = [
-        outerFixtureLog,
-        join(fixtureRoot, 'relay.log'),
-        join(fixtureRoot, 'migration.log'),
-        join(happyHomeDir, 'logs'),
+    if (filtered.length === 0) return [];
+    const roots: Array<{ source: PayloadLeakSource; path: string }> = [
+        { source: 'fixture', path: outerFixtureLog },
+        { source: 'relay', path: join(fixtureRoot, 'relay.log') },
+        { source: 'migration', path: join(fixtureRoot, 'migration.log') },
+        { source: 'happy', path: join(happyHomeDir, 'logs') },
     ];
+    const found = new Set<PayloadLeakSource>();
     for (const root of roots) {
         let info;
         try {
-            info = await stat(root);
+            info = await stat(root.path);
         } catch {
             continue;
         }
         const files = info.isDirectory()
-            ? (await readdir(root)).map((entry) => join(root, entry))
-            : [root];
+            ? (await readdir(root.path)).map((entry) => join(root.path, entry))
+            : [root.path];
         for (const path of files) {
             try {
                 const content = await readFile(path, 'utf8');
-                if (filtered.some((canary) => content.includes(canary))) return true;
+                if (filtered.some((canary) => content.includes(canary))) {
+                    found.add(root.source);
+                    break;
+                }
             } catch {
                 continue;
             }
         }
     }
-    return false;
+    return [...found].sort();
 }
 
 async function createAppToken(): Promise<string> {

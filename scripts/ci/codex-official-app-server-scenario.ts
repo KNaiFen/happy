@@ -370,6 +370,8 @@ async function exerciseOfficialUnixWebSocket(options: {
         const observer = new options.CodexAppServerClient(undefined, parsedVersion, endpoint);
         const creator = new options.CodexAppServerClient(undefined, parsedVersion, endpoint);
         const observedMethods = new Set<string>();
+        let subscriptionAttempts = 0;
+        let subscribedTurnCount = 0;
         let resolveObservedCompletion!: () => void;
         const observedCompletion = new Promise<void>((resolve) => {
             resolveObservedCompletion = resolve;
@@ -379,8 +381,8 @@ async function exerciseOfficialUnixWebSocket(options: {
             if (notification.method === 'turn/completed') resolveObservedCompletion();
         });
         try {
-            // The bridge is initialized before another connection creates the root.
-            // Official app-server auto-subscribes it through the thread-created event.
+            // A remote bridge can read a fresh thread before the rollout exists, but
+            // stable thread/resume becomes available only after the first turn starts.
             await observer.connect();
             await creator.connect();
             const started = await creator.startThread({
@@ -396,25 +398,66 @@ async function exerciseOfficialUnixWebSocket(options: {
             assert.equal(live.thread.id, started.threadId);
             assert.equal(live.thread.turns.length, 0);
 
-            const [turn] = await withTimeout(Promise.all([
-                creator.sendTurnAndWait('verify a second initialized connection observes the first turn', {
-                    clientUserMessageId: 'official-fresh-thread-observer-command',
-                }),
-                observedCompletion,
-            ]), 90_000, 'fresh thread observer lifecycle');
-            assert.equal(turn.aborted, false, 'fresh thread observer turn was aborted');
-            for (const method of [
-                'turn/started',
-                'item/commandExecution/outputDelta',
-                'item/reasoning/summaryTextDelta',
-                'item/agentMessage/delta',
-                'turn/completed',
-            ]) {
-                assert(
-                    observedMethods.has(method),
-                    `auto-subscribed observer omitted ${method}`,
-                );
+            const creatorTurn = creator.sendTurnAndWait(
+                'verify a materialized stable-v2 observer receives the first turn',
+                { clientUserMessageId: 'official-fresh-thread-observer-command' },
+            );
+            let subscribed: Awaited<ReturnType<typeof observer.subscribeThreadIfMaterialized>> = null;
+            const subscriptionDeadline = Date.now() + 15_000;
+            while (!subscribed && Date.now() < subscriptionDeadline) {
+                subscriptionAttempts += 1;
+                subscribed = await observer.subscribeThreadIfMaterialized(started.threadId);
+                if (!subscribed) await new Promise((resolve) => setTimeout(resolve, 10));
             }
+            assert(subscribed, 'observer could not resume the thread after its first turn materialized');
+            subscribedTurnCount = subscribed.thread.turns.length;
+            assert(
+                subscribed.thread.turns.length >= 1,
+                'materialized resume omitted the active first turn',
+            );
+
+            const [turn] = await withTimeout(Promise.all([
+                creatorTurn,
+                observedCompletion,
+            ]), 90_000, 'materialized thread observer lifecycle');
+            assert.equal(turn.aborted, false, 'fresh thread observer turn was aborted');
+            assert(observedMethods.has('turn/completed'), 'materialized observer omitted turn/completed');
+            assert(
+                [
+                    'item/commandExecution/outputDelta',
+                    'item/reasoning/summaryTextDelta',
+                    'item/agentMessage/delta',
+                ].some((method) => observedMethods.has(method)),
+                'materialized observer received no streamed item activity',
+            );
+
+            const finalSnapshot = await observer.readThreadComplete({
+                threadId: started.threadId,
+                emitSnapshot: false,
+            });
+            const serializedSnapshot = JSON.stringify(finalSnapshot.thread);
+            assert(
+                serializedSnapshot.includes(OFFICIAL_CODEX_TOOL_SENTINEL),
+                'materialized observer snapshot omitted command output',
+            );
+            assert(
+                serializedSnapshot.includes('official app-server tool round trip'),
+                'materialized observer snapshot omitted reasoning summary',
+            );
+            assert(
+                serializedSnapshot.includes(OFFICIAL_CODEX_RESPONSE_SENTINEL),
+                'materialized observer snapshot omitted the assistant response',
+            );
+        } catch (error) {
+            console.error(
+                [
+                    'Fresh observer diagnostics:',
+                    `subscriptionAttempts=${subscriptionAttempts}`,
+                    `subscribedTurns=${subscribedTurnCount}`,
+                    `methods=${[...observedMethods].sort().join(',')}`,
+                ].join(' '),
+            );
+            throw error;
         } finally {
             await Promise.allSettled([
                 observer.disconnect(),

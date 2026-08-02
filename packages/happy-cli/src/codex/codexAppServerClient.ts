@@ -252,6 +252,13 @@ function isPaginatedThreadReadError(error: unknown): boolean {
         && error.providerMessage === 'paginated threads do not support thread/read(includeTurns=true)';
 }
 
+function isUnmaterializedThreadResumeError(error: unknown, threadId: string): boolean {
+    return error instanceof CodexRpcResponseError
+        && error.method === 'thread/resume'
+        && error.code === -32600
+        && error.providerMessage === `no rollout found for thread id ${threadId}`;
+}
+
 // Codex item ids are per-thread counters, so items from collab subagent
 // threads collide with the main thread's. Scoping with the thread id keeps
 // them unique — but the SAME scoped id must be used both for the tool-call
@@ -1699,6 +1706,19 @@ export class CodexAppServerClient {
             selectThread: false,
             preserveConfiguration: true,
         });
+    }
+
+    async subscribeThreadIfMaterialized(threadId: string): Promise<{
+        threadId: string;
+        model: string;
+        thread: ProtocolThread;
+    } | null> {
+        try {
+            return await this.subscribeThread(threadId);
+        } catch (error) {
+            if (isUnmaterializedThreadResumeError(error, threadId)) return null;
+            throw error;
+        }
     }
 
     async forkThread(opts: {

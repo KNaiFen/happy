@@ -51,6 +51,7 @@ interface FixtureStatus {
     projectionLagSamples: number;
     projectionLagP95Ms: number | null;
     payloadLeakInLogs: boolean;
+    payloadLeakSources: Array<'fixture' | 'relay' | 'migration' | 'happy'>;
 }
 
 let initialGateway: GatewayStatus | null = null;
@@ -127,7 +128,11 @@ test.describe('terminal-origin Gateway', () => {
         );
         assert.equal(terminalState.v3MessageCount, 0, 'Codex terminal prompt fell back to v3');
         assert.equal(terminalState.rawReasoningLeak, false, 'raw reasoning reached Sync v4');
-        assert.equal(terminalState.payloadLeakInLogs, false, 'terminal prompt reached operational logs');
+        assert.equal(
+            terminalState.payloadLeakInLogs,
+            false,
+            `terminal prompt reached operational logs (${terminalState.payloadLeakSources.join(',') || 'unknown'})`,
+        );
         initialGateway = terminalState.gateway;
         assert(initialGateway?.providerPid);
 
@@ -151,7 +156,11 @@ test.describe('terminal-origin Gateway', () => {
         assert.equal(appState.gateway?.threadId, initialGateway.threadId);
         assert.equal(appState.v3MessageCount, 0, 'App prompt fell back to v3');
         assert.equal(appState.rawReasoningLeak, false, 'raw reasoning reached App projection');
-        assert.equal(appState.payloadLeakInLogs, false, 'App prompt reached operational logs');
+        assert.equal(
+            appState.payloadLeakInLogs,
+            false,
+            `App prompt reached operational logs (${appState.payloadLeakSources.join(',') || 'unknown'})`,
+        );
         assert(
             appState.projectionLagP95Ms !== null && appState.projectionLagP95Ms < 750,
             `App stream projection p95 was ${appState.projectionLagP95Ms ?? 'missing'}ms`,
@@ -227,7 +236,11 @@ test.describe('Gateway attach', () => {
         assert.equal(attachState.gateway?.providerPid, initialGateway.providerPid);
         assert.equal(attachState.gateway?.threadId, initialGateway.threadId);
         assert.equal(attachState.gateway?.sessionId, initialGateway.sessionId);
-        assert.equal(attachState.payloadLeakInLogs, false, 'attach prompt reached operational logs');
+        assert.equal(
+            attachState.payloadLeakInLogs,
+            false,
+            `attach prompt reached operational logs (${attachState.payloadLeakSources.join(',') || 'unknown'})`,
+        );
         await expect(terminal.getByText(officialResponse, { full: true, strict: false }))
             .toBeVisible({ timeout: 120_000 });
 

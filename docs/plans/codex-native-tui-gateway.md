@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.24`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.25`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -43,7 +43,10 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 - 官方远程 TUI 与本地 stdio TUI 的差异由产品接受；Happy 不伪造 TUI 控件。
 - 代理透传 JSON-RPC，不改写 provider payload。仅观察、预检并记录成功的根
   `thread/start`、`thread/resume`、`thread/fork` 绑定变化。
-- Happy bridge 作为 app-server 的独立订阅者；TUI 和 bridge 同时接收通知。
+- Happy bridge 在 thread 已物化后作为 app-server 的独立订阅者；TUI 和 bridge 同时
+  接收通知。终端新建的未物化 thread 先由代理只观察稳定 RPC 的方法、线程归属和受理
+  边界，首个 turn 已受理或出现 thread activity 后立即用 `thread/resume` 正式订阅并
+  以权威 snapshot 补齐早期状态。代理不得把 provider payload 复制进第二套 mapper。
 - 只同步官方 reasoning summary；raw reasoning text 只允许本地计数诊断，永不
   写入 Sync v4 或日志。
 
@@ -394,12 +397,30 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       第二个已初始化 bridge 在首条消息前能读取新线程、无需 resume，并能收到随后真实
       tool、reasoning summary、stream 和 `turn/completed`；PTY 首屏等待同时轮询脱敏
       `lastError`，阶段失败立即结束而不是空等 120 秒。
+      第十六轮主 CI `30762251980` 否定了上述“新建广播足以保证第二连接订阅”的产品
+      假设：官方双连接场景中 creator 完成真实 provider/tool 流程，但 observer 在 90 秒
+      内没有收到 `turn/completed`；真实 PTY 同时记录 provider 已完成 2 次请求，Gateway
+      已绑定且无 root error，但 Sync v4 的 agent/reasoning/command 投影仍全为 0。不能依赖
+      app-server 内部 `thread_created` 广播作为远程连接的公开协议契约。终端
+      `thread/start` 仍使用 metadata-only live snapshot 完成 fail-closed 根绑定，但标记为
+      `subscriptionPending`；透明代理在同一 TUI 连接观察 `turn/start` 成功响应或首个带
+      thread ID 的 provider activity 后，要求 coordinator 调用一个只在精确
+      `no rollout found` 时返回“尚未物化”的 `subscribeThreadIfMaterialized`。成功后立即
+      reconcile 完整 resume snapshot、释放 migration barrier 并清除 pending；失败为
+      尚未物化时等待下一 activity，其他错误进入 payload-free 诊断但不得伪造完成或关闭
+      健康 TUI。App 由 bridge 自己执行的 `thread/start` 保持 requester 已订阅路径；worker
+      恢复时先尝试 materialized resume，未物化则 metadata read 加 pending；若随后首个
+      turn 由 bridge 自己发起，bridge 收到 stable lifecycle 本身即证明 requester 订阅，
+      直接清除 pending 并按原序投影，不再额外 resume 后重复应用触发该判断的同一 delta。
+      官方双连接
+      门禁改为验证“metadata read -> 首 turn 受理 -> materialized resume -> snapshot/后续
+      lifecycle”，并继续证明 tool、reasoning summary、stream 与完成。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
   - official app-server 门禁：stable-v2 生命周期、resume/list/read、tool、reasoning
-    summary、stream 与完成；另以两个真实 WebSocket 连接验证未物化新线程的自动订阅、
-    metadata-only read 和首 turn 通知回流。
+    summary、stream 与完成；另以两个真实 WebSocket 连接验证未物化新线程的
+    metadata-only read、首 turn 后 stable resume、完整 snapshot 和后续通知回流。
   - Android field 门禁：真实 App UI 到 relay、CLI、官方 Codex 的新建/resume、MCP
     与回复回流。
   - source/transport 门禁：new/fork、审批 first-win、active handoff/drain、queue
@@ -410,7 +431,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.24`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.25`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -432,9 +453,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.23` package workflow 已通过，真实 PTY 也已确认官方 TUI 可经一次性 bearer
       回环转接器完成鉴权、initialize 和渲染；首个 `thread/start` 在 worker 的持久 root
       binding 阶段失败。该已运行版本不得复用，最终修复推进到 `1.4.24`。
+      `1.4.24` package workflow 已通过并下载验证，但主 CI 的真实双连接与 PTY 均证明
+      第二个初始化连接未收到新线程首 turn 生命周期；该已运行版本不得复用，正式订阅
+      协调修复推进到 `1.4.25`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.24.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.25.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
@@ -562,3 +586,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   app-server 会把所有已初始化连接自动订阅到新建线程。新线程绑定改为 metadata-only
   live read，并把同一 snapshot 直接交给 runtime 迁移；恢复/真实 resume 仍使用完整
   resume。新增官方双连接验收和 PTY 阶段快速失败。
+- 2026-08-02：主 CI `30762251980` 证明远程 WebSocket 第二连接不能依赖内部新线程
+  广播获得首 turn 通知。保留 metadata-only 根绑定，新增 `subscriptionPending` 与代理
+  观察到 materialization 边界后的稳定 resume/reconcile；不复制 raw provider payload，
+  不改变 TUI 连接。`1.4.24` 已发布不可复用，目标推进 `1.4.25`。

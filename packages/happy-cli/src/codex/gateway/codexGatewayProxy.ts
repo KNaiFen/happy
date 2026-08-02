@@ -31,6 +31,7 @@ export interface CodexGatewayProxyHooks {
     beforeRootRequest?(request: CodexGatewayRootRequest): Promise<void> | void;
     rootBound?(binding: CodexGatewayRootBinding): Promise<void> | void;
     rootFailed?(request: CodexGatewayRootRequest): Promise<void> | void;
+    threadMaterialized?(threadId: string): Promise<void> | void;
     claimTerminal?(connectionId: string, bearerToken: string | null): boolean;
     terminalConnected?(connectionId: string): Promise<void> | void;
     terminalDisconnected?(connectionId: string): Promise<void> | void;
@@ -38,6 +39,10 @@ export interface CodexGatewayProxyHooks {
 }
 
 interface PendingRootRequest extends CodexGatewayRootRequest {}
+
+interface PendingTurnStart {
+    threadId: string;
+}
 
 export class CodexGatewayProxy {
     private httpServer: HttpServer | null = null;
@@ -112,6 +117,7 @@ export class CodexGatewayProxy {
     private accept(downstream: WebSocket, connectionId: string): void {
         this.downstreams.add(downstream);
         const pendingRoots = new Map<JsonRpcId, PendingRootRequest>();
+        const pendingTurnStarts = new Map<JsonRpcId, PendingTurnStart>();
         const buffered: Array<{ data: Buffer; isBinary: boolean }> = [];
         let bufferedBytes = 0;
         let upstreamOpened = false;
@@ -138,7 +144,12 @@ export class CodexGatewayProxy {
         upstream.on('message', (data, isBinary) => {
             const normalized = codexWebSocketRawDataBuffer(data);
             providerMessagePipeline = providerMessagePipeline.then(async () => {
-                await this.observeProviderMessage(normalized, isBinary, pendingRoots);
+                await this.observeProviderMessage(
+                    normalized,
+                    isBinary,
+                    pendingRoots,
+                    pendingTurnStarts,
+                );
                 if (downstream.readyState === WebSocket.OPEN) {
                     downstream.send(normalized, { binary: isBinary });
                 }
@@ -166,6 +177,7 @@ export class CodexGatewayProxy {
                 data,
                 isBinary,
                 pendingRoots,
+                pendingTurnStarts,
                 forward: (message, binary) => {
                     if (upstreamOpened && upstream.readyState === WebSocket.OPEN) {
                         upstream.send(message, { binary });
@@ -201,6 +213,7 @@ export class CodexGatewayProxy {
                 void this.hooks.rootFailed?.(pending);
             }
             pendingRoots.clear();
+            pendingTurnStarts.clear();
             if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
                 upstream.close(1000, 'Terminal disconnected');
             }
@@ -213,6 +226,7 @@ export class CodexGatewayProxy {
         data: RawData;
         isBinary: boolean;
         pendingRoots: Map<JsonRpcId, PendingRootRequest>;
+        pendingTurnStarts: Map<JsonRpcId, PendingTurnStart>;
         forward(data: RawData, isBinary: boolean): void;
         reject(requestId: JsonRpcId, message: string): void;
     }): Promise<void> {
@@ -221,7 +235,17 @@ export class CodexGatewayProxy {
             return;
         }
         const parsed = parseJsonRpcObject(options.data);
-        if (!parsed || !isJsonRpcId(parsed.id) || typeof parsed.method !== 'string' || !ROOT_METHODS.has(parsed.method)) {
+        if (!parsed || !isJsonRpcId(parsed.id) || typeof parsed.method !== 'string') {
+            options.forward(options.data, false);
+            return;
+        }
+        if (parsed.method === 'turn/start') {
+            const threadId = directThreadId(parsed.params);
+            if (threadId) options.pendingTurnStarts.set(parsed.id, { threadId });
+            options.forward(options.data, false);
+            return;
+        }
+        if (!ROOT_METHODS.has(parsed.method)) {
             options.forward(options.data, false);
             return;
         }
@@ -245,10 +269,23 @@ export class CodexGatewayProxy {
         data: RawData,
         isBinary: boolean,
         pendingRoots: Map<JsonRpcId, PendingRootRequest>,
+        pendingTurnStarts: Map<JsonRpcId, PendingTurnStart>,
     ): Promise<void> {
         if (isBinary) return;
         const parsed = parseJsonRpcObject(data);
-        if (!parsed || !isJsonRpcId(parsed.id)) return;
+        if (!parsed) return;
+        if (!isJsonRpcResponse(parsed)) {
+            const threadId = providerActivityThreadId(parsed);
+            if (threadId) await this.notifyThreadMaterialized(threadId);
+            return;
+        }
+        const pendingTurn = pendingTurnStarts.get(parsed.id);
+        if (pendingTurn) {
+            pendingTurnStarts.delete(parsed.id);
+            if (!('error' in parsed)) {
+                await this.notifyThreadMaterialized(pendingTurn.threadId);
+            }
+        }
         const pending = pendingRoots.get(parsed.id);
         if (!pending) return;
         pendingRoots.delete(parsed.id);
@@ -261,6 +298,14 @@ export class CodexGatewayProxy {
             throw new Error(`${pending.method} response omitted the thread ID`);
         }
         await this.hooks.rootBound?.({ ...pending, threadId });
+    }
+
+    private async notifyThreadMaterialized(threadId: string): Promise<void> {
+        try {
+            await this.hooks.threadMaterialized?.(threadId);
+        } catch (error) {
+            this.hooks.protocolError?.(error);
+        }
     }
 }
 
@@ -301,6 +346,33 @@ function responseThreadId(result: unknown): string | null {
     if (!record.thread || typeof record.thread !== 'object' || Array.isArray(record.thread)) return null;
     const id = (record.thread as Record<string, unknown>).id;
     return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+function directThreadId(params: unknown): string | null {
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
+    const threadId = (params as Record<string, unknown>).threadId;
+    return typeof threadId === 'string' && threadId.length > 0 ? threadId : null;
+}
+
+function providerActivityThreadId(message: Record<string, unknown>): string | null {
+    if (typeof message.method !== 'string') return null;
+    const direct = directThreadId(message.params);
+    if (direct) return direct;
+    if (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) {
+        return null;
+    }
+    const thread = (message.params as Record<string, unknown>).thread;
+    if (!thread || typeof thread !== 'object' || Array.isArray(thread)) return null;
+    const id = (thread as Record<string, unknown>).id;
+    return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+function isJsonRpcResponse(message: Record<string, unknown>): message is Record<string, unknown> & {
+    id: JsonRpcId;
+} {
+    return isJsonRpcId(message.id)
+        && typeof message.method !== 'string'
+        && ('result' in message || 'error' in message);
 }
 
 function safeRootRejectionMessage(error: unknown): string {

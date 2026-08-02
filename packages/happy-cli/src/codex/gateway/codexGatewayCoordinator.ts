@@ -80,6 +80,7 @@ interface ManagedRoot {
     threadId: string;
     generation: number;
     role: CodexGatewayBindingRole;
+    subscriptionPending: boolean;
     previousSessionId: string | null;
     nextSessionId: string | null;
     title: string | null;
@@ -114,7 +115,7 @@ export interface CodexGatewayRecoveredBinding {
 }
 
 export interface CodexGatewayBindRootOptions {
-    subscription?: 'resume' | 'autoAttachedNewThread';
+    subscription?: 'resume' | 'bridgeStartedNewThread' | 'deferredNewThread';
 }
 
 export class CodexGatewayCoordinator {
@@ -156,6 +157,12 @@ export class CodexGatewayCoordinator {
         }));
     }
 
+    pendingSubscriptionThreadIds(): string[] {
+        return this.orderedRoots()
+            .filter((root) => root.subscriptionPending)
+            .map((root) => root.threadId);
+    }
+
     async connect(recovered = false): Promise<void> {
         if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
         this.installClientHandlers();
@@ -164,12 +171,25 @@ export class CodexGatewayCoordinator {
         this.connected = true;
 
         if (recovered) {
-            for (const root of this.orderedRoots()) {
-                const resumed = await this.options.client.subscribeThread(root.threadId);
-                root.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
-                await root.runtime.reconcile(resumed.thread);
-                await this.drainPending(root.threadId, root);
-            }
+            await this.bindingLock.inLock(async () => {
+                for (const root of this.orderedRoots()) {
+                    const recoveredSnapshot = await rootBindingStep(
+                        'providerSnapshot',
+                        () => this.acquireRecoverableSnapshot(root.threadId),
+                    );
+                    root.subscriptionPending = recoveredSnapshot.subscriptionPending;
+                    root.title = safeThreadTitle(recoveredSnapshot.thread);
+                    root.rootActiveTurnId = activeTurnIdFromSnapshot(recoveredSnapshot.thread);
+                    await rootBindingStep(
+                        'runtimeProjection',
+                        () => root.runtime.reconcile(recoveredSnapshot.thread),
+                    );
+                    await rootBindingStep(
+                        'pendingNotifications',
+                        () => this.drainPending(root.threadId, root),
+                    );
+                }
+            });
             await this.notificationPipeline;
             await this.retireEligibleDrainingRoots();
         }
@@ -185,8 +205,14 @@ export class CodexGatewayCoordinator {
     }> {
         validateThreadId(threadId);
         if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
+        const subscription = options.subscription ?? 'resume';
         return await this.bindingLock.inLock(async () => {
             if (this.current?.threadId === threadId) {
+                if (subscription === 'resume' && this.current.subscriptionPending) {
+                    await this.subscribeMaterializedRootLocked(this.current);
+                } else if (subscription === 'bridgeStartedNewThread') {
+                    this.current.subscriptionPending = false;
+                }
                 await rootBindingStep(
                     'pendingNotifications',
                     () => this.drainPending(threadId, this.current!),
@@ -239,6 +265,7 @@ export class CodexGatewayCoordinator {
                         threadId,
                         generation: nextGeneration,
                         role: 'recovering',
+                        subscriptionPending: false,
                         previousSessionId: previous?.runtime.sessionId ?? null,
                         nextSessionId: null,
                         title: null,
@@ -262,13 +289,13 @@ export class CodexGatewayCoordinator {
             try {
                 const providerSnapshot = await rootBindingStep(
                     'providerSnapshot',
-                    async () => options.subscription === 'autoAttachedNewThread'
-                        ? (await this.options.client.readThread({
+                    async () => subscription === 'resume'
+                        ? (await this.options.client.subscribeThread(threadId)).thread
+                        : (await this.options.client.readThread({
                             threadId,
                             includeTurns: false,
                             emitSnapshot: false,
-                        })).thread
-                        : (await this.options.client.subscribeThread(threadId)).thread,
+                        })).thread,
                 );
                 target.title = safeThreadTitle(providerSnapshot);
                 target.rootActiveTurnId = activeTurnIdFromSnapshot(providerSnapshot);
@@ -307,6 +334,7 @@ export class CodexGatewayCoordinator {
                 }));
                 target.role = 'current';
                 target.generation = nextGeneration;
+                target.subscriptionPending = subscription === 'deferredNewThread';
                 this.current = target;
                 this.generation = nextGeneration;
             } catch (error) {
@@ -337,6 +365,16 @@ export class CodexGatewayCoordinator {
                 generation: nextGeneration,
                 changed: true,
             };
+        });
+    }
+
+    async subscribeMaterializedRoot(threadId: string): Promise<boolean> {
+        validateThreadId(threadId);
+        if (this.stopped) return false;
+        return await this.bindingLock.inLock(async () => {
+            const root = this.roots.get(threadId);
+            if (!root) return false;
+            return await this.subscribeMaterializedRootLocked(root);
         });
     }
 
@@ -388,6 +426,7 @@ export class CodexGatewayCoordinator {
                         threadId: binding.threadId,
                         generation: binding.generation,
                         role: binding.role,
+                        subscriptionPending: false,
                         previousSessionId,
                         nextSessionId: null,
                         title: null,
@@ -402,10 +441,17 @@ export class CodexGatewayCoordinator {
                     if (binding.role === 'current') this.current = managed;
                     restored.push(managed);
 
-                    const resumed = await this.options.client.subscribeThread(binding.threadId);
-                    managed.title = safeThreadTitle(resumed.thread);
-                    managed.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
-                    await runtime.activate(resumed.thread);
+                    const recoveredSnapshot = await rootBindingStep(
+                        'providerSnapshot',
+                        () => this.acquireRecoverableSnapshot(binding.threadId),
+                    );
+                    managed.subscriptionPending = recoveredSnapshot.subscriptionPending;
+                    managed.title = safeThreadTitle(recoveredSnapshot.thread);
+                    managed.rootActiveTurnId = activeTurnIdFromSnapshot(recoveredSnapshot.thread);
+                    await rootBindingStep(
+                        'runtimeProjection',
+                        () => runtime.activate(recoveredSnapshot.thread),
+                    );
                     await this.drainPending(binding.threadId, managed);
                 }
                 const current = this.current!;
@@ -539,8 +585,45 @@ export class CodexGatewayCoordinator {
                         nextSessionId: root.nextSessionId,
                         changedAt,
                     });
-                }));
+            }));
         });
+    }
+
+    private async acquireRecoverableSnapshot(threadId: string): Promise<{
+        thread: Thread;
+        subscriptionPending: boolean;
+    }> {
+        const resumed = await this.options.client.subscribeThreadIfMaterialized(threadId);
+        if (resumed) {
+            return { thread: resumed.thread, subscriptionPending: false };
+        }
+        const live = await this.options.client.readThread({
+            threadId,
+            includeTurns: false,
+            emitSnapshot: false,
+        });
+        return { thread: live.thread, subscriptionPending: true };
+    }
+
+    private async subscribeMaterializedRootLocked(root: ManagedRoot): Promise<boolean> {
+        if (!root.subscriptionPending) return true;
+        const resumed = await rootBindingStep(
+            'providerSnapshot',
+            () => this.options.client.subscribeThreadIfMaterialized(root.threadId),
+        );
+        if (!resumed) return false;
+        root.title = safeThreadTitle(resumed.thread);
+        root.rootActiveTurnId = activeTurnIdFromSnapshot(resumed.thread);
+        await rootBindingStep(
+            'runtimeProjection',
+            () => root.runtime.reconcile(resumed.thread),
+        );
+        await rootBindingStep(
+            'pendingNotifications',
+            () => this.drainPending(root.threadId, root),
+        );
+        root.subscriptionPending = false;
+        return true;
     }
 
     private installClientHandlers(): void {
@@ -576,6 +659,16 @@ export class CodexGatewayCoordinator {
         if (!owner) {
             this.bufferNotification(threadId, notification);
             return;
+        }
+        // Receiving stable lifecycle on the bridge proves this connection is already
+        // subscribed. Re-resuming here could import a snapshot containing the same
+        // delta and then apply that delta twice.
+        if (owner.subscriptionPending) {
+            await this.bindingLock.inLock(async () => {
+                if (this.roots.get(owner!.threadId) === owner) {
+                    owner!.subscriptionPending = false;
+                }
+            });
         }
         this.registerOwnership(threadId, owner);
         trackRootActivity(owner, notification);
