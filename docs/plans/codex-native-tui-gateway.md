@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.20`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.21`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -322,12 +322,17 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       第五轮云端执行将失败精确定位为 `startup:bridge:network`。初始 Gateway 尚无 root，
       此时 bridge 阶段唯一网络操作是连接刚启动的官方 app-server；现有 supervisor 只用
       裸 Unix TCP connect 判定就绪，首次 WebSocket 网络错误会直接终止健康 provider。
-      provider readiness 必须完成真实 WebSocket upgrade，初始化前的 transient network/
-      timeout 只允许在同一 provider epoch 内有限重试，provider 退出或非瞬态错误立即停止。
+      provider socket bind 只负责确认私有端点可接受连接；真实协议 readiness 由 Happy 的
+      初始化 WebSocket/RPC 连接确认。初始化前的 transient network/timeout 只允许在同一
+      provider epoch 内有限重试，provider 退出或非瞬态错误立即停止。
       第六轮云端执行不再报告 `bridge:network`，但 descriptor 先被内部清理写成裸
       `stopped/unknown`，launcher 在外层阶段写入前抢读并退出。阶段码必须和首次
-      `stopped` 原子写入；WebSocket `open` 已足以证明 readiness，健康探针的 close ACK
-      只能后台有界清理，不能反过来成为 provider 就绪条件。
+      `stopped` 原子写入；provider listener 可达只证明端点已经绑定，不能替代实际
+      Happy client 的初始化 RPC 成功。独立探针的连接关闭也绝不能反过来成为 provider
+      就绪条件。
+      第七轮云端执行证明独立、未初始化的 Unix WebSocket 探针本身不能作为官方 app-server
+      readiness 条件，worker 停在 `startup:provider:unknown`。该探针必须移除；保留私有
+      socket listener 探测，并仅以真实 Happy client 初始化成功作为 protocol readiness。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -343,7 +348,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [x] CLI 升至 `1.4.20`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
+- [x] CLI 升至 `1.4.21`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -354,9 +359,13 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       readiness 竞态；该产品修复继续推进到新补丁版本。
       `1.4.19` 发布制品已通过、下载并验证，但真实 PTY 继续暴露阶段错误写入顺序竞态，
       因此该已运行版本同样不复用。
+      `1.4.20` 发布制品已通过；真实 PTY 证明单独 WebSocket 探针不是官方 provider
+      lifecycle 的有效边界，因此切回 listener probe 并把协议重试限定在实际 client。
+      `1.4.21` 提交前 CLI 单元测试 `952/952`、Gateway 聚焦测试 `25/25`、CLI 与真实
+      PTY fixture 类型检查均通过。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.20.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.21.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 

@@ -63,7 +63,7 @@ const EXISTING_SESSION_LOOKUP_TIMEOUT_MS = 15_000;
 const GRACEFUL_STOP_WAIT_MS = 10_000;
 const GRACEFUL_STOP_POLL_MS = 250;
 const GRACEFUL_STOP_RETRY_MS = 2_000;
-const PROVIDER_BRIDGE_RETRY_DELAYS_MS = [50, 100, 250, 500] as const;
+const PROVIDER_BRIDGE_RETRY_DELAYS_MS = [50, 100, 250, 500, 1_000, 2_000] as const;
 
 interface DeferredRoot {
     runtime: CodexGatewayDeferredRuntime;
