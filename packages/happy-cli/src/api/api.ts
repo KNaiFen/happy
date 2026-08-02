@@ -789,6 +789,42 @@ export class ApiClient {
       return false;
     }
   }
+
+  /** Persist the authoritative Codex Sync v4 archive tombstone. */
+  async archiveSessionV4(sessionId: string): Promise<boolean> {
+    const url = `${configuration.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/archive`;
+    try {
+      const response = await axios.post(
+        url,
+        {},
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`,
+          },
+          timeout: 60_000,
+        },
+      );
+      return response.status === undefined || (response.status >= 200 && response.status < 300);
+    } catch (error) {
+      const status = safeAxiosStatus(error);
+      logger.debug('[API] archiveSessionV4 failed', {
+        sessionHash: syncV4DiagnosticHash(sessionId),
+        errorKind: classifySyncV4DiagnosticError(error),
+        httpStatus: status,
+      });
+      if (status === 401) throw new HappyRelayAuthenticationError('Session archive');
+      if (
+        status === undefined
+        || status === 408
+        || status === 429
+        || status >= 500
+      ) {
+        return false;
+      }
+      throw new Error(`Failed to archive Codex session (${status})`);
+    }
+  }
 }
 
 function safeAxiosTraceHeader(response: unknown): string | undefined {

@@ -696,6 +696,37 @@ describe('Api server error handling', () => {
         });
     });
 
+    describe('archiveSessionV4', () => {
+        it('writes the authoritative v4 tombstone with terminal credentials', async () => {
+            mockPost.mockResolvedValueOnce({ status: 200, data: { success: true } });
+
+            await expect(api.archiveSessionV4('session/original')).resolves.toBe(true);
+            expect(mockPost).toHaveBeenCalledWith(
+                'https://api.example.com/v4/sessions/session%2Foriginal/archive',
+                {},
+                expect.objectContaining({
+                    headers: expect.objectContaining({ Authorization: 'Bearer fake-token' }),
+                }),
+            );
+        });
+
+        it('keeps retirement pending while the relay is unavailable', async () => {
+            mockPost.mockRejectedValueOnce({ code: 'ECONNRESET' });
+
+            await expect(api.archiveSessionV4('session-1')).resolves.toBe(false);
+        });
+
+        it('surfaces an ownership rejection instead of releasing the thread lease', async () => {
+            mockPost.mockRejectedValueOnce({
+                response: { status: 403 },
+                isAxiosError: true,
+            });
+
+            await expect(api.archiveSessionV4('session-1'))
+                .rejects.toThrow('Failed to archive Codex session (403)');
+        });
+    });
+
     describe('getOrCreateMachine', () => {
         it('returns pending instead of inventing a registered machine when the relay is unreachable', async () => {
             connectionState.reset();
