@@ -16,6 +16,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { spawn as crossSpawn } from 'cross-spawn';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
+import WebSocket from 'ws';
 import { logger } from '@/ui/logger';
 import {
     classifySyncV4DiagnosticError,
@@ -41,6 +42,11 @@ import {
 import { CodexThreadRegistry, type CodexTurnCompletion } from './codexThreadRegistry';
 import type { CodexProtocolTraceDirection, CodexProtocolTraceSink } from './codexProtocolTrace';
 import { redactCodexProtocolMethod } from './codexProtocolMethod';
+import {
+    codexWebSocketRawDataBuffer,
+    connectCodexAppServerWebSocket,
+    type CodexAppServerWebSocketEndpoint,
+} from './codexAppServerWebSocket';
 import type {
     ApprovalPolicy,
     ClientNotification,
@@ -102,6 +108,10 @@ type CodexWireResponse = {
     result?: unknown;
     error?: { code: number | string; message?: string; data?: unknown };
 };
+
+export interface CodexAppServerClientOptions {
+    webSocketEndpoint?: CodexAppServerWebSocketEndpoint;
+}
 
 class CodexRpcResponseError extends Error {
     constructor(
@@ -410,6 +420,7 @@ function normalizeRawFileChangeList(changes: unknown): LegacyPatchChanges | unde
 export class CodexAppServerClient {
     private process: ChildProcess | null = null;
     private readline: ReadlineInterface | null = null;
+    private webSocket: WebSocket | null = null;
     private nextId = 1;
     private pending = new Map<number, PendingRequest>();
     private processEpoch = 0;
@@ -458,7 +469,11 @@ export class CodexAppServerClient {
         error: null,
     };
 
-    constructor(sandboxConfig?: SandboxConfig, codexCliVersion?: CodexCliVersion) {
+    constructor(
+        sandboxConfig?: SandboxConfig,
+        codexCliVersion?: CodexCliVersion,
+        private readonly options: CodexAppServerClientOptions = {},
+    ) {
         this.sandboxConfig = sandboxConfig;
         this.codexCliVersion = codexCliVersion;
     }
@@ -1080,6 +1095,14 @@ export class CodexAppServerClient {
     // ─── Lifecycle ──────────────────────────────────────────────
 
     async connect(): Promise<void> {
+        if (this.options.webSocketEndpoint) {
+            await this.connectExternalWebSocket(this.options.webSocketEndpoint);
+            return;
+        }
+        await this.connectOwnedProcess();
+    }
+
+    private async connectOwnedProcess(): Promise<void> {
         if (this.connected) return;
         const appServerPath = process.env.HAPPY_CODEX_APP_SERVER_PATH?.trim();
         if (!appServerPath) {
@@ -1231,7 +1254,86 @@ export class CodexAppServerClient {
             this.handleUnexpectedTransportClose(proc, epoch);
         });
 
-        // Perform initialize handshake
+        await this.initializeConnection(epoch);
+    }
+
+    private async connectExternalWebSocket(
+        endpoint: CodexAppServerWebSocketEndpoint,
+    ): Promise<void> {
+        if (this.connected) return;
+        this.codexCliVersion = assertMinimumCodexCliVersion(
+            this.codexCliVersion ?? readCodexCliVersion(),
+        );
+        this.updateConnection({ connection: 'connecting', statusUnknown: true, error: null });
+
+        const epoch = ++this.processEpoch;
+        this.resetServerRequestTracking();
+        this.intentionalTransportClose = false;
+        this.recordDiagnostic({
+            level: 'info',
+            event: 'connection',
+            phase: 'started',
+            state: 'connecting',
+            epoch,
+            codexVersion: `${this.codexCliVersion.major}.${this.codexCliVersion.minor}.${this.codexCliVersion.patch}`,
+        });
+
+        const socket = connectCodexAppServerWebSocket(endpoint);
+        this.webSocket = socket;
+        socket.on('message', (data, isBinary) => {
+            if (this.webSocket !== socket || this.processEpoch !== epoch) return;
+            if (isBinary) {
+                this.recordDiagnostic({
+                    level: 'warn',
+                    event: 'notification',
+                    phase: 'dropped',
+                    source: 'notification',
+                    state: 'failed',
+                    epoch,
+                    errorKind: 'protocol',
+                });
+                socket.close(1003, 'Codex app-server RPC must use text frames');
+                return;
+            }
+            this.handleLine(codexWebSocketRawDataBuffer(data).toString('utf8'), epoch);
+        });
+        socket.on('close', () => {
+            if (this.intentionalTransportClose || this.webSocket !== socket || this.processEpoch !== epoch) {
+                return;
+            }
+            this.handleUnexpectedWebSocketClose(socket, epoch);
+        });
+        socket.on('error', (error) => {
+            if (this.webSocket !== socket || this.processEpoch !== epoch) return;
+            logger.debug(`[CodexAppServer] WebSocket transport error (${errorKind(error)})`);
+        });
+
+        let opened = false;
+        try {
+            await waitForWebSocketOpen(socket);
+            opened = true;
+            await this.initializeConnection(epoch);
+        } catch (error) {
+            if (this.webSocket === socket && this.processEpoch === epoch) {
+                this.webSocket = null;
+                socket.terminate();
+            }
+            if (!opened) {
+                this.recordDiagnostic({
+                    level: 'error',
+                    event: 'connection',
+                    phase: 'failed',
+                    state: 'failed',
+                    epoch,
+                    errorKind: providerDiagnosticErrorKind(error),
+                });
+                this.updateConnection({ connection: 'error', statusUnknown: true, error: errorKind(error) });
+            }
+            throw error;
+        }
+    }
+
+    private async initializeConnection(epoch: number): Promise<void> {
         const initParams: InitializeParams = {
             clientInfo: {
                 name: 'happy-codex',
@@ -1245,7 +1347,9 @@ export class CodexAppServerClient {
         };
         try {
             await this.request('initialize', initParams);
-            this.notify({ method: 'initialized' });
+            if (!this.notify({ method: 'initialized' })) {
+                throw new Error('Codex transport closed before initialized was sent');
+            }
             this.connected = true;
             this.updateConnection({
                 connection: 'connected',
@@ -1275,7 +1379,7 @@ export class CodexAppServerClient {
     }
 
     private async disconnectInternal(opts?: { preserveThreadState?: boolean }): Promise<void> {
-        if (!this.connected && !this.process) {
+        if (!this.connected && !this.process && !this.webSocket) {
             if (!opts?.preserveThreadState) {
                 this.threads.clear(new Error('Codex client disconnected'));
                 this.threadDefaults.clear();
@@ -1285,9 +1389,10 @@ export class CodexAppServerClient {
         }
 
         const proc = this.process;
+        const webSocket = this.webSocket;
         const pid = proc?.pid;
         const epoch = this.processEpoch;
-        logger.debug(`[CodexAppServer] Disconnecting; pid=${pid ?? 'none'}`);
+        logger.debug(`[CodexAppServer] Disconnecting; transport=${webSocket ? 'websocket' : 'stdio'}; pid=${pid ?? 'none'}`);
         this.recordDiagnostic({
             level: 'info',
             event: 'connection',
@@ -1300,6 +1405,11 @@ export class CodexAppServerClient {
         this.intentionalTransportClose = true;
         this.readline?.close();
         this.readline = null;
+        this.webSocket = null;
+
+        if (webSocket) {
+            await closeCodexWebSocket(webSocket);
+        }
 
         try {
             proc?.stdin?.end();
@@ -1345,11 +1455,11 @@ export class CodexAppServerClient {
             });
             req.reject(new CodexRpcOutcomeUnknownError(
                 req.method,
-                `Codex process disconnected while waiting for ${req.method}; outcome is unknown`,
+                `Codex transport disconnected while waiting for ${req.method}; outcome is unknown`,
             ));
             this.pending.delete(id);
         }
-        this.rejectPendingCompactions(epoch, 'Codex process disconnected');
+        this.rejectPendingCompactions(epoch, 'Codex transport disconnected');
 
         if (this.sandboxCleanup) {
             try { await this.sandboxCleanup(); } catch { /* ignore */ }
@@ -2232,7 +2342,7 @@ export class CodexAppServerClient {
     ): Promise<unknown> {
         const timeout = timeoutMs ?? CodexAppServerClient.REQUEST_TIMEOUT_MS;
         return new Promise((resolve, reject) => {
-            if (!this.process?.stdin?.writable) {
+            if (!this.isTransportWritable()) {
                 this.recordDiagnostic({
                     level: 'warn',
                     event: 'rpc',
@@ -2242,7 +2352,7 @@ export class CodexAppServerClient {
                     epoch: this.processEpoch,
                     errorKind: 'provider',
                 });
-                reject(new Error(`Cannot send ${method}: stdin not writable`));
+                reject(new Error(`Cannot send ${method}: Codex transport is not writable`));
                 return;
             }
             const id = this.nextId++;
@@ -2294,15 +2404,24 @@ export class CodexAppServerClient {
                 requestHash,
             });
             this.recordProtocolTrace('outbound', msg);
-            this.process.stdin.write(line);
+            if (!this.writeTransportPayload(line, JSON.stringify(msg), this.processEpoch)) {
+                this.pending.delete(id);
+                clearTimeout(timer);
+                reject(new CodexRpcOutcomeUnknownError(
+                    method,
+                    `Codex transport closed while sending ${method}; outcome is unknown`,
+                ));
+            }
         });
     }
 
-    private notify(msg: ClientNotification): void {
-        if (!this.process?.stdin?.writable) return;
+    private notify(msg: ClientNotification): boolean {
+        if (!this.isTransportWritable()) return false;
         this.recordProtocolTrace('outbound', msg);
-        this.process.stdin.write(JSON.stringify(msg) + '\n');
+        const payload = JSON.stringify(msg);
+        const written = this.writeTransportPayload(`${payload}\n`, payload, this.processEpoch);
         logger.debug(`[CodexAppServer] -> ${redactCodexProtocolMethod(msg.method)} (notification)`);
+        return written;
     }
 
     private async respond(
@@ -2326,33 +2445,82 @@ export class CodexAppServerClient {
         msg: CodexWireResponse,
         sourceEpoch: number,
     ): Promise<boolean> {
-        if (sourceEpoch !== this.processEpoch || !this.process?.stdin?.writable) return false;
-        const stdin = this.process.stdin;
+        if (sourceEpoch !== this.processEpoch || !this.isTransportWritable()) return false;
         this.recordProtocolTrace('outbound', msg);
         return await new Promise<boolean>((resolve) => {
-            let settled = false;
-            const finish = (written: boolean) => {
-                if (settled) return;
-                settled = true;
-                stdin.off('error', onError);
-                stdin.off('close', onClose);
-                if (written) {
-                    logger.debug('[CodexAppServer] → response', {
-                        requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${msg.id}`),
-                    });
-                }
-                resolve(written);
-            };
-            const onError = () => finish(false);
-            const onClose = () => finish(false);
-            stdin.once('error', onError);
-            stdin.once('close', onClose);
-            try {
-                stdin.write(JSON.stringify(msg) + '\n', (error) => finish(!error));
-            } catch {
-                finish(false);
-            }
+            const payload = JSON.stringify(msg);
+            const accepted = this.writeTransportPayload(
+                `${payload}\n`,
+                payload,
+                sourceEpoch,
+                (written) => {
+                    if (written) {
+                        logger.debug('[CodexAppServer] → response', {
+                            requestHash: syncV4DiagnosticHash(`${sourceEpoch}:${msg.id}`),
+                        });
+                    }
+                    resolve(written);
+                },
+            );
+            if (!accepted) resolve(false);
         });
+    }
+
+    private isTransportWritable(): boolean {
+        return Boolean(this.process?.stdin?.writable)
+            || this.webSocket?.readyState === WebSocket.OPEN;
+    }
+
+    private writeTransportPayload(
+        stdioPayload: string,
+        webSocketPayload: string,
+        sourceEpoch: number,
+        onWritten?: (written: boolean) => void,
+    ): boolean {
+        if (sourceEpoch !== this.processEpoch) return false;
+        const socket = this.webSocket;
+        if (socket?.readyState === WebSocket.OPEN) {
+            try {
+                socket.send(webSocketPayload, (error) => {
+                    onWritten?.(!error);
+                    if (error && this.webSocket === socket && this.processEpoch === sourceEpoch) {
+                        socket.terminate();
+                    }
+                });
+                return true;
+            } catch {
+                return false;
+            }
+        }
+        const stdin = this.process?.stdin;
+        if (!stdin?.writable) return false;
+        if (!onWritten) {
+            try {
+                stdin.write(stdioPayload);
+                return true;
+            } catch {
+                return false;
+            }
+        }
+        let settled = false;
+        const finish = (written: boolean) => {
+            if (settled) return;
+            settled = true;
+            stdin.off('error', onError);
+            stdin.off('close', onClose);
+            onWritten(written);
+        };
+        const onError = () => finish(false);
+        const onClose = () => finish(false);
+        stdin.once('error', onError);
+        stdin.once('close', onClose);
+        try {
+            stdin.write(stdioPayload, (error) => finish(!error));
+            return true;
+        } catch {
+            finish(false);
+            return false;
+        }
     }
 
     private handleLine(line: string, sourceEpoch: number = this.processEpoch): void {
@@ -2666,6 +2834,43 @@ export class CodexAppServerClient {
         if (activeThreadIds.length > 0) {
             void this.recoverThreadsAfterUnexpectedExit(activeThreadIds, this.threadId);
         }
+    }
+
+    private handleUnexpectedWebSocketClose(socket: WebSocket, epoch: number): void {
+        if (this.webSocket !== socket || this.processEpoch !== epoch) return;
+        this.connected = false;
+        this.webSocket = null;
+        this.recordDiagnostic({
+            level: 'warn',
+            event: 'connection',
+            phase: 'failed',
+            state: 'disconnected',
+            epoch,
+            reason: 'reconnect',
+            errorKind: 'provider',
+        });
+        this.updateConnection({ connection: 'disconnected', statusUnknown: true, error: null });
+        for (const [id, request] of this.pending) {
+            if (request.epoch !== epoch) continue;
+            this.recordDiagnostic({
+                level: 'warn',
+                event: 'rpc',
+                phase: 'failed',
+                state: 'outcomeUnknown',
+                rpcFamily: codexRpcFamily(request.method),
+                requestHash: request.requestHash,
+                epoch: request.epoch,
+                durationMs: elapsedDiagnosticMs(request.startedAt),
+                reason: 'reconnect',
+                errorKind: 'provider',
+            });
+            request.reject(new CodexRpcOutcomeUnknownError(
+                request.method,
+                `Codex WebSocket closed while waiting for ${request.method}; outcome is unknown`,
+            ));
+            this.pending.delete(id);
+        }
+        this.rejectPendingCompactions(epoch, 'Codex WebSocket transport closed');
     }
 
     /**
@@ -2997,4 +3202,57 @@ function isValidCodexRpcMethod(method: unknown): method is string {
     return typeof method === 'string'
         && method.length > 0
         && method.length <= MAX_CODEX_RPC_METHOD_CHARS;
+}
+
+async function waitForWebSocketOpen(socket: WebSocket, timeoutMs = 10_000): Promise<void> {
+    if (socket.readyState === WebSocket.OPEN) return;
+    await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (error?: Error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.off('open', onOpen);
+            socket.off('error', onError);
+            socket.off('close', onClose);
+            if (error) reject(error);
+            else resolve();
+        };
+        const onOpen = () => finish();
+        const onError = (error: Error) => finish(error);
+        const onClose = () => finish(new Error('Codex WebSocket closed before initialization'));
+        const timer = setTimeout(
+            () => finish(new Error(`Codex WebSocket did not open within ${timeoutMs}ms`)),
+            timeoutMs,
+        );
+        socket.once('open', onOpen);
+        socket.once('error', onError);
+        socket.once('close', onClose);
+    });
+}
+
+async function closeCodexWebSocket(socket: WebSocket): Promise<void> {
+    if (socket.readyState === WebSocket.CLOSED) return;
+    if (socket.readyState === WebSocket.CONNECTING) {
+        socket.terminate();
+        return;
+    }
+    await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.off('close', finish);
+            socket.off('error', finish);
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            socket.terminate();
+            finish();
+        }, 500);
+        socket.once('close', finish);
+        socket.once('error', finish);
+        socket.close(1000, 'Happy bridge disconnected');
+    });
 }

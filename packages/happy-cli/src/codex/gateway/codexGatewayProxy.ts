@@ -2,18 +2,19 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { chmod, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
+import {
+    CODEX_APP_SERVER_MAX_RPC_BYTES,
+    codexWebSocketRawDataBuffer,
+    connectCodexAppServerWebSocket,
+    type CodexAppServerWebSocketEndpoint,
+} from '../codexAppServerWebSocket';
 
-const MAX_RPC_MESSAGE_BYTES = 4 * 1024 * 1024;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const ROOT_METHODS = new Set(['thread/start', 'thread/resume', 'thread/fork']);
 
 type JsonRpcId = string | number;
 
-export interface CodexGatewayProxyEndpoint {
-    socketPath?: string;
-    url?: string;
-    bearerToken?: string;
-}
+export type CodexGatewayProxyEndpoint = CodexAppServerWebSocketEndpoint;
 
 export interface CodexGatewayRootRequest {
     connectionId: string;
@@ -54,7 +55,10 @@ export class CodexGatewayProxy {
             response.writeHead(426, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
             response.end('WebSocket upgrade required');
         });
-        const webSocketServer = new WebSocketServer({ noServer: true, maxPayload: MAX_RPC_MESSAGE_BYTES });
+        const webSocketServer = new WebSocketServer({
+            noServer: true,
+            maxPayload: CODEX_APP_SERVER_MAX_RPC_BYTES,
+        });
         httpServer.on('upgrade', (request, socket, head) => {
             webSocketServer.handleUpgrade(request, socket, head, (downstream) => {
                 webSocketServer.emit('connection', downstream, request);
@@ -95,7 +99,7 @@ export class CodexGatewayProxy {
         let bufferedBytes = 0;
         let upstreamOpened = false;
         let terminalMessagePipeline = Promise.resolve();
-        const upstream = connectCodexGatewayWebSocket(this.upstream);
+        const upstream = connectCodexAppServerWebSocket(this.upstream);
 
         const closePair = (code = 1011, reason = 'Gateway transport closed') => {
             if (downstream.readyState === WebSocket.OPEN || downstream.readyState === WebSocket.CONNECTING) {
@@ -141,7 +145,7 @@ export class CodexGatewayProxy {
                         upstream.send(message, { binary });
                         return;
                     }
-                    const normalized = rawDataBuffer(message);
+                    const normalized = codexWebSocketRawDataBuffer(message);
                     if (bufferedBytes + normalized.byteLength > MAX_BUFFERED_BYTES) {
                         closePair(1009, 'Gateway startup buffer exceeded');
                         return;
@@ -231,26 +235,13 @@ export class CodexGatewayProxy {
 }
 
 export function connectCodexGatewayWebSocket(endpoint: CodexGatewayProxyEndpoint): WebSocket {
-    const headers = endpoint.bearerToken
-        ? { authorization: `Bearer ${endpoint.bearerToken}` }
-        : undefined;
-    if (endpoint.socketPath) {
-        if (endpoint.socketPath.includes(':')) {
-            throw new Error('Codex Gateway Unix socket path cannot contain a colon');
-        }
-        return new WebSocket(`ws+unix://${endpoint.socketPath}:/`, {
-            headers,
-            maxPayload: MAX_RPC_MESSAGE_BYTES,
-        });
-    }
-    if (!endpoint.url) throw new Error('Codex Gateway WebSocket endpoint is missing');
-    return new WebSocket(endpoint.url, { headers, maxPayload: MAX_RPC_MESSAGE_BYTES });
+    return connectCodexAppServerWebSocket(endpoint);
 }
 
 function parseJsonRpcObject(data: RawData): Record<string, unknown> | null {
     try {
-        const text = rawDataBuffer(data).toString('utf8');
-        if (Buffer.byteLength(text, 'utf8') > MAX_RPC_MESSAGE_BYTES) return null;
+        const text = codexWebSocketRawDataBuffer(data).toString('utf8');
+        if (Buffer.byteLength(text, 'utf8') > CODEX_APP_SERVER_MAX_RPC_BYTES) return null;
         const parsed = JSON.parse(text);
         return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
             ? parsed as Record<string, unknown>
@@ -286,12 +277,6 @@ function safeRootRejectionMessage(error: unknown): string {
 function isJsonRpcId(value: unknown): value is JsonRpcId {
     return (typeof value === 'string' && value.length <= 256)
         || (typeof value === 'number' && Number.isSafeInteger(value));
-}
-
-function rawDataBuffer(data: RawData): Buffer {
-    if (Buffer.isBuffer(data)) return data;
-    if (data instanceof ArrayBuffer) return Buffer.from(data);
-    return Buffer.concat(data);
 }
 
 async function listenHttpServer(
