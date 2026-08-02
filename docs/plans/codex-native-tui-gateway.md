@@ -168,6 +168,18 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - [ ] 实现 app-server crash recovery、snapshot reconciliation 和 payload-free diagnostics。
 - [ ] 保留并复用 Sync v4 mapper/router/request broker；删除 selected-thread 全局假设。
 
+组件进度（不等同于 worker 接线或端到端验收）：
+
+- [x] 受保护 descriptor/control secret、原子状态写入、鉴权 control endpoint 和
+      HMAC thread lease registry。
+- [x] Unix/loopback WebSocket transport、透明 TUI proxy、独立 stable-v2 bridge client
+      连接和 provider process supervisor。
+- [x] provider 崩溃有限退避、bridge transport 重连和 current/draining snapshot 重订阅。
+- [x] root coordinator 的 generation、事务化 handoff、child ownership、严格通知顺序、
+      drain 条件与失败回滚。
+- [ ] 将上述组件接入一个可恢复的 worker，并补 descriptor heartbeat、daemon discovery、
+      terminal detach/attach 和真实 Sync v4 runtime factory。
+
 ### 3. CLI 原生命令面
 
 - [ ] 将 `happy codex` 参数解析改为原生委派，保留 Happy 自有 attach/stop。
@@ -256,3 +268,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 - 2026-08-02：根据确认的原生 TUI、持久 Gateway、attach/stop、thread handoff、
   binding generation 和云端 PTY 验收契约创建实施基线。
+- 2026-08-02：完成 Gateway state/control/lease/proxy、外部 stable-v2 subscriber、
+  provider supervisor 与 handoff coordinator 的组件实现；明确这些组件在 worker 和
+  Sync v4 runtime 接线完成前不构成可用产品或端到端验收。

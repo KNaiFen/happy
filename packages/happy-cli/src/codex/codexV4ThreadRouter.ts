@@ -69,6 +69,7 @@ interface ThreadRouterOptions {
     softwareVersion?: string;
     codexVersion?: string;
     transportSecurity?: SyncV4DiagnosticTransportSecurity;
+    onRouteRegistered?: (threadId: string) => void;
 }
 
 interface RelationLineage {
@@ -242,6 +243,10 @@ export class CodexV4ThreadRouter {
     }
 
     handleNotification(notification: ServerNotification): void {
+        void this.handleNotificationAsync(notification).catch(() => undefined);
+    }
+
+    async handleNotificationAsync(notification: ServerNotification): Promise<void> {
         if (this.closed) return;
         const threadId = notificationThreadId(notification);
         if (!threadId) return;
@@ -273,10 +278,27 @@ export class CodexV4ThreadRouter {
                 throw error;
             }
         };
-        void this.enqueueThread(threadId, task).catch((error) => {
+        try {
+            await this.enqueueThread(threadId, task);
+        } catch (error) {
             this.options.onError?.(error);
             this.scheduleOrphanRetry(threadId);
-        });
+            throw error;
+        }
+    }
+
+    ownsThread(threadId: string): boolean {
+        return this.routesByThread.has(threadId) || this.bindingsByThread.has(threadId);
+    }
+
+    hasActiveChildWork(): boolean {
+        for (const route of this.routesByThread.values()) {
+            if (route.kind !== 'providerChild' && route.kind !== 'detachedReview') continue;
+            if (route.activeTurnId || (route.status && isRecoverableRelationStatus(route.status))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     async handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse> {
@@ -1012,6 +1034,11 @@ export class CodexV4ThreadRouter {
             this.provisionalRoutesByThread.delete(resolved.threadId);
         }
         this.resolveRouteRegistrationWaiters(resolved.threadId);
+        try {
+            this.options.onRouteRegistered?.(resolved.threadId);
+        } catch (error) {
+            this.options.onError?.(error);
+        }
         return resolved;
     }
 

@@ -109,6 +109,16 @@ export class CodexV4CommandProcessor {
         if (this.reconcileTimer) clearInterval(this.reconcileTimer);
     }
 
+    async flush(): Promise<void> {
+        await this.pipeline;
+        await Promise.allSettled(this.inFlight.values());
+    }
+
+    hasPendingWork(): boolean {
+        if (this.inFlight.size > 0) return true;
+        return this.options.store.getPendingCommands().some(({ status }) => !TERMINAL_STATUSES.has(status));
+    }
+
     private async process(command: CodexCommandEntityV4): Promise<void> {
         if (this.closed) return;
         const existing = this.inFlight.get(command.commandId);

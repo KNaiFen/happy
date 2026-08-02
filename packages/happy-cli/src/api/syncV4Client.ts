@@ -624,6 +624,10 @@ export class SyncV4Client {
         await this.flushOutboundForGeneration(this.lifecycleGeneration, null, targetMutationIds);
     }
 
+    hasPendingOutbound(): boolean {
+        return this.journal.snapshot().pendingOutbound.length > 0;
+    }
+
     private async flushOutboundForGeneration(
         generation: number,
         batchBudget: number | null,

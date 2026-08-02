@@ -1483,6 +1483,14 @@ export class CodexAppServerClient {
         await this.disconnectInternal();
     }
 
+    async reconnectExternalTransportPreservingThreads(): Promise<void> {
+        if (!this.options.webSocketEndpoint) {
+            throw new Error('External Codex transport is not configured');
+        }
+        await this.disconnectInternal({ preserveThreadState: true });
+        await this.connect();
+    }
+
     private buildThreadConfig(mcpServers?: Record<string, unknown>): ThreadStartParams['config'] {
         if (!mcpServers) return null;
         const normalized = toJsonValue(mcpServers, 'mcpServers');
