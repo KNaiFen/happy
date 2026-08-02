@@ -335,8 +335,9 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       socket listener 探测，并仅以真实 Happy client 初始化成功作为 protocol readiness。
       第八轮在同一 provider epoch 内累计 3.9 秒重试后仍稳定失败于
       `startup:bridge:network`，排除普通启动延迟。下一次产品改动前先增加独立的官方 Unix
-      WebSocket 初始化门禁，只记录阶段、允许列表错误码和 stderr 字节数，判断问题属于
-      app-server 传输兼容还是 Gateway 编排；不得继续用延长等待掩盖确定性失败。
+      WebSocket 门禁必须在两个全新的 provider 进程上分别验证握手打开与真实 Happy
+      `initialize/initialized`，只记录阶段、允许列表错误码和 stderr 字节数；不得复用
+      关闭过的探针连接来判断后续 client，也不得继续用延长等待掩盖确定性失败。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。

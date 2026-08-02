@@ -3,6 +3,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
+import WebSocket from 'ws';
 import {
     CODEX_CLI_VERSION_PROBE_TIMEOUT_MS,
     MINIMUM_CODEX_CLI_VERSION,
@@ -64,8 +65,12 @@ async function main(): Promise<void> {
         const { CodexAppServerClient } = await import(
             '../../packages/happy-cli/src/codex/codexAppServerClient'
         );
+        const { connectCodexAppServerWebSocket } = await import(
+            '../../packages/happy-cli/src/codex/codexAppServerWebSocket'
+        );
         await exerciseOfficialUnixWebSocket({
             CodexAppServerClient,
+            connectCodexAppServerWebSocket,
             binary: process.env.HAPPY_SCENARIO_CODEX_BIN!,
             version: officialVersion,
             cwd: projectRoot,
@@ -288,11 +293,54 @@ async function exerciseOfficialUnixWebSocket(options: {
     CodexAppServerClient: typeof import(
         '../../packages/happy-cli/src/codex/codexAppServerClient'
     ).CodexAppServerClient;
+    connectCodexAppServerWebSocket: typeof import(
+        '../../packages/happy-cli/src/codex/codexAppServerWebSocket'
+    ).connectCodexAppServerWebSocket;
     binary: string;
     version: string;
     cwd: string;
     socketPath: string;
 }): Promise<void> {
+    await runOfficialUnixWebSocketProbe(options, 'websocketOpen', async (socketPath) => {
+        const socket = options.connectCodexAppServerWebSocket({ socketPath });
+        try {
+            await waitForWebSocketOpen(socket);
+        } finally {
+            await closeWebSocket(socket);
+        }
+    });
+    await runOfficialUnixWebSocketProbe(options, 'initialize', async (socketPath) => {
+        const parsedVersion = parseCodexCliVersion(options.version);
+        assert(parsedVersion, 'validated official Codex version did not parse');
+        const client = new options.CodexAppServerClient(
+            undefined,
+            parsedVersion,
+            { webSocketEndpoint: { socketPath } },
+        );
+        try {
+            await withTimeout(
+                client.connect(),
+                15_000,
+                'official Unix WebSocket initialize/initialized',
+            );
+        } finally {
+            await client.disconnect().catch(() => undefined);
+        }
+    });
+}
+
+type OfficialUnixWebSocketProbePhase = 'websocketOpen' | 'initialize';
+
+async function runOfficialUnixWebSocketProbe(
+    options: {
+        binary: string;
+        version: string;
+        cwd: string;
+        socketPath: string;
+    },
+    phase: OfficialUnixWebSocketProbePhase,
+    probe: (socketPath: string) => Promise<void>,
+): Promise<void> {
     const provider = spawn(
         options.binary,
         ['app-server', '--listen', `unix://${options.socketPath}`],
@@ -304,46 +352,86 @@ async function exerciseOfficialUnixWebSocket(options: {
     );
     let spawnError: unknown = null;
     let stderrBytes = 0;
-    let phase: 'listen' | 'initialize' = 'listen';
+    let currentPhase: 'listen' | OfficialUnixWebSocketProbePhase = 'listen';
     provider.once('error', (error) => {
         spawnError = error;
     });
     provider.stderr?.on('data', (chunk: Buffer | string) => {
         stderrBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
     });
-    let client: InstanceType<typeof options.CodexAppServerClient> | null = null;
-
     try {
         await waitForUnixSocket(options.socketPath, provider, () => spawnError);
-        phase = 'initialize';
-        const parsedVersion = parseCodexCliVersion(options.version);
-        assert(parsedVersion, 'validated official Codex version did not parse');
-        client = new options.CodexAppServerClient(
-            undefined,
-            parsedVersion,
-            { webSocketEndpoint: { socketPath: options.socketPath } },
-        );
-        await withTimeout(
-            client.connect(),
-            15_000,
-            'official Unix WebSocket initialize/initialized',
-        );
-        console.log(`Official Codex Unix WebSocket initialization passed: version=${options.version}`);
+        currentPhase = phase;
+        await probe(options.socketPath);
+        console.log(`Official Codex Unix WebSocket ${phase} passed: version=${options.version}`);
     } catch (error) {
         const diagnosticError = spawnError ?? error;
         throw new Error([
             'Official Codex Unix WebSocket initialization failed',
-            `phase=${phase}`,
+            `phase=${currentPhase}`,
             `kind=${safeTransportErrorKind(diagnosticError)}`,
             `code=${safeTransportErrorCode(diagnosticError)}`,
             `stderrBytes=${stderrBytes}`,
             `providerExited=${provider.exitCode !== null || provider.signalCode !== null}`,
         ].join(' '));
     } finally {
-        await client?.disconnect().catch(() => undefined);
         await stopChildProcess(provider);
         await rm(options.socketPath, { force: true });
     }
+}
+
+async function waitForWebSocketOpen(socket: WebSocket): Promise<void> {
+    if (socket.readyState === WebSocket.OPEN) return;
+    await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (error?: Error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.off('open', onOpen);
+            socket.off('close', onClose);
+            socket.off('error', onError);
+            if (error) reject(error);
+            else resolve();
+        };
+        const onOpen = () => finish();
+        const onClose = () => finish(new Error('Official Unix WebSocket closed before open'));
+        const onError = (error: Error) => finish(error);
+        const timer = setTimeout(
+            () => finish(new Error('Official Unix WebSocket did not open in time')),
+            10_000,
+        );
+        socket.once('open', onOpen);
+        socket.once('close', onClose);
+        socket.once('error', onError);
+    });
+}
+
+async function closeWebSocket(socket: WebSocket): Promise<void> {
+    if (socket.readyState === WebSocket.CLOSED) return;
+    socket.on('error', () => undefined);
+    if (socket.readyState === WebSocket.CONNECTING) {
+        socket.terminate();
+        return;
+    }
+    await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.off('close', finish);
+            socket.off('error', finish);
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            socket.terminate();
+            finish();
+        }, 500);
+        socket.once('close', finish);
+        socket.once('error', finish);
+        socket.close(1000, 'Happy CI transport probe');
+    });
 }
 
 async function waitForUnixSocket(
