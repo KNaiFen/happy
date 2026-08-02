@@ -24,7 +24,23 @@ export type CodexV4CommandReconciliation =
     | ({ action: 'succeeded' } & CodexV4CommandOutcome)
     | { action: 'retry' }
     | { action: 'pending' }
-    | { action: 'notReplayed'; error: string };
+    | { action: 'notReplayed'; error: string }
+    | { action: 'cancelled'; reason: CodexV4CommandCancellationReason; error: string };
+
+export type CodexV4CommandCancellationReason =
+    | 'bindingSuperseded'
+    | 'threadHandoff'
+    | 'gatewayStopping';
+
+export class CodexV4CommandCancelledError extends Error {
+    constructor(
+        readonly reason: CodexV4CommandCancellationReason,
+        message: string,
+    ) {
+        super(message);
+        this.name = 'CodexV4CommandCancelledError';
+    }
+}
 
 interface CommandStateStore {
     getCommandStatus(commandId: string): SyncV4CommandJournalStatus | undefined;
@@ -51,10 +67,12 @@ const TERMINAL_STATUSES = new Set<SyncV4CommandJournalStatus>([
     'succeeded',
     'failed',
     'notReplayed',
+    'cancelled',
 ]);
 
 export class CodexV4CommandProcessor {
     private readonly inFlight = new Map<string, Promise<void>>();
+    private pipeline: Promise<void> = Promise.resolve();
     private readonly reconcileTimer: NodeJS.Timeout | null;
     private executionPaused: boolean;
     private closed = false;
@@ -95,9 +113,10 @@ export class CodexV4CommandProcessor {
         if (this.closed) return;
         const existing = this.inFlight.get(command.commandId);
         if (existing) return await existing;
-        const run = this.processOnce(command).finally(() => {
+        const run = this.pipeline.then(() => this.processOnce(command)).finally(() => {
             if (this.inFlight.get(command.commandId) === run) this.inFlight.delete(command.commandId);
         });
+        this.pipeline = run.catch(() => undefined);
         this.inFlight.set(command.commandId, run);
         return await run;
     }
@@ -135,6 +154,13 @@ export class CodexV4CommandProcessor {
             await this.transition(command, 'succeeded', outcome);
         } catch (error) {
             if (this.closed) return;
+            if (error instanceof CodexV4CommandCancelledError) {
+                await this.transition(command, 'cancelled', {
+                    error: error.message,
+                    reason: error.reason,
+                });
+                return;
+            }
             if (this.isOutcomeUnknown(error)) {
                 await this.transition(command, 'resultUnknown', {
                     error: 'Provider RPC outcome is unknown; waiting for authoritative reconciliation',
@@ -165,6 +191,12 @@ export class CodexV4CommandProcessor {
             case 'notReplayed':
                 await this.transition(command, 'notReplayed', { error: result.error });
                 return;
+            case 'cancelled':
+                await this.transition(command, 'cancelled', {
+                    error: result.error,
+                    reason: result.reason,
+                });
+                return;
             case 'pending':
                 if (this.options.store.getCommandStatus(command.commandId) !== 'resultUnknown') {
                     await this.transition(command, 'resultUnknown', {
@@ -177,10 +209,16 @@ export class CodexV4CommandProcessor {
     private async transition(
         command: CodexCommandEntityV4,
         status: SyncV4CommandJournalStatus,
-        outcome: CodexV4CommandOutcome & { error?: string } = {},
+        outcome: CodexV4CommandOutcome & {
+            error?: string;
+            reason?: CodexV4CommandCancellationReason;
+        } = {},
     ): Promise<void> {
         const now = Math.max(0, Math.trunc(this.options.now?.() ?? Date.now()));
-        const result: CodexCommandResultEntityV4 = {
+        // Consumers can typecheck against an older locally built happy-wire while
+        // source-only verification is running. The cloud build regenerates the
+        // package declarations before compiling this consumer.
+        const result = {
             schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
             entityType: 'codex.commandResult',
             providerId: `${command.commandId}\0result`,
@@ -193,7 +231,8 @@ export class CodexV4CommandProcessor {
             providerRequestId: outcome.providerRequestId ?? null,
             result: asJsonValue(outcome.result),
             error: outcome.error ?? null,
-        };
+            reason: outcome.reason ?? null,
+        } as unknown as CodexCommandResultEntityV4;
         await this.options.store.publishCommandTransition(command, result, status);
     }
 

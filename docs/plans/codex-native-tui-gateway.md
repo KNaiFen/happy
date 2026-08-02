@@ -179,10 +179,10 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 4. Wire 与持久命令处理
 
-- [ ] 扩展 Wire schema 并补向后兼容测试和生成文件一致性门禁。
+- [x] 扩展 Wire schema 并补向后兼容测试；生成文件一致性继续由云端门禁验证。
 - [ ] CLI journal 持久化 binding/generation/handoff/worker lifecycle。
-- [ ] 命令处理器改为每 binding 严格 FIFO，执行前校验 generation。
-- [ ] 实现 cancelled reason、草稿恢复和 accepted command 对账。
+- [x] 命令处理器改为每 binding 严格 FIFO；Gateway 接入阶段补执行前 generation 校验。
+- [ ] 已实现 cancelled reason；仍需完成草稿恢复和 accepted command 对账。
 
 ### 5. App 状态与控制
 

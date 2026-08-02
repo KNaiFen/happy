@@ -979,7 +979,10 @@ function shouldProjectCommandResult(
 }
 
 function isCommandFailure(status: CodexCommandResultEntityV4['status']): boolean {
-    return status === 'failed' || status === 'resultUnknown' || status === 'notReplayed';
+    return status === 'failed'
+        || status === 'resultUnknown'
+        || status === 'notReplayed'
+        || (status as string) === 'cancelled';
 }
 
 function projectItem(

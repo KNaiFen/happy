@@ -8,6 +8,9 @@ import type { CodexV4Projection } from './codexV4Projection';
 
 type CodexV4Json = CodexCommandEntityV4['payload'];
 type CodexV4JsonObject = { [key: string]: CodexV4Json };
+type GatewayRuntime = NonNullable<CodexV4Projection['runtime']> & {
+    gateway?: { generation: number };
+};
 
 export interface CodexV4CommandDraft {
     command: string;
@@ -15,6 +18,7 @@ export interface CodexV4CommandDraft {
     threadId?: string | null;
     expectedTurnId?: string | null;
     replacesCommandId?: string | null;
+    bindingGeneration?: number;
 }
 
 export interface CodexV4TurnMode {
@@ -58,7 +62,10 @@ export function createCodexV4Command(
         payload: draft.payload,
         clientUserMessageId: options.commandId,
         replacesCommandId: draft.replacesCommandId ?? null,
-    };
+        ...(draft.bindingGeneration !== undefined
+            ? { bindingGeneration: draft.bindingGeneration }
+            : {}),
+    } as CodexCommandEntityV4;
 }
 
 export function parseCodexV4Input(text: string, skillCommands: readonly string[]): ParsedCodexV4Input {
@@ -143,6 +150,7 @@ export function commandForCodexV4Input(options: {
     mode: CodexV4TurnMode;
     attachments?: CodexV4AttachmentReference[];
 }): CodexV4CommandDraft {
+    const bindingGeneration = (options.projection.runtime as GatewayRuntime | null)?.gateway?.generation;
     const threadId = options.threadId !== undefined
         ? options.threadId
         : options.projection.thread?.threadId ?? null;
@@ -154,6 +162,9 @@ export function commandForCodexV4Input(options: {
                 ...asRecord(options.parsed.payload),
                 ...(options.attachments?.length ? { unsupportedAttachments: options.attachments.length } : {}),
             },
+            ...(bindingGeneration !== undefined
+                ? { bindingGeneration }
+                : {}),
         };
     }
 
@@ -179,10 +190,16 @@ export function commandForCodexV4Input(options: {
         threadId,
         expectedTurnId: activeTurnId,
         payload,
+        ...(bindingGeneration !== undefined
+            ? { bindingGeneration }
+            : {}),
     } : {
         command: 'turn.start',
         threadId,
         payload,
+        ...(bindingGeneration !== undefined
+            ? { bindingGeneration }
+            : {}),
     };
 }
 

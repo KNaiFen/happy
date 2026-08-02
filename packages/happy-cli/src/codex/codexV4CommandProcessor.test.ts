@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SyncV4AppliedEntity } from '@/api/syncV4Client';
 import type { SyncV4CommandJournalStatus } from '@/api/syncV4Journal';
 import {
+    CodexV4CommandCancelledError,
     CodexV4CommandProcessor,
     type CodexV4CommandReconciliation,
 } from './codexV4CommandProcessor';
@@ -52,7 +53,9 @@ class FakeStore {
     }
 }
 
-function command(overrides: Partial<CodexCommandEntityV4> = {}): CodexCommandEntityV4 {
+function command(
+    overrides: Partial<CodexCommandEntityV4> & { bindingGeneration?: number } = {},
+): CodexCommandEntityV4 {
     return {
         schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
         entityType: 'codex.command',
@@ -67,7 +70,7 @@ function command(overrides: Partial<CodexCommandEntityV4> = {}): CodexCommandEnt
         clientUserMessageId: 'command-1',
         replacesCommandId: null,
         ...overrides,
-    };
+    } as CodexCommandEntityV4;
 }
 
 function event(entity: CodexCommandEntityV4): SyncV4AppliedEntity {
@@ -96,6 +99,78 @@ describe('CodexV4CommandProcessor', () => {
             'succeeded',
         ]);
         expect(store.transitions.at(-1)).toMatchObject({ threadId: 'thread-1', turnId: 'turn-1' });
+        processor.close();
+    });
+
+    it('executes different command ids in strict FIFO order', async () => {
+        const store = new FakeStore();
+        let releaseFirst!: () => void;
+        let firstStarted!: () => void;
+        const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+        const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+        const executionOrder: string[] = [];
+        const execute = vi.fn(async (pending: CodexCommandEntityV4) => {
+            executionOrder.push(`start:${pending.commandId}`);
+            if (pending.commandId === 'command-1') {
+                firstStarted();
+                await gate;
+            }
+            executionOrder.push(`end:${pending.commandId}`);
+            return { threadId: pending.threadId };
+        });
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+        });
+
+        const first = processor.handle(event(command()));
+        await started;
+        const secondCommand = command({
+            providerId: 'command-2',
+            commandId: 'command-2',
+            clientUserMessageId: 'command-2',
+        });
+        const second = processor.handle(event(secondCommand));
+        await Promise.resolve();
+
+        expect(executionOrder).toEqual(['start:command-1']);
+        releaseFirst();
+        await Promise.all([first, second]);
+        expect(executionOrder).toEqual([
+            'start:command-1',
+            'end:command-1',
+            'start:command-2',
+            'end:command-2',
+        ]);
+        processor.close();
+    });
+
+    it('persists structured cancellation before any provider retry', async () => {
+        const store = new FakeStore();
+        const execute = vi.fn(async () => {
+            throw new CodexV4CommandCancelledError(
+                'bindingSuperseded',
+                'The command belongs to an older Gateway binding',
+            );
+        });
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+        });
+
+        await processor.handle(event(command({ bindingGeneration: 1 })));
+
+        expect(execute).toHaveBeenCalledOnce();
+        expect(store.transitions.at(-1)).toMatchObject({
+            status: 'cancelled',
+            reason: 'bindingSuperseded',
+            error: 'The command belongs to an older Gateway binding',
+        });
+        expect(store.statuses.get('command-1')).toBe('cancelled');
         processor.close();
     });
 

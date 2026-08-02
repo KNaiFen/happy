@@ -98,6 +98,17 @@ export const CodexRuntimeEntityV4Schema = z.object({
   pendingApprovalCount: z.number().int().nonnegative(),
   pendingUserInputCount: z.number().int().nonnegative(),
   activeSubagentCount: z.number().int().nonnegative(),
+  gateway: z.object({
+    gatewayId: idSchema,
+    generation: z.number().int().nonnegative(),
+    origin: z.enum(['terminal', 'app']),
+    role: z.enum(['current', 'draining', 'inactive', 'recovering']),
+    state: z.enum(['starting', 'running', 'recovering', 'stopping', 'stopped']),
+  }).strict().optional(),
+  terminal: z.object({
+    state: z.enum(['attached', 'pendingDetach', 'detached', 'headless']),
+    detachedAt: nullableTimestampSchema,
+  }).strict().optional(),
   lastError: z.string().nullable(),
   lastKnownAt: timestampSchema,
 }).strict();
@@ -207,6 +218,7 @@ export const CodexCommandEntityV4Schema = z.object({
   payload: jsonSchema,
   clientUserMessageId: idSchema,
   replacesCommandId: idSchema.nullable(),
+  bindingGeneration: z.number().int().nonnegative().optional(),
 }).strict();
 export type CodexCommandEntityV4 = z.infer<typeof CodexCommandEntityV4Schema>;
 
@@ -216,10 +228,11 @@ export const CodexCommandResultEntityV4Schema = z.object({
   commandId: idSchema,
   threadId: idSchema.nullable(),
   turnId: idSchema.nullable(),
-  status: z.enum(['received', 'executing', 'succeeded', 'failed', 'resultUnknown', 'notReplayed']),
+  status: z.enum(['received', 'executing', 'succeeded', 'failed', 'resultUnknown', 'notReplayed', 'cancelled']),
   providerRequestId: idSchema.nullable(),
   result: jsonSchema.nullable(),
   error: z.string().nullable(),
+  reason: z.enum(['bindingSuperseded', 'threadHandoff', 'gatewayStopping']).nullable().optional(),
 }).strict();
 export type CodexCommandResultEntityV4 = z.infer<typeof CodexCommandResultEntityV4Schema>;
 

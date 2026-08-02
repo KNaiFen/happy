@@ -29,6 +29,20 @@ function projection(active: boolean) {
     return result;
 }
 
+function gatewayProjection(active: boolean, generation: number) {
+    const result = projection(active);
+    result.runtime = {
+        gateway: {
+            gatewayId: 'gateway-1',
+            generation,
+            origin: 'terminal',
+            role: 'current',
+            state: 'running',
+        },
+    } as unknown as typeof result.runtime;
+    return result;
+}
+
 function request(
     requestType: CodexRequestEntityV4['requestType'],
     options: CodexRequestEntityV4['options'],
@@ -118,6 +132,17 @@ describe('Codex v4 App commands', () => {
             command: 'turn.start',
             threadId: 'thread-2',
         });
+    });
+
+    it('binds new Gateway commands to the projected generation', () => {
+        const draft = commandForCodexV4Input({
+            parsed: parseCodexV4Input('hello', []),
+            projection: gatewayProjection(false, 7),
+            mode: {},
+        });
+        expect(draft.bindingGeneration).toBe(7);
+        expect(createCodexV4Command(draft, { commandId: 'command-7', now: 100 }))
+            .toMatchObject({ bindingGeneration: 7 });
     });
 
     it('creates the first turn command before the v4 projection is activated', () => {

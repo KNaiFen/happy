@@ -55,6 +55,7 @@ export const SyncV4CommandJournalStatusSchema = z.enum([
     "failed",
     "resultUnknown",
     "notReplayed",
+    "cancelled",
 ]);
 export type SyncV4CommandJournalStatus = z.infer<typeof SyncV4CommandJournalStatusSchema>;
 
