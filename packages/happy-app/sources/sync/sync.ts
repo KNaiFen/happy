@@ -88,6 +88,7 @@ import {
     type CodexV4CommandDraft,
 } from './codexV4Commands';
 import { createCodexV4Projection } from './codexV4Projection';
+import { codexCommandDraftRecovery } from './codexCommandDraftRecovery.mmkv';
 import {
     assertCodexV4CommandPublishAllowed,
     resolveCodexV4SessionCapabilities,
@@ -229,15 +230,18 @@ class Sync {
             ),
             onEntity: async (sessionId, event) => {
                 storage.getState().applyCodexV4Entity(sessionId, event);
+                codexCommandDraftRecovery.reconcileSession(sessionId);
             },
             onEntities: async (sessionId, events) => {
                 storage.getState().applyCodexV4Entities(sessionId, events);
+                codexCommandDraftRecovery.reconcileSession(sessionId);
             },
             onSnapshotReset: async (sessionId) => {
                 storage.getState().resetCodexV4Projection(sessionId);
             },
             onSnapshotReplace: async (sessionId, events) => {
                 storage.getState().replaceCodexV4Entities(sessionId, events);
+                codexCommandDraftRecovery.reconcileSession(sessionId);
             },
             onSyncState: (sessionId, state) => {
                 storage.getState().applyCodexV4SyncState(sessionId, state);
@@ -426,6 +430,7 @@ class Sync {
         sessionId: string,
         draft: CodexV4CommandDraft,
         commandId: string = randomUUID(),
+        draftReceiptText?: string,
     ) {
         if (!this.isCodexV4Eligible(sessionId)) {
             throw new Error('Codex Sync v4 is not enabled for this session');
@@ -451,6 +456,13 @@ class Sync {
         assertCurrentSessionAllowsCommand();
         await this.codexV4Clients.withClient(sessionId, async (client) => {
             assertCurrentSessionAllowsCommand();
+            if (draftReceiptText !== undefined) {
+                codexCommandDraftRecovery.record({
+                    commandId,
+                    sourceSessionId: sessionId,
+                    text: draftReceiptText,
+                });
+            }
             await client.publishEntity(command);
         });
         return command;
@@ -903,7 +915,7 @@ class Sync {
                     mimeType: attachment.mimeType,
                 })),
             });
-            await this.publishCodexV4Command(sessionId, draft, localId);
+            await this.publishCodexV4Command(sessionId, draft, localId, text);
             trackMessageSent(source, session.metadata);
             storage.getState().markSessionMessageSent(sessionId);
             return;
@@ -3007,6 +3019,7 @@ class Sync {
                 : [];
         });
         storage.getState().applySessions(sessions);
+        codexCommandDraftRecovery.reconcileAll();
         for (const sessionId of rolledBackCodexV4SessionIds) {
             this.messagesSync.get(sessionId)?.stop();
             this.messagesSync.delete(sessionId);

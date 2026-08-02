@@ -19,6 +19,17 @@ const REGISTERED_PUSH_TOKEN_KEY = 'registered-push-token-v1';
 const VOICE_SOFT_PAYWALL_SHOWN_KEY = 'voice-soft-paywall-shown';
 const VOICE_ONBOARDING_PROMPT_LOAD_COUNT_KEY = 'voice-onboarding-prompt-load-count';
 const VOICE_MESSAGE_COUNT_KEY = 'voice-message-count';
+const CODEX_COMMAND_DRAFT_RECEIPTS_KEY = 'codex-command-draft-receipts-v1';
+
+export interface CodexCommandDraftReceipt {
+    version: 1;
+    commandId: string;
+    sourceSessionId: string;
+    gatewayId: string;
+    bindingGeneration: number;
+    text: string;
+    createdAt: number;
+}
 
 export function loadSettings(): { settings: Settings, version: number | null } {
     const settings = mmkv.getString('settings');
@@ -122,6 +133,50 @@ export function loadSessionDrafts(): Record<string, string> {
 
 export function saveSessionDrafts(drafts: Record<string, string>) {
     mmkv.set('session-drafts', JSON.stringify(drafts));
+}
+
+export function loadCodexCommandDraftReceipts(): CodexCommandDraftReceipt[] {
+    const encoded = mmkv.getString(CODEX_COMMAND_DRAFT_RECEIPTS_KEY);
+    if (!encoded) return [];
+    try {
+        const parsed: unknown = JSON.parse(encoded);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter(isCodexCommandDraftReceipt);
+    } catch {
+        console.error('Failed to parse Codex command draft receipts');
+        return [];
+    }
+}
+
+export function saveCodexCommandDraftReceipts(receipts: readonly CodexCommandDraftReceipt[]) {
+    if (receipts.length === 0) {
+        mmkv.delete(CODEX_COMMAND_DRAFT_RECEIPTS_KEY);
+        return;
+    }
+    mmkv.set(CODEX_COMMAND_DRAFT_RECEIPTS_KEY, JSON.stringify(receipts));
+}
+
+function isCodexCommandDraftReceipt(value: unknown): value is CodexCommandDraftReceipt {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const receipt = value as Partial<CodexCommandDraftReceipt>;
+    return receipt.version === 1
+        && typeof receipt.commandId === 'string'
+        && receipt.commandId.length > 0
+        && receipt.commandId.length <= 512
+        && typeof receipt.sourceSessionId === 'string'
+        && receipt.sourceSessionId.length > 0
+        && receipt.sourceSessionId.length <= 512
+        && typeof receipt.gatewayId === 'string'
+        && receipt.gatewayId.length > 0
+        && receipt.gatewayId.length <= 512
+        && typeof receipt.bindingGeneration === 'number'
+        && Number.isSafeInteger(receipt.bindingGeneration)
+        && receipt.bindingGeneration >= 0
+        && typeof receipt.text === 'string'
+        && receipt.text.length <= 262_144
+        && typeof receipt.createdAt === 'number'
+        && Number.isSafeInteger(receipt.createdAt)
+        && receipt.createdAt >= 0;
 }
 
 export function loadNewSessionDraft(): NewSessionDraft | null {

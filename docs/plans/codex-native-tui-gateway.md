@@ -240,7 +240,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       通知，中继恢复并确定性创建 session 后按原顺序回放，不能用临时 session ID
       生成无法重绑定 AAD 的 Sync v4 mutation。
 - [x] 命令处理器改为每 binding 严格 FIFO；Gateway 接入阶段补执行前 generation 校验。
-- [ ] 已实现 cancelled reason；仍需完成草稿恢复和 accepted command 对账。
+- [x] 已实现 cancelled reason；App 为自己发出的 command 保存本机 MMKV draft receipt，
+      以官方 `UserMessage.clientId` 或 commandResult 对账。provider 已接收或结果不明确时
+      删除 receipt 且绝不恢复；只有 `bindingSuperseded/threadHandoff` 明确证明未提交时，
+      才把原文恢复到同 gateway 下一 generation 的草稿。目标尚未同步时保留 receipt，
+      不覆盖用户已输入内容，不在其他 App 设备恢复。未得到权威结果的 receipt 不按
+      时间或数量淘汰，避免长期离线与大队列静默丢失仍待裁决的草稿。
 
 ### 5. App 状态与控制
 
@@ -400,3 +405,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   展示。handoff 只在同一 gateway 的下一 generation 校验成功后跟随。stop 改走带
   gateway/generation guard 的 machine RPC，且只允许 descriptor current binding；归档
   在 stop 受理后才隐藏。App `972/972`、CLI `947/947` 源码测试通过。
+- 2026-08-02：完成 App command-draft receipt。发起设备在 command mutation 前持久化
+  原草稿，以官方 `UserMessage.clientId` 和最新 commandResult 裁决；只有明确的
+  `bindingSuperseded/threadHandoff` 未提交结果才恢复到严格验证的下一 generation。
+  目标晚到、App 重启和 source 已移出列表均可恢复，当前输入优先且幂等合并；未知结果
+  或 provider 已接收时绝不恢复。App `979/979` 源码测试与 TypeScript 检查通过。

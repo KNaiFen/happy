@@ -41,6 +41,10 @@ import {
     resolveCodexGatewayUiState,
     type CodexGatewayDisplayPhase,
 } from '@/sync/codexGatewayUiState';
+import {
+    mergeRecoveredCodexDraft,
+} from '@/sync/codexCommandDraftRecovery';
+import { codexCommandDraftRecovery } from '@/sync/codexCommandDraftRecovery.mmkv';
 import { isSupportedExistingSession } from '@/sync/sessionFlavor';
 import { useSession } from '@/sync/storage';
 import { getSessionForkSource } from '@/utils/sessionFork';
@@ -648,6 +652,16 @@ const ChatComposer = React.memo(function ChatComposer(props: ChatComposerProps) 
     }, []);
 
     const { clearDraft } = useDraft(sessionId, message, applyDraft);
+
+    React.useEffect(() => codexCommandDraftRecovery.subscribe(sessionId, (recovered) => {
+        const liveDraft = inputHandleRef.current?.getText()
+            ?? storage.getState().sessions[sessionId]?.draft
+            ?? '';
+        const mergedDraft = mergeRecoveredCodexDraft(liveDraft, recovered);
+        if (mergedDraft === liveDraft) return;
+        applyDraft(mergedDraft);
+        storage.getState().updateSessionDraft(sessionId, mergedDraft);
+    }), [applyDraft, sessionId]);
 
     const handleChangeText = React.useCallback((text: string) => {
         // Transition keeps the textarea responsive even when the draft

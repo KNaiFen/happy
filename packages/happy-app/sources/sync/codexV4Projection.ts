@@ -63,6 +63,27 @@ export interface CodexV4ProjectionUpdate {
     revision: number;
 }
 
+export function hasCodexV4ProviderUserMessage(
+    projection: CodexV4Projection | null | undefined,
+    clientUserMessageId: string,
+): boolean {
+    if (!projection) return false;
+    return (projection.indexes.providerUserItemProviderIdsByClientId[clientUserMessageId] ?? [])
+        .some((providerId) => Boolean(projection.entities['codex.item'][providerId]));
+}
+
+export function newestCodexV4CommandResult(
+    projection: CodexV4Projection | null | undefined,
+    commandId: string,
+): CodexCommandResultEntityV4 | null {
+    if (!projection) return null;
+    return newestEntity(
+        (projection.indexes.commandResultProviderIdsByCommandId[commandId] ?? [])
+            .map((providerId) => projection.entities['codex.commandResult'][providerId])
+            .filter((entity): entity is CodexCommandResultEntityV4 => Boolean(entity)),
+    );
+}
+
 export function createCodexV4Projection(selectedThreadId: string | null = null): CodexV4Projection {
     return {
         revisions: {},
