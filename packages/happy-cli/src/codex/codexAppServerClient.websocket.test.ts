@@ -8,6 +8,7 @@ import {
     CodexAppServerClient,
     CodexRpcOutcomeUnknownError,
 } from './codexAppServerClient';
+import { connectCodexAppServerWebSocket } from './codexAppServerWebSocket';
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -78,6 +79,20 @@ describe('CodexAppServerClient external WebSocket transport', () => {
                 config: null,
             },
         });
+        expect(provider.extensionOffers()).toEqual([undefined]);
+    });
+
+    it('does not offer compression on loopback WebSocket endpoints', async () => {
+        const provider = await startLoopbackUpgradeRecorder();
+        cleanups.push(provider.close);
+        const socket = connectCodexAppServerWebSocket({
+            url: provider.url,
+            bearerToken: 'test-token',
+        });
+        socket.on('error', () => undefined);
+        await provider.upgraded;
+        expect(provider.extensionOffers()).toEqual([undefined]);
+        socket.terminate();
     });
 
     it('marks an in-flight RPC unknown when only the bridge socket closes', async () => {
@@ -147,10 +162,16 @@ describe('CodexAppServerClient external WebSocket transport', () => {
 async function startProvider(
     socketPath: string,
     onMessage: (socket: WebSocket, message: Record<string, unknown>) => void,
-): Promise<{ clients(): WebSocket[]; close(): Promise<void> }> {
+): Promise<{
+    clients(): WebSocket[];
+    extensionOffers(): Array<string | string[] | undefined>;
+    close(): Promise<void>;
+}> {
     const server = createServer();
     const webSocketServer = new WebSocketServer({ noServer: true });
+    const extensionOffers: Array<string | string[] | undefined> = [];
     server.on('upgrade', (request, socket, head) => {
+        extensionOffers.push(request.headers['sec-websocket-extensions']);
         webSocketServer.handleUpgrade(request, socket, head, (client) => {
             webSocketServer.emit('connection', client, request);
         });
@@ -169,12 +190,46 @@ async function startProvider(
     });
     return {
         clients: () => [...webSocketServer.clients],
+        extensionOffers: () => [...extensionOffers],
         close: async () => {
             for (const client of webSocketServer.clients) client.terminate();
             await new Promise<void>((resolve) => webSocketServer.close(() => resolve()));
             await closeServer(server);
             await rm(socketPath, { force: true });
         },
+    };
+}
+
+async function startLoopbackUpgradeRecorder(): Promise<{
+    url: string;
+    upgraded: Promise<void>;
+    extensionOffers(): Array<string | string[] | undefined>;
+    close(): Promise<void>;
+}> {
+    const server = createServer();
+    const extensionOffers: Array<string | string[] | undefined> = [];
+    let resolveUpgrade!: () => void;
+    const upgraded = new Promise<void>((resolve) => {
+        resolveUpgrade = resolve;
+    });
+    server.on('upgrade', (request, socket) => {
+        extensionOffers.push(request.headers['sec-websocket-extensions']);
+        socket.destroy();
+        resolveUpgrade();
+    });
+    await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+        throw new Error('Loopback test provider did not expose a TCP address');
+    }
+    return {
+        url: `ws://127.0.0.1:${address.port}`,
+        upgraded,
+        extensionOffers: () => [...extensionOffers],
+        close: async () => closeServer(server),
     };
 }
 

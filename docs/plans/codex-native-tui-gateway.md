@@ -354,6 +354,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       固定请求与 Node 默认握手的主要协议差异是后者声明 `permessage-deflate`。下一门禁在
       全新 provider 上使用相同 Node `ws+unix` URL、仅设置 `perMessageDeflate=false`；该
       probe 成功才把关闭扩展写入产品连接器，失败则继续比较脱敏后的请求 shape。
+      第十二轮单变量 A/B 已确认：相同 Node `ws+unix` 客户端仅关闭
+      `permessage-deflate` 后成功 `open`，随后默认客户端仍稳定重置。产品共用 Codex
+      WebSocket 连接器必须对 Unix 和 loopback URL 都设置 `perMessageDeflate=false`，并以
+      请求 header 回归锁定不发送 `Sec-WebSocket-Extensions`；无需改路径、换库、回退 TCP
+      或增加重试。官方门禁保留固定 RFC、实际连接器 open 和 Happy initialize 三层定位。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -498,3 +503,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   101，再与 Node `ws` 和 Happy initialize 的独立 provider 结果交叉定位。
 - 2026-08-02：固定 RFC 6455 Unix 握手在 `/` 上返回 101，当前 Node `ws` 则稳定重置；
   下一步用独立 provider 只关闭 Node 默认的 `permessage-deflate` 扩展，验证这一单变量。
+- 2026-08-02：单变量云端 A/B 证明 `permessage-deflate` 声明导致官方 `0.146.0`
+  listener 重置连接。Unix 与 loopback 共用连接器统一禁用压缩协商，并补 header 回归；
+  产品修复推进 CLI `1.4.22`。

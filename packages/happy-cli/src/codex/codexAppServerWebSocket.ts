@@ -17,19 +17,19 @@ export function connectCodexAppServerWebSocket(
     const headers = endpoint.bearerToken
         ? { authorization: `Bearer ${endpoint.bearerToken}` }
         : undefined;
+    const options = {
+        headers,
+        maxPayload: CODEX_APP_SERVER_MAX_RPC_BYTES,
+        // Official Codex app-server rejects ws's default permessage-deflate offer.
+        perMessageDeflate: false,
+    };
     if (endpoint.socketPath) {
         if (endpoint.socketPath.includes(':')) {
             throw new Error('Codex app-server Unix socket path cannot contain a colon');
         }
-        return new WebSocket(`ws+unix://${endpoint.socketPath}:/`, {
-            headers,
-            maxPayload: CODEX_APP_SERVER_MAX_RPC_BYTES,
-        });
+        return new WebSocket(`ws+unix://${endpoint.socketPath}:/`, options);
     }
-    return new WebSocket(endpoint.url!, {
-        headers,
-        maxPayload: CODEX_APP_SERVER_MAX_RPC_BYTES,
-    });
+    return new WebSocket(endpoint.url!, options);
 }
 
 export function codexWebSocketRawDataBuffer(data: RawData): Buffer {
