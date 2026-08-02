@@ -439,6 +439,16 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       文本已进入 composer，但初始化期吞掉回车，provider 请求数未增加。attach 测试改为
       先写文本并等待 composer 确认渲染，再单独提交回车，模拟真实用户输入边界。两项均为
       验收修正，不改变可分发代码，也不再推进 `1.4.26` 版本。
+      第十九轮主 CI `30765576825` 证明上述两项修正有效：fresh observer 全部通过，attach
+      二次 provider round trip 也完成。主 lifecycle 随后失败是因为它与 fresh observer
+      共用同一个有状态 Responses fixture，前者已经消费唯一的首轮 shell call，后者实际
+      直接回复却仍断言 command lifecycle；两个官方场景改用独立 fixture/config，防止工具
+      状态跨 provider 场景污染。
+      PTY 最终安全状态同时证明 descriptor 已 `stopped`、provider 已退出、Happy session
+      已 inactive、所有消息已投影且无泄漏，但专用 worker PID 在 45 秒后仍存活。worker
+      函数已经等待 proxy、coordinator/Sync v4 session、provider、control、journal 和原子
+      descriptor 清理；隐藏 worker 入口不得再依赖 Node 事件循环碰巧清空，完成后显式以
+      0 退出。该项改变已安装 CLI 的进程生命周期，发布目标推进到 `1.4.27`。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -455,7 +465,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [x] CLI 升至 `1.4.26`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.27`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -484,10 +494,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       订阅和投影恢复；PTY 同时定位到 CLI 入口原始 argv 日志泄漏。该已运行版本不得
       复用，日志修复与 snapshot 安全诊断推进到 `1.4.26`。
       `1.4.26` package workflow `30764952183` 已通过，制品已下载并验证；后续只修正
-      云端验收与计划，不改变分发行为或复用版本发布。
+      云端验收与计划。第十九轮 PTY 随后定位到专用 worker 完成清理后不退出的分发行为
+      缺陷；`1.4.26` 已运行不可复用，最终目标推进到 `1.4.27`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [x] CLI workflow 成功后下载并验证 `happy-1.4.26.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.27.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
@@ -632,3 +643,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   snapshot 断言并把三类 live method 改为逐项要求。真实 PTY trace 同时证明 attach prompt
   的原子文本+回车发生在 TUI 首屏后约 2 ms，改为渲染确认后的独立回车。两项均不修改
   产品代码，CLI 保持已发布并验证的 `1.4.26`。
+- 2026-08-02：主 CI `30765576825` 证明 observer 与 attach round trip 已通过。将两个
+  official-source 场景的有状态 Responses fixture 完全隔离；同时保留正常 stop 的严格
+  worker-PID 门禁，因为安全 artifact 证明业务清理已完成但专用 worker 仍不退出。隐藏
+  worker 入口在所有 awaited cleanup 后显式成功退出，产品修复推进 CLI `1.4.27`。

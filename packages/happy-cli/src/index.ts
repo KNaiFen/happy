@@ -30,7 +30,7 @@ import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
 import { configuration } from './configuration'
 import { getInsecureRelayWarning, isInsecureHttpUrl } from './utils/serverUrl'
-import { runCodexGatewayWorker } from './codex/gateway/codexGatewayWorker'
+import { runCodexGatewayWorkerEntrypoint } from './codex/gateway/codexGatewayWorkerEntrypoint'
 import { listCodexGatewayDescriptors } from './codex/gateway/codexGatewayState'
 import { cliInvocationDiagnostic } from './utils/cliInvocationDiagnostic'
 
@@ -48,8 +48,7 @@ import { cliInvocationDiagnostic } from './utils/cliInvocationDiagnostic'
 
   if (args[0] === '__codex-gateway-worker') {
     if (args.length !== 2) throw new Error('Invalid Codex Gateway worker invocation')
-    await runCodexGatewayWorker({ gatewayId: args[1] })
-    return
+    return await runCodexGatewayWorkerEntrypoint(args[1])
   }
 
   // If --version is passed - do not log, its likely daemon inquiring about our version

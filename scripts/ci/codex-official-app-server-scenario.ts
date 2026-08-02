@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     const originalCodexHome = process.env.CODEX_HOME;
     const originalPath = process.env.PATH;
     let fixture: CodexResponsesFixture | null = null;
+    let websocketFixture: CodexResponsesFixture | null = null;
     let codex: InstanceType<
         typeof import('../../packages/happy-cli/src/codex/codexAppServerClient').CodexAppServerClient
     > | null = null;
@@ -58,10 +59,10 @@ async function main(): Promise<void> {
                 `generated lab-rat project retained ${legacyName}`,
             );
         }
-        fixture = await startCodexResponsesFixture({
+        websocketFixture = await startCodexResponsesFixture({
             expectedInstructionSentinel: LAB_RAT_AGENT_INSTRUCTION_SENTINEL,
         });
-        await writeCodexResponsesConfig(codexHome, fixture.baseUrl);
+        await writeCodexResponsesConfig(codexHome, websocketFixture.baseUrl);
         process.env.CODEX_HOME = codexHome;
 
         const { CodexAppServerClient } = await import(
@@ -78,6 +79,13 @@ async function main(): Promise<void> {
             cwd: projectRoot,
             socketPath: join(root, 'official-provider.sock'),
         });
+        await websocketFixture.close();
+        websocketFixture = null;
+
+        fixture = await startCodexResponsesFixture({
+            expectedInstructionSentinel: LAB_RAT_AGENT_INSTRUCTION_SENTINEL,
+        });
+        await writeCodexResponsesConfig(codexHome, fixture.baseUrl);
         codex = new CodexAppServerClient();
         const notificationMethods = new Set<string>();
         const notificationOrder: string[] = [];
@@ -265,6 +273,7 @@ async function main(): Promise<void> {
         }
     } finally {
         if (codex) await codex.disconnect().catch(() => undefined);
+        await websocketFixture?.close().catch(() => undefined);
         await fixture?.close().catch(() => undefined);
         restoreEnvironment('HAPPY_CODEX_APP_SERVER_PATH', originalAppServerPath);
         restoreEnvironment('HAPPY_FAKE_CODEX_SCENARIO', originalFakeScenario);
