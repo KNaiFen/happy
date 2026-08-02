@@ -1,4 +1,5 @@
 import { createInterface } from 'node:readline/promises';
+import { randomUUID } from 'node:crypto';
 import { stdin, stdout } from 'node:process';
 import { spawn as crossSpawn } from 'cross-spawn';
 import { ensureDaemonRunning } from '@/daemon/ensureDaemonRunning';
@@ -7,11 +8,16 @@ import { authAndSetupMachineIfNeeded } from '@/ui/auth';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 import { assertMinimumCodexCliVersion } from '../codexCliVersion';
 import { createCodexGatewayAttachmentCredentials } from './codexGatewayAttachment';
-import { callCodexGatewayControl } from './codexGatewayControl';
+import {
+    callCodexGatewayControl,
+    type CodexGatewayOpenRootInput,
+    type CodexGatewayOpenRootResult,
+} from './codexGatewayControl';
 import {
     codexGatewayPaths,
     createCodexGatewayFiles,
     listCodexGatewayDescriptors,
+    readCodexGatewayDescriptor,
     readCodexGatewaySecret,
     type CodexGatewayDescriptor,
     type CodexGatewaySecret,
@@ -22,6 +28,28 @@ const WORKER_READY_POLL_MS = 50;
 const NORMAL_EXIT_RETRIES = 20;
 const NORMAL_EXIT_RETRY_MS = 50;
 const REMOTE_TOKEN_ENV = 'HAPPY_CODEX_GATEWAY_REMOTE_TOKEN';
+
+export interface CodexGatewayHeadlessLaunchOptions {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    action: 'start' | 'resume';
+    threadId?: string;
+    model?: string;
+    permissionMode?: 'default' | 'read-only' | 'safe-yolo' | 'yolo';
+    effortLevel?: string;
+    parentSessionId?: string;
+    forkedFromMessageId?: string;
+    isSideChat?: boolean;
+    existingSession?: {
+        sessionId: string;
+        dataEncryptionKey: string;
+    };
+}
+
+export interface CodexGatewayHeadlessLaunchResult extends CodexGatewayOpenRootResult {
+    pid: number;
+    descriptor: CodexGatewayDescriptor;
+}
 
 export async function launchCodexGatewayTui(nativeArgs: string[]): Promise<number> {
     assertMinimumCodexCliVersion();
@@ -51,8 +79,10 @@ export async function launchCodexGatewayTui(nativeArgs: string[]): Promise<numbe
             nativeArgs,
         });
     } catch (error) {
+        const latest = await readCodexGatewayDescriptor(created.paths.descriptorPath)
+            ?? created.descriptor;
         await callCodexGatewayControl({
-            descriptor: created.descriptor,
+            descriptor: latest,
             token: created.secret.controlToken,
             path: '/stop',
             body: { force: true },
@@ -60,6 +90,82 @@ export async function launchCodexGatewayTui(nativeArgs: string[]): Promise<numbe
         }).catch(() => undefined);
         throw error;
     }
+}
+
+export async function launchCodexGatewayHeadless(
+    options: CodexGatewayHeadlessLaunchOptions,
+): Promise<CodexGatewayHeadlessLaunchResult> {
+    assertMinimumCodexCliVersion();
+    const created = await createCodexGatewayFiles({
+        cwd: options.cwd,
+        origin: 'app',
+    });
+    const worker = spawnHappyCLI(
+        ['__codex-gateway-worker', created.descriptor.gatewayId],
+        {
+            cwd: options.cwd,
+            detached: true,
+            stdio: 'ignore',
+            env: sanitizeSessionEnvironment(options.env),
+        },
+    );
+    if (!worker.pid) throw new Error('Codex Gateway worker did not start');
+    worker.unref();
+
+    let descriptor: CodexGatewayDescriptor;
+    try {
+        descriptor = await waitForGatewayReady(created.descriptor, created.secret);
+    } catch (error) {
+        const latest = await readCodexGatewayDescriptor(created.paths.descriptorPath)
+            ?? created.descriptor;
+        await callCodexGatewayControl({
+            descriptor: latest,
+            token: created.secret.controlToken,
+            path: '/stop',
+            body: { force: true },
+            timeoutMs: 1_000,
+        }).catch(() => undefined);
+        throw error;
+    }
+
+    const operationId = randomUUID();
+    const request: CodexGatewayOpenRootInput = {
+        operationId,
+        action: options.action,
+        threadId: options.action === 'resume' ? options.threadId ?? null : null,
+        cwd: options.cwd,
+        model: options.model ?? null,
+        permissionMode: options.permissionMode ?? 'default',
+        effortLevel: options.effortLevel ?? null,
+        parentSessionId: options.parentSessionId ?? null,
+        forkedFromMessageId: options.forkedFromMessageId ?? null,
+        isSideChat: options.isSideChat ?? false,
+        happySessionId: options.existingSession?.sessionId ?? null,
+        dataEncryptionKey: options.existingSession?.dataEncryptionKey ?? null,
+    };
+    let opened: CodexGatewayOpenRootResult | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+            opened = await callCodexGatewayControl<CodexGatewayOpenRootResult>({
+                descriptor,
+                token: created.secret.controlToken,
+                path: '/root/open',
+                body: request,
+                timeoutMs: 30_000,
+            });
+            break;
+        } catch (error) {
+            lastError = error;
+            await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+        }
+    }
+    if (!opened) throw lastError instanceof Error ? lastError : new Error('Codex Gateway root did not open');
+    return {
+        ...opened,
+        pid: worker.pid,
+        descriptor,
+    };
 }
 
 export async function attachCodexGateway(selector?: string): Promise<number> {
@@ -97,12 +203,17 @@ export function buildCodexRemoteArgs(
     descriptor: CodexGatewayDescriptor,
     nativeArgs: string[],
 ): string[] {
-    if (!descriptor.tuiSocketPath) {
+    const endpoint = descriptor.tuiSocketPath
+        ? `unix://${descriptor.tuiSocketPath}`
+        : descriptor.tuiPort
+            ? `ws://127.0.0.1:${descriptor.tuiPort}`
+            : null;
+    if (!endpoint) {
         throw new Error('Codex Gateway TUI endpoint is unavailable');
     }
     return [
         '--remote',
-        `unix://${descriptor.tuiSocketPath}`,
+        endpoint,
         '--remote-auth-token-env',
         REMOTE_TOKEN_ENV,
         ...nativeArgs,
@@ -168,7 +279,13 @@ async function waitForGatewayReady(
 ): Promise<CodexGatewayDescriptor> {
     const deadline = Date.now() + WORKER_READY_TIMEOUT_MS;
     let latest = descriptor;
+    const descriptorPath = codexGatewayPaths(descriptor.gatewayId).descriptorPath;
     while (Date.now() < deadline) {
+        latest = await readCodexGatewayDescriptor(descriptorPath) ?? latest;
+        if (!latest.controlSocketPath && !latest.controlPort) {
+            await new Promise((resolve) => setTimeout(resolve, WORKER_READY_POLL_MS));
+            continue;
+        }
         try {
             latest = await callCodexGatewayControl<CodexGatewayDescriptor>({
                 descriptor: latest,
@@ -192,7 +309,7 @@ async function selectGateway(
     operation: 'attach' | 'stop',
     selector?: string,
 ): Promise<{ descriptor: CodexGatewayDescriptor; secret: CodexGatewaySecret }> {
-    const gateways = await discoverLiveGateways();
+    const gateways = await discoverLiveCodexGateways();
     if (gateways.length === 0) throw new Error('No live Codex Gateways were found');
     if (selector) {
         const exact = gateways.filter(({ descriptor }) => (
@@ -227,7 +344,7 @@ async function selectGateway(
     }
 }
 
-async function discoverLiveGateways(): Promise<Array<{
+export async function discoverLiveCodexGateways(): Promise<Array<{
     descriptor: CodexGatewayDescriptor;
     secret: CodexGatewaySecret;
 }>> {

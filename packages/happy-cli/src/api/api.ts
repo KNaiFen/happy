@@ -382,7 +382,9 @@ export class ApiClient {
     machineId: string;
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
+    timeoutMs?: number;
   }): Promise<MachineSessionSnapshot | null> {
+    const deadline = Date.now() + (opts.timeoutMs ?? 60_000);
     let cursor: string | null = null;
     const seenCursors = new Set<string>();
     for (let page = 0; page < 1_000; page += 1) {
@@ -393,12 +395,14 @@ export class ApiClient {
       });
       let response;
       try {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) throw new Error('Session lookup timed out');
         response = await axios.get(`${configuration.serverUrl}/v2/sessions?${query.toString()}`, {
           headers: {
             Authorization: `Bearer ${this.credential.token}`,
             'X-Happy-Client': `cli-daemon/${configuration.currentCliVersion}`,
           },
-          timeout: 15_000,
+          timeout: Math.min(15_000, remainingMs),
         });
       } catch (error) {
         if (safeAxiosStatus(error) === 401) {

@@ -384,7 +384,31 @@ export class CodexGatewayCoordinator {
         });
     }
 
-    async stop(): Promise<void> {
+    async stop(options: { force?: boolean } = {}): Promise<void> {
+        if (this.stopped) return;
+        if (!options.force) await this.deactivateRootsForGracefulStop();
+        await this.finalizeStop();
+    }
+
+    private async deactivateRootsForGracefulStop(): Promise<void> {
+        await this.notificationPipeline;
+        await this.bindingLock.inLock(async () => {
+            for (const root of this.orderedRoots()) {
+                if (root.role === 'inactive') continue;
+                await root.runtime.flush();
+                await root.runtime.updateBinding({
+                    role: 'inactive',
+                    generation: root.generation,
+                    previousSessionId: null,
+                    nextSessionId: null,
+                    changedAt: this.now(),
+                });
+                root.role = 'inactive';
+            }
+        });
+    }
+
+    private async finalizeStop(): Promise<void> {
         if (this.stopped) return;
         this.stopped = true;
         this.options.client.setStableNotificationHandler(null);
@@ -394,18 +418,7 @@ export class CodexGatewayCoordinator {
         await this.bindingLock.inLock(async () => {
             const roots = [...this.roots.values()];
             this.current = null;
-            for (const root of roots) {
-                root.role = 'inactive';
-                await root.runtime.updateBinding({
-                    role: 'inactive',
-                    generation: root.generation,
-                    previousSessionId: null,
-                    nextSessionId: null,
-                    changedAt: this.now(),
-                }).catch((error) => this.options.onError?.(error));
-            }
             await Promise.all(roots.map(async (root) => {
-                await root.runtime.flush().catch((error) => this.options.onError?.(error));
                 await root.runtime.close().catch((error) => this.options.onError?.(error));
                 await this.options.leases.release(root.threadId, this.options.gatewayId)
                     .catch((error) => {

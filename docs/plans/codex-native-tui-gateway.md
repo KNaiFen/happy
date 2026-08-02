@@ -166,12 +166,14 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 ### 2. Gateway 核心
 
 - [x] 将 app-server process/transport ownership 从旧 `runCodex` 拆到独立 worker。
-- [ ] Unix 透明代理、官方 WS 鉴权和多订阅连接管理已接入；Windows loopback
-      endpoint 与动态端口仍待完成。
-- [ ] 实现受保护的 worker descriptor、control token、heartbeat 和 daemon discovery。
+- [x] Unix 透明代理、官方 WS 鉴权和多订阅连接管理已接入；Windows 使用两个随机
+      loopback WebSocket 端口，provider 端由 `0600` capability-token 文件鉴权，
+      TUI 端继续使用每次 attachment 独立 bearer；launcher 会等待 worker 原子发布
+      动态 control 端口，绝不回退到默认 HTTP 端口。
+- [x] 实现受保护的 worker descriptor、control token、heartbeat 和 daemon discovery。
 - [x] 实现 provider thread lease、generation、current/draining registry 和冲突预检。
 - [x] 实现 app-server crash recovery、snapshot reconciliation 和 payload-free diagnostics。
-- [ ] 保留并复用 Sync v4 mapper/router/request broker；删除 selected-thread 全局假设。
+- [x] 保留并复用 Sync v4 mapper/router/request broker；删除 selected-thread 全局假设。
 
 组件进度（不等同于 worker 接线或端到端验收）：
 
@@ -222,7 +224,25 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 5. App 状态与控制
 
-- [ ] App-origin 新建和 resume 全部通过统一 Gateway manager。
+- [x] App-origin 新建和 resume 全部通过统一 Gateway manager。
+  - daemon 收到现有 `spawn-happy-session` RPC 后，Codex 分支不再进入 tmux 或旧
+    `happy codex --started-by daemon` 子进程。daemon 创建 `origin=app` 的 headless
+    worker，等待其本机鉴权 control endpoint 就绪，再调用 stable-v2
+    `thread/start` 或 `thread/resume`；control 返回已物化的 Happy session ID。
+  - App-origin bootstrap 复用现有目录、模型、权限和思考等级字段，不新增中继明文
+    协议。worker 用模型/权限创建或恢复官方 thread；思考等级继续由每个 App turn 的
+    Sync v4 command 显式携带。
+  - daemon 重启通过受保护 descriptor 和 control `status` 重新发现存活 worker，
+    不依赖旧 session webhook 或 worker 是 daemon 的直接子进程。
+  - headless bootstrap 使用稳定 operation ID；`thread/start|resume` 返回 provider thread
+    后先把 `providerAccepted` 写入 Gateway journal，再创建 Happy binding 并写入
+    `bound`。本机 control 超时或 daemon 重试只继续同一条记录，绝不重复调用非幂等
+    `thread/start`。
+  - 打开已绑定历史时必须复用原 Happy session ID。daemon 在现有 E2EE 校验通过后，
+    只通过私有 control socket 传递该 session ID 与 32 字节独立 data key；worker 从
+    中继读取并 unarchive 原 Sync v4 session，而不是用新 Gateway seed 创建重复 session。
+    外部官方 thread 仍先以 App 生成的独立 data key 创建 Happy session，再由 Gateway
+    接管同一 session。身份材料只允许写入 `0600` Gateway journal，不进入日志。
 - [ ] App 命令附带当前 generation；同步期间禁发但保留草稿。
 - [ ] 展示 attached/detached/headless/recovering，并保持 execution 独立。
 - [ ] handoff 成功后按 gateway/generation 自动跟随，避免旧通知把页面拉回。
@@ -231,9 +251,9 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 6. 删除旧交互层
 
-- [ ] 删除 Codex 自定义 Ink UI 和 raw stdin 交互层。
-- [ ] 删除 Happy `change_title` MCP、隐藏 `codexPrompt` 标题指令和 Codex XML system prompt。
-- [ ] 标题使用官方 thread name，缺失时退回第一条真实用户消息的安全截断。
+- [x] 删除 Codex 自定义 Ink UI 和 raw stdin 交互层。
+- [x] 删除 Happy `change_title` MCP、隐藏 `codexPrompt` 标题指令和 Codex XML system prompt。
+- [x] 标题使用官方 thread name，缺失时退回官方 preview 的安全截断。
 - [ ] 保留 Gemini/ACP 仍使用的共享 server/MCP 基础设施，不以名称误删。
 
 ### 7. 测试与云端验收
@@ -316,3 +336,16 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   组合 provider、独立 bridge、proxy、control、heartbeat、journal、lease 和恢复；
   native new/resume/fork 走 Gateway，attach 在同一 app-server 上 native resume，其他
   官方子命令直接委派。descriptor 恢复保留精确 generation，不伪造一次新 handoff。
+- 2026-08-02：锁定 App-origin bootstrap 接线。复用现有 machine spawn RPC 字段，
+  Codex 由 daemon 创建 headless Gateway 并通过本机鉴权 control endpoint 调用官方
+  stable-v2 start/resume；Codex 不再进入 tmux 和旧 `--started-by daemon` 启动链路，
+  daemon 重启以 descriptor/control 状态重新发现存活 worker。
+- 2026-08-02：完成 App-origin headless start/resume、受 journal 保护的 bootstrap
+  幂等恢复、原 Happy Sync v4 session 身份复用、daemon descriptor discovery 和鉴权
+  stop。补齐 Windows 随机 loopback provider/TUI endpoint 与 capability-token 文件；
+  删除无生产入口的旧 Ink/raw-stdin/隐藏 prompt/Codex Happy-MCP 适配链。
+- 2026-08-02：审查修复正常 stop 的离线归档漏洞。正常 stop 只有在 root outbox、
+  inactive metadata 与 archive 全部成功后才关闭 runtime 和释放 lease；中继离线时
+  worker 保持 `stopping`、持续心跳并可由重复 stop 唤醒重试，只有 `--force` 会跳过。
+  旧 Happy session 分页读取使用独立 15 秒总时限；Windows launcher 从 descriptor
+  等待真实 control 端口，禁止未发布端口时误连默认端口。

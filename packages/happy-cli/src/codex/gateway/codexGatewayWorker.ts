@@ -1,13 +1,15 @@
 import { rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { classifySyncV4DiagnosticError, type CodexCommandEntityV4 } from '@slopus/happy-wire';
 import { ApiClient } from '@/api/api';
-import { initialMachineMetadata } from '@/daemon/run';
+import { decodeBase64 } from '@/api/encryption';
+import { initialMachineMetadata } from '@/daemon/initialMachineMetadata';
 import { readCredentials, readSettings } from '@/persistence';
 import { logger } from '@/ui/logger';
 import { scopeCredentialsToCurrentRelay } from '@/ui/auth';
 import { AsyncLock } from '@/utils/lock';
 import { configuration } from '@/configuration';
-import { CodexAppServerClient } from '../codexAppServerClient';
+import { CodexAppServerClient, CodexRpcOutcomeUnknownError } from '../codexAppServerClient';
 import {
     assertMinimumCodexCliVersion,
     readCodexCliVersion,
@@ -15,6 +17,8 @@ import {
 import { loadCodexModelCapabilities } from '../codexModelCapabilities';
 import { discoverCodexSkillCommands } from '../codexSkills';
 import type { ReasoningEffort, Thread } from '../protocol';
+import { resolveCodexExecutionPolicy } from '../executionPolicy';
+import type { CodexAppServerWebSocketEndpoint } from '../codexAppServerWebSocket';
 import { CodexGatewayAttachmentManager } from './codexGatewayAttachment';
 import {
     CodexGatewayCoordinator,
@@ -22,17 +26,22 @@ import {
 } from './codexGatewayCoordinator';
 import {
     startCodexGatewayControlServer,
+    type CodexGatewayOpenRootInput,
+    type CodexGatewayOpenRootResult,
     type CodexGatewayControlHandlers,
 } from './codexGatewayControl';
 import { CodexGatewayDeferredRuntime } from './codexGatewayDeferredRuntime';
-import { CodexGatewayJournal } from './codexGatewayJournal';
+import { CodexGatewayJournal, type CodexGatewayBootstrap } from './codexGatewayJournal';
 import { CodexGatewayThreadLeaseRegistry } from './codexGatewayLease';
 import { CodexGatewayProvider } from './codexGatewayProvider';
 import {
     CodexGatewayProxy,
     type CodexGatewayRootRequest,
 } from './codexGatewayProxy';
-import { CodexGatewayRuntimeFactory } from './codexGatewayRuntimeFactory';
+import {
+    CodexGatewayRuntimeFactory,
+    type CodexGatewayRootSessionConfig,
+} from './codexGatewayRuntimeFactory';
 import {
     codexGatewayPaths,
     readCodexGatewayDescriptor,
@@ -45,13 +54,28 @@ import {
 
 const HEARTBEAT_MS = 2_000;
 const RELAY_REQUEST_TIMEOUT_MS = 1_500;
+const EXISTING_SESSION_LOOKUP_TIMEOUT_MS = 15_000;
 const GRACEFUL_STOP_WAIT_MS = 10_000;
 const GRACEFUL_STOP_POLL_MS = 250;
+const GRACEFUL_STOP_RETRY_MS = 2_000;
 
 interface DeferredRoot {
     runtime: CodexGatewayDeferredRuntime;
     factoryOptions: CodexGatewayRootRuntimeFactoryOptions;
 }
+
+type RootSessionBootstrapConfig = Pick<
+    CodexGatewayBootstrap,
+    | 'cwd'
+    | 'model'
+    | 'permissionMode'
+    | 'effortLevel'
+    | 'parentSessionId'
+    | 'forkedFromMessageId'
+    | 'isSideChat'
+    | 'happySessionId'
+    | 'dataEncryptionKey'
+>;
 
 export async function runCodexGatewayWorker(options: {
     gatewayId: string;
@@ -68,9 +92,17 @@ export async function runCodexGatewayWorker(options: {
     if (!initialDescriptor || !secret || initialDescriptor.gatewayId !== secret.gatewayId) {
         throw new Error('Codex Gateway state is unavailable or inconsistent');
     }
-    if (!initialDescriptor.providerSocketPath || !initialDescriptor.tuiSocketPath) {
-        throw new Error('Codex Gateway worker currently requires private Unix sockets');
+    if (
+        !initialDescriptor.providerSocketPath
+        && (!initialDescriptor.providerPort || !secret.providerToken)
+    ) {
+        throw new Error('Codex Gateway provider endpoint is unavailable');
     }
+    if (!initialDescriptor.tuiSocketPath && !initialDescriptor.tuiPort) {
+        throw new Error('Codex Gateway TUI endpoint is unavailable');
+    }
+    const gatewayOrigin = initialDescriptor.origin;
+    const gatewayCwd = initialDescriptor.cwd;
 
     const descriptorStore = new CodexGatewayDescriptorStore(paths, {
         ...initialDescriptor,
@@ -85,6 +117,10 @@ export async function runCodexGatewayWorker(options: {
     await descriptorStore.persist();
 
     const journal = await CodexGatewayJournal.open({ path: paths.journalPath });
+    const rootSessionConfigs = new Map<string, RootSessionBootstrapConfig>();
+    for (const bootstrap of journal.pendingBootstraps()) {
+        rootSessionConfigs.set(bootstrap.resolvedThreadId, rootConfigFromBootstrap(bootstrap));
+    }
     const credentials = await readCredentials();
     if (!credentials) throw new Error('Happy authentication is required before starting Codex Gateway');
     const scopedCredentials = await scopeCredentialsToCurrentRelay(credentials, {
@@ -104,8 +140,15 @@ export async function runCodexGatewayWorker(options: {
         return null;
     });
 
-    const providerEndpoint = { socketPath: initialDescriptor.providerSocketPath };
-    const tuiEndpoint = { socketPath: initialDescriptor.tuiSocketPath };
+    const providerEndpoint: CodexAppServerWebSocketEndpoint = initialDescriptor.providerSocketPath
+        ? { socketPath: initialDescriptor.providerSocketPath }
+        : {
+            url: `ws://127.0.0.1:${initialDescriptor.providerPort}`,
+            bearerToken: secret.providerToken!,
+        };
+    const tuiEndpoint: CodexAppServerWebSocketEndpoint = initialDescriptor.tuiSocketPath
+        ? { socketPath: initialDescriptor.tuiSocketPath }
+        : { url: `ws://127.0.0.1:${initialDescriptor.tuiPort}` };
     const client = new CodexAppServerClient(
         settings.sandboxConfig,
         codexCliVersion,
@@ -120,9 +163,12 @@ export async function runCodexGatewayWorker(options: {
     let runtimeFactory: CodexGatewayRuntimeFactory | null = null;
     let coordinator: CodexGatewayCoordinator | null = null;
     let stopping = false;
+    let forceShutdownRequested = false;
     let shutdownPromise: Promise<void> | null = null;
+    let wakeShutdownRetry: (() => void) | null = null;
     let controlServer: Awaited<ReturnType<typeof startCodexGatewayControlServer>> | null = null;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    const rootOpenLock = new AsyncLock();
 
     const terminal = new CodexGatewayAttachmentManager({
         origin: initialDescriptor.origin,
@@ -207,6 +253,7 @@ export async function runCodexGatewayWorker(options: {
     const provider = new CodexGatewayProvider({
         cwd: initialDescriptor.cwd,
         endpoint: providerEndpoint,
+        tokenFilePath: providerEndpoint.url ? paths.providerTokenPath : undefined,
         codexCliVersion,
         hooks: {
             stateChanged: (state) => {
@@ -247,6 +294,34 @@ export async function runCodexGatewayWorker(options: {
                         skillCommands: skills,
                         transportSecurity: relayTransportSecurity(),
                         relayRequestTimeoutMs: RELAY_REQUEST_TIMEOUT_MS,
+                        existingSessionLookupTimeoutMs: EXISTING_SESSION_LOOKUP_TIMEOUT_MS,
+                        resolveRootSessionConfig: (threadId) => {
+                            const configured = rootSessionConfigs.get(threadId);
+                            if (!configured) return null;
+                            return {
+                                cwd: configured.cwd,
+                                permissionMode: configured.permissionMode,
+                                model: configured.model ?? modelCode,
+                                effort: (configured.effortLevel ?? defaultEffort) as ReasoningEffort,
+                                ...(configured.parentSessionId
+                                    ? { parentSessionId: configured.parentSessionId }
+                                    : {}),
+                                ...(configured.forkedFromMessageId
+                                    ? { forkedFromMessageId: configured.forkedFromMessageId }
+                                    : {}),
+                                ...(configured.isSideChat ? { isSideChat: true } : {}),
+                                ...(configured.happySessionId && configured.dataEncryptionKey
+                                    ? {
+                                        existingSession: {
+                                            sessionId: configured.happySessionId,
+                                            dataEncryptionKey: decodeRootSessionKey(
+                                                configured.dataEncryptionKey,
+                                            ),
+                                        },
+                                    }
+                                    : {}),
+                            } satisfies CodexGatewayRootSessionConfig;
+                        },
                         onError: recordWorkerError,
                     });
                     coordinator = new CodexGatewayCoordinator({
@@ -325,6 +400,7 @@ export async function runCodexGatewayWorker(options: {
             void requestShutdown(input.force);
             return { stopping: true, force: input.force };
         },
+        openRoot: (input) => rootOpenLock.inLock(() => openHeadlessRoot(input)),
     };
 
     const stopSignal = () => { void requestShutdown(true); };
@@ -371,7 +447,7 @@ export async function runCodexGatewayWorker(options: {
         const coordinatorAtShutdown = coordinator as CodexGatewayCoordinator | null;
         await Promise.allSettled([
             proxy.close(),
-            coordinatorAtShutdown?.stop() ?? Promise.resolve(),
+            coordinatorAtShutdown?.stop({ force: true }) ?? Promise.resolve(),
             provider.stop(),
         ]);
         await syncDescriptorBindings().catch(() => undefined);
@@ -387,6 +463,7 @@ export async function runCodexGatewayWorker(options: {
             rm(paths.providerSocketPath, { force: true }),
             rm(paths.tuiSocketPath, { force: true }),
             rm(paths.controlSocketPath, { force: true }),
+            rm(paths.providerTokenPath, { force: true }),
         ]).catch(() => undefined);
     }
 
@@ -420,8 +497,93 @@ export async function runCodexGatewayWorker(options: {
         return deferred;
     }
 
+    async function openHeadlessRoot(
+        input: CodexGatewayOpenRootInput,
+    ): Promise<CodexGatewayOpenRootResult> {
+        if (gatewayOrigin !== 'app') {
+            throw new Error('Root control is only available for App-origin Gateways');
+        }
+        if (stopping) throw new Error('Codex Gateway is stopping');
+        if (resolve(input.cwd) !== resolve(gatewayCwd)) {
+            throw new Error('Root control working directory does not match the Gateway');
+        }
+        if (input.dataEncryptionKey) decodeRootSessionKey(input.dataEncryptionKey);
+        const activeCoordinator = requireCoordinator();
+        const existing = journal.bootstrap(input.operationId);
+        let threadId: string;
+        if (existing) {
+            await journal.recordBootstrap({
+                ...bootstrapRecordInput(input, existing.resolvedThreadId),
+                state: existing.state,
+                updatedAt: Date.now(),
+            });
+            threadId = existing.resolvedThreadId;
+        } else {
+            const policy = resolveCodexExecutionPolicy(input.permissionMode, false);
+            let releaseResumeLease = false;
+            if (input.action === 'resume') {
+                const requestedThreadId = input.threadId!;
+                const owner = await leases.owner(requestedThreadId);
+                await leases.acquire(requestedThreadId, options.gatewayId);
+                releaseResumeLease = owner !== options.gatewayId;
+            }
+            try {
+                const opened = input.action === 'start'
+                    ? await client.startThread({
+                        cwd: input.cwd,
+                        model: input.model ?? undefined,
+                        approvalPolicy: policy.approvalPolicy,
+                        sandbox: policy.sandbox,
+                    })
+                    : await client.resumeThread({
+                        threadId: input.threadId!,
+                        cwd: input.cwd,
+                        model: input.model ?? undefined,
+                        approvalPolicy: policy.approvalPolicy,
+                        sandbox: policy.sandbox,
+                        emitSnapshot: false,
+                    });
+                threadId = opened.threadId;
+            } catch (error) {
+                if (releaseResumeLease && !(error instanceof CodexRpcOutcomeUnknownError)) {
+                    await leases.release(input.threadId!, options.gatewayId).catch(() => false);
+                }
+                throw error;
+            }
+            const accepted = {
+                ...bootstrapRecordInput(input, threadId),
+                state: 'providerAccepted' as const,
+                updatedAt: Date.now(),
+            };
+            await journal.recordBootstrap(accepted);
+            rootSessionConfigs.set(threadId, rootConfigFromBootstrap(accepted));
+        }
+
+        const bound = await activeCoordinator.bindRoot(threadId);
+        await journal.recordBootstrap({
+            ...bootstrapRecordInput(input, threadId),
+            state: 'bound',
+            updatedAt: Date.now(),
+        });
+        await materializeDeferredRoots();
+        await syncDescriptorBindings();
+        const current = activeCoordinator.bindingSnapshot().find((binding) => (
+            binding.threadId === threadId && binding.role === 'current'
+        ));
+        const sessionId = current?.sessionId ?? bound.sessionId;
+        if (!sessionId) {
+            throw new Error('Happy relay is unavailable after the Codex thread was accepted');
+        }
+        return {
+            gatewayId: options.gatewayId,
+            threadId,
+            sessionId,
+            generation: current?.generation ?? bound.generation,
+        };
+    }
+
     async function materializeDeferredRoots(): Promise<void> {
-        if (!runtimeFactory || !coordinator || stopping) return;
+        if (!runtimeFactory || !coordinator) return;
         for (const [threadId, deferred] of deferredRoots) {
             if (deferred.runtime.isMaterialized) {
                 await deferred.runtime.replayDeferred();
@@ -499,13 +661,56 @@ export async function runCodexGatewayWorker(options: {
     }
 
     async function requestShutdown(force: boolean): Promise<void> {
-        if (shutdownPromise) return await shutdownPromise;
+        if (force) {
+            forceShutdownRequested = true;
+            wakeShutdownRetry?.();
+        }
+        if (shutdownPromise) {
+            wakeShutdownRetry?.();
+            return await shutdownPromise;
+        }
         stopping = true;
         shutdownPromise = (async () => {
             await updateGatewayLifecycle('stopping').catch(() => undefined);
-            if (!force) await interruptCurrentTurnAndWait().catch(recordWorkerError);
+            if (!forceShutdownRequested) {
+                await interruptCurrentTurnAndWait().catch(recordWorkerError);
+            }
+            while (coordinator) {
+                try {
+                    if (!forceShutdownRequested) await materializeDeferredRoots();
+                    await coordinator.stop({ force: forceShutdownRequested });
+                    return;
+                } catch (error) {
+                    recordWorkerError(error);
+                    if (forceShutdownRequested) {
+                        await coordinator.stop({ force: true });
+                        return;
+                    }
+                    await descriptorStore.update((descriptor) => ({
+                        ...descriptor,
+                        state: 'stopping',
+                        heartbeatAt: Date.now(),
+                    })).catch(() => undefined);
+                    await waitForShutdownRetry();
+                }
+            }
         })();
         await shutdownPromise;
+    }
+
+    async function waitForShutdownRetry(): Promise<void> {
+        await new Promise<void>((resolveRetry) => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (wakeShutdownRetry === finish) wakeShutdownRetry = null;
+                resolveRetry();
+            };
+            const timer = setTimeout(finish, GRACEFUL_STOP_RETRY_MS);
+            wakeShutdownRetry = finish;
+        });
     }
 
     async function interruptCurrentTurnAndWait(): Promise<void> {
@@ -519,7 +724,7 @@ export async function runCodexGatewayWorker(options: {
             propagateErrors: true,
         }).catch(() => undefined);
         const deadline = Date.now() + GRACEFUL_STOP_WAIT_MS;
-        while (Date.now() < deadline) {
+        while (!forceShutdownRequested && Date.now() < deadline) {
             const snapshot = await client.readThreadComplete({ threadId, emitSnapshot: false });
             if (!activeTurnId(snapshot.thread)) return;
             await new Promise((resolve) => setTimeout(resolve, GRACEFUL_STOP_POLL_MS));
@@ -587,6 +792,49 @@ function descriptorBinding(input: {
 
 function rootRequestKey(request: Pick<CodexGatewayRootRequest, 'connectionId' | 'requestId'>): string {
     return `${request.connectionId}:${String(request.requestId)}`;
+}
+
+function bootstrapRecordInput(
+    input: CodexGatewayOpenRootInput,
+    resolvedThreadId: string,
+): Omit<CodexGatewayBootstrap, 'state' | 'updatedAt'> {
+    return {
+        operationId: input.operationId,
+        action: input.action,
+        requestedThreadId: input.threadId,
+        resolvedThreadId,
+        cwd: input.cwd,
+        model: input.model,
+        permissionMode: input.permissionMode,
+        effortLevel: input.effortLevel,
+        parentSessionId: input.parentSessionId,
+        forkedFromMessageId: input.forkedFromMessageId,
+        isSideChat: input.isSideChat,
+        happySessionId: input.happySessionId,
+        dataEncryptionKey: input.dataEncryptionKey,
+    };
+}
+
+function rootConfigFromBootstrap(
+    bootstrap: CodexGatewayBootstrap,
+): RootSessionBootstrapConfig {
+    return {
+        cwd: bootstrap.cwd,
+        model: bootstrap.model,
+        permissionMode: bootstrap.permissionMode,
+        effortLevel: bootstrap.effortLevel,
+        parentSessionId: bootstrap.parentSessionId,
+        forkedFromMessageId: bootstrap.forkedFromMessageId,
+        isSideChat: bootstrap.isSideChat,
+        happySessionId: bootstrap.happySessionId,
+        dataEncryptionKey: bootstrap.dataEncryptionKey,
+    };
+}
+
+function decodeRootSessionKey(encoded: string): Uint8Array {
+    const decoded = decodeBase64(encoded);
+    if (decoded.length !== 32) throw new Error('Invalid Gateway session data key');
+    return decoded;
 }
 
 function activeTurnId(thread: Thread): string | null {

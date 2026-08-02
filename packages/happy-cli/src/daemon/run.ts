@@ -1,11 +1,11 @@
 import fs from 'fs/promises';
-import os from 'os';
 import * as tmp from 'tmp';
 import { createHmac } from 'node:crypto';
+import { classifySyncV4DiagnosticError } from '@slopus/happy-wire';
 
 import { ApiClient } from '@/api/api';
 import { TrackedSession, SessionEncryptionData } from './types';
-import { MachineMetadata, DaemonState, Metadata, type MachineSessionSnapshot } from '@/api/types';
+import { DaemonState, Metadata, type MachineSessionSnapshot } from '@/api/types';
 import { SpawnSessionOptions, SpawnSessionResult } from '@/modules/common/registerCommonHandlers';
 import { logger } from '@/ui/logger';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
@@ -24,9 +24,7 @@ import { join, resolve } from 'path';
 import { projectPath } from '@/projectPath';
 import { getTmuxUtilities, isTmuxAvailable, parseTmuxSessionIdentifier, formatTmuxSessionIdentifier } from '@/utils/tmux';
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
-import { detectCLIAvailability } from '@/utils/detectCLI';
 import { buildResumeLaunch } from '@/resume/handleResumeCommand';
-import { detectResumeSupport } from '@/resume/localHappyAgentAuth';
 import { encodeBase64, decodeBase64 } from '@/api/encryption';
 import {
   buildSessionChildEnvironment,
@@ -51,6 +49,12 @@ import {
   type CodexOpenThreadRequest,
   type CodexOpenThreadResult,
 } from '@/codex/codexThreadOpenCoordinator';
+import { initialMachineMetadata } from './initialMachineMetadata';
+import {
+  discoverLiveCodexGateways,
+  launchCodexGatewayHeadless,
+} from '@/codex/gateway/codexGatewayLauncher';
+import { callCodexGatewayControl } from '@/codex/gateway/codexGatewayControl';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
@@ -75,6 +79,14 @@ function stableCodexResumeTag(dataKey: Uint8Array): string {
   return `codex-resume-v1-${digest}`;
 }
 
+function resolveGatewayPermissionMode(
+  value: string | undefined,
+): 'default' | 'read-only' | 'safe-yolo' | 'yolo' {
+  if (value === undefined || value === 'default') return 'default';
+  if (value === 'read-only' || value === 'safe-yolo' || value === 'yolo') return value;
+  throw new Error(`Unsupported Codex permission mode: '${value}'`);
+}
+
 function isProcessAlive(pid: number | undefined): boolean {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -84,26 +96,6 @@ function isProcessAlive(pid: number | undefined): boolean {
     return false;
   }
 }
-
-// Prepare initial metadata
-// Suffix host with `-dev` for the HAPPY_VARIANT=dev variant so the dev daemon
-// is visually distinct from the stable one in the machine list (they otherwise
-// share the same hostname and look identical).
-const hostSuffix = process.env.HAPPY_VARIANT === 'dev' ? '-dev' : '';
-export const initialMachineMetadata: MachineMetadata = {
-  host: os.hostname() + hostSuffix,
-  platform: os.platform(),
-  happyCliVersion: packageJson.version,
-  homeDir: os.homedir(),
-  happyHomeDir: configuration.happyHomeDir,
-  happyLibDir: projectPath(),
-  cliAvailability: detectCLIAvailability(),
-  resumeSupport: {
-    ...detectResumeSupport(),
-    rpcAvailable: true,
-    codexThreadHistoryRpcAvailable: true,
-  },
-};
 
 export async function startDaemon(): Promise<void> {
   // The daemon may have been launched from a session process. Keep its normal
@@ -247,6 +239,41 @@ export async function startDaemon(): Promise<void> {
 
     // Session spawning awaiter system
     const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
+
+    const refreshLiveCodexGateways = async (): Promise<void> => {
+      const live = await discoverLiveCodexGateways();
+      const liveGatewayIds = new Set(live.map(({ descriptor }) => descriptor.gatewayId));
+      for (const [pid, tracked] of pidToTrackedSession) {
+        if (tracked.codexGatewayId && !liveGatewayIds.has(tracked.codexGatewayId)) {
+          pidToTrackedSession.delete(pid);
+        }
+      }
+      for (const { descriptor } of live) {
+        const sessionId = descriptor.current?.sessionId;
+        if (!sessionId) continue;
+        for (const [pid, tracked] of pidToTrackedSession) {
+          if (tracked.codexGatewayId === descriptor.gatewayId && pid !== descriptor.pid) {
+            pidToTrackedSession.delete(pid);
+          }
+        }
+        const persistedSession = sessionIdToFinishedSession.get(sessionId);
+        const tracked = pidToTrackedSession.get(descriptor.pid) ?? {
+          startedBy: descriptor.origin === 'app' ? 'daemon' : 'terminal',
+          pid: descriptor.pid,
+          ...(persistedSession?.happySessionMetadataFromLocalWebhook
+            ? { happySessionMetadataFromLocalWebhook: persistedSession.happySessionMetadataFromLocalWebhook }
+            : {}),
+          ...(persistedSession?.encryption ? { encryption: persistedSession.encryption } : {}),
+        };
+        tracked.startedBy = descriptor.origin === 'app' ? 'daemon' : 'terminal';
+        tracked.pid = descriptor.pid;
+        tracked.happySessionId = sessionId;
+        tracked.codexGatewayId = descriptor.gatewayId;
+        pidToTrackedSession.set(descriptor.pid, tracked);
+      }
+    };
+
+    await refreshLiveCodexGateways();
 
     // Helper functions
     const getCurrentChildren = () => Array.from(pidToTrackedSession.values());
@@ -441,6 +468,39 @@ export async function startDaemon(): Promise<void> {
             type: 'error',
             errorMessage
           };
+        }
+
+        if (spawnPlan.agent === 'codex') {
+          const permissionMode = resolveGatewayPermissionMode(options.permissionMode);
+          const launch = await launchCodexGatewayHeadless({
+            cwd: directory,
+            env: buildSessionChildEnvironment(ambientEnvironment, extraEnv),
+            action: options.resumeCodexThreadId ? 'resume' : 'start',
+            threadId: options.resumeCodexThreadId,
+            model: options.modelMode && options.modelMode !== 'default'
+              ? options.modelMode
+              : undefined,
+            permissionMode,
+            effortLevel: options.effortLevel,
+            parentSessionId: options.parentSessionId,
+            forkedFromMessageId: options.forkedFromMessageId,
+            isSideChat: options.isSideChat,
+          });
+          const existing = pidToTrackedSession.get(launch.pid);
+          const trackedSession: TrackedSession = existing ?? {
+            startedBy: 'daemon',
+            pid: launch.pid,
+          };
+          trackedSession.startedBy = 'daemon';
+          trackedSession.pid = launch.pid;
+          trackedSession.happySessionId = launch.sessionId;
+          trackedSession.codexGatewayId = launch.gatewayId;
+          trackedSession.directoryCreated = directoryCreated;
+          trackedSession.message = directoryCreated
+            ? `The path '${directory}' did not exist. We created a new folder and started a Codex Gateway there.`
+            : undefined;
+          pidToTrackedSession.set(launch.pid, trackedSession);
+          return { type: 'success', sessionId: launch.sessionId };
         }
 
         // Check if tmux is available and should be used
@@ -744,6 +804,54 @@ export async function startDaemon(): Promise<void> {
         const metadata = tracked.happySessionMetadataFromLocalWebhook!;
         const encryption = tracked.encryption!;
 
+        if (
+          metadata.flavor === 'codex'
+          && metadata.codexSyncVersion === 4
+          && metadata.codexThreadId
+        ) {
+          if (encryption.encryptionVariant !== 'dataKey') {
+            return {
+              type: 'error',
+              errorMessage: 'This Codex session does not have an independent Sync v4 data key.',
+            };
+          }
+          const liveGateway = (await discoverLiveCodexGateways()).find(({ descriptor }) => (
+            descriptor.current?.sessionId === happySessionId
+          ));
+          if (liveGateway) return { type: 'success', sessionId: happySessionId };
+          const permissionMode = resolveGatewayPermissionMode(
+            options?.permissionMode ?? metadata.permissionMode ?? undefined,
+          );
+          const requestedModel = options?.model ?? metadata.modelMode ?? undefined;
+          const launched = await launchCodexGatewayHeadless({
+            cwd: metadata.path,
+            env: buildSessionChildEnvironment(ambientEnvironment, {}),
+            action: 'resume',
+            threadId: metadata.codexThreadId,
+            model: requestedModel && requestedModel !== 'default'
+              ? requestedModel
+              : undefined,
+            permissionMode,
+            effortLevel: options?.effort ?? metadata.effortLevel ?? undefined,
+            existingSession: {
+              sessionId: happySessionId,
+              dataEncryptionKey: encodeBase64(encryption.encryptionKey),
+            },
+          });
+          if (launched.sessionId !== happySessionId) {
+            return {
+              type: 'error',
+              errorMessage: 'Codex Gateway resumed a different Happy session identity.',
+            };
+          }
+          tracked.startedBy = 'daemon';
+          tracked.pid = launched.pid;
+          tracked.codexGatewayId = launched.gatewayId;
+          pidToTrackedSession.set(launched.pid, tracked);
+          sessionIdToFinishedSession.delete(happySessionId);
+          return { type: 'success', sessionId: happySessionId };
+        }
+
         const launch = buildResumeLaunch(
           { id: happySessionId, active: true, metadata },
           {
@@ -780,15 +888,40 @@ export async function startDaemon(): Promise<void> {
     };
 
     // Stop a session by sessionId or PID fallback
-    const stopSession = (sessionId: string): boolean => {
+    const stopSession = async (sessionId: string): Promise<boolean> => {
       logger.debug(`[DAEMON RUN] Attempting to stop session ${sessionId}`);
+
+      const gateways = await discoverLiveCodexGateways();
+      const gateway = gateways.find(({ descriptor }) => (
+        descriptor.current?.sessionId === sessionId
+        || descriptor.draining.some((binding) => binding.sessionId === sessionId)
+      ));
+      if (gateway) {
+        try {
+          await callCodexGatewayControl({
+            descriptor: gateway.descriptor,
+            token: gateway.secret.controlToken,
+            path: '/stop',
+            body: { force: false },
+          });
+          return true;
+        } catch (error) {
+          logger.debug('[DAEMON RUN] Gateway stop request failed', {
+            errorKind: classifySyncV4DiagnosticError(error),
+          });
+          return false;
+        }
+      }
 
       // Try to find by sessionId first
       for (const [pid, session] of pidToTrackedSession.entries()) {
         if (session.happySessionId === sessionId ||
           (sessionId.startsWith('PID-') && pid === parseInt(sessionId.replace('PID-', '')))) {
 
-          if (session.startedBy === 'daemon' && session.childProcess) {
+          if (session.codexGatewayId) {
+            logger.debug('[DAEMON RUN] Refusing to signal a Gateway without authenticated control');
+            return false;
+          } else if (session.startedBy === 'daemon' && session.childProcess) {
             try {
               session.childProcess.kill('SIGTERM');
               logger.debug(`[DAEMON RUN] Sent SIGTERM to daemon-spawned session ${sessionId}`);
@@ -1186,6 +1319,11 @@ export async function startDaemon(): Promise<void> {
       }
 
       // Prune stale sessions
+      await refreshLiveCodexGateways().catch((error) => {
+        logger.debug('[DAEMON RUN] Gateway discovery refresh failed', {
+          errorKind: classifySyncV4DiagnosticError(error),
+        });
+      });
       for (const [pid, _] of pidToTrackedSession.entries()) {
         try {
           // Check if process is still alive (signal 0 doesn't kill, just checks)

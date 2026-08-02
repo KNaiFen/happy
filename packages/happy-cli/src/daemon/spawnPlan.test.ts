@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { buildDaemonSpawnPlan } from './spawnPlan';
 
 describe('buildDaemonSpawnPlan', () => {
-    it('turns an omitted agent into an explicit Codex child command', () => {
+    it('routes an omitted agent to the headless Codex Gateway without legacy argv', () => {
         expect(buildDaemonSpawnPlan({ directory: '/workspace' })).toEqual({
             agent: 'codex',
-            args: ['codex', '--happy-starting-mode', 'remote', '--started-by', 'daemon'],
+            args: [],
         });
     });
 
-    it('passes Codex model, effort, permission, and resume exactly once', () => {
+    it('never encodes Codex settings into the removed daemon child command', () => {
         expect(buildDaemonSpawnPlan({
             directory: '/workspace',
             agent: 'codex',
@@ -17,15 +17,7 @@ describe('buildDaemonSpawnPlan', () => {
             modelMode: 'gpt-5.6-sol',
             effortLevel: 'max',
             resumeCodexThreadId: 'thread-1',
-        }).args).toEqual([
-            'codex',
-            '--happy-starting-mode', 'remote',
-            '--started-by', 'daemon',
-            '--permission-mode', 'read-only',
-            '--model', 'gpt-5.6-sol',
-            '--effort', 'max',
-            '--resume', 'thread-1',
-        ]);
+        }).args).toEqual([]);
     });
 
     it('does not pass Codex modes to another retained agent', () => {

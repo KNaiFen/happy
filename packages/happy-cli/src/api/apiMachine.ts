@@ -91,7 +91,7 @@ type MachineRpcHandlers = {
     resumeSession?: (sessionId: string, options?: { model?: string; permissionMode?: string; effort?: string }) => Promise<SpawnSessionResult>;
     listCodexThreads: (request: CodexListThreadsRequest) => Promise<CodexListThreadsResult>;
     openCodexThread: (request: CodexOpenThreadRequest) => Promise<CodexOpenThreadResult>;
-    stopSession: (sessionId: string) => boolean;
+    stopSession: (sessionId: string) => Promise<boolean> | boolean;
     requestShutdown: () => void;
 }
 
@@ -283,14 +283,14 @@ export class ApiMachineClient {
         });
 
         // Register stop session handler
-        this.rpcHandlerManager.registerHandler('stop-session', (params: any) => {
+        this.rpcHandlerManager.registerHandler('stop-session', async (params: any) => {
             const { sessionId } = params || {};
 
             if (!sessionId) {
                 throw new Error('Session ID is required');
             }
 
-            const success = stopSession(sessionId);
+            const success = await stopSession(sessionId);
             if (!success) {
                 throw new Error('Session not found or failed to stop');
             }

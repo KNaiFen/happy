@@ -453,7 +453,7 @@ export class CodexAppServerClient {
     private readonly settledServerRequestIds = new Set<number>();
     private retiredServerRequestId = -1;
 
-    // Handlers set by the consumer (runCodex.ts)
+    // Handlers are installed by the Gateway coordinator or a focused protocol consumer.
     private eventHandler: ((msg: EventMsg) => void) | null = null;
     private approvalHandler: ApprovalHandler | null = null;
     private stableNotificationHandler: ((notification: ServerNotification) => void) | null = null;

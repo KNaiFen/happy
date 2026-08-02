@@ -18,18 +18,17 @@ function resolveDaemonSpawnAgent(agent: SpawnSessionOptions['agent']): DaemonSpa
 
 export function buildDaemonSpawnPlan(options: SpawnSessionOptions): DaemonSpawnPlan {
     const agent = resolveDaemonSpawnAgent(options.agent);
+    if (agent === 'codex') {
+        // Codex is bootstrapped by the headless Gateway manager in daemon/run.
+        // Keeping this plan empty makes it impossible to regress to the removed
+        // `happy codex --started-by daemon` adapter by accident.
+        return { agent, args: [] };
+    }
     const args = [
         agent,
         '--happy-starting-mode', 'remote',
         '--started-by', 'daemon',
     ];
-
-    if (agent === 'codex') {
-        if (options.permissionMode) args.push('--permission-mode', options.permissionMode);
-        if (options.modelMode && options.modelMode !== 'default') args.push('--model', options.modelMode);
-        if (options.effortLevel) args.push('--effort', options.effortLevel);
-        if (options.resumeCodexThreadId) args.push('--resume', options.resumeCodexThreadId);
-    }
 
     return { agent, args };
 }

@@ -60,6 +60,25 @@ const handoffSchema = z.object({
 }).strict();
 export type CodexGatewayCommandHandoff = z.infer<typeof handoffSchema>;
 
+const bootstrapSchema = z.object({
+    operationId: z.string().uuid(),
+    action: z.enum(['start', 'resume']),
+    requestedThreadId: idSchema.nullable(),
+    resolvedThreadId: idSchema,
+    cwd: z.string().min(1).max(8_192),
+    model: z.string().min(1).max(512).nullable(),
+    permissionMode: z.enum(['default', 'read-only', 'safe-yolo', 'yolo']),
+    effortLevel: z.string().min(1).max(128).nullable(),
+    parentSessionId: idSchema.nullable(),
+    forkedFromMessageId: idSchema.nullable(),
+    isSideChat: z.boolean(),
+    happySessionId: idSchema.nullable(),
+    dataEncryptionKey: z.string().min(1).max(128).nullable(),
+    state: z.enum(['providerAccepted', 'bound']),
+    updatedAt: timestampSchema,
+}).strict();
+export type CodexGatewayBootstrap = z.infer<typeof bootstrapSchema>;
+
 const recordSchema = z.discriminatedUnion('kind', [
     z.object({
         version: z.literal(JOURNAL_VERSION),
@@ -81,12 +100,18 @@ const recordSchema = z.discriminatedUnion('kind', [
         kind: z.literal('handoffCompleted'),
         commandId: idSchema,
     }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
+        kind: z.literal('bootstrap'),
+        bootstrap: bootstrapSchema,
+    }).strict(),
 ]);
 type JournalRecord =
     | { version: 1; kind: 'deferred'; entry: CodexGatewayDeferredEntry }
     | { version: 1; kind: 'deferredCompleted'; entryId: string }
     | { version: 1; kind: 'handoff'; handoff: CodexGatewayCommandHandoff }
-    | { version: 1; kind: 'handoffCompleted'; commandId: string };
+    | { version: 1; kind: 'handoffCompleted'; commandId: string }
+    | { version: 1; kind: 'bootstrap'; bootstrap: CodexGatewayBootstrap };
 
 export interface CodexGatewayJournalOptions {
     path: string;
@@ -115,6 +140,7 @@ export class CodexGatewayJournal {
     private readonly writeLock = new AsyncLock();
     private readonly deferred = new Map<string, CodexGatewayDeferredEntry>();
     private readonly handoffs = new Map<string, CodexGatewayCommandHandoff>();
+    private readonly bootstraps = new Map<string, CodexGatewayBootstrap>();
     private handle: Awaited<ReturnType<typeof open>> | null = null;
     private lockPath: string;
     private lockOwned = false;
@@ -141,6 +167,14 @@ export class CodexGatewayJournal {
 
     handoff(commandId: string): CodexGatewayCommandHandoff | null {
         return this.handoffs.get(commandId) ?? null;
+    }
+
+    bootstrap(operationId: string): CodexGatewayBootstrap | null {
+        return this.bootstraps.get(operationId) ?? null;
+    }
+
+    pendingBootstraps(): CodexGatewayBootstrap[] {
+        return [...this.bootstraps.values()];
     }
 
     async enqueueNotification(
@@ -213,6 +247,32 @@ export class CodexGatewayJournal {
         await this.append({ version: JOURNAL_VERSION, kind: 'handoffCompleted', commandId });
     }
 
+    async recordBootstrap(bootstrap: CodexGatewayBootstrap): Promise<void> {
+        this.assertOpen();
+        const parsed = bootstrapSchema.parse(bootstrap);
+        const current = this.bootstraps.get(parsed.operationId);
+        if (current) {
+            if (
+                current.action !== parsed.action
+                || current.requestedThreadId !== parsed.requestedThreadId
+                || current.resolvedThreadId !== parsed.resolvedThreadId
+                || current.cwd !== parsed.cwd
+                || current.model !== parsed.model
+                || current.permissionMode !== parsed.permissionMode
+                || current.effortLevel !== parsed.effortLevel
+                || current.parentSessionId !== parsed.parentSessionId
+                || current.forkedFromMessageId !== parsed.forkedFromMessageId
+                || current.isSideChat !== parsed.isSideChat
+                || current.happySessionId !== parsed.happySessionId
+                || current.dataEncryptionKey !== parsed.dataEncryptionKey
+            ) {
+                throw new Error('Codex Gateway bootstrap identity changed');
+            }
+            if (current.state === 'bound' && parsed.state === 'providerAccepted') return;
+        }
+        await this.append({ version: JOURNAL_VERSION, kind: 'bootstrap', bootstrap: parsed });
+    }
+
     async compact(): Promise<void> {
         this.assertOpen();
         await this.writeLock.inLock(async () => {
@@ -226,6 +286,11 @@ export class CodexGatewayJournal {
                     version: JOURNAL_VERSION,
                     kind: 'handoff',
                     handoff,
+                })),
+                ...[...this.bootstraps.values()].map((bootstrap): JournalRecord => ({
+                    version: JOURNAL_VERSION,
+                    kind: 'bootstrap',
+                    bootstrap,
                 })),
             ];
             await this.replaceRecords(records);
@@ -333,6 +398,11 @@ export class CodexGatewayJournal {
                         kind: 'handoff',
                         handoff,
                     })),
+                    ...[...this.bootstraps.values()].map((bootstrap): JournalRecord => ({
+                        version: JOURNAL_VERSION,
+                        kind: 'bootstrap',
+                        bootstrap,
+                    })),
                 ]);
             }
         });
@@ -374,6 +444,9 @@ export class CodexGatewayJournal {
                 return;
             case 'handoffCompleted':
                 this.handoffs.delete(record.commandId);
+                return;
+            case 'bootstrap':
+                this.bootstraps.set(record.bootstrap.operationId, record.bootstrap);
         }
     }
 

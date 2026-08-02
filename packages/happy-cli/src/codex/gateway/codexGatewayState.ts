@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createServer as createTcpServer } from 'node:net';
 import { z } from 'zod';
 import { configuration } from '@/configuration';
 
@@ -44,6 +45,8 @@ export const CodexGatewayDescriptorSchema = z.object({
     terminalDetachedAt: timestampSchema.nullable(),
     providerSocketPath: pathSchema.nullable(),
     tuiSocketPath: pathSchema.nullable(),
+    providerPort: z.number().int().min(1).max(65_535).nullable().default(null),
+    tuiPort: z.number().int().min(1).max(65_535).nullable().default(null),
     controlSocketPath: pathSchema.nullable(),
     controlPort: z.number().int().min(1).max(65_535).nullable(),
     current: CodexGatewayBindingSchema.nullable(),
@@ -57,6 +60,7 @@ export const CodexGatewaySecretSchema = z.object({
     gatewayId: idSchema,
     controlToken: z.string().min(32).max(512),
     sessionKeySeed: z.string().min(32).max(512),
+    providerToken: z.string().min(32).max(512).nullable().default(null),
 }).strict();
 export type CodexGatewaySecret = z.infer<typeof CodexGatewaySecretSchema>;
 
@@ -71,6 +75,7 @@ export interface CodexGatewayPaths {
     providerSocketPath: string;
     tuiSocketPath: string;
     controlSocketPath: string;
+    providerTokenPath: string;
 }
 
 export function codexGatewayStateRoot(happyHomeDir = configuration.happyHomeDir): string {
@@ -107,6 +112,7 @@ export function codexGatewayPaths(
         providerSocketPath: join(runtimeDir, 'provider.sock'),
         tuiSocketPath: join(runtimeDir, 'tui.sock'),
         controlSocketPath: join(runtimeDir, 'control.sock'),
+        providerTokenPath: join(runtimeDir, 'provider.token'),
     };
 }
 
@@ -128,11 +134,15 @@ export async function createCodexGatewayFiles(options: {
     await ensurePrivateDirectory(paths.gatewayDir);
     await ensurePrivateDirectory(paths.runtimeDir);
     const now = Math.max(0, Math.trunc(options.now ?? Date.now()));
+    const [providerPort, tuiPort] = process.platform === 'win32'
+        ? await Promise.all([reserveLoopbackPort(), reserveLoopbackPort()])
+        : [null, null];
     const secret: CodexGatewaySecret = {
         version: CODEX_GATEWAY_STATE_VERSION,
         gatewayId,
         controlToken: randomBytes(32).toString('base64url'),
         sessionKeySeed: randomBytes(32).toString('base64url'),
+        providerToken: randomBytes(32).toString('base64url'),
     };
     const descriptor: CodexGatewayDescriptor = {
         version: CODEX_GATEWAY_STATE_VERSION,
@@ -148,6 +158,8 @@ export async function createCodexGatewayFiles(options: {
         terminalDetachedAt: null,
         providerSocketPath: process.platform === 'win32' ? null : paths.providerSocketPath,
         tuiSocketPath: process.platform === 'win32' ? null : paths.tuiSocketPath,
+        providerPort,
+        tuiPort,
         controlSocketPath: process.platform === 'win32' ? null : paths.controlSocketPath,
         controlPort: null,
         current: null,
@@ -155,6 +167,9 @@ export async function createCodexGatewayFiles(options: {
         lastError: null,
     };
     await writePrivateJson(paths.secretPath, CodexGatewaySecretSchema.parse(secret));
+    if (process.platform === 'win32') {
+        await writePrivateText(paths.providerTokenPath, `${secret.providerToken}\n`);
+    }
     await writeCodexGatewayDescriptor(paths, descriptor);
     return { descriptor, secret, paths };
 }
@@ -219,11 +234,15 @@ async function ensurePrivateDirectory(path: string): Promise<void> {
 }
 
 async function writePrivateJson(path: string, value: unknown): Promise<void> {
+    await writePrivateText(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function writePrivateText(path: string, value: string): Promise<void> {
     await ensurePrivateDirectory(dirname(path));
     const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
     const handle = await open(temporary, 'wx', 0o600);
     try {
-        await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+        await handle.writeFile(value, 'utf8');
         await handle.sync();
     } finally {
         await handle.close();
@@ -236,6 +255,24 @@ async function writePrivateJson(path: string, value: unknown): Promise<void> {
         await rm(temporary, { force: true }).catch(() => undefined);
         throw error;
     }
+}
+
+async function reserveLoopbackPort(): Promise<number> {
+    const server = createTcpServer();
+    await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+            server.off('error', reject);
+            resolve();
+        });
+    });
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+    });
+    if (port < 1 || port > 65_535) throw new Error('Failed to reserve a Gateway loopback port');
+    return port;
 }
 
 async function syncDirectory(path: string): Promise<void> {

@@ -259,7 +259,30 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.release).toHaveBeenCalledWith('thread-b', 'gateway-1');
     });
 
-    it('releases every lease on stop even when a runtime cannot flush or close', async () => {
+    it('keeps roots and leases while graceful stop cannot persist inactive state', async () => {
+        const harness = createHarness({ 'thread-a': thread('thread-a', 'idle') });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        const runtime = harness.runtimes.get('thread-a')!;
+        const updateBinding = runtime.updateBinding.bind(runtime);
+        runtime.updateBinding = vi.fn(async (binding) => {
+            if (binding.role === 'inactive') throw new Error('relay offline');
+            await updateBinding(binding);
+        });
+
+        await expect(harness.coordinator.stop()).rejects.toThrow('relay offline');
+
+        expect(runtime.close).not.toHaveBeenCalled();
+        expect(harness.leases.release).not.toHaveBeenCalled();
+        expect(harness.coordinator.currentThreadId).toBe('thread-a');
+
+        runtime.updateBinding = updateBinding;
+        await harness.coordinator.stop();
+        expect(runtime.close).toHaveBeenCalledOnce();
+        expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
+    });
+
+    it('releases every lease on force stop even when a runtime cannot close', async () => {
         const errors: unknown[] = [];
         const harness = createHarness(
             { 'thread-a': thread('thread-a', 'idle') },
@@ -268,13 +291,12 @@ describe('Codex Gateway coordinator', () => {
         await harness.coordinator.connect();
         await harness.coordinator.bindRoot('thread-a');
         const runtime = harness.runtimes.get('thread-a')!;
-        runtime.flush.mockRejectedValueOnce(new Error('flush failed'));
         runtime.close.mockRejectedValueOnce(new Error('close failed'));
 
-        await harness.coordinator.stop();
+        await harness.coordinator.stop({ force: true });
 
         expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
-        expect(errors).toHaveLength(2);
+        expect(errors).toHaveLength(1);
     });
 
     it('accepts child ownership registered while the runtime factory is still resolving', async () => {

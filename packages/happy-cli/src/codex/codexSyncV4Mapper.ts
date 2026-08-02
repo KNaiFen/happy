@@ -35,7 +35,7 @@ import type {
     UserInput,
 } from './protocol';
 import { redactCodexProtocolMethod } from './codexProtocolMethod';
-import { stripHappySystemBlocks } from './codexPrompt';
+import { stripLegacyHappySystemBlocks } from './codexVisibleText';
 
 type SyncPublisher = Pick<
     SyncV4Client,
@@ -1904,7 +1904,7 @@ function userInputPart(input: UserInput): {
     switch (input.type) {
         case 'text': {
             const visibleText = stripLeadingTaskNotificationWrappers(
-                stripHappySystemBlocks(input.text),
+                stripLegacyHappySystemBlocks(input.text),
             );
             return { content: visibleText, contentType: 'text' };
         }

@@ -28,4 +28,6 @@ export interface TrackedSession {
   message?: string;
   /** tmux session identifier (format: session:window) */
   tmuxSessionId?: string;
+  /** Persistent native Codex worker identity, when this entry came from Gateway discovery. */
+  codexGatewayId?: string;
 }

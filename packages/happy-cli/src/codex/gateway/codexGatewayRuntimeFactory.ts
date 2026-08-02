@@ -9,6 +9,7 @@ import type {
     CodexModelCapability,
     PermissionMode,
     Session as ApiSession,
+    MachineSessionSnapshot,
 } from '@/api/types';
 import { encodeBase64 } from '@/api/encryption';
 import { notifyDaemonSessionStarted } from '@/daemon/controlClient';
@@ -72,6 +73,7 @@ export interface CodexGatewayRuntimeFactoryApi {
     unarchiveSession(sessionId: string, timeoutMs?: number): Promise<boolean>;
     sessionSyncClient(session: ApiSession): ApiSessionClientContract;
     archiveSessionV4(sessionId: string): Promise<boolean>;
+    getMachineSessionSnapshot?(options: Parameters<ApiClient['getMachineSessionSnapshot']>[0]): Promise<MachineSessionSnapshot | null>;
 }
 
 export interface CodexGatewayRootHandoffHooks {
@@ -89,6 +91,20 @@ export interface CodexGatewayRootHandoffHooks {
         outcome: CodexV4CommandOutcome;
     }): Promise<void>;
     reconcile(command: CodexCommandEntityV4): Promise<CodexV4CommandReconciliation | null>;
+}
+
+export interface CodexGatewayRootSessionConfig {
+    cwd: string;
+    permissionMode: PermissionMode;
+    model: string;
+    effort: ReasoningEffort;
+    parentSessionId?: string;
+    forkedFromMessageId?: string;
+    isSideChat?: boolean;
+    existingSession?: {
+        sessionId: string;
+        dataEncryptionKey: Uint8Array;
+    };
 }
 
 export interface CodexGatewayRuntimeFactoryOptions {
@@ -120,6 +136,8 @@ export interface CodexGatewayRuntimeFactoryOptions {
     onSessionArchived?: (sessionId: string) => void;
     reportSessionStarted?: typeof notifyDaemonSessionStarted;
     relayRequestTimeoutMs?: number;
+    existingSessionLookupTimeoutMs?: number;
+    resolveRootSessionConfig?(threadId: string): CodexGatewayRootSessionConfig | null;
 }
 
 /** Creates fully materialized Sync v4 runtimes. Relay-offline roots stay in the worker journal. */
@@ -129,20 +147,24 @@ export class CodexGatewayRuntimeFactory {
     async tryCreate(
         factoryOptions: CodexGatewayRootRuntimeFactoryOptions,
     ): Promise<CodexGatewayRootRuntime | null> {
-        const identity = await deriveCodexGatewayRootSessionIdentity({
-            gatewayId: this.options.gatewayId,
-            sessionKeySeed: this.options.sessionKeySeed,
-            threadId: factoryOptions.threadId,
-        });
+        const rootConfig = this.options.resolveRootSessionConfig?.(factoryOptions.threadId) ?? {
+            cwd: this.options.cwd,
+            permissionMode: this.options.defaultPermissionMode,
+            model: this.options.defaultModel,
+            effort: this.options.defaultEffort,
+        };
         const created = createSessionMetadata({
             flavor: 'codex',
             machineId: this.options.machineId,
-            cwd: this.options.cwd,
+            cwd: rootConfig.cwd,
             startedBy: this.options.origin === 'app' ? 'daemon' : 'terminal',
             sandbox: this.options.sandboxConfig,
             dangerouslySkipPermissions: isDangerousPermissionMode(
-                this.options.defaultPermissionMode,
+                rootConfig.permissionMode,
             ),
+            parentSessionId: rootConfig.parentSessionId,
+            forkedFromMessageId: rootConfig.forkedFromMessageId,
+            isSideChat: rootConfig.isSideChat,
         });
         const terminal = this.options.terminalState();
         created.metadata.codexThreadId = factoryOptions.threadId;
@@ -150,9 +172,9 @@ export class CodexGatewayRuntimeFactory {
         created.metadata.codexCapabilities = {
             queueSteering: this.options.client.supportsTurnSteering(),
         };
-        created.metadata.permissionMode = this.options.defaultPermissionMode;
-        created.metadata.modelMode = this.options.defaultModel;
-        created.metadata.effortLevel = this.options.defaultEffort;
+        created.metadata.permissionMode = rootConfig.permissionMode;
+        created.metadata.modelMode = rootConfig.model;
+        created.metadata.effortLevel = rootConfig.effort;
         created.metadata.codexGatewayBinding = {
             gatewayId: this.options.gatewayId,
             generation: factoryOptions.generation,
@@ -172,13 +194,46 @@ export class CodexGatewayRuntimeFactory {
             ]));
         }
 
-        const session = await this.options.api.getOrCreateSession({
-            tag: identity.tag,
-            metadata: created.metadata,
-            state: created.state,
-            dataEncryptionKey: identity.sessionKey,
-            timeoutMs: this.options.relayRequestTimeoutMs,
-        });
+        let session: ApiSession | null;
+        if (rootConfig.existingSession) {
+            if (!this.options.api.getMachineSessionSnapshot) {
+                throw new Error('Existing Gateway session loading is unavailable');
+            }
+            const snapshot = await this.options.api.getMachineSessionSnapshot({
+                sessionId: rootConfig.existingSession.sessionId,
+                machineId: this.options.machineId,
+                encryptionKey: rootConfig.existingSession.dataEncryptionKey,
+                encryptionVariant: 'dataKey',
+                timeoutMs: this.options.existingSessionLookupTimeoutMs,
+            });
+            if (snapshot && (
+                snapshot.metadata.flavor !== 'codex'
+                || snapshot.metadata.codexSyncVersion !== 4
+                || snapshot.metadata.codexThreadId !== factoryOptions.threadId
+            )) {
+                throw new Error('Existing Happy session does not match the Codex Gateway thread');
+            }
+            session = snapshot ? {
+                ...snapshot,
+                metadata: {
+                    ...snapshot.metadata,
+                    ...created.metadata,
+                },
+            } : null;
+        } else {
+            const identity = await deriveCodexGatewayRootSessionIdentity({
+                gatewayId: this.options.gatewayId,
+                sessionKeySeed: this.options.sessionKeySeed,
+                threadId: factoryOptions.threadId,
+            });
+            session = await this.options.api.getOrCreateSession({
+                tag: identity.tag,
+                metadata: created.metadata,
+                state: created.state,
+                dataEncryptionKey: identity.sessionKey,
+                timeoutMs: this.options.relayRequestTimeoutMs,
+            });
+        }
         if (!session) return null;
         if (!await this.options.api.unarchiveSession(
             session.id,
@@ -199,6 +254,7 @@ export class CodexGatewayRuntimeFactory {
                 closeSession: true,
                 router: () => router,
                 assertCurrentGeneration: factoryOptions.assertCurrentGeneration,
+                defaultCwd: rootConfig.cwd,
             });
             router = new CodexV4ThreadRouter({
                 rootBinding,
@@ -306,6 +362,7 @@ export class CodexGatewayRuntimeFactory {
                 closeSession: true,
                 router: () => null,
                 assertCurrentGeneration: () => undefined,
+                defaultCwd: thread.cwd || this.options.cwd,
             });
         } catch (error) {
             await target.close().catch(() => undefined);
@@ -321,6 +378,7 @@ export class CodexGatewayRuntimeFactory {
         closeSession: boolean;
         router(): CodexV4ThreadRouter | null;
         assertCurrentGeneration(bindingGeneration: number | undefined): void;
+        defaultCwd: string;
     }): Promise<CodexV4SessionBinding> {
         let mapper: CodexSyncV4Mapper | null = null;
         let commandProcessor: CodexV4CommandProcessor | null = null;
@@ -337,7 +395,7 @@ export class CodexGatewayRuntimeFactory {
             const commandExecutor = new CodexV4CommandExecutor({
                 client: this.options.client,
                 requestBroker,
-                defaultCwd: this.options.cwd,
+                defaultCwd: options.defaultCwd,
                 prepareAttachments: async (attachments) => {
                     const downloaded: Array<{ data: Uint8Array; mimeType: string; name: string }> = [];
                     for (const attachment of attachments) {

@@ -34,7 +34,7 @@ vi.mock("@/ui/logger", () => ({
 vi.mock("@/api/api", () => ({
     ApiClient: { create: mocks.apiCreate },
 }));
-vi.mock("@/daemon/run", () => ({
+vi.mock("@/daemon/initialMachineMetadata", () => ({
     initialMachineMetadata: {
         host: "test-host",
         platform: "darwin",

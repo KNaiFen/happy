@@ -82,7 +82,7 @@ vi.mock('@/api/api', () => ({
   },
 }));
 
-vi.mock('@/daemon/run', () => ({
+vi.mock('@/daemon/initialMachineMetadata', () => ({
   initialMachineMetadata: { host: 'host', platform: 'darwin', happyCliVersion: 'test', homeDir: '/tmp', happyHomeDir: '/tmp/.happy', happyLibDir: '/tmp/happy' },
 }));
 

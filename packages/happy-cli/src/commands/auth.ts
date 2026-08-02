@@ -8,7 +8,7 @@ import { stopDaemon, checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/c
 import { logger } from '@/ui/logger';
 import os from 'node:os';
 import { ApiClient } from '@/api/api';
-import { initialMachineMetadata } from '@/daemon/run';
+import { initialMachineMetadata } from '@/daemon/initialMachineMetadata';
 
 export async function handleAuthCommand(args: string[]): Promise<void> {
   const subcommand = args[0];

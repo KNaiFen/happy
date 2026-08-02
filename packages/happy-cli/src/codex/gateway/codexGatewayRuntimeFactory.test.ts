@@ -53,7 +53,7 @@ function thread(id = 'thread-a'): Thread {
     } as unknown as Thread;
 }
 
-function createHarness(options: { relayAvailable?: boolean } = {}) {
+function createHarness(options: { relayAvailable?: boolean; existingSession?: boolean } = {}) {
     const routes = new Map<string, SyncV4CodexThreadRoute>();
     const commandStatuses = new Map<string, SyncV4CommandJournalStatus>();
     let entityHandler: ((event: SyncV4AppliedEntity) => Promise<void>) | null = null;
@@ -122,8 +122,23 @@ function createHarness(options: { relayAvailable?: boolean } = {}) {
             return options.relayAvailable === false ? null : apiSession(createOptions.metadata);
         }),
         unarchiveSession: vi.fn(async () => true),
-        sessionSyncClient: vi.fn(() => session),
+        sessionSyncClient: vi.fn((apiSession) => {
+            sessionMetadata = apiSession.metadata;
+            return session;
+        }),
         archiveSessionV4: vi.fn(async () => true),
+        getMachineSessionSnapshot: vi.fn(async () => options.relayAvailable === false ? null : ({
+            ...apiSession({
+                path: '/workspace',
+                flavor: 'codex',
+                codexSyncVersion: 4,
+                codexThreadId: 'thread-a',
+            } as Metadata),
+            active: false,
+            originMachineId: 'machine-a',
+            machineDeletedAt: null,
+            hasIndependentDataKey: true,
+        })),
     };
     const providerThread = thread();
     const client = {
@@ -179,6 +194,16 @@ function createHarness(options: { relayAvailable?: boolean } = {}) {
         terminalState: () => ({ state: 'attached', detachedAt: null }),
         rootHandoff,
         reportSessionStarted,
+        resolveRootSessionConfig: options.existingSession ? () => ({
+            cwd: '/workspace',
+            permissionMode: 'safe-yolo',
+            model: 'gpt-resumed',
+            effort: 'max',
+            existingSession: {
+                sessionId: 'session-a',
+                dataEncryptionKey: new Uint8Array(32).fill(9),
+            },
+        }) : undefined,
         now: () => 200,
     });
     return {
@@ -227,6 +252,33 @@ describe('CodexGatewayRuntimeFactory', () => {
                 codexThreadId: 'thread-a',
             }),
         });
+    });
+
+    it('loads and unarchives a verified existing Sync v4 session without creating a duplicate tag', async () => {
+        const harness = createHarness({ existingSession: true });
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 4,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+
+        expect(runtime?.sessionId).toBe('session-a');
+        expect(harness.api.getMachineSessionSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 'session-a',
+            machineId: 'machine-a',
+            encryptionVariant: 'dataKey',
+            timeoutMs: undefined,
+        }));
+        expect(harness.api.getOrCreateSession).not.toHaveBeenCalled();
+        expect(harness.api.unarchiveSession).toHaveBeenCalledWith('session-a', undefined);
+        expect(harness.sessionMetadata()).toMatchObject({
+            permissionMode: 'safe-yolo',
+            modelMode: 'gpt-resumed',
+            effortLevel: 'max',
+        });
+        await runtime?.close();
     });
 
     it('runs raw App text through the current root and coordinates root switches outside the source router', async () => {

@@ -25,7 +25,21 @@ describe('Codex Gateway launcher', () => {
     });
 
     it('refuses to launch without a private TUI endpoint', () => {
-        expect(() => buildCodexRemoteArgs({ tuiSocketPath: null } as CodexGatewayDescriptor, []))
+        expect(() => buildCodexRemoteArgs({ tuiSocketPath: null, tuiPort: null } as CodexGatewayDescriptor, []))
             .toThrow('TUI endpoint is unavailable');
+    });
+
+    it('uses an authenticated loopback remote endpoint on Windows descriptors', () => {
+        expect(buildCodexRemoteArgs({
+            tuiSocketPath: null,
+            tuiPort: 45123,
+        } as CodexGatewayDescriptor, ['resume', 'thread-a'])).toEqual([
+            '--remote',
+            'ws://127.0.0.1:45123',
+            '--remote-auth-token-env',
+            'HAPPY_CODEX_GATEWAY_REMOTE_TOKEN',
+            'resume',
+            'thread-a',
+        ]);
     });
 });

@@ -75,6 +75,44 @@ describe('CodexGatewayJournal', () => {
         await final.close();
     });
 
+    it('persists one idempotent App bootstrap across worker recovery', async () => {
+        const path = await journalPath();
+        const journal = await CodexGatewayJournal.open({ path });
+        const accepted = {
+            operationId: '421fbef2-aa4a-4a1a-a7f7-b7f640f06f42',
+            action: 'start' as const,
+            requestedThreadId: null,
+            resolvedThreadId: 'thread-a',
+            cwd: '/workspace',
+            model: 'gpt-5.6-sol',
+            permissionMode: 'safe-yolo' as const,
+            effortLevel: 'max',
+            parentSessionId: null,
+            forkedFromMessageId: null,
+            isSideChat: false,
+            happySessionId: null,
+            dataEncryptionKey: null,
+            state: 'providerAccepted' as const,
+            updatedAt: 100,
+        };
+        await journal.recordBootstrap(accepted);
+        await journal.recordBootstrap({ ...accepted, state: 'bound', updatedAt: 200 });
+        await journal.recordBootstrap({ ...accepted, state: 'providerAccepted', updatedAt: 300 });
+        await journal.close();
+
+        const recovered = await CodexGatewayJournal.open({ path });
+        expect(recovered.bootstrap(accepted.operationId)).toMatchObject({
+            resolvedThreadId: 'thread-a',
+            state: 'bound',
+            effortLevel: 'max',
+        });
+        await expect(recovered.recordBootstrap({
+            ...accepted,
+            resolvedThreadId: 'thread-b',
+        })).rejects.toThrow('bootstrap identity changed');
+        await recovered.close();
+    });
+
     it('repairs a truncated tail without discarding the prior fsynced record', async () => {
         const path = await journalPath();
         const journal = await CodexGatewayJournal.open({ path });

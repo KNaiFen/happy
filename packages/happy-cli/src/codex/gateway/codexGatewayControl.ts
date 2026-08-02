@@ -16,12 +16,62 @@ const TerminalAttachedSchema = z.object({
     connectionToken: z.string().min(32).max(512),
     normalExitNonce: z.string().min(32).max(512),
 }).strict();
+const OpenRootSchema = z.object({
+    operationId: z.string().uuid(),
+    action: z.enum(['start', 'resume']),
+    threadId: z.string().min(1).max(512).nullable().default(null),
+    cwd: z.string().min(1).max(8_192),
+    model: z.string().min(1).max(512).nullable().default(null),
+    permissionMode: z.enum([
+        'default',
+        'read-only',
+        'safe-yolo',
+        'yolo',
+    ]).default('default'),
+    effortLevel: z.string().min(1).max(128).nullable().default(null),
+    parentSessionId: z.string().min(1).max(512).nullable().default(null),
+    forkedFromMessageId: z.string().min(1).max(512).nullable().default(null),
+    isSideChat: z.boolean().default(false),
+    happySessionId: z.string().min(1).max(512).nullable().default(null),
+    dataEncryptionKey: z.string().min(1).max(128).nullable().default(null),
+}).strict().superRefine((input, context) => {
+    if (input.action === 'resume' && !input.threadId) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['threadId'],
+            message: 'threadId is required for resume',
+        });
+    }
+    if (input.action === 'start' && input.threadId) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['threadId'],
+            message: 'threadId is not allowed for start',
+        });
+    }
+    if (Boolean(input.happySessionId) !== Boolean(input.dataEncryptionKey)) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['happySessionId'],
+            message: 'happySessionId and dataEncryptionKey must be supplied together',
+        });
+    }
+});
+export type CodexGatewayOpenRootInput = z.infer<typeof OpenRootSchema>;
+
+export interface CodexGatewayOpenRootResult {
+    gatewayId: string;
+    threadId: string;
+    sessionId: string;
+    generation: number;
+}
 
 export interface CodexGatewayControlHandlers {
     status(): Promise<unknown> | unknown;
     normalExit(input: z.infer<typeof NormalExitSchema>): Promise<unknown> | unknown;
     stop(input: z.infer<typeof StopSchema>): Promise<unknown> | unknown;
     terminalAttached(input: z.infer<typeof TerminalAttachedSchema>): Promise<unknown> | unknown;
+    openRoot(input: CodexGatewayOpenRootInput): Promise<CodexGatewayOpenRootResult>;
 }
 
 export async function startCodexGatewayControlServer(options: {
@@ -61,6 +111,9 @@ export async function startCodexGatewayControlServer(options: {
                 case '/terminal-attached':
                     result = await options.handlers.terminalAttached(TerminalAttachedSchema.parse(body));
                     break;
+                case '/root/open':
+                    result = await options.handlers.openRoot(OpenRootSchema.parse(body));
+                    break;
                 default:
                     sendJson(response, 404, { error: 'notFound' });
                     return;
@@ -90,10 +143,13 @@ export async function startCodexGatewayControlServer(options: {
 export async function callCodexGatewayControl<T>(options: {
     descriptor: CodexGatewayDescriptor;
     token: string;
-    path: '/status' | '/normal-exit' | '/stop' | '/terminal-attached';
+    path: '/status' | '/normal-exit' | '/stop' | '/terminal-attached' | '/root/open';
     body?: unknown;
     timeoutMs?: number;
 }): Promise<T> {
+    if (!options.descriptor.controlSocketPath && !options.descriptor.controlPort) {
+        throw new Error('Codex Gateway control endpoint is unavailable');
+    }
     const body = Buffer.from(JSON.stringify(options.body ?? {}), 'utf8');
     const response = await new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
         const request = httpRequest({

@@ -12,12 +12,29 @@ afterEach(async () => {
 });
 
 describe('Codex Gateway control endpoint', () => {
+    it('does not fall back to an unrelated default TCP port before Windows startup publishes one', async () => {
+        await expect(callCodexGatewayControl({
+            descriptor: {
+                controlSocketPath: null,
+                controlPort: null,
+            } as CodexGatewayDescriptor,
+            token: 'control-token-that-is-at-least-thirty-two-bytes',
+            path: '/status',
+        })).rejects.toThrow('control endpoint is unavailable');
+    });
+
     it('requires the capability token and validates normal-exit input', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-control-'));
         roots.push(root);
         const socketPath = join(root, 'control.sock');
         const normalExit = vi.fn(() => ({ accepted: true }));
         const terminalAttached = vi.fn(() => ({ attached: true }));
+        const openRoot = vi.fn(async () => ({
+            gatewayId: 'gateway-1',
+            threadId: 'thread-1',
+            sessionId: 'session-1',
+            generation: 1,
+        }));
         const server = await startCodexGatewayControlServer({
             socketPath,
             token: 'control-token-that-is-at-least-thirty-two-bytes',
@@ -26,6 +43,7 @@ describe('Codex Gateway control endpoint', () => {
                 normalExit,
                 stop: () => ({ stopping: true }),
                 terminalAttached,
+                openRoot,
             },
         });
         const descriptor = { controlSocketPath: socketPath, controlPort: null } as CodexGatewayDescriptor;
@@ -56,6 +74,26 @@ describe('Codex Gateway control endpoint', () => {
             },
         })).resolves.toEqual({ attached: true });
         expect(terminalAttached).toHaveBeenCalledOnce();
+        await expect(callCodexGatewayControl({
+            descriptor,
+            token: 'control-token-that-is-at-least-thirty-two-bytes',
+            path: '/root/open',
+            body: {
+                operationId: 'f5f2824d-9e74-4470-b39c-39e65936b777',
+                action: 'start',
+                threadId: null,
+                cwd: '/workspace',
+                model: null,
+                permissionMode: 'default',
+                effortLevel: 'max',
+                parentSessionId: null,
+                forkedFromMessageId: null,
+                isSideChat: false,
+                happySessionId: null,
+                dataEncryptionKey: null,
+            },
+        })).resolves.toMatchObject({ sessionId: 'session-1', generation: 1 });
+        expect(openRoot).toHaveBeenCalledOnce();
         await server.close();
     });
 });
