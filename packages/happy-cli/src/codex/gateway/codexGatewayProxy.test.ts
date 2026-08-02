@@ -136,6 +136,49 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         ]));
     });
 
+    it('holds a root response and following notifications until the binding is durable', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
+        const upstreamPath = join(root, 'upstream.sock');
+        const downstreamPath = join(root, 'downstream.sock');
+        const upstream = await startWebSocketServer(upstreamPath, (socket) => {
+            socket.on('message', (data) => {
+                const request = JSON.parse(data.toString()) as { id: number; method: string };
+                if (request.method !== 'thread/resume') return;
+                socket.send(JSON.stringify({ id: request.id, result: { thread: { id: 'thread-1' } } }));
+                socket.send(JSON.stringify({
+                    method: 'thread/status/changed',
+                    params: { threadId: 'thread-1', status: { type: 'idle' } },
+                }));
+            });
+        });
+        let releaseBinding: (() => void) | undefined;
+        const bindingReady = new Promise<void>((resolve) => { releaseBinding = resolve; });
+        const rootBound = vi.fn(() => bindingReady);
+        const proxy = new CodexGatewayProxy(
+            { socketPath: downstreamPath },
+            { socketPath: upstreamPath },
+            { rootBound },
+        );
+        await proxy.start();
+        cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
+        const client = connectCodexGatewayWebSocket({ socketPath: downstreamPath });
+        cleanups.push(async () => { client.close(); });
+        await opened(client);
+        const received: string[] = [];
+        client.on('message', (data) => received.push(data.toString()));
+
+        client.send(JSON.stringify({ id: 9, method: 'thread/resume', params: { threadId: 'thread-1' } }));
+        await vi.waitFor(() => expect(rootBound).toHaveBeenCalledOnce());
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(received).toEqual([]);
+
+        releaseBinding?.();
+        await vi.waitFor(() => expect(received).toEqual([
+            '{"id":9,"result":{"thread":{"id":"thread-1"}}}',
+            '{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"idle"}}}',
+        ]));
+    });
+
     it('passes binary frames through without coercing their payload', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
         const upstreamPath = join(root, 'upstream.sock');

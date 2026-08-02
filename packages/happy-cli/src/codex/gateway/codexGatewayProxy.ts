@@ -99,6 +99,7 @@ export class CodexGatewayProxy {
         let bufferedBytes = 0;
         let upstreamOpened = false;
         let terminalMessagePipeline = Promise.resolve();
+        let providerMessagePipeline = Promise.resolve();
         const upstream = connectCodexAppServerWebSocket(this.upstream);
 
         const closePair = (code = 1011, reason = 'Gateway transport closed') => {
@@ -118,8 +119,16 @@ export class CodexGatewayProxy {
             void this.hooks.terminalConnected?.(connectionId);
         });
         upstream.on('message', (data, isBinary) => {
-            this.observeProviderMessage(data, isBinary, pendingRoots);
-            if (downstream.readyState === WebSocket.OPEN) downstream.send(data, { binary: isBinary });
+            const normalized = codexWebSocketRawDataBuffer(data);
+            providerMessagePipeline = providerMessagePipeline.then(async () => {
+                await this.observeProviderMessage(normalized, isBinary, pendingRoots);
+                if (downstream.readyState === WebSocket.OPEN) {
+                    downstream.send(normalized, { binary: isBinary });
+                }
+            }).catch((error) => {
+                this.hooks.protocolError?.(error);
+                closePair();
+            });
         });
         upstream.on('error', (error) => {
             this.hooks.protocolError?.(error);
@@ -212,11 +221,11 @@ export class CodexGatewayProxy {
         options.forward(options.data, false);
     }
 
-    private observeProviderMessage(
+    private async observeProviderMessage(
         data: RawData,
         isBinary: boolean,
         pendingRoots: Map<JsonRpcId, PendingRootRequest>,
-    ): void {
+    ): Promise<void> {
         if (isBinary) return;
         const parsed = parseJsonRpcObject(data);
         if (!parsed || !isJsonRpcId(parsed.id)) return;
@@ -226,11 +235,9 @@ export class CodexGatewayProxy {
         if ('error' in parsed) return;
         const threadId = responseThreadId(parsed.result);
         if (!threadId) {
-            this.hooks.protocolError?.(new Error(`${pending.method} response omitted the thread ID`));
-            return;
+            throw new Error(`${pending.method} response omitted the thread ID`);
         }
-        void Promise.resolve(this.hooks.rootBound?.({ ...pending, threadId }))
-            .catch((error) => this.hooks.protocolError?.(error));
+        await this.hooks.rootBound?.({ ...pending, threadId });
     }
 }
 
