@@ -156,7 +156,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 - [x] 确认 clean `main`、基线版本和云端构建边界。
 - [x] 落盘本权威计划并记录本地 memory。
-- [ ] 新增 ADR，记录官方 TUI、独立 worker、attach 语义、thread lease 和 handoff。
+- [x] 新增 ADR，记录官方 TUI、独立 worker、attach 语义、thread lease 和 handoff。
 - [ ] 固化当前自定义 TUI、静态 thread 绑定和 daemon 生命周期的失败测试。
 
 ### 2. Gateway 核心
