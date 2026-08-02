@@ -108,11 +108,15 @@ vi.mock('./codexGatewayProvider', () => ({
 }));
 vi.mock('./codexGatewayProxy', () => ({
     CodexGatewayProxy: class {
+        private readonly hooks: CodexGatewayProxyHooks;
+
         constructor(_listen: unknown, _upstream: unknown, hooks: CodexGatewayProxyHooks) {
-            mocks.proxyHooks = hooks;
+            this.hooks = hooks;
         }
-        async start() {}
-        async close() {}
+        async start() { mocks.proxyHooks = this.hooks; }
+        async close() {
+            if (mocks.proxyHooks === this.hooks) mocks.proxyHooks = null;
+        }
     },
 }));
 vi.mock('./codexGatewayControl', () => ({

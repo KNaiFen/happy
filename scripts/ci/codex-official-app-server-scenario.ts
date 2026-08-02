@@ -372,6 +372,10 @@ async function exerciseOfficialUnixWebSocket(options: {
         const observedMethods = new Set<string>();
         let subscriptionAttempts = 0;
         let subscribedTurnCount = 0;
+        let snapshotItemTypes: string[] = [];
+        let snapshotCommandBytes = 0;
+        let snapshotReasoningBytes = 0;
+        let snapshotAgentBytes = 0;
         let resolveObservedCompletion!: () => void;
         const observedCompletion = new Promise<void>((resolve) => {
             resolveObservedCompletion = resolve;
@@ -435,6 +439,17 @@ async function exerciseOfficialUnixWebSocket(options: {
                 threadId: started.threadId,
                 emitSnapshot: false,
             });
+            const snapshotItems = finalSnapshot.thread.turns.flatMap((turn) => turn.items);
+            snapshotItemTypes = [...new Set(snapshotItems.map((item) => item.type))].sort();
+            for (const item of snapshotItems) {
+                if (item.type === 'commandExecution') {
+                    snapshotCommandBytes += Buffer.byteLength(item.aggregatedOutput ?? '', 'utf8');
+                } else if (item.type === 'reasoning') {
+                    snapshotReasoningBytes += Buffer.byteLength(item.summary.join(''), 'utf8');
+                } else if (item.type === 'agentMessage') {
+                    snapshotAgentBytes += Buffer.byteLength(item.text, 'utf8');
+                }
+            }
             const serializedSnapshot = JSON.stringify(finalSnapshot.thread);
             assert(
                 serializedSnapshot.includes(OFFICIAL_CODEX_TOOL_SENTINEL),
@@ -455,6 +470,10 @@ async function exerciseOfficialUnixWebSocket(options: {
                     `subscriptionAttempts=${subscriptionAttempts}`,
                     `subscribedTurns=${subscribedTurnCount}`,
                     `methods=${[...observedMethods].sort().join(',')}`,
+                    `snapshotItemTypes=${snapshotItemTypes.join(',')}`,
+                    `snapshotCommandBytes=${snapshotCommandBytes}`,
+                    `snapshotReasoningBytes=${snapshotReasoningBytes}`,
+                    `snapshotAgentBytes=${snapshotAgentBytes}`,
                 ].join(' '),
             );
             throw error;

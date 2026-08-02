@@ -415,6 +415,19 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       官方双连接
       门禁改为验证“metadata read -> 首 turn 受理 -> materialized resume -> snapshot/后续
       lifecycle”，并继续证明 tool、reasoning summary、stream 与完成。
+      第十七轮主 CI `30764098362` 证明订阅协调已生效：官方 observer 第二次探测即
+      materialized resume 成功，snapshot 含首 turn，并收到 command、reasoning、agent
+      stream 与 `turn/completed`；真实 PTY 也在约 5 秒内完成终端消息投影。当前失败转为
+      两个独立验收问题：官方 observer 的最终 snapshot 内容断言缺少安全字段级诊断；
+      PTY canary 明确定位到 Happy 本地日志。源码检查确认 CLI 入口把完整
+      `process.argv` 写入日志，因而把 `happy codex <prompt>` 明文持久化。删除原始 argv
+      日志，只保留允许列表 command family 与参数数量；官方 observer 记录 item type、
+      command/reasoning/agent 字节数，不输出内容并继续保留完整性断言。CLI `1.4.25` 已
+      发布不可复用，修复推进到 `1.4.26`。
+      完整 CLI 并发套件同时暴露 PTY worker 测试替身早于真实 `proxy.start()` 暴露
+      root hooks，导致测试可在 runtime factory 初始化前伪造一个生产中不可达的请求，
+      并在失败后提前删除临时目录。测试替身改为仅在 `start()` 时公开 hooks，保持与
+      真实监听边界一致；该修正不改变 Gateway 产品时序。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -431,7 +444,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.25`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.26`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -456,9 +469,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.24` package workflow 已通过并下载验证，但主 CI 的真实双连接与 PTY 均证明
       第二个初始化连接未收到新线程首 turn 生命周期；该已运行版本不得复用，正式订阅
       协调修复推进到 `1.4.25`。
+      `1.4.25` package workflow 已通过并下载验证，真实 observer 与 PTY 已证明首轮
+      订阅和投影恢复；PTY 同时定位到 CLI 入口原始 argv 日志泄漏。该已运行版本不得
+      复用，日志修复与 snapshot 安全诊断推进到 `1.4.26`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.25.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.26.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
@@ -590,3 +606,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   广播获得首 turn 通知。保留 metadata-only 根绑定，新增 `subscriptionPending` 与代理
   观察到 materialization 边界后的稳定 resume/reconcile；不复制 raw provider payload，
   不改变 TUI 连接。`1.4.24` 已发布不可复用，目标推进 `1.4.25`。
+- 2026-08-02：主 CI `30764098362` 证明 materialized stable resume 和真实 PTY 首轮
+  投影均已成功；失败转为完整 argv 被 Happy 启动日志持久化，以及 observer snapshot
+  断言缺少字段级安全诊断。移除原始 argv 日志，保留允许列表 invocation metadata；
+  增加仅含 item 类型和字节计数的 snapshot 诊断。`1.4.25` 已发布不可复用，目标推进
+  `1.4.26`。
+- 2026-08-02：修正 worker 测试替身的 proxy 可用边界。hooks 只在 mock `start()` 后
+  暴露，与真实 listener 一致，避免完整并发套件在 worker 尚未 ready 时注入不可能发生
+  的 root 请求并把后续异步清理误报为产品竞态。

@@ -30,7 +30,6 @@ export function getEnvironmentInfo(): Record<string, any> {
         NODE_ENV: process.env.NODE_ENV,
         DEBUG: process.env.DEBUG,
         workingDirectory: process.cwd(),
-        processArgv: process.argv,
         happyDir: configuration?.happyHomeDir,
         serverUrl: configuration?.serverUrl,
         logsDir: configuration?.logsDir,

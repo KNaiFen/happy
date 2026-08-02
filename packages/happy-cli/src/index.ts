@@ -32,6 +32,7 @@ import { configuration } from './configuration'
 import { getInsecureRelayWarning, isInsecureHttpUrl } from './utils/serverUrl'
 import { runCodexGatewayWorker } from './codex/gateway/codexGatewayWorker'
 import { listCodexGatewayDescriptors } from './codex/gateway/codexGatewayState'
+import { cliInvocationDiagnostic } from './utils/cliInvocationDiagnostic'
 
 
 (async () => {
@@ -53,7 +54,7 @@ import { listCodexGatewayDescriptors } from './codex/gateway/codexGatewayState'
 
   // If --version is passed - do not log, its likely daemon inquiring about our version
   if (!args.includes('--version')) {
-    logger.debug('Starting happy CLI with args: ', process.argv)
+    logger.debug('Starting happy CLI', cliInvocationDiagnostic(args))
     if (args[0] !== 'server' && isInsecureHttpUrl(configuration.serverUrl)) {
       console.error(chalk.yellow(getInsecureRelayWarning(configuration.serverUrl)))
     }
@@ -61,10 +62,6 @@ import { listCodexGatewayDescriptors } from './codex/gateway/codexGatewayState'
 
   // Check if first argument is a subcommand
   const subcommand = args[0]
-  
-  // Log which subcommand was detected (for debugging)
-  if (!args.includes('--version')) {
-  }
 
   if (subcommand === 'doctor') {
     // Check for clean subcommand
