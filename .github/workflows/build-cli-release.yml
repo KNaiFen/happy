@@ -125,14 +125,33 @@ jobs:
           INSTALL_ROOT="$RUNNER_TEMP/happy-cli-installed"
           npm install --ignore-scripts --prefix "$INSTALL_ROOT" "$ARCHIVE"
           BIN="$INSTALL_ROOT/node_modules/happy/bin/happy.mjs"
-          test "$(node --no-warnings --no-deprecation "$BIN" --version)" = "happy version: $VERSION"
-          node --no-warnings --no-deprecation "$BIN" --help | grep -Fq 'Start Codex'
+          VERSION_OUT="$RUNNER_TEMP/happy-version.out"
+          HELP_OUT="$RUNNER_TEMP/happy-help.out"
+          node --no-warnings --no-deprecation "$BIN" --version >"$VERSION_OUT"
+          if ! grep -Fxq "happy version: $VERSION" "$VERSION_OUT"; then
+            echo "Unexpected installed CLI version output:" >&2
+            cat "$VERSION_OUT" >&2
+            exit 1
+          fi
+          node --no-warnings --no-deprecation "$BIN" --help >"$HELP_OUT"
+          if ! grep -Fq 'happy codex [official Codex options or prompt]' "$HELP_OUT"; then
+            echo "Installed CLI help is missing the native Codex entrypoint:" >&2
+            cat "$HELP_OUT" >&2
+            exit 1
+          fi
           set +e
           node --no-warnings --no-deprecation "$BIN" claude >"$RUNNER_TEMP/happy-removed-command.out" 2>"$RUNNER_TEMP/happy-removed-command.err"
           STATUS=$?
           set -e
-          test "$STATUS" -ne 0
-          grep -Fq 'This removed command is no longer supported' "$RUNNER_TEMP/happy-removed-command.err"
+          if test "$STATUS" -eq 0; then
+            echo "Removed Claude command unexpectedly succeeded" >&2
+            exit 1
+          fi
+          if ! grep -Fq 'This removed command is no longer supported' "$RUNNER_TEMP/happy-removed-command.err"; then
+            echo "Removed Claude command returned an unexpected error:" >&2
+            cat "$RUNNER_TEMP/happy-removed-command.err" >&2
+            exit 1
+          fi
 
       - name: Upload CLI package
         uses: actions/upload-artifact@v4

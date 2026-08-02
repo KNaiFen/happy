@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +12,7 @@ const cliRoot = join(repoRoot, 'packages', 'happy-cli');
 const tsxEntrypoint = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const fixtureTsconfig = join(repoRoot, 'scripts', 'ci', 'tsconfig.codex-gateway-tui.json');
 const fixtureEntrypoint = join(repoRoot, 'scripts', 'ci', 'codex-gateway-tui-fixture.ts');
-const tuiTestEntrypoint = join(cliRoot, 'node_modules', '.bin', 'tui-test');
+const tuiTestEntrypoint = createRequire(import.meta.url).resolve('@microsoft/tui-test');
 const artifactRoot = process.env.HAPPY_GATEWAY_TUI_ARTIFACT_DIR
     ? resolve(process.env.HAPPY_GATEWAY_TUI_ARTIFACT_DIR)
     : await mkdtemp(join(tmpdir(), 'happy-gateway-tui-e2e-'));
@@ -56,7 +57,8 @@ let exitCode = 1;
 try {
     const fixtureState = await waitForFixtureState();
     await waitForHealth(fixtureState.controlUrl);
-    const runner = spawn(tuiTestEntrypoint, [
+    const runner = spawn(process.execPath, [
+        tuiTestEntrypoint,
         '--trace',
         'tests/tui/codexGatewayTui.test.ts',
     ], {

@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.16`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.17`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -309,6 +309,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       首轮云端执行在 fixture 引导期发现 `tsx` 未加载该场景专用 tsconfig，导致生产
       `@/` 路径别名无法解析；启动器必须显式传入同一 tsconfig，使类型检查与运行时
       使用完全相同的解析规则。
+      第二轮云端执行确认 pnpm 未在 package-local `.bin` 放置 `tui-test`；启动器必须
+      使用 Node 模块解析得到官方包入口，不依赖包管理器的可执行文件布局。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -324,12 +326,14 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [x] CLI 升至 `1.4.16`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
-      `1.4.15` 的制品安装成功，但发布冒烟测试用小写字符串匹配实际首字母大写的
-      removed-command 错误，工作流因此误报失败；按不可复用已运行版本的规则推进补丁版。
+- [x] CLI 升至 `1.4.17`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
+      `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
+      `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
+      复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
+      每个失败输出独立诊断。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.16.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.17.tgz` 到
       `dist/release-artifacts`。
 - [ ] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
