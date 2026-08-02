@@ -338,6 +338,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       WebSocket 门禁必须在两个全新的 provider 进程上分别验证握手打开与真实 Happy
       `initialize/initialized`，只记录阶段、允许列表错误码和 stderr 字节数；不得复用
       关闭过的探针连接来判断后续 client，也不得继续用延长等待掩盖确定性失败。
+      第九轮在全新官方 `0.146.0` provider 上确认连接在 WebSocket `open` 事件前稳定收到
+      `ECONNRESET`，provider 仍存活且产生固定长度 stderr；因此 RPC initialize、Gateway
+      worker 编排和 provider 启动等待均已排除。下一门禁只允许对最多 16 KiB stderr 在内存
+      中匹配官方 tungstenite 固定握手错误字符串并输出枚举分类，不得输出原文、路径或
+      payload。分类前不得改用 TCP、关闭协议能力或继续扩大重试窗口。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -474,3 +479,6 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   `bindingSuperseded/threadHandoff` 未提交结果才恢复到严格验证的下一 generation。
   目标晚到、App 重启和 source 已移出列表均可恢复，当前输入优先且幂等合并；未知结果
   或 provider 已接收时绝不恢复。App `979/979` 源码测试与 TypeScript 检查通过。
+- 2026-08-02：真实官方 Unix 诊断在独立 provider 上将失败收敛到 WebSocket 握手本身：
+  Happy 客户端尚未触发 `open` 就收到 `ECONNRESET`，provider 未退出。下一步仅通过
+  tungstenite 固定错误白名单分类握手拒绝原因，在拿到分类证据前不改变产品传输架构。

@@ -289,6 +289,26 @@ const SAFE_TRANSPORT_ERROR_CODES = new Set([
     'ETIMEDOUT',
 ]);
 
+const MAX_OFFICIAL_PROVIDER_STDERR_DIAGNOSTIC_BYTES = 16 * 1024;
+
+const OFFICIAL_WEBSOCKET_REJECTION_PATTERNS = [
+    ['methodNotGet', 'Unsupported HTTP method used - only GET is allowed'],
+    ['httpVersionTooOld', 'HTTP version must be 1.1 or higher'],
+    ['missingConnectionUpgrade', 'No "Connection: upgrade" header'],
+    ['missingUpgradeWebSocket', 'No "Upgrade: websocket" header'],
+    ['missingWebSocketVersion', 'No "Sec-WebSocket-Version: 13" header'],
+    ['missingWebSocketKey', 'No "Sec-WebSocket-Key" header'],
+    ['junkAfterRequest', 'Junk after client request'],
+    ['invalidHeader', 'Missing, duplicated or incorrect header'],
+    ['httpParse', 'httparse error'],
+    ['tooManyHeaders', 'Too many headers'],
+] as const;
+
+type OfficialWebSocketServerRejection =
+    | (typeof OFFICIAL_WEBSOCKET_REJECTION_PATTERNS)[number][0]
+    | 'upgradeRejectedOther'
+    | 'noUpgradeRejection';
+
 async function exerciseOfficialUnixWebSocket(options: {
     CodexAppServerClient: typeof import(
         '../../packages/happy-cli/src/codex/codexAppServerClient'
@@ -352,12 +372,20 @@ async function runOfficialUnixWebSocketProbe(
     );
     let spawnError: unknown = null;
     let stderrBytes = 0;
+    let capturedStderrBytes = 0;
+    const capturedStderrChunks: Buffer[] = [];
     let currentPhase: 'listen' | OfficialUnixWebSocketProbePhase = 'listen';
     provider.once('error', (error) => {
         spawnError = error;
     });
     provider.stderr?.on('data', (chunk: Buffer | string) => {
-        stderrBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        stderrBytes += buffer.byteLength;
+        const remaining = MAX_OFFICIAL_PROVIDER_STDERR_DIAGNOSTIC_BYTES - capturedStderrBytes;
+        if (remaining <= 0) return;
+        const captured = buffer.subarray(0, remaining);
+        capturedStderrChunks.push(captured);
+        capturedStderrBytes += captured.byteLength;
     });
     try {
         await waitForUnixSocket(options.socketPath, provider, () => spawnError);
@@ -371,6 +399,7 @@ async function runOfficialUnixWebSocketProbe(
             `phase=${currentPhase}`,
             `kind=${safeTransportErrorKind(diagnosticError)}`,
             `code=${safeTransportErrorCode(diagnosticError)}`,
+            `serverRejection=${classifyOfficialWebSocketServerRejection(Buffer.concat(capturedStderrChunks))}`,
             `stderrBytes=${stderrBytes}`,
             `providerExited=${provider.exitCode !== null || provider.signalCode !== null}`,
         ].join(' '));
@@ -378,6 +407,18 @@ async function runOfficialUnixWebSocketProbe(
         await stopChildProcess(provider);
         await rm(options.socketPath, { force: true });
     }
+}
+
+function classifyOfficialWebSocketServerRejection(
+    stderr: Buffer,
+): OfficialWebSocketServerRejection {
+    const text = stderr.toString('utf8');
+    for (const [classification, pattern] of OFFICIAL_WEBSOCKET_REJECTION_PATTERNS) {
+        if (text.includes(pattern)) return classification;
+    }
+    return text.includes('failed to upgrade control socket websocket connection')
+        ? 'upgradeRejectedOther'
+        : 'noUpgradeRejection';
 }
 
 async function waitForWebSocketOpen(socket: WebSocket): Promise<void> {
