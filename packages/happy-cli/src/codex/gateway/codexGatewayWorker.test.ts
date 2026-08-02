@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
     credentialsAvailable: true,
     connectAttempts: 0,
     connectFailuresRemaining: 0,
+    connectFailureCode: 'ECONNRESET',
+    providerStopDelayMs: 0,
 }));
 
 vi.mock('@/api/api', () => ({
@@ -93,6 +95,9 @@ vi.mock('./codexGatewayProvider', () => ({
             this.options.hooks?.stateChanged?.('running');
         }
         async stop() {
+            if (mocks.providerStopDelayMs > 0) {
+                await new Promise((resolve) => setTimeout(resolve, mocks.providerStopDelayMs));
+            }
             this.pid = null;
             this.options.hooks?.stateChanged?.('stopped');
         }
@@ -130,7 +135,7 @@ vi.mock('../codexAppServerClient', () => ({
             if (mocks.connectFailuresRemaining > 0) {
                 mocks.connectFailuresRemaining -= 1;
                 throw Object.assign(new Error('transient provider connection failure'), {
-                    code: 'ECONNRESET',
+                    code: mocks.connectFailureCode,
                 });
             }
             this.connected = true;
@@ -170,6 +175,8 @@ afterEach(async () => {
     mocks.credentialsAvailable = true;
     mocks.connectAttempts = 0;
     mocks.connectFailuresRemaining = 0;
+    mocks.connectFailureCode = 'ECONNRESET';
+    mocks.providerStopDelayMs = 0;
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -231,6 +238,36 @@ describe('Codex Gateway worker composition', () => {
         expect(mocks.connectAttempts).toBe(2);
         await mocks.controlHandlers!.stop({ force: true });
         await worker;
+    });
+
+    it('atomically persists the startup stage before exposing a stopped descriptor', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.connectFailuresRemaining = 1;
+        mocks.connectFailureCode = 'EACCES';
+        mocks.providerStopDelayMs = 200;
+
+        const outcome = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+        }).then(() => null, (error: unknown) => error);
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('stopped'));
+
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            lastError: 'startup:bridge:unknown',
+        });
+        await expect(outcome).resolves.toBeInstanceOf(Error);
     });
 
     it('persists an offline root and exits only after the matching terminal confirms normal exit', async () => {

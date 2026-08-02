@@ -115,6 +115,7 @@ export async function runCodexGatewayWorker(options: {
         await runCodexGatewayWorkerInternal(
             options,
             markStartupStage,
+            () => startup.stage,
             (cleanup) => { startup.earlyCleanup = cleanup; },
         );
     } catch (error) {
@@ -137,6 +138,7 @@ async function runCodexGatewayWorkerInternal(
         heartbeatMs?: number;
     },
     markStartupStage: (stage: CodexGatewayStartupStage) => void,
+    currentStartupStage: () => CodexGatewayStartupStage,
     setEarlyCleanup: (cleanup: (() => Promise<void>) | null) => void,
 ): Promise<void> {
     const paths = codexGatewayPaths(options.gatewayId, {
@@ -547,7 +549,7 @@ async function runCodexGatewayWorkerInternal(
         await descriptorStore.update((descriptor) => ({
             ...descriptor,
             state: preserveProviderEndpoint ? 'recovering' : 'stopped',
-            lastError: safeErrorKind(error),
+            lastError: startupFailureKind(currentStartupStage(), error),
             heartbeatAt: Date.now(),
         })).catch(() => undefined);
         throw error;
@@ -1034,9 +1036,14 @@ async function persistCodexGatewayStartupFailure(
     await writeCodexGatewayDescriptor(paths, {
         ...descriptor,
         state: descriptor.state === 'starting' ? 'stopped' : descriptor.state,
-        lastError: `startup:${stage}:${safeErrorKind(error)}`,
+        lastError: startupFailureKind(stage, error),
         heartbeatAt: Date.now(),
     });
+}
+
+function startupFailureKind(stage: CodexGatewayStartupStage, error: unknown): string {
+    const kind = safeErrorKind(error);
+    return stage === 'ready' ? kind : `startup:${stage}:${kind}`;
 }
 
 function safeErrorKind(error: unknown): string {

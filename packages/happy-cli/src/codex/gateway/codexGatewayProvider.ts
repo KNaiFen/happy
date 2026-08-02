@@ -565,7 +565,6 @@ async function waitForProviderEndpoint(
 async function probeWebSocketEndpoint(endpoint: CodexAppServerWebSocketEndpoint): Promise<void> {
     const socket = connectCodexAppServerWebSocket(endpoint);
     await new Promise<void>((resolve, reject) => {
-        let opened = false;
         let settled = false;
         const finish = (error?: Error) => {
             if (settled) return;
@@ -583,12 +582,18 @@ async function probeWebSocketEndpoint(endpoint: CodexAppServerWebSocketEndpoint)
             }
         };
         const onOpen = () => {
-            opened = true;
+            const forceCloseTimer = setTimeout(() => {
+                if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+            }, PROVIDER_PROBE_TIMEOUT_MS);
+            forceCloseTimer.unref();
+            socket.once('close', () => clearTimeout(forceCloseTimer));
+            socket.on('error', () => undefined);
             socket.close(1000, 'readiness');
+            finish();
         };
-        const onClose = () => finish(opened
-            ? undefined
-            : new Error('Codex app-server WebSocket closed before readiness'));
+        const onClose = () => finish(
+            new Error('Codex app-server WebSocket closed before readiness'),
+        );
         const onError = (error: Error) => finish(error);
         const timer = setTimeout(
             () => finish(new Error('Codex app-server WebSocket readiness probe timed out')),
