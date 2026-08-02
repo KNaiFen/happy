@@ -26,6 +26,7 @@ const serverRoot = join(repoRoot, 'packages', 'happy-server');
 const cliRoot = join(repoRoot, 'packages', 'happy-cli');
 const cliEntrypoint = join(cliRoot, 'dist', 'index.mjs');
 const tsxEntrypoint = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const fieldMcpServerEntrypoint = join(repoRoot, 'scripts', 'ci', 'codex-field-mcp-server.mjs');
 const appVersion = packageVersion(join(repoRoot, 'packages', 'happy-app', 'package.json'));
 const cliVersion = packageVersion(join(cliRoot, 'package.json'));
 const relayMasterSecret = randomBytes(32).toString('base64url');
@@ -44,7 +45,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 5;
+    schemaVersion: 6;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -55,7 +56,7 @@ interface FieldDiagnostic {
     officialCodexVersion: string;
     providerRequestCount: number;
     providerToolOutputObserved: boolean;
-    providerHappyMcpOfferCount: number;
+    providerFixtureMcpOfferCount: number;
     providerNamespaceToolOfferCount: number;
     providerToolSearchCallCount: number;
     providerToolSearchOutputObserved: boolean;
@@ -103,11 +104,16 @@ async function main(): Promise<void> {
 
     const codexVersion = configureOfficialCodexPath();
     responsesFixture = await startCodexResponsesFixture({
-        preferHappyMcpTool: true,
+        preferFixtureMcpTool: true,
         mcpFollowupDelayMs: 5_000,
     });
     const codexHome = join(fixtureRoot, 'codex-home');
-    await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl);
+    await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl, {
+        fieldMcp: {
+            command: process.execPath,
+            args: [fieldMcpServerEntrypoint],
+        },
+    });
     process.env.CODEX_HOME = codexHome;
     const seededThreadId = await seedOfficialCodexHistory();
     console.log(`Seeded official Codex history ${hashForLog(seededThreadId)}`);
@@ -147,7 +153,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 5,
+        schemaVersion: 6,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -158,7 +164,7 @@ async function main(): Promise<void> {
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
         providerToolOutputObserved: false,
-        providerHappyMcpOfferCount: 0,
+        providerFixtureMcpOfferCount: 0,
         providerNamespaceToolOfferCount: 0,
         providerToolSearchCallCount: 0,
         providerToolSearchOutputObserved: false,
@@ -168,7 +174,7 @@ async function main(): Promise<void> {
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 5,
+            schemaVersion: 6,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -179,7 +185,7 @@ async function main(): Promise<void> {
             officialCodexVersion: codexVersion,
             providerRequestCount: 0,
             providerToolOutputObserved: false,
-            providerHappyMcpOfferCount: 0,
+            providerFixtureMcpOfferCount: 0,
             providerNamespaceToolOfferCount: 0,
             providerToolSearchCallCount: 0,
             providerToolSearchOutputObserved: false,
@@ -214,7 +220,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 5,
+        schemaVersion: 6,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -225,7 +231,7 @@ async function main(): Promise<void> {
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
         providerToolOutputObserved: false,
-        providerHappyMcpOfferCount: 0,
+        providerFixtureMcpOfferCount: 0,
         providerNamespaceToolOfferCount: 0,
         providerToolSearchCallCount: 0,
         providerToolSearchOutputObserved: false,
@@ -496,7 +502,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 5,
+        schemaVersion: 6,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -507,7 +513,7 @@ async function verifyFieldRoundTrip(
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
         providerToolOutputObserved: false,
-        providerHappyMcpOfferCount: 0,
+        providerFixtureMcpOfferCount: 0,
         providerNamespaceToolOfferCount: 0,
         providerToolSearchCallCount: 0,
         providerToolSearchOutputObserved: false,
@@ -519,7 +525,7 @@ async function verifyFieldRoundTrip(
         const provider = responsesFixture?.snapshot();
         diagnostic.providerRequestCount = provider?.requestCount ?? 0;
         diagnostic.providerToolOutputObserved = provider?.toolOutputObserved ?? false;
-        diagnostic.providerHappyMcpOfferCount = provider?.happyMcpOfferCount ?? 0;
+        diagnostic.providerFixtureMcpOfferCount = provider?.fixtureMcpOfferCount ?? 0;
         diagnostic.providerNamespaceToolOfferCount = provider?.namespaceToolOfferCount ?? 0;
         diagnostic.providerToolSearchCallCount = provider?.toolSearchCallCount ?? 0;
         diagnostic.providerToolSearchOutputObserved = provider?.toolSearchOutputObserved ?? false;
@@ -597,7 +603,7 @@ async function verifyFieldRoundTrip(
                 && (counts.get('codex.part') ?? 0) >= 2
                 && (provider?.requestCount ?? 0) >= 4
                 && provider?.toolOutputObserved === true
-                && (provider?.happyMcpOfferCount ?? 0) >= 1
+                && (provider?.fixtureMcpOfferCount ?? 0) >= 1
                 && (provider?.mcpToolCallCount ?? 0) >= 1
                 && provider?.mcpToolOutputObserved === true
             );
@@ -624,7 +630,7 @@ async function verifyFieldRoundTrip(
             officialCodexVersion: diagnostic.officialCodexVersion,
             providerRequestCount: diagnostic.providerRequestCount,
             providerToolOutputObserved: diagnostic.providerToolOutputObserved,
-            providerHappyMcpOfferCount: diagnostic.providerHappyMcpOfferCount,
+            providerFixtureMcpOfferCount: diagnostic.providerFixtureMcpOfferCount,
             providerNamespaceToolOfferCount: diagnostic.providerNamespaceToolOfferCount,
             providerToolSearchCallCount: diagnostic.providerToolSearchCallCount,
             providerToolSearchOutputObserved: diagnostic.providerToolSearchOutputObserved,

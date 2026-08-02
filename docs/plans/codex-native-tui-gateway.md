@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.25`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.27`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -460,6 +460,16 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   - source/transport 门禁：new/fork、审批 first-win、active handoff/drain、queue
     restore、app-server crash、daemon restart、thread lock、多窗口、relay offline
     journal 和 10k snapshot。
+  - 第二十轮 Android field `30766338317` 已确认 APK 打包、零机器 bootstrap、历史
+    resume 与首条普通回复均通过；失败只发生在等待 `codex-mcp-tool-message`。现场诊断
+    显示官方 `0.146.0` 暴露了 5 个动态工具命名空间，但 `Happy MCP` offer、调用和结果
+    均为 0。这符合本计划已经删除 Codex 专用 Happy MCP 注入的产品边界，不能为修复
+    测试而恢复隐藏生产 MCP 或 prompt。Android fixture 改为仅在其临时 `CODEX_HOME`
+    `config.toml` 配置独立、无业务副作用的 stdio 测试 MCP；Responses fixture 保持 seed
+    turn 使用普通 shell，随后经官方动态 tool-search 选择该测试 MCP。验收改为确认
+    官方 `mcpToolCall`、Sync v4 entity、App 单卡投影和 MCP output 均出现，同时不再把
+    测试专用 server 名称或 Happy 工具名写入产品代码。该修正仅影响 CI fixture/测试，不
+    改变已发布 CLI `1.4.27`、App `1.11.22` 或 Wire `0.1.6`。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 

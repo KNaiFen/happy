@@ -7,12 +7,14 @@ import {
 } from 'node:http';
 import * as zlib from 'node:zlib';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export const OFFICIAL_CODEX_RESPONSE_SENTINEL = 'Official Codex source E2E response';
-export const OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL = 'Official Codex Happy MCP E2E response';
+export const OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL = 'Official Codex MCP E2E response';
 export const OFFICIAL_CODEX_TOOL_SENTINEL = 'HAPPY_OFFICIAL_CODEX_TOOL_OK';
 export const OFFICIAL_CODEX_MCP_SENTINEL = 'MCP single-card field verification';
+export const OFFICIAL_CODEX_FIELD_MCP_SERVER = 'field_e2e';
+export const OFFICIAL_CODEX_FIELD_MCP_TOOL = 'record_field_event';
 
 const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumDecodedRequestBytes = 32 * 1024 * 1024;
@@ -28,7 +30,7 @@ export interface CodexResponsesFixtureSnapshot {
     requestCount: number;
     toolOutputObserved: boolean;
     toolOutputCount: number;
-    happyMcpOfferCount: number;
+    fixtureMcpOfferCount: number;
     namespaceToolOfferCount: number;
     toolSearchCallCount: number;
     toolSearchOutputObserved: boolean;
@@ -41,8 +43,13 @@ export interface CodexResponsesFixtureSnapshot {
 
 export interface CodexResponsesFixtureOptions {
     expectedInstructionSentinel?: string;
-    preferHappyMcpTool?: boolean;
+    preferFixtureMcpTool?: boolean;
     mcpFollowupDelayMs?: number;
+}
+
+export interface CodexResponsesFixtureMcpConfig {
+    command: string;
+    args: readonly string[];
 }
 
 export interface CodexResponsesFixture {
@@ -63,7 +70,7 @@ export async function startCodexResponsesFixture(
         requestCount: 0,
         toolOutputObserved: false,
         toolOutputCount: 0,
-        happyMcpOfferCount: 0,
+        fixtureMcpOfferCount: 0,
         namespaceToolOfferCount: 0,
         toolSearchCallCount: 0,
         toolSearchOutputObserved: false,
@@ -73,7 +80,7 @@ export async function startCodexResponsesFixture(
         instructionSentinelObserved: false,
         requestShapes: [],
     };
-    const pendingTools = new Map<string, { isHappyMcp: boolean }>();
+    const pendingTools = new Map<string, { isFixtureMcp: boolean }>();
     const pendingToolSearches = new Set<string>();
     const server = createServer((request, response) => {
         void handleRequest(
@@ -108,8 +115,19 @@ export async function startCodexResponsesFixture(
 export async function writeCodexResponsesConfig(
     codexHome: string,
     fixtureBaseUrl: string,
+    options: { fieldMcp?: CodexResponsesFixtureMcpConfig } = {},
 ): Promise<void> {
     assert.match(fixtureBaseUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
+    if (options.fieldMcp) {
+        assert.equal(
+            isAbsolute(options.fieldMcp.command),
+            true,
+            'field MCP command must be absolute',
+        );
+        for (const arg of options.fieldMcp.args) {
+            assert.equal(typeof arg, 'string', 'field MCP arguments must be strings');
+        }
+    }
     await mkdir(codexHome, { recursive: true });
     const config = [
         'model = "mock-model"',
@@ -126,6 +144,14 @@ export async function writeCodexResponsesConfig(
         'stream_max_retries = 0',
         'supports_websockets = false',
         '',
+        ...(options.fieldMcp ? [
+            `[mcp_servers.${OFFICIAL_CODEX_FIELD_MCP_SERVER}]`,
+            `command = ${tomlString(options.fieldMcp.command)}`,
+            `args = [${options.fieldMcp.args.map(tomlString).join(', ')}]`,
+            'required = true',
+            'default_tools_approval_mode = "approve"',
+            '',
+        ] : []),
     ].join('\n');
     await writeFile(join(codexHome, 'config.toml'), config, {
         encoding: 'utf8',
@@ -138,7 +164,7 @@ async function handleRequest(
     response: ServerResponse,
     state: CodexResponsesFixtureSnapshot,
     options: CodexResponsesFixtureOptions,
-    pendingTools: Map<string, { isHappyMcp: boolean }>,
+    pendingTools: Map<string, { isFixtureMcp: boolean }>,
     pendingToolSearches: Set<string>,
 ): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
@@ -165,7 +191,7 @@ async function handleRequest(
         pendingTools.delete(completedTool.callId);
         state.toolOutputObserved = true;
         state.toolOutputCount += 1;
-        if (completedTool.isHappyMcp) state.mcpToolOutputObserved = true;
+        if (completedTool.isFixtureMcp) state.mcpToolOutputObserved = true;
     }
     const completedToolSearch = findMatchingToolSearchOutput(body, pendingToolSearches);
     if (completedToolSearch) {
@@ -179,33 +205,37 @@ async function handleRequest(
         Connection: 'close',
     });
     if (completedTool) {
-        if (completedTool.isHappyMcp && options.mcpFollowupDelayMs) {
+        if (completedTool.isFixtureMcp && options.mcpFollowupDelayMs) {
             await delay(options.mcpFollowupDelayMs);
         }
         await writeFinalResponse(
             response,
             state.toolOutputCount,
-            completedTool.isHappyMcp
+            completedTool.isFixtureMcp
                 ? OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL
                 : OFFICIAL_CODEX_RESPONSE_SENTINEL,
         );
         return;
     }
 
-    const selectedTool = selectHappyMcpTool(
-        body,
-        completedToolSearch?.tools ?? [],
-        state,
-        options,
-    );
+    // The seed turn must remain a normal shell lifecycle. The field MCP is
+    // intentionally selected only for the later App-origin turn.
+    const selectedTool = state.toolOutputCount > 0
+        ? selectFixtureMcpTool(
+            body,
+            completedToolSearch?.tools ?? [],
+            state,
+            options,
+        )
+        : null;
     if (selectedTool) {
         const callId = state.toolNames.length === 0
             ? toolCallId
             : `${toolCallId}-${state.toolNames.length + 1}`;
-        const isHappyMcp = isHappyMcpTool(selectedTool);
-        pendingTools.set(callId, { isHappyMcp });
+        const isFixtureMcp = isFixtureMcpTool(selectedTool);
+        pendingTools.set(callId, { isFixtureMcp });
         state.toolNames.push(canonicalToolName(selectedTool));
-        if (isHappyMcp) state.mcpToolCallCount += 1;
+        if (isFixtureMcp) state.mcpToolCallCount += 1;
         writeEvents(response, toolCallEvents(callId, selectedTool));
         response.end();
         return;
@@ -214,7 +244,7 @@ async function handleRequest(
     // Keep the seed history turn on the deterministic shell path. Tool search is
     // reserved for the later App-driven turn, after that warm-up has completed.
     if (state.toolNames.length === 0) {
-        pendingTools.set(toolCallId, { isHappyMcp: false });
+        pendingTools.set(toolCallId, { isFixtureMcp: false });
         state.toolNames.push('shell_command');
         writeEvents(response, toolCallEvents(toolCallId, { name: 'shell_command' }));
         response.end();
@@ -222,7 +252,7 @@ async function handleRequest(
     }
 
     if (
-        options.preferHappyMcpTool
+        options.preferFixtureMcpTool
         && state.mcpToolCallCount === 0
         && state.toolSearchCallCount === 0
         && hasClientToolSearch(body)
@@ -247,7 +277,7 @@ function toolSearchEvents(callId: string): Array<Record<string, unknown>> {
                 call_id: callId,
                 execution: 'client',
                 arguments: {
-                    query: 'Happy change_title change chat session title',
+                    query: 'field verification record event',
                     limit: 8,
                 },
             },
@@ -260,8 +290,8 @@ function toolCallEvents(
     callId: string,
     tool: OfferedTool,
 ): Array<Record<string, unknown>> {
-    const argumentsJson = JSON.stringify(isHappyMcpTool(tool)
-        ? { title: OFFICIAL_CODEX_MCP_SENTINEL }
+    const argumentsJson = JSON.stringify(isFixtureMcpTool(tool)
+        ? { marker: OFFICIAL_CODEX_MCP_SENTINEL }
         : {
             command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
             workdir: null,
@@ -466,8 +496,8 @@ function collectInputTypes(body: unknown): string[] {
 
 function findMatchingToolOutput(
     body: unknown,
-    pendingTools: Map<string, { isHappyMcp: boolean }>,
-): { callId: string; isHappyMcp: boolean } | null {
+    pendingTools: Map<string, { isFixtureMcp: boolean }>,
+): { callId: string; isFixtureMcp: boolean } | null {
     if (!isRecord(body) || !Array.isArray(body.input)) return null;
     for (const item of body.input) {
         if (
@@ -508,18 +538,18 @@ function findMatchingToolSearchOutput(
     return null;
 }
 
-function selectHappyMcpTool(
+function selectFixtureMcpTool(
     body: unknown,
     discoveredTools: OfferedTool[],
     state: CodexResponsesFixtureSnapshot,
     options: CodexResponsesFixtureOptions,
 ): OfferedTool | null {
     const offeredTools = [...collectOfferedTools(body), ...discoveredTools];
-    state.happyMcpOfferCount += offeredTools.filter(isHappyMcpTool).length;
+    state.fixtureMcpOfferCount += offeredTools.filter(isFixtureMcpTool).length;
     state.namespaceToolOfferCount += offeredTools.filter((tool) => tool.namespace).length;
-    if (options.preferHappyMcpTool && state.mcpToolCallCount === 0) {
-        const happyMcp = offeredTools.find(isHappyMcpTool);
-        if (happyMcp) return happyMcp;
+    if (options.preferFixtureMcpTool && state.mcpToolCallCount === 0) {
+        const fixtureMcp = offeredTools.find(isFixtureMcpTool);
+        if (fixtureMcp) return fixtureMcp;
     }
     return null;
 }
@@ -575,14 +605,22 @@ function canonicalToolName(tool: OfferedTool): string {
     return `${tool.namespace}${separator}${tool.name}`;
 }
 
-function isHappyMcpTool(tool: OfferedTool): boolean {
+function isFixtureMcpTool(tool: OfferedTool): boolean {
     const name = tool.name.toLowerCase();
     if (tool.namespace) {
         const namespace = tool.namespace.toLowerCase().replace(/__$/, '');
-        return name === 'change_title'
-            && (namespace === 'happy' || namespace === 'mcp__happy');
+        return name === OFFICIAL_CODEX_FIELD_MCP_TOOL
+            && (
+                namespace === OFFICIAL_CODEX_FIELD_MCP_SERVER
+                || namespace === `mcp__${OFFICIAL_CODEX_FIELD_MCP_SERVER}`
+            );
     }
-    return name === 'happy__change_title' || name === 'mcp__happy__change_title';
+    return name === `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_MCP_TOOL}`
+        || name === `mcp__${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_MCP_TOOL}`;
+}
+
+function tomlString(value: string): string {
+    return JSON.stringify(value);
 }
 
 function containsString(value: unknown, expected: string): boolean {

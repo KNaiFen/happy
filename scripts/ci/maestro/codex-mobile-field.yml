@@ -85,10 +85,10 @@ tags:
 - takeScreenshot: codex-live-single-mcp
 
 - scrollUntilVisible:
-    element: Official Codex Happy MCP E2E response
+    element: Official Codex MCP E2E response
     direction: DOWN
     timeout: 60000
-- assertVisible: Official Codex Happy MCP E2E response
+- assertVisible: Official Codex MCP E2E response
 - assertNotVisible: Used 2 tools
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
@@ -121,10 +121,10 @@ tags:
 - assertVisible:
     id: codex-timeline-context-compaction
 - scrollUntilVisible:
-    element: Official Codex Happy MCP E2E response
+    element: Official Codex MCP E2E response
     direction: UP
     timeout: 60000
-- assertVisible: Official Codex Happy MCP E2E response
+- assertVisible: Official Codex MCP E2E response
 - assertNotVisible: Used 2 tools
 - assertNotVisible: CodexControlCommand
 - assertNotVisible: CodexCompact
