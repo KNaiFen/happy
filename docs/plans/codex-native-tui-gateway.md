@@ -69,7 +69,9 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 - 未收到确认时进入 `terminalDetached`，不结束 app-server、turn 或 Sync bridge。
   App 保持发送、steer、interrupt、审批和 user-input 能力。
 - 电脑休眠但进程与连接未断开时不改变状态。
-- `attach` 只连接原 Gateway，不调用 provider resume，不创建第二个 app-server。
+- `attach` 只连接原 Gateway，不创建第二个 app-server 或 provider runtime。由于新的
+  官方 TUI 进程没有旧 UI 内存，它必须在同一 app-server 内发送一次官方
+  `thread/resume` 来恢复历史与订阅；该调用不得启动、重放或复制既有 turn。
   选择器展示当前目录优先的 title、path、状态、断开时间和短 ID。
 
 ### Thread 独占与切换
