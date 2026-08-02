@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import {
@@ -64,6 +64,13 @@ async function main(): Promise<void> {
         const { CodexAppServerClient } = await import(
             '../../packages/happy-cli/src/codex/codexAppServerClient'
         );
+        await exerciseOfficialUnixWebSocket({
+            CodexAppServerClient,
+            binary: process.env.HAPPY_SCENARIO_CODEX_BIN!,
+            version: officialVersion,
+            cwd: projectRoot,
+            socketPath: join(root, 'official-provider.sock'),
+        });
         codex = new CodexAppServerClient();
         const notificationMethods = new Set<string>();
         const notificationOrder: string[] = [];
@@ -258,6 +265,165 @@ async function main(): Promise<void> {
         restoreEnvironment('PATH', originalPath);
         await rm(root, { recursive: true, force: true });
     }
+}
+
+const SAFE_TRANSPORT_ERROR_CODES = new Set([
+    'EACCES',
+    'ECONNABORTED',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EAI_AGAIN',
+    'EHOSTUNREACH',
+    'ENAMETOOLONG',
+    'ENETUNREACH',
+    'ENOENT',
+    'ENOTFOUND',
+    'EPIPE',
+    'ERR_NETWORK',
+    'ESOCKETTIMEDOUT',
+    'ETIMEDOUT',
+]);
+
+async function exerciseOfficialUnixWebSocket(options: {
+    CodexAppServerClient: typeof import(
+        '../../packages/happy-cli/src/codex/codexAppServerClient'
+    ).CodexAppServerClient;
+    binary: string;
+    version: string;
+    cwd: string;
+    socketPath: string;
+}): Promise<void> {
+    const provider = spawn(
+        options.binary,
+        ['app-server', '--listen', `unix://${options.socketPath}`],
+        {
+            cwd: options.cwd,
+            env: process.env,
+            stdio: ['ignore', 'ignore', 'pipe'],
+        },
+    );
+    let spawnError: unknown = null;
+    let stderrBytes = 0;
+    let phase: 'listen' | 'initialize' = 'listen';
+    provider.once('error', (error) => {
+        spawnError = error;
+    });
+    provider.stderr?.on('data', (chunk: Buffer | string) => {
+        stderrBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
+    });
+    let client: InstanceType<typeof options.CodexAppServerClient> | null = null;
+
+    try {
+        await waitForUnixSocket(options.socketPath, provider, () => spawnError);
+        phase = 'initialize';
+        const parsedVersion = parseCodexCliVersion(options.version);
+        assert(parsedVersion, 'validated official Codex version did not parse');
+        client = new options.CodexAppServerClient(
+            undefined,
+            parsedVersion,
+            { webSocketEndpoint: { socketPath: options.socketPath } },
+        );
+        await withTimeout(
+            client.connect(),
+            15_000,
+            'official Unix WebSocket initialize/initialized',
+        );
+        console.log(`Official Codex Unix WebSocket initialization passed: version=${options.version}`);
+    } catch (error) {
+        const diagnosticError = spawnError ?? error;
+        throw new Error([
+            'Official Codex Unix WebSocket initialization failed',
+            `phase=${phase}`,
+            `kind=${safeTransportErrorKind(diagnosticError)}`,
+            `code=${safeTransportErrorCode(diagnosticError)}`,
+            `stderrBytes=${stderrBytes}`,
+            `providerExited=${provider.exitCode !== null || provider.signalCode !== null}`,
+        ].join(' '));
+    } finally {
+        await client?.disconnect().catch(() => undefined);
+        await stopChildProcess(provider);
+        await rm(options.socketPath, { force: true });
+    }
+}
+
+async function waitForUnixSocket(
+    socketPath: string,
+    provider: ChildProcess,
+    spawnError: () => unknown,
+): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+        const currentSpawnError = spawnError();
+        if (currentSpawnError) throw currentSpawnError;
+        if (provider.exitCode !== null || provider.signalCode !== null) {
+            throw new Error('Official app-server exited before binding its Unix socket');
+        }
+        try {
+            if ((await stat(socketPath)).isSocket()) return;
+        } catch {
+            // The official app-server has not bound the private endpoint yet.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error('Official app-server did not bind its Unix socket in time');
+}
+
+function safeTransportErrorCode(error: unknown): string {
+    try {
+        if (!error || typeof error !== 'object' || Array.isArray(error)) return 'unknown';
+        const code = (error as Record<string, unknown>).code;
+        return typeof code === 'string' && SAFE_TRANSPORT_ERROR_CODES.has(code)
+            ? code
+            : 'unknown';
+    } catch {
+        return 'unknown';
+    }
+}
+
+function safeTransportErrorKind(error: unknown): string {
+    const code = safeTransportErrorCode(error);
+    if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || code === 'ECONNABORTED') {
+        return 'timeout';
+    }
+    if (
+        code === 'ECONNRESET'
+        || code === 'ECONNREFUSED'
+        || code === 'EHOSTUNREACH'
+        || code === 'ENETUNREACH'
+        || code === 'ENOTFOUND'
+        || code === 'EAI_AGAIN'
+        || code === 'ERR_NETWORK'
+    ) {
+        return 'network';
+    }
+    if (code === 'EACCES') return 'authorization';
+    if (code === 'ENOENT' || code === 'ENAMETOOLONG') return 'endpoint';
+    if (code === 'EPIPE') return 'transport';
+    return 'unknown';
+}
+
+async function stopChildProcess(processHandle: ChildProcess): Promise<void> {
+    if (processHandle.exitCode !== null || processHandle.signalCode !== null) return;
+    const exited = new Promise<void>((resolve) => processHandle.once('exit', () => resolve()));
+    try {
+        processHandle.kill('SIGTERM');
+    } catch {
+        return;
+    }
+    const graceful = await Promise.race([
+        exited.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+    ]);
+    if (graceful) return;
+    try {
+        processHandle.kill('SIGKILL');
+    } catch {
+        return;
+    }
+    await Promise.race([
+        exited,
+        new Promise<void>((resolve) => setTimeout(resolve, 250)),
+    ]);
 }
 
 function configureOfficialCodexPath(): string {

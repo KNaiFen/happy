@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.21`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.22`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -333,6 +333,10 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       第七轮云端执行证明独立、未初始化的 Unix WebSocket 探针本身不能作为官方 app-server
       readiness 条件，worker 停在 `startup:provider:unknown`。该探针必须移除；保留私有
       socket listener 探测，并仅以真实 Happy client 初始化成功作为 protocol readiness。
+      第八轮在同一 provider epoch 内累计 3.9 秒重试后仍稳定失败于
+      `startup:bridge:network`，排除普通启动延迟。下一次产品改动前先增加独立的官方 Unix
+      WebSocket 初始化门禁，只记录阶段、允许列表错误码和 stderr 字节数，判断问题属于
+      app-server 传输兼容还是 Gateway 编排；不得继续用延长等待掩盖确定性失败。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -348,7 +352,7 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 
 ### 8. 发布
 
-- [x] CLI 升至 `1.4.21`，App 升至 `1.11.22`，Wire 升至 `0.1.6`。
+- [ ] CLI 升至 `1.4.22`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -362,10 +366,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.20` 发布制品已通过；真实 PTY 证明单独 WebSocket 探针不是官方 provider
       lifecycle 的有效边界，因此切回 listener probe 并把协议重试限定在实际 client。
       `1.4.21` 提交前 CLI 单元测试 `952/952`、Gateway 聚焦测试 `25/25`、CLI 与真实
-      PTY fixture 类型检查均通过。
+      PTY fixture 类型检查均通过；发布制品也已成功并下载验证，但真实 PTY 仍稳定报告
+      `startup:bridge:network`，因此该已运行版本不得复用。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.21.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.22.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
