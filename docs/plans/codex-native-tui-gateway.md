@@ -349,6 +349,11 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       错误；随后两个新 provider 继续分别验证 Node `ws` open 和 Happy initialize。固定
       握手成功才允许把问题归因到 Node 客户端构造，固定握手也失败则继续核对官方 listener
       构建和启动契约；两种结果都不得输出响应头、key、socket 路径或 provider stderr 原文。
+      第十一轮固定 RFC 6455 请求在 `/` 路径成功返回 HTTP 101，而当前 Node `ws` 随后仍在
+      `open` 前收到 `ECONNRESET`；官方 listener、Unix stream、根路径和启动时序因此排除。
+      固定请求与 Node 默认握手的主要协议差异是后者声明 `permessage-deflate`。下一门禁在
+      全新 provider 上使用相同 Node `ws+unix` URL、仅设置 `perMessageDeflate=false`；该
+      probe 成功才把关闭扩展写入产品连接器，失败则继续比较脱敏后的请求 shape。
 - [ ] 覆盖矩阵按职责拆分，避免一个超大场景掩盖失败来源：
   - 新 PTY 门禁：terminal/App 双向消息、官方 tool/reasoning/stream、异常 PTY kill、
     十秒 detach、同 Gateway attach、同 provider PID/thread、正常退出与 v3 零回退。
@@ -491,3 +496,5 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
 - 2026-08-02：官方 stderr 白名单分类返回 `noUpgradeRejection`，没有证据支持缺失或错误
   WebSocket header。验收增加一个全新 provider 的固定 RFC 6455 握手对照，仅比较 HTTP
   101，再与 Node `ws` 和 Happy initialize 的独立 provider 结果交叉定位。
+- 2026-08-02：固定 RFC 6455 Unix 握手在 `/` 上返回 101，当前 Node `ws` 则稳定重置；
+  下一步用独立 provider 只关闭 Node 默认的 `permessage-deflate` 扩展，验证这一单变量。

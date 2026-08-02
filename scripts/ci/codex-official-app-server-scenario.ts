@@ -67,12 +67,16 @@ async function main(): Promise<void> {
         const { CodexAppServerClient } = await import(
             '../../packages/happy-cli/src/codex/codexAppServerClient'
         );
-        const { connectCodexAppServerWebSocket } = await import(
+        const {
+            CODEX_APP_SERVER_MAX_RPC_BYTES,
+            connectCodexAppServerWebSocket,
+        } = await import(
             '../../packages/happy-cli/src/codex/codexAppServerWebSocket'
         );
         await exerciseOfficialUnixWebSocket({
             CodexAppServerClient,
             connectCodexAppServerWebSocket,
+            maxRpcBytes: CODEX_APP_SERVER_MAX_RPC_BYTES,
             binary: process.env.HAPPY_SCENARIO_CODEX_BIN!,
             version: officialVersion,
             cwd: projectRoot,
@@ -329,6 +333,7 @@ async function exerciseOfficialUnixWebSocket(options: {
     connectCodexAppServerWebSocket: typeof import(
         '../../packages/happy-cli/src/codex/codexAppServerWebSocket'
     ).connectCodexAppServerWebSocket;
+    maxRpcBytes: number;
     binary: string;
     version: string;
     cwd: string;
@@ -337,6 +342,21 @@ async function exerciseOfficialUnixWebSocket(options: {
     await runOfficialUnixWebSocketProbe(options, 'rfc6455Handshake', async (socketPath) => {
         await waitForRfc6455WebSocketUpgrade(socketPath);
     });
+    await runOfficialUnixWebSocketProbe(
+        options,
+        'websocketOpenNoCompression',
+        async (socketPath) => {
+            const socket = new WebSocket(`ws+unix://${socketPath}:/`, {
+                maxPayload: options.maxRpcBytes,
+                perMessageDeflate: false,
+            });
+            try {
+                await waitForWebSocketOpen(socket);
+            } finally {
+                await closeWebSocket(socket);
+            }
+        },
+    );
     await runOfficialUnixWebSocketProbe(options, 'websocketOpen', async (socketPath) => {
         const socket = options.connectCodexAppServerWebSocket({ socketPath });
         try {
@@ -367,6 +387,7 @@ async function exerciseOfficialUnixWebSocket(options: {
 
 type OfficialUnixWebSocketProbePhase =
     | 'rfc6455Handshake'
+    | 'websocketOpenNoCompression'
     | 'websocketOpen'
     | 'initialize';
 
