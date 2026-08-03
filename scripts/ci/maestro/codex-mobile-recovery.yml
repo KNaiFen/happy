@@ -29,10 +29,10 @@ tags:
     timeout: 45000
 - assertVisible: resume-history-from-android-e2e
 - scrollUntilVisible:
-    element: hello-from-android-e2e
+    element: H
     direction: UP
     timeout: 45000
-- assertVisible: hello-from-android-e2e
+- assertVisible: H
 - scrollUntilVisible:
     element: Official Codex source E2E response
     direction: DOWN

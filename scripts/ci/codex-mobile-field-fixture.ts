@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     const codexVersion = configureOfficialCodexPath();
     responsesFixture = await startCodexResponsesFixture({
         preferFixtureMcpTool: true,
-        mcpFollowupDelayMs: 20_000,
+        mcpFollowupDelayMs: 90_000,
     });
     const codexHome = join(fixtureRoot, 'codex-home');
     await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl, {

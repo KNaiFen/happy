@@ -64,9 +64,9 @@ tags:
 
 - tapOn:
     id: agent-input-message
-- setClipboard: hello-from-android-e2e
+- setClipboard: H
 - pasteText
-- assertVisible: hello-from-android-e2e
+- assertVisible: H
 - hideKeyboard
 - tapOn:
     id: agent-input-send
@@ -105,9 +105,9 @@ tags:
 
 - tapOn:
     id: agent-input-message
-- setClipboard: queue-from-android-e2e
+- setClipboard: Q
 - pasteText
-- assertVisible: queue-from-android-e2e
+- assertVisible: Q
 - hideKeyboard
 - tapOn:
     id: agent-input-send
@@ -115,7 +115,7 @@ tags:
     visible: Edit queued message
     timeout: 30000
 - assertVisible: Send to active turn
-- assertVisible: queue-from-android-e2e
+- assertVisible: Q
 - takeScreenshot: codex-queued-follow-up
 - extendedWaitUntil:
     notVisible: Edit queued message
