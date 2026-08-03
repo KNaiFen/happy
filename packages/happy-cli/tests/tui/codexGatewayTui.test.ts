@@ -119,8 +119,11 @@ test.describe('terminal-origin Gateway', () => {
             full: true,
             strict: false,
         })).toBeVisible({ timeout: 30_000 });
+        const terminalText = terminal.getBuffer()
+            .map((row) => row.join(''))
+            .join('\n');
         assert.equal(
-            terminal.content.includes('Failed to start TUI session picker'),
+            terminalText.includes('Failed to start TUI session picker'),
             false,
             'the remote session picker failed to open a second App Server connection',
         );
