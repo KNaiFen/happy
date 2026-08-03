@@ -150,6 +150,18 @@ tags:
 - pressKey: home
 - launchApp:
     stopApp: false
+- extendedWaitUntil:
+    visible: New chat
+    timeout: 45000
+- runFlow:
+    when:
+      visible: Terminals
+    commands:
+      - tapOn: New chat
+- extendedWaitUntil:
+    visible:
+      id: agent-input-message
+    timeout: 45000
 - hideKeyboard
 - scrollUntilVisible:
     element:

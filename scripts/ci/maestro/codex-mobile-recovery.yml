@@ -10,7 +10,15 @@ tags:
 - extendedWaitUntil:
     visible: New chat
     timeout: 45000
-- tapOn: New chat
+- runFlow:
+    when:
+      visible: Terminals
+    commands:
+      - tapOn: New chat
+- extendedWaitUntil:
+    visible:
+      id: agent-input-message
+    timeout: 45000
 - hideKeyboard
 - scrollUntilVisible:
     element:
