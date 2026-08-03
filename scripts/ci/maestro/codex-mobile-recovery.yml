@@ -18,7 +18,9 @@ tags:
 - tapOn:
     id: codex-mcp-tool-message
 - extendedWaitUntil:
-    visible: MCP single-card field verification
+    # Maestro matches one accessibility text node. Tool output is a JSON node with newlines,
+    # so require the marker anywhere in that visible node rather than assuming it is standalone.
+    visible: '(?s).*MCP single-card field verification.*'
     timeout: 45000
 - back
 - scrollUntilVisible:

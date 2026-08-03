@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.30`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.31`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -44,11 +44,15 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 - 代理透传 JSON-RPC，不改写 provider payload。仅观察、预检并记录成功的根
   `thread/start`、`thread/resume`、`thread/fork` 绑定变化。
 - Happy bridge 在 thread 已物化后作为 app-server 的独立订阅者；TUI 和 bridge 同时
-  接收通知。终端新建的未物化 thread 在根 RPC 成功后立即建立一个可取消的后台协调器：
-  它以有界指数退避安全重试 stable `thread/resume`，并在尚未订阅时读取权威
-  `thread/read` 快照补齐早期状态。协调器一直持续到订阅成功、root 被权威退休或 worker
-  停止，不能依赖一次 `turn/start`/activity 通知或有限次数重试；代理 activity 只可加速
-  已存在的协调器。代理不得把 provider payload 复制进第二套 mapper。
+  接收通知。终端根 RPC 成功响应中的官方 `Thread` 快照只在进程内短暂交给 coordinator
+  激活对应 root，绝不写日志、descriptor 或第二套 mapper；不得在把该响应交给 TUI 前
+  再以独立 observer 的 `thread/read` 取得同一快照。终端新建或切换的 root 随后立即建立
+  一个可取消的后台协调器：它以有界指数退避安全重试 stable `thread/resume`，并在尚未订阅
+  时读取权威 `thread/read` 快照补齐早期状态。协调器一直持续到订阅成功、root 被权威退休或
+  worker 停止，不能依赖一次 `turn/start`/activity 通知或有限次数重试；代理 activity 只可
+  加速已存在的协调器。observer 的安全 resume/read 暂时失败只能记录为 payload-free
+  `observerRetry` 并继续尝试，绝不能关闭健康 TUI、取消成功根 RPC 或写成 `rootBinding`
+  失败。
 - 只同步官方 reasoning summary；raw reasoning text 只允许本地计数诊断，永不
   写入 Sync v4 或日志。
 
@@ -523,12 +527,29 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     pending snapshot reconcile 不会把 root 误标为已订阅，以及 stop 发生在 resume RPC
     无响应时仍能完成清理。这个变化只改 CLI，`1.4.29` release
     `30772327334` 已通过并下载验证，版本不可复用，目标推进到 `1.4.30`。
+  - 第二十五轮主 CI `30773936190` 的真实 PTY 证明根 RPC 已成功返回后，worker 仍在
+    把响应转发给 TUI 前对独立 observer 执行 `thread/read`，官方 stable-v2 源码明确该
+    读取可暂时以 `thread not loaded` 拒绝，导致错误地持久化
+    `rootBinding:providerSnapshot:protocol` 并关闭健康 TUI。根响应本身已经携带权威
+    `Thread` snapshot，代理必须只在内存把它交给 coordinator，terminal start/resume/fork
+    一律进入 observer-pending 状态；observer 后续单独订阅。所有后台 observer
+    subscribe/read 异常都必须先尝试 snapshot reconcile、限频记录为非致命
+    `observerRetry:<kind>`，且只在实际订阅成功后清除，不得触发 PTY 的 root-binding
+    快速失败。新增 proxy 原样转发+snapshot、coordinator 免二次读取、worker observer
+    异常不致命三类回归。`1.4.30` release `30773936092` 已成功并下载验证，版本不可
+    复用，目标推进到 `1.4.31`。
+  - 第二十六轮 Android field `30773936210` 再次证明主路径和 server-side 诊断均已完成：
+    `5` 次 provider request、动态 tool-search、测试 MCP call/output、单卡、回复和 compact
+    均通过，失败截图也展示了重启后工具详情的完整 JSON output。失败原因是 Maestro 将该 JSON
+    作为一个含换行的原子 accessibility text，而 recovery 断言将 marker 当作整个文本节点
+    匹配。恢复门禁改为 DOTALL 全文本正则，仍要求 marker 出现在可见的持久 output 中，不能仅以
+    工具卡存在或服务端诊断代替；这只修正测试选择器，不改变 App 或协议行为。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.30`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.31`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -569,9 +590,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.29` release `30772327334` 已通过、制品已下载验证，但主 CI
       `30772327426` 的真实 PTY 仍零投影，证明 activity 缓存与短有限重试不能构成
       订阅正确性保证；该已运行版本不得复用，目标推进到 `1.4.30`。
+      `1.4.30` release `30773936092` 已通过并下载验证，但真实 PTY
+      `30773936190` 暴露了成功根响应被 observer 二次读取抢占的协议竞态；该已运行版本
+      不得复用，目标推进到 `1.4.31`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.30.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.31.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
@@ -727,3 +751,8 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   coordinator lock 前于 interrupt 协调后关闭 observer transport，解除可能持有 root lock
   的安全读/订阅 RPC，但不把该取消解释为 turn 完成或持久 rootBinding 失败。
   该分发行为修复推进 CLI `1.4.30`。
+- 2026-08-03：主 CI `30773936190` 证明首个 terminal root 响应虽已成功，但 worker 在
+  转发它前从独立 observer 重读 thread，官方 `thread/read` 的暂时 `thread not loaded`
+  边界被错误升级为 root binding 失败。改为仅在内存复用成功根响应的 stable-v2 snapshot
+  激活 root，并把 observer 的后续订阅/read 失败隔离为可重试、payload-free 的
+  `observerRetry`；不改变 TUI 透明转发、不写 provider payload、不推断 turn 完成。

@@ -500,9 +500,12 @@ async function runCodexGatewayWorkerInternal(
             rootReservations.delete(rootRequestKey(binding));
             try {
                 await requireCoordinator().bindRoot(binding.threadId, {
-                    subscription: binding.method === 'thread/start'
-                        ? 'deferredNewThread'
-                        : 'resume',
+                    subscription: binding.providerSnapshot
+                        ? 'terminalRootResponse'
+                        : binding.method === 'thread/start'
+                            ? 'deferredNewThread'
+                            : 'resume',
+                    ...(binding.providerSnapshot ? { providerSnapshot: binding.providerSnapshot } : {}),
                 });
                 syncPendingFreshSubscriptions();
             } catch (error) {
@@ -845,34 +848,27 @@ async function runCodexGatewayWorkerInternal(
             try {
                 subscribed = await requireCoordinator().subscribeMaterializedRoot(threadId);
             } catch (error) {
+                await persistObserverRetryError(error).catch(() => undefined);
+                await reconcilePendingFreshSubscriptionSnapshot(threadId);
                 syncPendingFreshSubscriptions();
-                if (!pendingFreshSubscriptions.has(threadId) || freshSubscriptionRetriesClosed) return;
-                const diagnosed = error instanceof CodexGatewayRootBindingError
-                    ? error
-                    : new CodexGatewayRootBindingError('providerSnapshot', error);
-                await persistWorkerError(diagnosed).catch(() => undefined);
+                if (await finishFreshSubscriptionIfSettled(threadId)) return;
                 continue;
             }
 
             if (!subscribed) {
-                try {
-                    await requireCoordinator().reconcilePendingRootSnapshot(threadId);
-                } catch (error) {
-                    const diagnosed = error instanceof CodexGatewayRootBindingError
-                        ? error
-                        : new CodexGatewayRootBindingError('providerSnapshot', error);
-                    if (!stopping && !freshSubscriptionRetriesClosed) {
-                        await persistWorkerError(diagnosed).catch(() => undefined);
-                    }
-                }
+                await reconcilePendingFreshSubscriptionSnapshot(threadId);
                 syncPendingFreshSubscriptions();
+                if (await finishFreshSubscriptionIfSettled(threadId)) return;
                 continue;
             }
 
             syncPendingFreshSubscriptions();
             if (stopping || freshSubscriptionRetriesClosed) return;
             try {
-                await syncDescriptorBindings({ clearRootBindingError: true });
+                await syncDescriptorBindings({
+                    clearRootBindingError: true,
+                    clearObserverRetryError: true,
+                });
             } catch (error) {
                 const diagnosed = error instanceof CodexGatewayRootBindingError
                     ? error
@@ -881,6 +877,25 @@ async function runCodexGatewayWorkerInternal(
             }
             return;
         }
+    }
+
+    async function reconcilePendingFreshSubscriptionSnapshot(threadId: string): Promise<void> {
+        if (stopping || freshSubscriptionRetriesClosed || !pendingFreshSubscriptions.has(threadId)) return;
+        try {
+            await requireCoordinator().reconcilePendingRootSnapshot(threadId);
+        } catch (error) {
+            if (!stopping && !freshSubscriptionRetriesClosed) {
+                await persistObserverRetryError(error).catch(() => undefined);
+            }
+        }
+    }
+
+    async function finishFreshSubscriptionIfSettled(threadId: string): Promise<boolean> {
+        if (stopping || freshSubscriptionRetriesClosed || pendingFreshSubscriptions.has(threadId)) {
+            return false;
+        }
+        await syncDescriptorBindings({ clearObserverRetryError: true }).catch(() => undefined);
+        return true;
     }
 
     function freshSubscriptionRetryDelay(attempt: number): number {
@@ -948,7 +963,10 @@ async function runCodexGatewayWorkerInternal(
     }
 
     async function syncDescriptorBindings(
-        options: { clearRootBindingError?: boolean } = {},
+        options: {
+            clearRootBindingError?: boolean;
+            clearObserverRetryError?: boolean;
+        } = {},
     ): Promise<void> {
         if (!coordinator) return;
         const bindings = coordinator.bindingSnapshot();
@@ -959,9 +977,10 @@ async function runCodexGatewayWorkerInternal(
             current: current ? descriptorBinding(current) : null,
             draining: draining.map(descriptorBinding),
             heartbeatAt: Date.now(),
-            lastError: options.clearRootBindingError && descriptor.lastError?.startsWith('rootBinding:')
-                ? null
-                : descriptor.lastError,
+            lastError: (
+                (options.clearRootBindingError && descriptor.lastError?.startsWith('rootBinding:'))
+                || (options.clearObserverRetryError && descriptor.lastError?.startsWith('observerRetry:'))
+            ) ? null : descriptor.lastError,
         }));
     }
 
@@ -983,7 +1002,7 @@ async function runCodexGatewayWorkerInternal(
             await descriptorStore.update((descriptor) => ({
                 ...descriptor,
                 heartbeatAt: Date.now(),
-                lastError: descriptor.lastError?.startsWith('rootBinding:')
+                lastError: isPersistentGatewayDiagnostic(descriptor.lastError)
                     ? descriptor.lastError
                     : null,
             }));
@@ -1084,6 +1103,16 @@ async function runCodexGatewayWorkerInternal(
         await descriptorStore.update((descriptor) => ({
             ...descriptor,
             lastError: safeErrorKind(error),
+            heartbeatAt: Date.now(),
+        }));
+    }
+
+    async function persistObserverRetryError(error: unknown): Promise<void> {
+        const diagnostic = observerRetryDiagnostic(error);
+        if (descriptorStore.snapshot().lastError === diagnostic) return;
+        await descriptorStore.update((descriptor) => ({
+            ...descriptor,
+            lastError: diagnostic,
             heartbeatAt: Date.now(),
         }));
     }
@@ -1282,6 +1311,18 @@ function safeErrorKind(error: unknown): string {
     }
     const classified = classifySyncV4DiagnosticError(error);
     return [...classified].slice(0, 128).join('');
+}
+
+function observerRetryDiagnostic(error: unknown): string {
+    const cause = error instanceof CodexGatewayRootBindingError
+        ? error.diagnosticCause
+        : error;
+    return `observerRetry:${classifySyncV4DiagnosticError(cause)}`;
+}
+
+function isPersistentGatewayDiagnostic(value: string | null): boolean {
+    return value?.startsWith('rootBinding:') === true
+        || value?.startsWith('observerRetry:') === true;
 }
 
 function processAlive(pid: number): boolean {

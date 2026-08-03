@@ -168,6 +168,36 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
     });
 
+    it('activates a terminal root from its successful response without rereading it', async () => {
+        const fresh = thread('thread-fresh', 'idle');
+        const harness = createHarness({ 'thread-fresh': fresh });
+        await harness.coordinator.connect();
+
+        await expect(harness.coordinator.bindRoot('thread-fresh', {
+            subscription: 'terminalRootResponse',
+            providerSnapshot: fresh,
+        })).resolves.toMatchObject({ generation: 1, changed: true });
+
+        expect(harness.client.readThread).not.toHaveBeenCalled();
+        expect(harness.client.subscribeThread).not.toHaveBeenCalled();
+        expect(harness.runtimes.get('thread-fresh')!.activatedSnapshots).toEqual([fresh]);
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual(['thread-fresh']);
+    });
+
+    it('rejects a terminal response snapshot with a different thread ID', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+        });
+
+        await expect(harness.coordinator.bindRoot('thread-a', {
+            subscription: 'terminalRootResponse',
+            providerSnapshot: thread('thread-b', 'idle'),
+        })).rejects.toMatchObject({ phase: 'providerSnapshot' });
+        expect(harness.leases.acquire).not.toHaveBeenCalled();
+        expect(harness.client.readThread).not.toHaveBeenCalled();
+    });
+
     it('reconciles a terminal-started root after its first turn materializes', async () => {
         const fresh = thread('thread-fresh', 'idle');
         const materialized = thread('thread-fresh', 'active', 'turn-1');

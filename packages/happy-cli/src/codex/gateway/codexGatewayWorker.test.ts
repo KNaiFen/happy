@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CodexGatewayProxyHooks } from './codexGatewayProxy';
+import type { Thread } from '../protocol';
 
 const mocks = vi.hoisted(() => ({
     controlHandlers: null as import('./codexGatewayControl').CodexGatewayControlHandlers | null,
@@ -439,7 +440,8 @@ describe('Codex Gateway worker composition', () => {
         });
         await vi.waitFor(async () => expect(
             (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.lastError,
-        ).toBe('rootBinding:providerSnapshot:network'));
+        ).toBe('observerRetry:network'));
+        expect(mocks.completeSnapshotCalls).toContain('thread-a');
 
         mocks.subscribeFailureCode = null;
         await vi.waitFor(async () => expect(
@@ -454,6 +456,51 @@ describe('Codex Gateway worker composition', () => {
         await mocks.proxyHooks!.threadMaterialized?.('thread-a');
         await new Promise((resolve) => setTimeout(resolve, 100));
         expect(mocks.materializedSubscriptionCalls).toHaveLength(callsAfterSubscription);
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    }, 5_000);
+
+    it('uses the successful terminal root snapshot while observer retries stay non-fatal', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.subscribeFailureCode = 'ECONNRESET';
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
+
+        await expect(mocks.proxyHooks!.rootBound?.({
+            connectionId: 'connection-a',
+            requestId: 1,
+            method: 'thread/start',
+            requestedThreadId: null,
+            threadId: 'thread-a',
+            providerSnapshot: thread('thread-a'),
+        })).resolves.toBeUndefined();
+        await vi.waitFor(async () => expect(
+            await readCodexGatewayDescriptor(created.paths.descriptorPath),
+        ).toMatchObject({
+            current: expect.objectContaining({ threadId: 'thread-a' }),
+            lastError: 'observerRetry:network',
+        }));
+
+        mocks.subscribeFailureCode = null;
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.lastError,
+        ).toBeNull());
 
         await mocks.controlHandlers!.stop({ force: true });
         await worker;
@@ -807,12 +854,12 @@ describe('Codex Gateway worker composition', () => {
     }, 5_000);
 });
 
-function thread(id: string) {
+function thread(id: string): Thread {
     return {
         id,
         parentThreadId: null,
         status: { type: 'idle' },
         turns: [],
         cwd: '/workspace/project',
-    };
+    } as unknown as Thread;
 }

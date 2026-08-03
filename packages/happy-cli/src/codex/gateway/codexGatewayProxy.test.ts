@@ -67,6 +67,7 @@ describe('Codex Gateway JSON-RPC proxy', () => {
             method: 'thread/resume',
             requestedThreadId: 'thread-1',
             threadId: 'thread-1',
+            providerSnapshot: { id: 'thread-1' },
         })));
         expect(upstreamMessages).toEqual([
             '{"id":1,"method":"initialize","params":{}}',

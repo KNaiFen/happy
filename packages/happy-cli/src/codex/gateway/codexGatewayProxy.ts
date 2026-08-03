@@ -8,6 +8,7 @@ import {
     connectCodexAppServerWebSocket,
     type CodexAppServerWebSocketEndpoint,
 } from '../codexAppServerWebSocket';
+import type { Thread } from '../protocol';
 
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const ROOT_METHODS = new Set(['thread/start', 'thread/resume', 'thread/fork']);
@@ -25,6 +26,9 @@ export interface CodexGatewayRootRequest {
 
 export interface CodexGatewayRootBinding extends CodexGatewayRootRequest {
     threadId: string;
+    // This is the official root response's snapshot. It remains in memory only;
+    // the original provider frame is forwarded byte-for-byte below.
+    providerSnapshot?: Thread;
 }
 
 export interface CodexGatewayProxyHooks {
@@ -293,11 +297,16 @@ export class CodexGatewayProxy {
             await this.hooks.rootFailed?.(pending);
             return;
         }
-        const threadId = responseThreadId(parsed.result);
+        const providerSnapshot = responseThreadSnapshot(parsed.result);
+        const threadId = providerSnapshot?.id ?? responseThreadId(parsed.result);
         if (!threadId) {
             throw new Error(`${pending.method} response omitted the thread ID`);
         }
-        await this.hooks.rootBound?.({ ...pending, threadId });
+        await this.hooks.rootBound?.({
+            ...pending,
+            threadId,
+            ...(providerSnapshot ? { providerSnapshot } : {}),
+        });
     }
 
     private async notifyThreadMaterialized(threadId: string): Promise<void> {
@@ -346,6 +355,14 @@ function responseThreadId(result: unknown): string | null {
     if (!record.thread || typeof record.thread !== 'object' || Array.isArray(record.thread)) return null;
     const id = (record.thread as Record<string, unknown>).id;
     return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+function responseThreadSnapshot(result: unknown): Thread | null {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+    const thread = (result as Record<string, unknown>).thread;
+    if (!thread || typeof thread !== 'object' || Array.isArray(thread)) return null;
+    const id = (thread as Record<string, unknown>).id;
+    return typeof id === 'string' && id.length > 0 ? thread as Thread : null;
 }
 
 function directThreadId(params: unknown): string | null {

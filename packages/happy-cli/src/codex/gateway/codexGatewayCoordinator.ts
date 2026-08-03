@@ -115,7 +115,8 @@ export interface CodexGatewayRecoveredBinding {
 }
 
 export interface CodexGatewayBindRootOptions {
-    subscription?: 'resume' | 'bridgeStartedNewThread' | 'deferredNewThread';
+    subscription?: 'resume' | 'bridgeStartedNewThread' | 'deferredNewThread' | 'terminalRootResponse';
+    providerSnapshot?: Thread;
 }
 
 export class CodexGatewayCoordinator {
@@ -206,6 +207,12 @@ export class CodexGatewayCoordinator {
         validateThreadId(threadId);
         if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
         const subscription = options.subscription ?? 'resume';
+        if (options.providerSnapshot && options.providerSnapshot.id !== threadId) {
+            throw new CodexGatewayRootBindingError(
+                'providerSnapshot',
+                new Error('Codex Gateway root response thread ID does not match its binding'),
+            );
+        }
         return await this.bindingLock.inLock(async () => {
             if (this.current?.threadId === threadId) {
                 if (subscription === 'resume' && this.current.subscriptionPending) {
@@ -287,16 +294,18 @@ export class CodexGatewayCoordinator {
 
             let previousMarkedDraining = false;
             try {
-                const providerSnapshot = await rootBindingStep(
-                    'providerSnapshot',
-                    async () => subscription === 'resume'
+                const providerSnapshot = await rootBindingStep('providerSnapshot', async () => {
+                    if (options.providerSnapshot) {
+                        return options.providerSnapshot;
+                    }
+                    return subscription === 'resume'
                         ? (await this.options.client.subscribeThread(threadId)).thread
                         : (await this.options.client.readThread({
                             threadId,
                             includeTurns: false,
                             emitSnapshot: false,
-                        })).thread,
-                );
+                        })).thread;
+                });
                 target.title = safeThreadTitle(providerSnapshot);
                 target.rootActiveTurnId = activeTurnIdFromSnapshot(providerSnapshot);
                 await rootBindingStep(
@@ -334,7 +343,8 @@ export class CodexGatewayCoordinator {
                 }));
                 target.role = 'current';
                 target.generation = nextGeneration;
-                target.subscriptionPending = subscription === 'deferredNewThread';
+                target.subscriptionPending = subscription === 'deferredNewThread'
+                    || subscription === 'terminalRootResponse';
                 this.current = target;
                 this.generation = nextGeneration;
             } catch (error) {
