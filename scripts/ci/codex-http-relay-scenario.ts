@@ -291,7 +291,7 @@ async function runHttpRelayScenario(): Promise<void> {
         const machineState = await createMachine(baseUrl, token);
         const sessionKey = randomBytes(32);
         const sessionId = await createSession(baseUrl, token, machineState.id, sessionKey, {
-            tag: `codex-http-scenario-${Date.now()}`,
+            tag: `codex-gateway-root-v1-http-scenario-${Date.now()}`,
             threadId: null,
         });
         const invalidations: number[] = [];
@@ -467,7 +467,7 @@ async function runHttpRelayScenario(): Promise<void> {
                 machineState.id,
                 archiveSessionKey,
                 {
-                    tag: `codex-archive-roundtrip-${Date.now()}`,
+                    tag: `codex-gateway-root-v1-archive-roundtrip-${Date.now()}`,
                     threadId: 'archive-thread',
                 },
             );
@@ -578,7 +578,7 @@ async function runHttpRelayScenario(): Promise<void> {
             machineState.id,
             firstCommandSessionKey,
             {
-                tag: `codex-first-command-${Date.now()}`,
+                tag: `codex-gateway-root-v1-first-command-${Date.now()}`,
                 threadId: null,
             },
         );
@@ -637,18 +637,14 @@ async function runHttpRelayScenario(): Promise<void> {
             5_000,
             'first pre-activation App command at CLI',
         );
-        const legacyMessagesResponse = await fetch(
+        const retiredMessagesResponse = await fetch(
             `${baseUrl}/v3/sessions/${encodeURIComponent(firstCommandSessionId)}/messages?after_seq=0&limit=100`,
             { headers: relayHeaders(appToken) },
         );
-        assert.equal(legacyMessagesResponse.status, 200);
-        const legacyMessages = await legacyMessagesResponse.json() as {
-            messages?: unknown[];
-        };
-        assert.deepEqual(
-            legacyMessages.messages,
-            [],
-            'first Codex v4 prompt was duplicated into the v3 message stream',
+        assert.equal(
+            retiredMessagesResponse.status,
+            404,
+            'retired v3 message route is still reachable',
         );
 
         const firstThreadId = 'field-first-thread-private-v4';
