@@ -10,7 +10,6 @@ export async function startCodexGatewayTuiRelay(options: {
     upstreamSocketPath: string;
     bearerToken: string;
 }): Promise<CodexGatewayTuiRelay> {
-    let claimed = false;
     const proxy = new CodexGatewayProxy(
         { url: 'ws://127.0.0.1:0' },
         {
@@ -19,10 +18,7 @@ export async function startCodexGatewayTuiRelay(options: {
         },
         {
             claimTerminal: (_connectionId, bearerToken) => {
-                if (claimed || !bearerToken) return false;
-                if (!secureEqual(bearerToken, options.bearerToken)) return false;
-                claimed = true;
-                return true;
+                return Boolean(bearerToken && secureEqual(bearerToken, options.bearerToken));
             },
         },
     );

@@ -113,6 +113,25 @@ test.describe('terminal-origin Gateway', () => {
         assert.equal(stableIdleGateway.gateway?.workerAlive, true);
         assert.equal(stableIdleGateway.gateway?.providerAlive, true);
 
+        terminal.write('/resume');
+        terminal.submit();
+        await expect(terminal.getByText('Resume a previous session', {
+            full: true,
+            strict: false,
+        })).toBeVisible({ timeout: 30_000 });
+        assert.equal(
+            terminal.content.includes('Failed to start TUI session picker'),
+            false,
+            'the remote session picker failed to open a second App Server connection',
+        );
+        terminal.write('\x1B');
+        await delay(500);
+        const afterResumePicker = await readStatus({});
+        throwOnGatewayTransportFailure(afterResumePicker);
+        assert.equal(afterResumePicker.gateway?.gatewayId, idleGateway.gateway?.gatewayId);
+        assert.equal(afterResumePicker.gateway?.providerPid, idleGateway.gateway?.providerPid);
+        assert.equal(afterResumePicker.gateway?.terminalState, 'attached');
+
         terminal.write(terminalPrompt);
         const terminalPromptLocator = terminal.getByText(terminalPrompt, {
             full: true,

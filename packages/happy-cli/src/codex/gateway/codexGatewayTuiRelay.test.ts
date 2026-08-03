@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe('Codex Gateway TUI attachment relay', () => {
-    it('authenticates one loopback client and forwards with the same Unix bearer', async () => {
+    it('authenticates concurrent loopback clients and forwards with the same Unix bearer', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-tui-relay-'));
         const socketPath = join(root, 'tui.sock');
         const token = 'attachment-token-that-is-at-least-thirty-two-bytes';
@@ -58,8 +58,13 @@ describe('Codex Gateway TUI attachment relay', () => {
             url: relay.remoteUrl,
             bearerToken: token,
         });
-        await expect(opened(duplicate)).rejects.toThrow('Unexpected server response: 401');
-        expect(upstream.connections).toHaveBeenCalledTimes(1);
+        cleanups.push(async () => duplicate.terminate());
+        await opened(duplicate);
+        const duplicateResponse = nextMessage(duplicate);
+        duplicate.send('picker-message');
+        await expect(duplicateResponse).resolves.toBe('provider:picker-message');
+        expect(upstream.authorizationHeaders).toEqual([`Bearer ${token}`, `Bearer ${token}`]);
+        expect(upstream.connections).toHaveBeenCalledTimes(2);
     });
 
     it('forwards a provider frame larger than the former 4 MiB transport limit', async () => {

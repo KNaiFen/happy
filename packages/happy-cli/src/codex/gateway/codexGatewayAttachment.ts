@@ -25,7 +25,7 @@ export type CodexGatewayNormalExitResult =
     | { accepted: false; reason: 'notPending' | 'staleAttachment' | 'invalidNonce' };
 
 interface ActiveAttachment extends CodexGatewayAttachmentRegistration {
-    connectionId: string;
+    connectionIds: Set<string>;
     exitAuthorityValid: boolean;
 }
 
@@ -63,6 +63,18 @@ export class CodexGatewayAttachmentManager {
     }
 
     claim(connectionId: string, connectionToken: string | null): boolean {
+        const active = this.active;
+        if (
+            active
+            && active.exitAuthorityValid
+            && connectionToken
+            && secureEqual(connectionToken, active.connectionToken)
+        ) {
+            this.clearDetachTimer();
+            active.connectionIds.add(connectionId);
+            this.updateState('attached', null);
+            return true;
+        }
         const registration = this.registration;
         if (!registration || !connectionToken || !secureEqual(connectionToken, registration.connectionToken)) {
             return false;
@@ -71,7 +83,7 @@ export class CodexGatewayAttachmentManager {
         this.registration = null;
         this.active = {
             ...registration,
-            connectionId,
+            connectionIds: new Set([connectionId]),
             exitAuthorityValid: true,
         };
         this.updateState('attached', null);
@@ -79,15 +91,17 @@ export class CodexGatewayAttachmentManager {
     }
 
     disconnect(connectionId: string): void {
-        if (!this.active || this.active.connectionId !== connectionId) return;
+        const active = this.active;
+        if (!active || !active.connectionIds.delete(connectionId)) return;
+        if (active.connectionIds.size > 0) return;
         const detachedAt = this.now();
         this.updateState('pendingDetach', detachedAt);
         this.clearDetachTimer();
         this.detachTimer = setTimeout(() => {
             this.detachTimer = null;
-            if (!this.active || this.active.connectionId !== connectionId) return;
+            if (this.active !== active || active.connectionIds.size > 0) return;
             if (this.stateValue !== 'pendingDetach') return;
-            this.active.exitAuthorityValid = false;
+            active.exitAuthorityValid = false;
             this.updateState('detached', detachedAt);
         }, this.options.detachGraceMs ?? 10_000);
         this.detachTimer.unref?.();
