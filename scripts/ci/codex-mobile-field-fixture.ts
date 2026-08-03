@@ -45,13 +45,13 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 6;
+    schemaVersion: 7;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
     commandAccepted: boolean;
     cliRoundTripObserved: boolean;
-    v3MessageCount: number;
+    retiredV3MessageRouteStatus: number | null;
     entityCounts: Record<string, number>;
     officialCodexVersion: string;
     providerRequestCount: number;
@@ -153,13 +153,13 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 6,
+        schemaVersion: 7,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
         commandAccepted: false,
         cliRoundTripObserved: false,
-        v3MessageCount: 0,
+        retiredV3MessageRouteStatus: null,
         entityCounts: {},
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
@@ -174,13 +174,13 @@ async function main(): Promise<void> {
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 6,
+            schemaVersion: 7,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
             commandAccepted: false,
             cliRoundTripObserved: false,
-            v3MessageCount: 0,
+            retiredV3MessageRouteStatus: null,
             entityCounts: {},
             officialCodexVersion: codexVersion,
             providerRequestCount: 0,
@@ -220,13 +220,13 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 6,
+        schemaVersion: 7,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
         commandAccepted: false,
         cliRoundTripObserved: false,
-        v3MessageCount: 0,
+        retiredV3MessageRouteStatus: null,
         entityCounts: {},
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
@@ -502,13 +502,13 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 6,
+        schemaVersion: 7,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
         commandAccepted: false,
         cliRoundTripObserved: false,
-        v3MessageCount: 0,
+        retiredV3MessageRouteStatus: null,
         entityCounts: {},
         officialCodexVersion: codexVersion,
         providerRequestCount: 0,
@@ -561,14 +561,12 @@ async function verifyFieldRoundTrip(
                 `${serverUrl}/v3/sessions/${encodeURIComponent(session.id)}/messages?after_seq=0&limit=100`,
                 { headers: appHeaders(appToken) },
             );
-            assert.equal(v3Response.status, 200);
-            const v3Body = await v3Response.json() as { messages?: unknown[] };
-            diagnostic.v3MessageCount = (v3Body.messages ?? []).length;
+            diagnostic.retiredV3MessageRouteStatus = v3Response.status;
             await persistDiagnostic();
-            assert.deepEqual(
-                v3Body.messages ?? [],
-                [],
-                'Android first Codex prompt fell back to the v3 message stream',
+            assert.equal(
+                v3Response.status,
+                404,
+                'the Android round trip exposed the retired v3 message route',
             );
 
             const snapshotResponse = await fetch(
@@ -625,7 +623,7 @@ async function verifyFieldRoundTrip(
         JSON.stringify({
             verified: true,
             sessionHash: verifiedSessionHash,
-            v3MessageCount: diagnostic.v3MessageCount,
+            retiredV3MessageRouteStatus: diagnostic.retiredV3MessageRouteStatus,
             entityCounts: diagnostic.entityCounts,
             officialCodexVersion: diagnostic.officialCodexVersion,
             providerRequestCount: diagnostic.providerRequestCount,

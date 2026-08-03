@@ -50,7 +50,7 @@ interface FixtureStatus {
     providerFixtureMcpOfferCount: number;
     providerMcpToolOutputObserved: boolean;
     failedMcpAttempted: boolean;
-    v3MessageCount: number;
+    retiredV3MessageRouteStatus: number | null;
     projectionLagSamples: number;
     projectionLagP95Ms: number | null;
     payloadLeakInLogs: boolean;
@@ -206,7 +206,11 @@ test.describe('terminal-origin Gateway', () => {
             ),
             'terminal prompt projection',
         );
-        assert.equal(terminalState.v3MessageCount, 0, 'Codex terminal prompt fell back to v3');
+        assert.equal(
+            terminalState.retiredV3MessageRouteStatus,
+            404,
+            'the retired v3 message route is still reachable',
+        );
         assert.equal(terminalState.rawReasoningLeak, false, 'raw reasoning reached Sync v4');
         assert.equal(
             terminalState.payloadLeakInLogs,
@@ -236,7 +240,11 @@ test.describe('terminal-origin Gateway', () => {
         assert.equal(appState.gateway?.gatewayId, initialGateway.gatewayId);
         assert.equal(appState.gateway?.providerPid, initialGateway.providerPid);
         assert.equal(appState.gateway?.threadId, initialGateway.threadId);
-        assert.equal(appState.v3MessageCount, 0, 'App prompt fell back to v3');
+        assert.equal(
+            appState.retiredV3MessageRouteStatus,
+            404,
+            'the App round trip exposed the retired v3 message route',
+        );
         assert.equal(appState.rawReasoningLeak, false, 'raw reasoning reached App projection');
         assert.equal(
             appState.payloadLeakInLogs,
@@ -350,7 +358,7 @@ test.describe('Gateway attach', () => {
             45_000,
         );
         assert.equal(stopped.gateway?.gatewayId, initialGateway.gatewayId);
-        assert.equal(stopped.v3MessageCount, 0);
+        assert.equal(stopped.retiredV3MessageRouteStatus, 404);
         assert.equal(stopped.rawReasoningLeak, false);
         assert.equal(stopped.payloadLeakInLogs, false);
         assert.equal(stopped.commandResultStatus, 'succeeded');

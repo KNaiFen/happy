@@ -104,13 +104,13 @@ for _ in $(seq 1 600); do
         throw new Error("Invalid mobile field verification marker");
       }
       if (
-        diagnostics.schemaVersion !== 6
+        diagnostics.schemaVersion !== 7
         || diagnostics.phase !== "verified"
         || diagnostics.machineRegistered !== true
         || diagnostics.sessionObserved !== true
         || diagnostics.commandAccepted !== true
         || diagnostics.cliRoundTripObserved !== true
-        || diagnostics.v3MessageCount !== 0
+        || diagnostics.retiredV3MessageRouteStatus !== 404
         || !/^codex-cli \d+\.\d+\.\d+$/.test(diagnostics.officialCodexVersion)
         || diagnostics.providerRequestCount < 4
         || diagnostics.providerToolOutputObserved !== true
@@ -126,6 +126,7 @@ for _ in $(seq 1 600); do
         || result.providerToolSearchOutputObserved !== diagnostics.providerToolSearchOutputObserved
         || result.providerMcpToolCallCount !== diagnostics.providerMcpToolCallCount
         || result.providerMcpToolOutputObserved !== true
+        || result.retiredV3MessageRouteStatus !== diagnostics.retiredV3MessageRouteStatus
       ) {
         throw new Error("Mobile field diagnostics did not prove the Sync v4 round trip");
       }

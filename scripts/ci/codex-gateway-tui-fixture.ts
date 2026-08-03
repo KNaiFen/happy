@@ -335,9 +335,9 @@ async function fixtureStatus(options: {
         ? Object.values(projection.entities['codex.item'])
         : [];
     const projectionLags = runtime?.projectionLags() ?? [];
-    const v3MessageCount = runtime
-        ? await readV3MessageCount(runtime.session.id).catch(() => -1)
-        : 0;
+    const retiredV3MessageRouteStatus = runtime
+        ? await readRetiredV3MessageRouteStatus(runtime.session.id).catch(() => null)
+        : null;
     const provider = responsesFixture?.snapshot() ?? null;
     const payloadLeakSources = await logPayloadLeakSources([...payloadCanaries]);
 
@@ -388,7 +388,7 @@ async function fixtureStatus(options: {
         providerFixtureMcpOfferCount: provider?.fixtureMcpOfferCount ?? 0,
         providerMcpToolOutputObserved: provider?.mcpToolOutputObserved ?? false,
         failedMcpAttempted: await fileExists(failedMcpMarkerPath),
-        v3MessageCount,
+        retiredV3MessageRouteStatus,
         projectionLagSamples: projectionLags.length,
         projectionLagP95Ms: percentile(projectionLags, 0.95),
         payloadLeakInLogs: payloadLeakSources.length > 0,
@@ -571,14 +571,12 @@ async function fileExists(path: string): Promise<boolean> {
     }
 }
 
-async function readV3MessageCount(sessionId: string): Promise<number> {
+async function readRetiredV3MessageRouteStatus(sessionId: string): Promise<number> {
     const response = await fetch(
         `${relayServerUrl}/v3/sessions/${encodeURIComponent(sessionId)}/messages?after_seq=0&limit=100`,
         { headers: appHeaders() },
     );
-    if (!response.ok) throw new Error(`v3 message list failed with HTTP ${response.status}`);
-    const body = await response.json() as { messages?: unknown[] };
-    return body.messages?.length ?? 0;
+    return response.status;
 }
 
 async function logPayloadLeakSources(canaries: string[]): Promise<PayloadLeakSource[]> {
