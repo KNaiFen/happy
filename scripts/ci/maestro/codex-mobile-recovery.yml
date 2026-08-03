@@ -20,10 +20,12 @@ tags:
     commands:
       - tapOn: New chat
 - extendedWaitUntil:
+    notVisible: Terminals
+    timeout: 45000
+- extendedWaitUntil:
     visible:
       id: agent-input-message
     timeout: 45000
-- hideKeyboard
 - scrollUntilVisible:
     element:
       id: codex-mcp-tool-message
