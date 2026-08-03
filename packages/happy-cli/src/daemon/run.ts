@@ -1,6 +1,5 @@
 import fs from 'fs/promises';
 import * as tmp from 'tmp';
-import { createHmac } from 'node:crypto';
 import { classifySyncV4DiagnosticError } from '@slopus/happy-wire';
 
 import { ApiClient } from '@/api/api';
@@ -53,6 +52,7 @@ import {
   launchCodexGatewayHeadless,
 } from '@/codex/gateway/codexGatewayLauncher';
 import { callCodexGatewayControl } from '@/codex/gateway/codexGatewayControl';
+import { deriveCodexGatewayResumeSessionTag } from '@/codex/gateway/codexGatewayIdentity';
 import { retireVerifiedLegacyCodexAdapters } from './legacyCodexAdapterRetirement';
 import {
   findCodexGatewayStopBinding,
@@ -69,13 +69,6 @@ function decodeIndependentSessionKey(encoded: string): Uint8Array {
     throw new Error('Invalid per-session encryption key');
   }
   return key;
-}
-
-function stableCodexResumeTag(dataKey: Uint8Array): string {
-  const digest = createHmac('sha256', dataKey)
-    .update('Happy Codex Resume Session Tag v1', 'utf8')
-    .digest('base64url');
-  return `codex-resume-v1-${digest}`;
 }
 
 function resolveGatewayPermissionMode(
@@ -964,7 +957,7 @@ export async function startDaemon(): Promise<void> {
         metadata.effortLevel = effortLevel;
 
         const created = await api.getOrCreateSession({
-          tag: stableCodexResumeTag(dataKey),
+          tag: deriveCodexGatewayResumeSessionTag(dataKey),
           metadata,
           state,
           dataEncryptionKey: dataKey,

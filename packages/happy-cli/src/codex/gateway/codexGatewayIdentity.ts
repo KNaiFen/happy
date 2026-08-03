@@ -1,6 +1,16 @@
 import { createHmac } from 'node:crypto';
 import { deriveKey } from '@/utils/deriveKey';
 
+export function deriveCodexGatewayResumeSessionTag(dataKey: Uint8Array): string {
+    if (dataKey.length !== 32) {
+        throw new Error('Invalid Codex resume session data key');
+    }
+    const digest = createHmac('sha256', dataKey)
+        .update('Happy Codex Resume Session Tag v1', 'utf8')
+        .digest('base64url');
+    return `codex-gateway-root-v1-${digest}`;
+}
+
 export async function deriveCodexGatewayRootSessionIdentity(options: {
     gatewayId: string;
     sessionKeySeed: string;

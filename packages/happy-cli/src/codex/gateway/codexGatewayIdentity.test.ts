@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { deriveCodexGatewayRootSessionIdentity } from './codexGatewayIdentity';
+import {
+    deriveCodexGatewayResumeSessionTag,
+    deriveCodexGatewayRootSessionIdentity,
+} from './codexGatewayIdentity';
+
+describe('deriveCodexGatewayResumeSessionTag', () => {
+    it('uses the supported V4 root prefix and remains deterministic', () => {
+        const key = Buffer.alloc(32, 11);
+        const first = deriveCodexGatewayResumeSessionTag(key);
+
+        expect(first).toMatch(/^codex-gateway-root-v1-[A-Za-z0-9_-]+$/);
+        expect(deriveCodexGatewayResumeSessionTag(key)).toBe(first);
+        expect(deriveCodexGatewayResumeSessionTag(Buffer.alloc(32, 12))).not.toBe(first);
+        expect(first).not.toContain(key.toString('base64url'));
+    });
+
+    it('rejects malformed data keys', () => {
+        expect(() => deriveCodexGatewayResumeSessionTag(Buffer.alloc(31)))
+            .toThrow('resume session data key');
+    });
+});
 
 describe('deriveCodexGatewayRootSessionIdentity', () => {
     it('is deterministic per Gateway and thread while isolating both scopes', async () => {

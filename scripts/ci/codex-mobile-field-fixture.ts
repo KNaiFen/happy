@@ -45,7 +45,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 7;
+    schemaVersion: 8;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     const codexVersion = configureOfficialCodexPath();
     responsesFixture = await startCodexResponsesFixture({
         preferFixtureMcpTool: true,
-        mcpFollowupDelayMs: 5_000,
+        mcpFollowupDelayMs: 20_000,
     });
     const codexHome = join(fixtureRoot, 'codex-home');
     await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl, {
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 7,
+        schemaVersion: 8,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -174,7 +174,7 @@ async function main(): Promise<void> {
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 7,
+            schemaVersion: 8,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 7,
+        schemaVersion: 8,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -502,7 +502,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 7,
+        schemaVersion: 8,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -590,7 +590,7 @@ async function verifyFieldRoundTrip(
             diagnostic.entityCounts = Object.fromEntries(
                 [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)),
             );
-            diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 1;
+            diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 2;
             const provider = responsesFixture?.snapshot();
             diagnostic.cliRoundTripObserved = (
                 diagnostic.commandAccepted

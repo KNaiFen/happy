@@ -84,6 +84,43 @@ tags:
 - assertNotVisible: Used 2 tools
 - takeScreenshot: codex-live-single-mcp
 
+- extendedWaitUntil:
+    visible:
+      text: Queue
+      selected: true
+    timeout: 30000
+- assertVisible:
+    text: Steer
+    enabled: true
+- tapOn:
+    text: Steer
+    enabled: true
+- assertVisible:
+    text: Steer
+    selected: true
+- tapOn: Queue
+- assertVisible:
+    text: Queue
+    selected: true
+
+- tapOn:
+    id: agent-input-message
+- setClipboard: queue-from-android-e2e
+- pasteText
+- assertVisible: queue-from-android-e2e
+- hideKeyboard
+- tapOn:
+    id: agent-input-send
+- extendedWaitUntil:
+    visible: Edit queued message
+    timeout: 30000
+- assertVisible: Send to active turn
+- assertVisible: queue-from-android-e2e
+- takeScreenshot: codex-queued-follow-up
+- extendedWaitUntil:
+    notVisible: Edit queued message
+    timeout: 60000
+
 - scrollUntilVisible:
     element: Official Codex MCP E2E response
     direction: DOWN
