@@ -115,10 +115,18 @@ test.describe('terminal-origin Gateway', () => {
 
         terminal.write('/resume');
         terminal.submit();
-        await expect(terminal.getByText('mock-model default', {
-            full: true,
-            strict: false,
-        })).toBeVisible({ timeout: 30_000 });
+        await waitUntil(async () => {
+            const status = await readStatus({});
+            throwOnGatewayTransportFailure(status);
+            const visibleText = terminal.getViewableBuffer()
+                .map((row) => row.join(''))
+                .join('\n');
+            if (visibleText.includes('Failed to start TUI session picker')) {
+                throw new Error('the remote session picker failed to connect');
+            }
+            return visibleText.includes('Resume a previous session')
+                && visibleText.includes('Type to search');
+        }, 30_000, 'remote session picker');
         const terminalText = terminal.getBuffer()
             .map((row) => row.join(''))
             .join('\n');
@@ -127,8 +135,15 @@ test.describe('terminal-origin Gateway', () => {
             false,
             'the remote session picker failed to open a second App Server connection',
         );
-        terminal.write('\x1B');
-        await delay(500);
+        terminal.keyEscape();
+        await waitUntil(async () => {
+            const status = await readStatus({});
+            throwOnGatewayTransportFailure(status);
+            return !terminal.getViewableBuffer()
+                .map((row) => row.join(''))
+                .join('\n')
+                .includes('Resume a previous session');
+        }, 30_000, 'remote session picker dismissal');
         const afterResumePicker = await readStatus({});
         throwOnGatewayTransportFailure(afterResumePicker);
         assert.equal(afterResumePicker.gateway?.gatewayId, idleGateway.gateway?.gatewayId);

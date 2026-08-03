@@ -169,7 +169,7 @@ create_encrypted_business_state() {
                 "X-Happy-Client": "cli/ci",
             };
             const machineId = `ci-byte-machine-${Date.now()}`;
-            const sessionTag = `ci-byte-session-${Date.now()}`;
+            const sessionTag = `codex-gateway-root-v1-ci-byte-session-${Date.now()}`;
             const machineKey = Buffer.from([0, 1, 2, 127, 128, 254, 255]).toString("base64");
             const sessionKey = Buffer.from([255, 254, 128, 127, 2, 1, 0]).toString("base64");
 
