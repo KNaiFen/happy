@@ -114,6 +114,13 @@ test.describe('terminal-origin Gateway', () => {
         assert.equal(stableIdleGateway.gateway?.providerAlive, true);
 
         terminal.write('/resume');
+        await expect(terminal.getByText('/resume', {
+            full: true,
+            strict: false,
+        })).toBeVisible({ timeout: 10_000 });
+        // tui-test writes the command in one burst, so dismiss the slash-command
+        // completion layer before Enter submits the exact command.
+        terminal.keyEscape();
         terminal.submit();
         await waitUntil(async () => {
             const status = await readStatus({});

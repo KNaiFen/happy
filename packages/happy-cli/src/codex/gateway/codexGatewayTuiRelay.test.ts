@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { connectCodexGatewayWebSocket } from './codexGatewayProxy';
+import { CodexGatewayAttachmentManager } from './codexGatewayAttachment';
+import { CodexGatewayProxy, connectCodexGatewayWebSocket } from './codexGatewayProxy';
 import { startCodexGatewayTuiRelay } from './codexGatewayTuiRelay';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -67,6 +68,103 @@ describe('Codex Gateway TUI attachment relay', () => {
         expect(upstream.connections).toHaveBeenCalledTimes(2);
     });
 
+    it('initializes a picker and lists threads through the nested authenticated proxies', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-tui-relay-'));
+        const providerSocketPath = join(root, 'provider.sock');
+        const tuiSocketPath = join(root, 'tui.sock');
+        const token = 'attachment-token-that-is-at-least-thirty-two-bytes';
+        const provider = await startAuthenticatedUnixServer(providerSocketPath, null, {
+            responseForMessage: (message) => {
+                const request = JSON.parse(message) as {
+                    id?: string | number;
+                    method?: string;
+                };
+                if (request.method === 'initialize') {
+                    return JSON.stringify({
+                        id: request.id,
+                        result: {
+                            userAgent: 'codex-cli/0.146.0',
+                            codexHome: root,
+                            platformFamily: 'unix',
+                            platformOs: 'linux',
+                        },
+                    });
+                }
+                if (request.method === 'thread/list') {
+                    return JSON.stringify({
+                        id: request.id,
+                        result: { data: [], nextCursor: null },
+                    });
+                }
+                return null;
+            },
+        });
+        const attachment = new CodexGatewayAttachmentManager({ origin: 'terminal' });
+        attachment.register({
+            attachmentId: 'attachment-id',
+            connectionToken: token,
+            normalExitNonce: 'normal-exit-nonce',
+        });
+        const workerProxy = new CodexGatewayProxy(
+            { socketPath: tuiSocketPath },
+            { socketPath: providerSocketPath },
+            {
+                claimTerminal: (connectionId, bearerToken) => attachment.claim(connectionId, bearerToken),
+                terminalDisconnected: (connectionId) => attachment.disconnect(connectionId),
+            },
+        );
+        await workerProxy.start();
+        const relay = await startCodexGatewayTuiRelay({
+            upstreamSocketPath: tuiSocketPath,
+            bearerToken: token,
+        });
+        cleanups.push(async () => {
+            await relay.close();
+            await workerProxy.close();
+            attachment.dispose();
+            await provider.close();
+            await rm(root, { recursive: true, force: true });
+        });
+
+        const primary = connectCodexGatewayWebSocket({
+            url: relay.remoteUrl,
+            bearerToken: token,
+        });
+        const picker = connectCodexGatewayWebSocket({
+            url: relay.remoteUrl,
+            bearerToken: token,
+        });
+        cleanups.push(async () => {
+            primary.terminate();
+            picker.terminate();
+        });
+        await Promise.all([opened(primary), opened(picker)]);
+
+        const primaryInitialize = nextMessage(primary);
+        const pickerInitialize = nextMessage(picker);
+        primary.send(JSON.stringify({ id: 'initialize', method: 'initialize', params: {} }));
+        picker.send(JSON.stringify({ id: 'initialize', method: 'initialize', params: {} }));
+        await expect(Promise.all([primaryInitialize, pickerInitialize])).resolves.toEqual([
+            expect.stringContaining('"id":"initialize"'),
+            expect.stringContaining('"id":"initialize"'),
+        ]);
+
+        primary.send(JSON.stringify({ method: 'initialized' }));
+        picker.send(JSON.stringify({ method: 'initialized' }));
+        const listed = nextMessage(picker);
+        picker.send(JSON.stringify({
+            id: 1,
+            method: 'thread/list',
+            params: { cursor: null, limit: 100, sortKey: 'updated_at' },
+        }));
+        await expect(listed).resolves.toBe(JSON.stringify({
+            id: 1,
+            result: { data: [], nextCursor: null },
+        }));
+        expect(provider.connections).toHaveBeenCalledTimes(2);
+        expect(provider.authorizationHeaders).toEqual([undefined, undefined]);
+    });
+
     it('forwards a provider frame larger than the former 4 MiB transport limit', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-tui-relay-'));
         const socketPath = join(root, 'tui.sock');
@@ -104,8 +202,11 @@ describe('Codex Gateway TUI attachment relay', () => {
 
 async function startAuthenticatedUnixServer(
     socketPath: string,
-    expectedToken: string,
-    options: { providerResponse?: string } = {},
+    expectedToken: string | null,
+    options: {
+        providerResponse?: string;
+        responseForMessage?: (message: string) => string | null;
+    } = {},
 ): Promise<{
     authorizationHeaders: Array<string | undefined>;
     connections: ReturnType<typeof vi.fn>;
@@ -117,7 +218,8 @@ async function startAuthenticatedUnixServer(
     const connections = vi.fn();
     server.on('upgrade', (request, socket, head) => {
         authorizationHeaders.push(request.headers.authorization);
-        if (request.headers.authorization !== `Bearer ${expectedToken}`) {
+        const expectedAuthorization = expectedToken ? `Bearer ${expectedToken}` : undefined;
+        if (request.headers.authorization !== expectedAuthorization) {
             socket.write([
                 'HTTP/1.1 401 Unauthorized',
                 'Connection: close',
@@ -135,7 +237,12 @@ async function startAuthenticatedUnixServer(
     webSocketServer.on('connection', (socket) => {
         connections();
         socket.on('message', (data, isBinary) => {
-            socket.send(options.providerResponse ?? `provider:${data.toString()}`, {
+            const message = data.toString();
+            const response = options.responseForMessage
+                ? options.responseForMessage(message)
+                : options.providerResponse ?? `provider:${message}`;
+            if (response === null) return;
+            socket.send(response, {
                 binary: isBinary,
             });
         });
