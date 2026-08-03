@@ -94,6 +94,55 @@ describe('CodexV4CommandExecutor', () => {
         expect(result).toEqual({ threadId: 'thread-1', turnId: 'turn-1' });
     });
 
+    it('starts a queued follow-up as a new official turn with the same idempotency key', async () => {
+        const client = fakeClient();
+        const result = await executor(client).execute(command('turn.queue', { text: 'next' }));
+
+        expect(client.steerTurnOnThread).not.toHaveBeenCalled();
+        expect(client.startTurnOnThread).toHaveBeenCalledWith(
+            'thread-1',
+            '[prepared] next',
+            expect.objectContaining({ clientUserMessageId: 'command-1' }),
+        );
+        expect(result).toEqual({ threadId: 'thread-1', turnId: 'turn-1' });
+    });
+
+    it('starts a new turn when an explicit steer loses the active-turn race locally', async () => {
+        const client = fakeClient();
+        const result = await executor(client, {
+            activeTurnId: () => null,
+        }).execute(command('turn.steer', { text: 'redirect' }, {
+            expectedTurnId: 'turn-finished',
+        }));
+
+        expect(client.steerTurnOnThread).not.toHaveBeenCalled();
+        expect(client.startTurnOnThread).toHaveBeenCalledWith(
+            'thread-1',
+            '[prepared] redirect',
+            expect.objectContaining({ clientUserMessageId: 'command-1' }),
+        );
+        expect(result).toEqual({ threadId: 'thread-1', turnId: 'turn-1' });
+    });
+
+    it('reconciles a failed steer snapshot and starts after the provider turn ended', async () => {
+        const client = fakeClient({
+            steerTurnOnThread: vi.fn(async () => { throw new Error('turn is no longer active'); }),
+            readThreadComplete: vi.fn(async () => ({
+                thread: { id: 'thread-1', turns: [{ id: 'turn-finished', status: 'completed', items: [] }] },
+            })),
+        });
+        const result = await executor(client).execute(command('turn.steer', { text: 'redirect' }, {
+            expectedTurnId: 'turn-finished',
+        }));
+
+        expect(client.startTurnOnThread).toHaveBeenCalledOnce();
+        expect(result).toEqual({
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            result: { deliveryMode: 'startAfterSteerRace' },
+        });
+    });
+
     it('checks the binding immediately after asynchronous input preparation and before the provider call', async () => {
         const client = fakeClient();
         const prepareAttachments = vi.fn(async () => ([{
@@ -176,6 +225,25 @@ describe('CodexV4CommandExecutor', () => {
             action: 'succeeded',
             threadId: 'thread-1',
             turnId: 'turn-from-snapshot',
+        });
+    });
+
+    it('reconciles a queued turn through the same official client id', async () => {
+        const client = fakeClient({
+            readThreadComplete: vi.fn(async () => ({
+                thread: {
+                    id: 'thread-1',
+                    turns: [{
+                        id: 'turn-from-queue',
+                        items: [{ type: 'userMessage', id: 'item-1', clientId: 'command-1', content: [] }],
+                    }],
+                },
+            })),
+        });
+        await expect(executor(client).reconcile(command('turn.queue', { text: 'next' }))).resolves.toEqual({
+            action: 'succeeded',
+            threadId: 'thread-1',
+            turnId: 'turn-from-queue',
         });
     });
 

@@ -174,6 +174,17 @@ const journalRecordSchema = z.discriminatedUnion("kind", [
     }).strict(),
     z.object({
         version: z.literal(JOURNAL_VERSION),
+        kind: z.literal("commandTransitionBatch"),
+        transitions: z.array(z.object({
+            commandId: z.string().min(1).max(512),
+            status: SyncV4CommandJournalStatusSchema,
+            updatedAt: z.number().int().nonnegative(),
+            mutation: SyncMutationV4Schema,
+            command: CodexCommandEntityV4Schema.optional(),
+        }).strict()).min(1).max(16),
+    }).strict(),
+    z.object({
+        version: z.literal(JOURNAL_VERSION),
         kind: z.literal("providerRequest"),
         request: CodexRequestEntityV4Schema,
         state: syncV4ProviderRequestRecordStateSchema,
@@ -480,6 +491,23 @@ export class SyncV4Journal {
         }]);
     }
 
+    async appendCommandTransitionBatch(transitions: Array<{
+        commandId: string;
+        status: SyncV4CommandJournalStatus;
+        mutation: SyncMutationV4;
+        command?: CodexCommandEntityV4;
+    }>): Promise<void> {
+        const updatedAt = this.now();
+        await this.appendRecords([{
+            version: JOURNAL_VERSION,
+            kind: "commandTransitionBatch",
+            transitions: transitions.map((transition) => ({
+                ...transition,
+                updatedAt,
+            })),
+        }]);
+    }
+
     async appendProviderRequestTransition(
         request: CodexRequestEntityV4,
         state: SyncV4ProviderRequestJournalState,
@@ -735,21 +763,11 @@ export class SyncV4Journal {
                 this.applyCursor(record.seq);
                 return;
             case "commandTransition":
-                this.pendingOutbound.set(record.mutation.mutationId, record.mutation);
-                this.pendingOutboundEnqueuedAt.set(
-                    record.mutation.mutationId,
-                    Math.min(
-                        this.pendingOutboundEnqueuedAt.get(record.mutation.mutationId) ?? record.updatedAt,
-                        record.updatedAt,
-                    ),
-                );
-                this.applyRevision(record.mutation.entityId, record.mutation.revision);
-                this.commandStatuses.set(record.commandId, record.status);
-                this.commandUpdatedAt.set(record.commandId, record.updatedAt);
-                if (isPendingCommandStatus(record.status) && record.command) {
-                    this.commands.set(record.commandId, record.command);
-                } else if (!isPendingCommandStatus(record.status)) {
-                    this.commands.delete(record.commandId);
+                this.applyCommandTransition(record);
+                return;
+            case "commandTransitionBatch":
+                for (const transition of record.transitions) {
+                    this.applyCommandTransition(transition);
                 }
                 return;
             case "providerRequest":
@@ -802,6 +820,31 @@ export class SyncV4Journal {
             entityId,
             Math.max(this.entityRevisions.get(entityId) ?? 0, revision),
         );
+    }
+
+    private applyCommandTransition(transition: {
+        commandId: string;
+        status: SyncV4CommandJournalStatus;
+        updatedAt: number;
+        mutation: SyncMutationV4;
+        command?: CodexCommandEntityV4;
+    }): void {
+        this.pendingOutbound.set(transition.mutation.mutationId, transition.mutation);
+        this.pendingOutboundEnqueuedAt.set(
+            transition.mutation.mutationId,
+            Math.min(
+                this.pendingOutboundEnqueuedAt.get(transition.mutation.mutationId) ?? transition.updatedAt,
+                transition.updatedAt,
+            ),
+        );
+        this.applyRevision(transition.mutation.entityId, transition.mutation.revision);
+        this.commandStatuses.set(transition.commandId, transition.status);
+        this.commandUpdatedAt.set(transition.commandId, transition.updatedAt);
+        if (isPendingCommandStatus(transition.status) && transition.command) {
+            this.commands.set(transition.commandId, transition.command);
+        } else if (!isPendingCommandStatus(transition.status)) {
+            this.commands.delete(transition.commandId);
+        }
     }
 
     private applyCursor(seq: number): void {

@@ -348,6 +348,8 @@ export const ja: TranslationStructure = {
         forkErrorMissingUuid: '選んだ巻き戻しポイントがソースセッションに存在しません — 切り詰めなしのフォークをお試しください。',
         forkErrorMissingMetadata: 'フォークに必要なセッションのメタデータがありません。',
         forkErrorGeneric: 'セッションのフォークに失敗しました。',
+        followUpQueue: 'キュー',
+        followUpSteer: '指示',
     },
 
     commandPalette: {

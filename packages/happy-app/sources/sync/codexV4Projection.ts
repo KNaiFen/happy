@@ -63,6 +63,14 @@ export interface CodexV4ProjectionUpdate {
     revision: number;
 }
 
+export interface CodexV4QueuedMessage {
+    id: string;
+    commandId: string;
+    text: string;
+    createdAt: number;
+    command: CodexCommandEntityV4;
+}
+
 export function hasCodexV4ProviderUserMessage(
     projection: CodexV4Projection | null | undefined,
     clientUserMessageId: string,
@@ -82,6 +90,59 @@ export function newestCodexV4CommandResult(
             .map((providerId) => projection.entities['codex.commandResult'][providerId])
             .filter((entity): entity is CodexCommandResultEntityV4 => Boolean(entity)),
     );
+}
+
+export function codexV4QueuedMessages(
+    projection: CodexV4Projection | null | undefined,
+): CodexV4QueuedMessage[] {
+    if (!projection) return [];
+    const groups = new Map<string, CodexCommandEntityV4[]>();
+    for (const command of Object.values(projection.entities['codex.command'])) {
+        const queueEntryId = commandQueueEntryId(command);
+        if (!queueEntryId) continue;
+        const commands = groups.get(queueEntryId) ?? [];
+        commands.push(command);
+        groups.set(queueEntryId, commands);
+    }
+
+    const queued: CodexV4QueuedMessage[] = [];
+    for (const [queueEntryId, commands] of groups) {
+        const ordered = [...commands].sort((left, right) => (
+            left.createdAt - right.createdAt || left.commandId.localeCompare(right.commandId)
+        ));
+        const effective = [...ordered].reverse().find((command) => {
+            const result = newestCodexV4CommandResult(projection, command.commandId);
+            const status = result ? commandResultStatus(result) : null;
+            return !result
+                || (status !== 'failed'
+                    && status !== 'notReplayed'
+                    && !(status === 'cancelled' && commandResultReason(result) === 'commandReplaced'));
+        });
+        if (!effective || effective.command !== 'turn.queue') continue;
+        const result = newestCodexV4CommandResult(projection, effective.commandId);
+        const resultStatus = result ? commandResultStatus(result) : null;
+        if (
+            resultStatus === 'succeeded'
+            || resultStatus === 'failed'
+            || resultStatus === 'notReplayed'
+            || resultStatus === 'cancelled'
+            || hasCodexV4ProviderUserMessage(projection, effective.clientUserMessageId)
+        ) continue;
+        const payload = jsonObject(effective.payload);
+        const text = typeof payload.displayText === 'string'
+            ? payload.displayText
+            : typeof payload.text === 'string' ? payload.text : '';
+        queued.push({
+            id: queueEntryId,
+            commandId: effective.commandId,
+            text,
+            createdAt: commandQueuedAt(ordered[0]),
+            command: effective,
+        });
+    }
+    return queued.sort((left, right) => (
+        left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+    ));
 }
 
 export function createCodexV4Projection(selectedThreadId: string | null = null): CodexV4Projection {
@@ -887,7 +948,7 @@ function projectCommand(
     result: CodexCommandResultEntityV4 | undefined,
     hidden: boolean,
 ): Message | null {
-    if (hidden) return null;
+    if (hidden || command.command === 'turn.queue') return null;
     const displayText = jsonObject(command.payload).displayText;
     if (typeof displayText !== 'string' || displayText.length === 0) return null;
     const threadId = result?.threadId ?? command.threadId;
@@ -995,8 +1056,36 @@ function shouldProjectCommandResult(
     result: CodexCommandResultEntityV4,
     command: CodexCommandEntityV4 | undefined,
 ): boolean {
+    if (command?.command === 'turn.queue') {
+        const status = commandResultStatus(result);
+        return status === 'failed'
+            || status === 'notReplayed'
+            || (status === 'cancelled' && commandResultReason(result) !== 'commandReplaced');
+    }
     return isCommandFailure(result.status)
         || Boolean(command && QUERY_COMMANDS.has(command.command));
+}
+
+function commandQueueEntryId(command: CodexCommandEntityV4): string | null {
+    const value = (command as CodexCommandEntityV4 & {
+        queueEntryId?: string | null;
+    }).queueEntryId;
+    return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function commandQueuedAt(command: CodexCommandEntityV4): number {
+    const value = (command as CodexCommandEntityV4 & { queuedAt?: number }).queuedAt;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? value
+        : command.createdAt;
+}
+
+function commandResultStatus(result: CodexCommandResultEntityV4): string {
+    return result.status as string;
+}
+
+function commandResultReason(result: CodexCommandResultEntityV4): string | null {
+    return (result as CodexCommandResultEntityV4 & { reason?: string | null }).reason ?? null;
 }
 
 function isCommandFailure(status: CodexCommandResultEntityV4['status']): boolean {

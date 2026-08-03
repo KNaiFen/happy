@@ -486,6 +486,8 @@ export const ru: TranslationStructure = {
         forkErrorMissingUuid: 'Выбранная точка отката больше не существует в исходной сессии — попробуйте форк без обрезки.',
         forkErrorMissingMetadata: 'Не хватает метаданных сессии для форка.',
         forkErrorGeneric: 'Не удалось форкнуть сессию.',
+        followUpQueue: 'В очередь',
+        followUpSteer: 'Направить',
     },
 
     commandPalette: {

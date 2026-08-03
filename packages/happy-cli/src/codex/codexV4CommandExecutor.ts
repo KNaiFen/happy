@@ -29,6 +29,7 @@ interface CommandExecutorOptions {
     };
     resolveEffort?: (model: string | undefined, effort: string | undefined) => string | null | undefined;
     beforeProviderCall?: (command: CodexCommandEntityV4) => void;
+    activeTurnId?: (threadId: string) => string | null;
 }
 
 export interface CodexV4AttachmentReference {
@@ -121,23 +122,45 @@ export class CodexV4CommandExecutor {
             }
             case 'turn.start':
                 return await this.startTurn(command, payload);
+            case 'turn.queue':
+                return await this.startTurn(command, payload);
             case 'turn.steer': {
                 const threadId = commandThreadId(command, payload);
                 const expectedTurnId = command.expectedTurnId ?? requiredString(
                     payload.expectedTurnId,
                     'turn.steer requires expectedTurnId',
                 );
+                if (
+                    this.options.activeTurnId
+                    && this.options.activeTurnId(threadId) !== expectedTurnId
+                ) {
+                    return await this.startTurn(command, payload);
+                }
                 const extraInputItems = await this.extraInputItems(payload, command);
                 const text = optionalString(payload.text) ?? '';
                 if (!text && extraInputItems.length === 0) throw new Error('turn.steer requires input');
                 this.beforeProviderCall(command);
-                await this.options.client.steerTurnOnThread(
-                    threadId,
-                    expectedTurnId,
-                    text,
-                    { clientUserMessageId: command.commandId, extraInputItems },
-                );
-                return { threadId, turnId: expectedTurnId };
+                try {
+                    await this.options.client.steerTurnOnThread(
+                        threadId,
+                        expectedTurnId,
+                        text,
+                        { clientUserMessageId: command.commandId, extraInputItems },
+                    );
+                    return { threadId, turnId: expectedTurnId, result: { deliveryMode: 'steer' } };
+                } catch (error) {
+                    this.beforeProviderCall(command);
+                    const snapshot = await this.options.client.readThreadComplete({ threadId });
+                    const submittedTurnId = findClientUserMessage(snapshot.thread, command.commandId);
+                    if (submittedTurnId) {
+                        return { threadId, turnId: submittedTurnId, result: { deliveryMode: 'steer' } };
+                    }
+                    if (!activeTurnIdFromThread(snapshot.thread)) {
+                        const started = await this.startTurn(command, payload);
+                        return { ...started, result: { deliveryMode: 'startAfterSteerRace' } };
+                    }
+                    throw error;
+                }
             }
             case 'turn.interrupt': {
                 const threadId = commandThreadId(command, payload);
@@ -227,7 +250,11 @@ export class CodexV4CommandExecutor {
     }
 
     async reconcile(command: CodexCommandEntityV4): Promise<CodexV4CommandReconciliation> {
-        if (command.command === 'turn.start' || command.command === 'turn.steer') {
+        if (
+            command.command === 'turn.start'
+            || command.command === 'turn.queue'
+            || command.command === 'turn.steer'
+        ) {
             const payload = commandPayload(command.payload);
             const threadId = commandThreadId(command, payload);
             const snapshot = await this.options.client.readThreadComplete({ threadId });
@@ -332,6 +359,10 @@ function findClientUserMessage(thread: Thread, commandId: string): string | null
         }
     }
     return null;
+}
+
+function activeTurnIdFromThread(thread: Thread): string | null {
+    return thread.turns.find((turn) => turn.status === 'inProgress')?.id ?? null;
 }
 
 function reviewTarget(value: unknown): ReviewStartParams['target'] {

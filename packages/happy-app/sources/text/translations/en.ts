@@ -361,6 +361,8 @@ export const en: TranslationStructure = {
         forkErrorMissingUuid: 'The chosen rewind point is no longer present in the source session — try forking without truncation.',
         forkErrorMissingMetadata: 'Missing session metadata required to fork.',
         forkErrorGeneric: 'Failed to fork the session.',
+        followUpQueue: 'Queue',
+        followUpSteer: 'Steer',
     },
 
     commandPalette: {

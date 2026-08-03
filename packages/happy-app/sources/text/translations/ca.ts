@@ -347,6 +347,8 @@ export const ca: TranslationStructure = {
         forkErrorMissingUuid: 'El punt de retrocés escollit ja no existeix a la sessió origen — prova a bifurcar sense truncar.',
         forkErrorMissingMetadata: 'Falten metadades de la sessió necessàries per bifurcar.',
         forkErrorGeneric: 'No s\'ha pogut bifurcar la sessió.',
+        followUpQueue: 'En cua',
+        followUpSteer: 'Guiar',
     },
 
     commandPalette: {

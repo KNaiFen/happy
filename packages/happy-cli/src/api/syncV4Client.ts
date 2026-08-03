@@ -532,6 +532,74 @@ export class SyncV4Client {
         return mutation;
     }
 
+    async publishCommandReplacement(
+        previousCommand: CodexCommandEntityV4,
+        previousResult: CodexCommandResultEntityV4,
+        replacementCommand: CodexCommandEntityV4,
+        replacementResult: CodexCommandResultEntityV4,
+    ): Promise<[SyncMutationV4, SyncMutationV4]> {
+        const canonicalPrevious = CodexCommandResultEntityV4Schema.parse(previousResult);
+        const canonicalReplacement = CodexCommandResultEntityV4Schema.parse(replacementResult);
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        const mutations = await this.publishLock.inLock(async () => {
+            const createMutation = async (result: CodexCommandResultEntityV4): Promise<SyncMutationV4> => {
+                this.assertCurrentGeneration(generation);
+                const entityId = await this.crypto.opaqueEntityId(result.entityType, result.providerId);
+                const revision = this.journal.nextRevision(entityId);
+                const aad = {
+                    sessionId: this.sessionId,
+                    entityId,
+                    entityType: result.entityType,
+                    revision,
+                    op: "upsert" as const,
+                };
+                return SyncMutationV4Schema.parse({
+                    mutationId: randomUUID(),
+                    producerId: this.producerId,
+                    entityId,
+                    entityType: result.entityType,
+                    revision,
+                    op: aad.op,
+                    ciphertext: await this.crypto.encryptEntity(aad, result),
+                });
+            };
+            const previousMutation = await createMutation(canonicalPrevious);
+            const replacementMutation = await createMutation(canonicalReplacement);
+            this.assertCurrentGeneration(generation);
+            await this.journal.appendCommandTransitionBatch([
+                {
+                    commandId: previousCommand.commandId,
+                    status: "cancelled",
+                    mutation: previousMutation,
+                    command: previousCommand,
+                },
+                {
+                    commandId: replacementCommand.commandId,
+                    status: "received",
+                    mutation: replacementMutation,
+                    command: replacementCommand,
+                },
+            ]);
+            return [previousMutation, replacementMutation] as [SyncMutationV4, SyncMutationV4];
+        });
+        for (const [command, state] of [
+            [previousCommand, "cancelled"],
+            [replacementCommand, "received"],
+        ] as const) {
+            this.recordDiagnostic({
+                level: "debug",
+                event: "request",
+                phase: "changed",
+                source: "command",
+                commandHash: syncV4DiagnosticHash(command.commandId),
+                state,
+            });
+        }
+        if (this.started) this.sendSync.invalidate();
+        return mutations;
+    }
+
     async publishProviderRequestTransition(
         request: CodexRequestEntityV4,
         state: SyncV4ProviderRequestJournalState = request.status === "pending"
@@ -927,6 +995,10 @@ export class SyncV4Client {
 
     getCommandStatus(commandId: string): SyncV4CommandJournalStatus | undefined {
         return this.journal.snapshot().commandStatuses.get(commandId);
+    }
+
+    getCommand(commandId: string): CodexCommandEntityV4 | undefined {
+        return this.journal.snapshot().commands.get(commandId);
     }
 
     getPendingCommands(): Array<{

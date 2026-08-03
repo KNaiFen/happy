@@ -103,7 +103,7 @@ describe('Codex v4 App commands', () => {
         });
     });
 
-    it('starts while idle and steers only the currently identified active turn', () => {
+    it('starts while idle, queues by default, and steers only when requested', () => {
         const parsed = parseCodexV4Input('hello', []);
         expect(commandForCodexV4Input({
             parsed,
@@ -119,6 +119,16 @@ describe('Codex v4 App commands', () => {
             projection: projection(true),
             mode: {},
         })).toMatchObject({
+            command: 'turn.queue',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-1',
+        });
+        expect(commandForCodexV4Input({
+            parsed,
+            projection: projection(true),
+            mode: {},
+            followUpMode: 'steer',
+        })).toMatchObject({
             command: 'turn.steer',
             threadId: 'thread-1',
             expectedTurnId: 'turn-1',
@@ -131,6 +141,39 @@ describe('Codex v4 App commands', () => {
         })).toMatchObject({
             command: 'turn.start',
             threadId: 'thread-2',
+        });
+    });
+
+    it('assigns stable queue metadata when the command is materialized', () => {
+        const entity = createCodexV4Command(commandForCodexV4Input({
+            parsed: parseCodexV4Input('follow up', []),
+            projection: projection(true),
+            mode: {},
+        }), { commandId: 'queue-command-1', now: 200 });
+
+        expect(entity).toMatchObject({
+            command: 'turn.queue',
+            queueEntryId: 'queue-command-1',
+            queuedAt: 200,
+        });
+    });
+
+    it('queues during the runtime-active window before the turn entity arrives', () => {
+        const activeRuntime = projection(false);
+        activeRuntime.runtime = {
+            threadId: 'thread-1',
+            execution: { type: 'active', activeFlags: [] },
+        } as unknown as typeof activeRuntime.runtime;
+
+        expect(commandForCodexV4Input({
+            parsed: parseCodexV4Input('arrived early', []),
+            projection: activeRuntime,
+            mode: {},
+            followUpMode: 'steer',
+        })).toMatchObject({
+            command: 'turn.queue',
+            threadId: 'thread-1',
+            expectedTurnId: null,
         });
     });
 

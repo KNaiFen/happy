@@ -390,6 +390,11 @@ export class CodexGatewayRuntimeFactory {
                 diagnostics: this.options.diagnostics,
                 diagnosticSessionHash: sync.diagnosticSessionHash,
                 onError: (error) => this.reportError(error),
+                onTurnStateChanged: (threadId) => {
+                    void commandProcessor?.providerTurnStateChanged(threadId).catch((error) => {
+                        this.reportError(error);
+                    });
+                },
             });
             requestBroker = new CodexV4RequestBroker({ mapper });
             const commandExecutor = new CodexV4CommandExecutor({
@@ -427,6 +432,7 @@ export class CodexGatewayRuntimeFactory {
                         bindingGeneration?: number;
                     }).bindingGeneration);
                 },
+                activeTurnId: (threadId) => mapper?.activeTurnId(threadId) ?? null,
             });
             commandProcessor = new CodexV4CommandProcessor({
                 store: sync,
@@ -508,6 +514,7 @@ export class CodexGatewayRuntimeFactory {
                     }
                     return await commandExecutor.reconcile(command);
                 },
+                isTurnActive: (threadId) => mapper?.activeTurnId(threadId) !== null,
                 onError: (error) => this.reportError(error),
             });
             return (event) => commandProcessor!.handle(event);
@@ -594,10 +601,10 @@ function assertGatewayTurnTarget(
     rootThreadId: string,
     readOnly: boolean,
 ): void {
-    if (readOnly || command.command !== 'turn.start') return;
+    if (readOnly || (command.command !== 'turn.start' && command.command !== 'turn.queue')) return;
     const target = codexV4CommandTargetThreadId(command);
     if (target !== rootThreadId) {
-        throw new Error('Codex Gateway turn.start requires the current root thread');
+        throw new Error(`Codex Gateway ${command.command} requires the current root thread`);
     }
 }
 

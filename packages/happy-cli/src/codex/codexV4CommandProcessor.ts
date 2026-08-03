@@ -30,7 +30,8 @@ export type CodexV4CommandReconciliation =
 export type CodexV4CommandCancellationReason =
     | 'bindingSuperseded'
     | 'threadHandoff'
-    | 'gatewayStopping';
+    | 'gatewayStopping'
+    | 'commandReplaced';
 
 export class CodexV4CommandCancelledError extends Error {
     constructor(
@@ -44,12 +45,19 @@ export class CodexV4CommandCancelledError extends Error {
 
 interface CommandStateStore {
     getCommandStatus(commandId: string): SyncV4CommandJournalStatus | undefined;
+    getCommand(commandId: string): CodexCommandEntityV4 | undefined;
     getPendingCommands(): Array<{ command: CodexCommandEntityV4; status: SyncV4CommandJournalStatus }>;
     publishCommandTransition(
         command: CodexCommandEntityV4,
         result: CodexCommandResultEntityV4,
         status: SyncV4CommandJournalStatus,
     ): ReturnType<SyncV4Client['publishCommandTransition']>;
+    publishCommandReplacement(
+        previousCommand: CodexCommandEntityV4,
+        previousResult: CodexCommandResultEntityV4,
+        replacementCommand: CodexCommandEntityV4,
+        replacementResult: CodexCommandResultEntityV4,
+    ): ReturnType<SyncV4Client['publishCommandReplacement']>;
 }
 
 interface CommandProcessorOptions {
@@ -60,6 +68,7 @@ interface CommandProcessorOptions {
     isOutcomeUnknown?: (error: unknown) => boolean;
     now?: () => number;
     reconcileIntervalMs?: number;
+    isTurnActive?: (threadId: string) => boolean;
     onError?: (error: unknown) => void;
 }
 
@@ -75,6 +84,7 @@ export class CodexV4CommandProcessor {
     private pipeline: Promise<void> = Promise.resolve();
     private readonly reconcileTimer: NodeJS.Timeout | null;
     private executionPaused: boolean;
+    private readonly queueStartsAwaitingLifecycle = new Set<string>();
     private closed = false;
 
     constructor(private readonly options: CommandProcessorOptions) {
@@ -93,9 +103,27 @@ export class CodexV4CommandProcessor {
 
     async recoverPending(): Promise<void> {
         if (this.closed) return;
+        let queuedCommandVisited = false;
         for (const { command } of this.options.store.getPendingCommands()) {
+            if (command.command === 'turn.queue') {
+                if (queuedCommandVisited) continue;
+            }
             await this.process(command);
+            if (
+                command.command === 'turn.queue'
+                && !TERMINAL_STATUSES.has(
+                    this.options.store.getCommandStatus(command.commandId) ?? 'received',
+                )
+            ) {
+                queuedCommandVisited = true;
+            }
         }
+    }
+
+    async providerTurnStateChanged(threadId: string): Promise<void> {
+        if (this.closed) return;
+        this.queueStartsAwaitingLifecycle.delete(threadId);
+        await this.recoverPending();
     }
 
     async resumeExecution(): Promise<void> {
@@ -141,11 +169,17 @@ export class CodexV4CommandProcessor {
         }
 
         if (!status) {
-            await this.transition(command, 'received');
+            if (command.replacesCommandId) {
+                if (!await this.adoptReplacement(command)) return;
+            } else {
+                await this.transition(command, 'received');
+            }
             status = 'received';
         }
         if (this.closed) return;
         if (this.executionPaused) return;
+
+        if (this.shouldDefer(command)) return;
 
         if (status === 'executing' || status === 'resultUnknown') {
             await this.reconcile(command);
@@ -158,6 +192,8 @@ export class CodexV4CommandProcessor {
     private async execute(command: CodexCommandEntityV4): Promise<void> {
         await this.transition(command, 'executing');
         if (this.closed) return;
+        const queuedThreadId = command.command === 'turn.queue' ? command.threadId : null;
+        if (queuedThreadId) this.queueStartsAwaitingLifecycle.add(queuedThreadId);
         try {
             const outcome = await this.options.execute(command);
             if (this.closed) return;
@@ -165,6 +201,7 @@ export class CodexV4CommandProcessor {
         } catch (error) {
             if (this.closed) return;
             if (error instanceof CodexV4CommandCancelledError) {
+                if (queuedThreadId) this.queueStartsAwaitingLifecycle.delete(queuedThreadId);
                 await this.transition(command, 'cancelled', {
                     error: error.message,
                     reason: error.reason,
@@ -177,6 +214,7 @@ export class CodexV4CommandProcessor {
                 });
                 return;
             }
+            if (queuedThreadId) this.queueStartsAwaitingLifecycle.delete(queuedThreadId);
             await this.transition(command, 'failed', { error: errorMessage(error) });
         }
     }
@@ -224,10 +262,58 @@ export class CodexV4CommandProcessor {
             reason?: CodexV4CommandCancellationReason;
         } = {},
     ): Promise<void> {
+        const result = this.resultFor(command, status, outcome);
+        await this.options.store.publishCommandTransition(command, result, status);
+    }
+
+    private async adoptReplacement(command: CodexCommandEntityV4): Promise<boolean> {
+        const previousCommandId = command.replacesCommandId;
+        const previous = previousCommandId
+            ? this.options.store.getCommand(previousCommandId)
+            : undefined;
+        const previousStatus = previousCommandId
+            ? this.options.store.getCommandStatus(previousCommandId)
+            : undefined;
+        const replacementQueueEntryId = queueEntryId(command);
+        const sameQueueEntry = previous && replacementQueueEntryId
+            && replacementQueueEntryId === (queueEntryId(previous) ?? previous.commandId);
+        const validReplacement = previous?.command === 'turn.queue'
+            && (command.command === 'turn.queue' || command.command === 'turn.steer')
+            && previous.threadId === command.threadId
+            && sameQueueEntry;
+        if (!validReplacement || previousStatus !== 'received') {
+            await this.transition(command, 'failed', {
+                error: 'The queued message is no longer available for replacement',
+            });
+            return false;
+        }
+        await this.options.store.publishCommandReplacement(
+            previous,
+            this.resultFor(previous, 'cancelled', {
+                error: 'Queued message replaced by a newer command',
+                reason: 'commandReplaced',
+            }),
+            command,
+            this.resultFor(command, 'received'),
+        );
+        return true;
+    }
+
+    private shouldDefer(command: CodexCommandEntityV4): boolean {
+        if (command.command !== 'turn.queue' || !command.threadId) return false;
+        return this.queueStartsAwaitingLifecycle.has(command.threadId)
+            || this.options.isTurnActive?.(command.threadId) === true;
+    }
+
+    private resultFor(
+        command: CodexCommandEntityV4,
+        status: SyncV4CommandJournalStatus,
+        outcome: CodexV4CommandOutcome & {
+            error?: string;
+            reason?: CodexV4CommandCancellationReason;
+        } = {},
+    ): CodexCommandResultEntityV4 {
         const now = Math.max(0, Math.trunc(this.options.now?.() ?? Date.now()));
-        // Consumers can typecheck against an older locally built happy-wire while
-        // source-only verification is running. The cloud build regenerates the
-        // package declarations before compiling this consumer.
         const result = {
             schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
             entityType: 'codex.commandResult',
@@ -243,7 +329,7 @@ export class CodexV4CommandProcessor {
             error: outcome.error ?? null,
             reason: outcome.reason ?? null,
         } as unknown as CodexCommandResultEntityV4;
-        await this.options.store.publishCommandTransition(command, result, status);
+        return result;
     }
 
     private isOutcomeUnknown(error: unknown): boolean {
@@ -264,4 +350,11 @@ function asJsonValue(value: unknown): JsonValue {
 
 function errorMessage(error: unknown): string {
     return error instanceof Error && error.message.length > 0 ? error.message : 'Codex command failed';
+}
+
+function queueEntryId(command: CodexCommandEntityV4): string | null {
+    const value = (command as CodexCommandEntityV4 & {
+        queueEntryId?: string | null;
+    }).queueEntryId;
+    return typeof value === 'string' && value.length > 0 ? value : null;
 }

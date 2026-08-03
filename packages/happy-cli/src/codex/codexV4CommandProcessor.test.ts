@@ -22,6 +22,10 @@ class FakeStore {
         return this.statuses.get(commandId);
     }
 
+    getCommand(commandId: string): CodexCommandEntityV4 | undefined {
+        return this.commands.get(commandId);
+    }
+
     getPendingCommands(): Array<{ command: CodexCommandEntityV4; status: SyncV4CommandJournalStatus }> {
         const result: Array<{ command: CodexCommandEntityV4; status: SyncV4CommandJournalStatus }> = [];
         for (const [commandId, command] of this.commands) {
@@ -51,10 +55,37 @@ class FakeStore {
             ciphertext: 'ciphertext',
         };
     }
+
+    async publishCommandReplacement(
+        previousCommand: CodexCommandEntityV4,
+        previousResult: CodexCommandResultEntityV4,
+        replacementCommand: CodexCommandEntityV4,
+        replacementResult: CodexCommandResultEntityV4,
+    ): Promise<[SyncMutationV4, SyncMutationV4]> {
+        this.commands.set(previousCommand.commandId, previousCommand);
+        this.statuses.set(previousCommand.commandId, 'cancelled');
+        this.commands.set(replacementCommand.commandId, replacementCommand);
+        this.statuses.set(replacementCommand.commandId, 'received');
+        this.transitions.push(previousResult, replacementResult);
+        const mutation = (index: number): SyncMutationV4 => ({
+            mutationId: `mutation-${index}`,
+            producerId: 'producer-1',
+            entityId: `opaque-result-${index}`,
+            entityType: 'codex.commandResult',
+            revision: index,
+            op: 'upsert',
+            ciphertext: 'ciphertext',
+        });
+        return [mutation(this.transitions.length - 1), mutation(this.transitions.length)];
+    }
 }
 
 function command(
-    overrides: Partial<CodexCommandEntityV4> & { bindingGeneration?: number } = {},
+    overrides: Partial<CodexCommandEntityV4> & {
+        bindingGeneration?: number;
+        queueEntryId?: string;
+        queuedAt?: number;
+    } = {},
 ): CodexCommandEntityV4 {
     return {
         schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
@@ -330,6 +361,163 @@ describe('CodexV4CommandProcessor', () => {
         await processor.handle(event(command({ clientUserMessageId: 'other' })));
         expect(execute).not.toHaveBeenCalled();
         expect(store.transitions).toMatchObject([{ status: 'failed', error: 'clientUserMessageId must equal commandId' }]);
+        processor.close();
+    });
+
+    it('keeps follow-ups durable while a turn is active and starts them after provider completion', async () => {
+        const store = new FakeStore();
+        let turnActive = true;
+        const execute = vi.fn(async () => ({ threadId: 'thread-1', turnId: 'turn-queued' }));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+            isTurnActive: () => turnActive,
+        });
+        const queued = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+        });
+
+        await processor.handle(event(queued));
+        expect(execute).not.toHaveBeenCalled();
+        expect(store.statuses.get(queued.commandId)).toBe('received');
+
+        turnActive = false;
+        await processor.providerTurnStateChanged('thread-1');
+        expect(execute).toHaveBeenCalledOnce();
+        expect(store.statuses.get(queued.commandId)).toBe('succeeded');
+        processor.close();
+    });
+
+    it('starts queued follow-ups one at a time in FIFO lifecycle order', async () => {
+        const store = new FakeStore();
+        let turnActive = true;
+        const executionOrder: string[] = [];
+        const execute = vi.fn(async (pending: CodexCommandEntityV4) => {
+            executionOrder.push(pending.commandId);
+            turnActive = true;
+            return { threadId: 'thread-1', turnId: `turn-${pending.commandId}` };
+        });
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+            isTurnActive: () => turnActive,
+        });
+        const first = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+        });
+        const second = command({
+            providerId: 'command-2',
+            commandId: 'command-2',
+            clientUserMessageId: 'command-2',
+            command: 'turn.queue',
+            queueEntryId: 'queue-2',
+            queuedAt: 200,
+            createdAt: 200,
+            updatedAt: 200,
+        });
+
+        await processor.handle(event(first));
+        await processor.handle(event(second));
+        turnActive = false;
+        await processor.providerTurnStateChanged('thread-1');
+        expect(executionOrder).toEqual(['command-1']);
+        expect(store.statuses.get(second.commandId)).toBe('received');
+
+        turnActive = false;
+        await processor.providerTurnStateChanged('thread-1');
+        expect(executionOrder).toEqual(['command-1', 'command-2']);
+        processor.close();
+    });
+
+    it('atomically replaces a received queue entry without changing its FIFO identity', async () => {
+        const store = new FakeStore();
+        let turnActive = true;
+        const execute = vi.fn(async (pending: CodexCommandEntityV4) => ({
+            threadId: pending.threadId,
+            turnId: 'turn-replacement',
+        }));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+            isTurnActive: () => turnActive,
+        });
+        const original = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+        });
+        const replacement = command({
+            providerId: 'command-edit',
+            commandId: 'command-edit',
+            clientUserMessageId: 'command-edit',
+            command: 'turn.queue',
+            payload: { text: 'edited' },
+            replacesCommandId: original.commandId,
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+            createdAt: 200,
+            updatedAt: 200,
+        });
+
+        await processor.handle(event(original));
+        await processor.handle(event(replacement));
+        expect(store.statuses.get(original.commandId)).toBe('cancelled');
+        expect(store.statuses.get(replacement.commandId)).toBe('received');
+        expect(store.transitions.slice(-2)).toMatchObject([
+            { commandId: original.commandId, status: 'cancelled', reason: 'commandReplaced' },
+            { commandId: replacement.commandId, status: 'received' },
+        ]);
+
+        turnActive = false;
+        await processor.providerTurnStateChanged('thread-1');
+        expect(execute).toHaveBeenCalledWith(replacement);
+        processor.close();
+    });
+
+    it('rejects a late replacement without changing the completed queue command', async () => {
+        const store = new FakeStore();
+        const execute = vi.fn(async () => ({ threadId: 'thread-1', turnId: 'turn-1' }));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+            isTurnActive: () => false,
+        });
+        const original = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+        });
+        const replacement = command({
+            providerId: 'command-late',
+            commandId: 'command-late',
+            clientUserMessageId: 'command-late',
+            command: 'turn.steer',
+            expectedTurnId: 'turn-active',
+            replacesCommandId: original.commandId,
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+            createdAt: 200,
+            updatedAt: 200,
+        });
+
+        await processor.handle(event(original));
+        await processor.handle(event(replacement));
+
+        expect(store.statuses.get(original.commandId)).toBe('succeeded');
+        expect(store.statuses.get(replacement.commandId)).toBe('failed');
+        expect(execute).toHaveBeenCalledTimes(1);
         processor.close();
     });
 });

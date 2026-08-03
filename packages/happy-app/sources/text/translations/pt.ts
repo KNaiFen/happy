@@ -346,6 +346,8 @@ export const pt: TranslationStructure = {
         forkErrorMissingUuid: 'O ponto de retrocesso escolhido não existe mais na sessão de origem — tente bifurcar sem truncar.',
         forkErrorMissingMetadata: 'Faltam metadados da sessão necessários para bifurcar.',
         forkErrorGeneric: 'Não foi possível bifurcar a sessão.',
+        followUpQueue: 'Na fila',
+        followUpSteer: 'Orientar',
     },
 
     commandPalette: {

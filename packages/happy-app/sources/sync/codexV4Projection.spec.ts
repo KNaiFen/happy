@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
     applyCodexV4ProjectionUpdate,
     applyCodexV4ProjectionUpdates,
+    codexV4QueuedMessages,
     createCodexV4Projection,
     resetCodexV4Projection,
     selectCodexV4ProjectionThread,
@@ -1061,6 +1062,130 @@ describe('Codex v4 projection', () => {
         expect(projection.messages).toMatchObject([{
             id: 'codex-v4:command:command-original',
             text: 'first',
+        }]);
+    });
+
+    it('keeps durable follow-ups in queue cards and preserves FIFO identity across edits', () => {
+        const original = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'queue-command-original',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'queue-command-original',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-active',
+            command: 'turn.queue',
+            payload: { text: 'first', displayText: 'first' },
+            clientUserMessageId: 'queue-command-original',
+            replacesCommandId: null,
+            queueEntryId: 'queue-entry-1',
+            queuedAt: 10,
+        } as unknown as CodexCommandEntityV4;
+        const replacement = {
+            ...original,
+            providerId: 'queue-command-edit',
+            createdAt: 20,
+            updatedAt: 20,
+            commandId: 'queue-command-edit',
+            payload: { text: 'edited', displayText: 'edited' },
+            clientUserMessageId: 'queue-command-edit',
+            replacesCommandId: original.commandId,
+        } as unknown as CodexCommandEntityV4;
+        const result = (
+            commandId: string,
+            status: string,
+            overrides: Record<string, unknown> = {},
+        ) => ({
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: `result-${commandId}`,
+            createdAt: 11,
+            updatedAt: 11,
+            commandId,
+            threadId: 'thread-1',
+            turnId: null,
+            status,
+            providerRequestId: null,
+            result: null,
+            error: null,
+            ...overrides,
+        }) as unknown as CodexCommandResultEntityV4;
+
+        let projection = apply(createCodexV4Projection('thread-1'), original);
+        projection = apply(projection, result(original.commandId, 'received'));
+        expect(projection.messages).toEqual([]);
+        expect(codexV4QueuedMessages(projection)).toMatchObject([{
+            id: 'queue-entry-1',
+            commandId: original.commandId,
+            text: 'first',
+            createdAt: 10,
+        }]);
+
+        projection = apply(projection, replacement);
+        projection = apply(projection, result(original.commandId, 'cancelled', {
+            reason: 'commandReplaced',
+            updatedAt: 20,
+        }), 2);
+        projection = apply(projection, result(replacement.commandId, 'received'));
+        expect(projection.messages).toEqual([]);
+        expect(codexV4QueuedMessages(projection)).toMatchObject([{
+            id: 'queue-entry-1',
+            commandId: replacement.commandId,
+            text: 'edited',
+            createdAt: 10,
+        }]);
+    });
+
+    it('keeps the original queue card when a late edit replacement is rejected', () => {
+        const original = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'queue-original',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'queue-original',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-active',
+            command: 'turn.queue',
+            payload: { text: 'original', displayText: 'original' },
+            clientUserMessageId: 'queue-original',
+            replacesCommandId: null,
+            queueEntryId: 'queue-entry-1',
+            queuedAt: 10,
+        } as unknown as CodexCommandEntityV4;
+        const rejected = {
+            ...original,
+            providerId: 'queue-rejected-edit',
+            commandId: 'queue-rejected-edit',
+            clientUserMessageId: 'queue-rejected-edit',
+            replacesCommandId: original.commandId,
+            payload: { text: 'too late', displayText: 'too late' },
+            createdAt: 20,
+            updatedAt: 20,
+        } as unknown as CodexCommandEntityV4;
+        const failedResult = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'result-rejected-edit',
+            createdAt: 20,
+            updatedAt: 20,
+            commandId: rejected.commandId,
+            threadId: 'thread-1',
+            turnId: null,
+            status: 'failed',
+            providerRequestId: null,
+            result: null,
+            error: 'The queued message is no longer available for replacement',
+        } as CodexCommandResultEntityV4;
+        let projection = apply(createCodexV4Projection('thread-1'), original);
+        projection = apply(projection, rejected);
+        projection = apply(projection, failedResult);
+
+        expect(codexV4QueuedMessages(projection)).toMatchObject([{
+            id: 'queue-entry-1',
+            commandId: original.commandId,
+            text: 'original',
         }]);
     });
 

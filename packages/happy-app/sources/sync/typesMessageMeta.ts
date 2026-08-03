@@ -13,7 +13,7 @@ export const MessageMetaSchema = z.object({
     disallowedTools: z.array(z.string()).nullable().optional(), // Disallowed tools for this message (null = reset)
     effort: z.string().nullable().optional(), // Reasoning / thinking effort for this message (null = reset)
     displayText: z.string().optional(), // Optional text to display in UI instead of actual message text
-    followUpMode: z.literal('queue').optional(),
+    followUpMode: z.enum(['queue', 'steer']).optional(),
 });
 
 export type MessageMeta = z.infer<typeof MessageMetaSchema>;

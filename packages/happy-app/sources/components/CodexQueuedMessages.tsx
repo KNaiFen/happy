@@ -4,24 +4,23 @@ import {
     sessionSteerCodexQueuedMessage,
     sessionUpdateCodexQueuedMessage,
 } from '@/sync/ops';
-import type { AgentState } from '@/sync/storageTypes';
+import type { CodexV4QueuedMessage } from '@/sync/codexV4Projection';
 import { t } from '@/text';
 import * as React from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-type CodexQueuedMessage = NonNullable<AgentState['codexMessageQueue']>['messages'][number];
 type QueueAction = { id: string; type: 'edit' | 'steer' } | null;
 
 export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props: {
     sessionId: string;
-    messages: CodexQueuedMessage[];
+    messages: CodexV4QueuedMessage[];
     canSteer: boolean;
 }) {
     const { theme } = useUnistyles();
     const [action, setAction] = React.useState<QueueAction>(null);
 
-    const handleEdit = React.useCallback(async (message: CodexQueuedMessage) => {
+    const handleEdit = React.useCallback(async (message: CodexV4QueuedMessage) => {
         if (action) return;
         const nextText = await Modal.prompt(t('session.queuedMessageEdit'), undefined, {
             defaultValue: message.text,
@@ -42,7 +41,7 @@ export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props
         }
     }, [action, props.sessionId]);
 
-    const handleSteer = React.useCallback(async (message: CodexQueuedMessage) => {
+    const handleSteer = React.useCallback(async (message: CodexV4QueuedMessage) => {
         if (action || !props.canSteer) return;
         setAction({ id: message.id, type: 'steer' });
         try {

@@ -70,6 +70,7 @@ interface MapperOptions {
     diagnosticId?: () => string;
     now?: () => number;
     onError?: (error: unknown) => void;
+    onTurnStateChanged?: (threadId: string, activeTurnId: string | null) => void;
     diagnostics?: SyncV4DiagnosticSink;
     diagnosticSessionHash?: string;
     gateway?: CodexGatewayRuntimeProjection;
@@ -198,6 +199,10 @@ export class CodexSyncV4Mapper {
     importGoal(threadId: string, goal: ThreadGoal | null): void {
         if (this.closed) return;
         void this.enqueue(() => this.applyThreadGoal(threadId, goal, true)).catch(() => undefined);
+    }
+
+    activeTurnId(threadId: string): string | null {
+        return this.activeTurnByThread.get(threadId) ?? null;
     }
 
     async setConnection(
@@ -767,6 +772,10 @@ export class CodexSyncV4Mapper {
         this.threads.set(threadId, nextThread);
         this.runtimes.set(threadId, runtime);
         if (nextThread.status.type !== 'active') this.activeTurnByThread.delete(threadId);
+        this.options.onTurnStateChanged?.(
+            threadId,
+            this.activeTurnByThread.get(threadId) ?? null,
+        );
     }
 
     private async applyThreadName(threadId: string, name: string | null): Promise<void> {
@@ -927,6 +936,10 @@ export class CodexSyncV4Mapper {
             this.threads.set(threadId, nextThread);
             this.runtimes.set(threadId, runtime);
         }
+        this.options.onTurnStateChanged?.(
+            threadId,
+            this.activeTurnByThread.get(threadId) ?? null,
+        );
     }
 
     private async applyTurnPlan(params: {

@@ -19,6 +19,7 @@ import {
     rigHasRpcMethod,
 } from './rig';
 import { codexV4RequestResponse, findActiveCodexV4Turn } from './codexV4Commands';
+import { codexV4QueuedMessages } from './codexV4Projection';
 import {
     assertCodexSessionWritable,
     isCodexGatewaySession,
@@ -664,13 +665,64 @@ export async function sessionUpdateCodexQueuedMessage(
     text: string,
 ): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    await apiSocket.sessionRPC(sessionId, 'codex-update-queued-message', { id, text });
+    const projection = storage.getState().codexV4Sessions[sessionId];
+    const queued = codexV4QueuedMessages(projection).find((message) => message.id === id);
+    if (!queued) throw new Error('Queued Codex message not found');
+    const payload = jsonObject(queued.command.payload);
+    await sync.publishCodexV4Command(sessionId, {
+        command: 'turn.queue',
+        threadId: queued.command.threadId,
+        expectedTurnId: queued.command.expectedTurnId,
+        payload: { ...payload, text, displayText: text },
+        replacesCommandId: queued.command.commandId,
+        queueEntryId: queued.id,
+        queuedAt: queued.createdAt,
+        ...(commandBindingGeneration(queued.command) !== undefined
+            ? { bindingGeneration: commandBindingGeneration(queued.command) }
+            : {}),
+    }, undefined, text);
 }
 
 /** Move one CLI-owned Codex follow-up into the currently active turn. */
 export async function sessionSteerCodexQueuedMessage(sessionId: string, id: string): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    await apiSocket.sessionRPC(sessionId, 'codex-steer-queued-message', { id });
+    const state = storage.getState();
+    const session = state.sessions[sessionId];
+    const projection = state.codexV4Sessions[sessionId];
+    const queued = codexV4QueuedMessages(projection).find((message) => message.id === id);
+    if (!queued) throw new Error('Queued Codex message not found');
+    if (session?.metadata?.codexCapabilities?.queueSteering !== true) {
+        throw new Error('Codex turn steering is unavailable');
+    }
+    const activeTurn = findActiveCodexV4Turn(projection);
+    if (!activeTurn) throw new Error('The active Codex turn is no longer available');
+    const payload = jsonObject(queued.command.payload);
+    await sync.publishCodexV4Command(sessionId, {
+        command: 'turn.steer',
+        threadId: activeTurn.threadId,
+        expectedTurnId: activeTurn.turnId,
+        payload: payload as typeof queued.command.payload,
+        replacesCommandId: queued.command.commandId,
+        queueEntryId: queued.id,
+        queuedAt: queued.createdAt,
+        ...(commandBindingGeneration(queued.command) !== undefined
+            ? { bindingGeneration: commandBindingGeneration(queued.command) }
+            : {}),
+    }, undefined, queued.text);
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}
+
+function commandBindingGeneration(command: unknown): number | undefined {
+    if (!command || typeof command !== 'object' || !('bindingGeneration' in command)) {
+        return undefined;
+    }
+    const value = command.bindingGeneration;
+    return typeof value === 'number' ? value : undefined;
 }
 
 /**

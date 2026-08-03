@@ -344,6 +344,8 @@ export const en = {
         queuedMessageSteer: 'Send to active turn',
         queuedMessageActionFailed: "Couldn't update the queued message. Its status may have changed; try again.",
         queuedAttachment: 'Queued attachment',
+        followUpQueue: 'Queue',
+        followUpSteer: 'Steer',
         // Fork / duplicate / rewind flow
         forkAction: 'Fork session',
         forkSubtitle: 'Continue in a new session with the same context',

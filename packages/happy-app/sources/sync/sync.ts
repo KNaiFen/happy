@@ -127,8 +127,8 @@ type SendMessageOptions = {
     source?: MessageSentSource;
     /** Optional image attachments to send before the text message. */
     attachments?: AttachmentPreview[];
-    /** Queue this follow-up in the CLI instead of rendering it immediately. */
-    followUpMode?: 'queue';
+    /** Choose whether an active Codex turn queues or immediately receives this follow-up. */
+    followUpMode?: 'queue' | 'steer';
     /** Stable identity shared by the App send and CLI queue item. */
     localKey?: string;
 };
@@ -914,6 +914,7 @@ class Sync {
                     name: attachment.name,
                     mimeType: attachment.mimeType,
                 })),
+                followUpMode,
             });
             await this.publishCodexV4Command(sessionId, draft, localId, text);
             trackMessageSent(source, session.metadata);

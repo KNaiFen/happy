@@ -201,6 +201,64 @@ describe("SyncV4Journal", () => {
         expect(snapshot.entityRevisions.get("command-result-1")).toBe(1);
     });
 
+    it("reopens and compacts an atomic queued-command replacement as one state change", async () => {
+        const rootDir = await createRoot();
+        const journal = await openJournal({ rootDir, sessionId: "session-1", compactionBytes: 1 });
+        const previousCommand = {
+            ...command,
+            command: "turn.queue",
+        } as typeof command;
+        const replacementCommand = {
+            ...previousCommand,
+            providerId: "command-2",
+            commandId: "command-2",
+            clientUserMessageId: "command-2",
+            replacesCommandId: "command-1",
+            createdAt: 200,
+            updatedAt: 200,
+        } as unknown as typeof command;
+        await journal.setCommandStatus("command-1", "received", previousCommand);
+        const previousMutation = {
+            ...mutation,
+            mutationId: "result-cancelled",
+            entityId: "command-result-1",
+            entityType: "codex.commandResult" as const,
+        };
+        const replacementMutation = {
+            ...mutation,
+            mutationId: "result-received",
+            entityId: "command-result-2",
+            entityType: "codex.commandResult" as const,
+        };
+
+        await journal.appendCommandTransitionBatch([
+            {
+                commandId: "command-1",
+                status: "cancelled",
+                mutation: previousMutation,
+                command: previousCommand,
+            },
+            {
+                commandId: "command-2",
+                status: "received",
+                mutation: replacementMutation,
+                command: replacementCommand,
+            },
+        ]);
+        await journal.compactIfNeeded();
+        await journal.close();
+
+        const reopened = await openJournal({ rootDir, sessionId: "session-1" });
+        const snapshot = reopened.snapshot();
+        expect(snapshot.commandStatuses.get("command-1")).toBe("cancelled");
+        expect(snapshot.commandStatuses.get("command-2")).toBe("received");
+        expect(snapshot.commands.get("command-1")).toBeUndefined();
+        expect(snapshot.commands.get("command-2")).toEqual(replacementCommand);
+        expect(snapshot.pendingOutbound).toEqual([previousMutation, replacementMutation]);
+        expect(snapshot.entityRevisions.get("command-result-1")).toBe(1);
+        expect(snapshot.entityRevisions.get("command-result-2")).toBe(1);
+    });
+
     it("atomically tracks provider requests until a terminal entity is durable", async () => {
         const rootDir = await createRoot();
         const journal = await openJournal({ rootDir, sessionId: "session-1", now: () => 200 });

@@ -3,6 +3,7 @@ import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentInput } from '@/components/AgentInput';
 import { CodexQueuedMessages } from '@/components/CodexQueuedMessages';
+import { CodexFollowUpModeSelector } from '@/components/CodexFollowUpModeSelector';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -32,6 +33,8 @@ import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat } 
 import { archiveSession } from '@/sync/sessionArchiveCoordinator';
 import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
+import { findActiveCodexV4Turn, type CodexV4FollowUpMode } from '@/sync/codexV4Commands';
+import { codexV4QueuedMessages } from '@/sync/codexV4Projection';
 import {
     resolveCodexGatewayBinding,
     resolveCodexV4SessionCapabilities,
@@ -719,6 +722,21 @@ export function SessionViewLoaded({
     const isSessionExecuting = isCodexV4Active
         ? codexV4Session.runtime?.execution.type === 'active'
         : session.thinking;
+    const activeCodexTurnId = React.useMemo(
+        () => codexV4Session ? findActiveCodexV4Turn(codexV4Session)?.turnId ?? null : null,
+        [codexV4Session],
+    );
+    const [codexFollowUpMode, setCodexFollowUpMode] = React.useState<CodexV4FollowUpMode>('queue');
+    const canSteerCodexTurn = session.metadata?.codexCapabilities?.queueSteering === true
+        && activeCodexTurnId !== null;
+    React.useEffect(() => {
+        setCodexFollowUpMode('queue');
+    }, [sessionId, activeCodexTurnId]);
+    React.useEffect(() => {
+        if (!canSteerCodexTurn && codexFollowUpMode === 'steer') {
+            setCodexFollowUpMode('queue');
+        }
+    }, [canSteerCodexTurn, codexFollowUpMode]);
     const { messages, isLoaded } = useSessionMessages(sessionId);
     const acknowledgedCliVersions = useLocalSetting('acknowledgedCliVersions');
     const zenMode = useLocalSetting('zenMode');
@@ -911,17 +929,17 @@ export function SessionViewLoaded({
         const liveMessage = composerHandleRef.current?.getMessage() ?? '';
         if (liveMessage.trim() || (expImageUpload && selectedImages.length > 0)) {
             const attachments = expImageUpload ? selectedImages : undefined;
-            const shouldQueueInCli = session.metadata?.codexCapabilities?.queueSteering === true
-                && isSessionExecuting;
             await sync.sendMessage(sessionId, liveMessage, {
                 source: 'chat',
                 attachments,
-                ...(shouldQueueInCli ? { followUpMode: 'queue' as const } : {}),
+                ...(isCodexV4Active && isSessionExecuting
+                    ? { followUpMode: codexFollowUpMode }
+                    : {}),
             });
             composerHandleRef.current?.clearMessage();
             if (expImageUpload) clearImages();
         }
-    }, [sessionId, session.metadata?.codexCapabilities?.queueSteering, isSessionExecuting, expImageUpload, selectedImages, clearImages]);
+    }, [sessionId, isCodexV4Active, isSessionExecuting, codexFollowUpMode, expImageUpload, selectedImages, clearImages]);
     const [, handleSend] = useHappyAction(sendMessage);
 
     const handleAbort = React.useCallback(() => {
@@ -1223,7 +1241,10 @@ export function SessionViewLoaded({
 
     const showSessionStatusBar = sessionStatusBarDisplay === 'above' || sessionStatusBarDisplay === 'below';
     const sessionStatusBarPosition = sessionStatusBarDisplay === 'above' ? 'above' : 'below';
-    const codexQueuedMessages = session.agentState?.codexMessageQueue?.messages ?? [];
+    const codexQueuedMessages = React.useMemo(
+        () => codexV4QueuedMessages(codexV4Session),
+        [codexV4Session],
+    );
     const sessionStatusBar = showSessionStatusBar ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <SessionStatusBar
@@ -1266,7 +1287,16 @@ export function SessionViewLoaded({
                     <CodexQueuedMessages
                         sessionId={sessionId}
                         messages={codexQueuedMessages}
-                        canSteer={session.metadata?.codexCapabilities?.queueSteering === true && isSessionExecuting}
+                        canSteer={canSteerCodexTurn && isSessionExecuting}
+                    />
+                </CenteredInputWidth>
+            )}
+            {!isCodexReadOnly && isCodexV4Active && isSessionExecuting && (
+                <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
+                    <CodexFollowUpModeSelector
+                        value={codexFollowUpMode}
+                        canSteer={canSteerCodexTurn}
+                        onChange={setCodexFollowUpMode}
                     />
                 </CenteredInputWidth>
             )}

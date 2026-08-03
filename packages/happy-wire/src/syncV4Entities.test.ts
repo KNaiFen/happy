@@ -115,7 +115,7 @@ describe('Codex Sync v4 entity schemas', () => {
     });
   });
 
-  it('accepts optional command generations and structured cancellation results', () => {
+  it('accepts durable queue metadata, command generations, and structured cancellation results', () => {
     const command = {
       schemaVersion: 1,
       entityType: 'codex.command' as const,
@@ -133,6 +133,12 @@ describe('Codex Sync v4 entity schemas', () => {
     expect(CodexCommandEntityV4Schema.parse(command)).toEqual(command);
     expect(CodexCommandEntityV4Schema.parse({ ...command, bindingGeneration: 4 }))
       .toMatchObject({ bindingGeneration: 4 });
+    expect(CodexCommandEntityV4Schema.parse({
+      ...command,
+      command: 'turn.queue',
+      queueEntryId: 'queue-1',
+      queuedAt: 9,
+    })).toMatchObject({ command: 'turn.queue', queueEntryId: 'queue-1', queuedAt: 9 });
     expect(CodexCommandResultEntityV4Schema.parse({
       schemaVersion: 1,
       entityType: 'codex.commandResult',
@@ -148,6 +154,21 @@ describe('Codex Sync v4 entity schemas', () => {
       error: 'The thread binding changed before submission',
       reason: 'bindingSuperseded',
     })).toMatchObject({ status: 'cancelled', reason: 'bindingSuperseded' });
+    expect(CodexCommandResultEntityV4Schema.parse({
+      schemaVersion: 1,
+      entityType: 'codex.commandResult',
+      providerId: 'command-1\0replacement',
+      createdAt: 10,
+      updatedAt: 12,
+      commandId: 'command-1',
+      threadId: 'thread-1',
+      turnId: null,
+      status: 'cancelled',
+      providerRequestId: null,
+      result: null,
+      error: 'Queued message replaced',
+      reason: 'commandReplaced',
+    })).toMatchObject({ status: 'cancelled', reason: 'commandReplaced' });
   });
 
   it('does not define a raw reasoning part type', () => {

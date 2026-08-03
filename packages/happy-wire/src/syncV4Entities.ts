@@ -218,6 +218,8 @@ export const CodexCommandEntityV4Schema = z.object({
   payload: jsonSchema,
   clientUserMessageId: idSchema,
   replacesCommandId: idSchema.nullable(),
+  queueEntryId: idSchema.nullable().optional(),
+  queuedAt: timestampSchema.optional(),
   bindingGeneration: z.number().int().nonnegative().optional(),
 }).strict();
 export type CodexCommandEntityV4 = z.infer<typeof CodexCommandEntityV4Schema>;
@@ -232,7 +234,7 @@ export const CodexCommandResultEntityV4Schema = z.object({
   providerRequestId: idSchema.nullable(),
   result: jsonSchema.nullable(),
   error: z.string().nullable(),
-  reason: z.enum(['bindingSuperseded', 'threadHandoff', 'gatewayStopping']).nullable().optional(),
+  reason: z.enum(['bindingSuperseded', 'threadHandoff', 'gatewayStopping', 'commandReplaced']).nullable().optional(),
 }).strict();
 export type CodexCommandResultEntityV4 = z.infer<typeof CodexCommandResultEntityV4Schema>;
 

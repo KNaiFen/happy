@@ -18,8 +18,12 @@ export interface CodexV4CommandDraft {
     threadId?: string | null;
     expectedTurnId?: string | null;
     replacesCommandId?: string | null;
+    queueEntryId?: string | null;
+    queuedAt?: number;
     bindingGeneration?: number;
 }
+
+export type CodexV4FollowUpMode = 'queue' | 'steer';
 
 export interface CodexV4TurnMode {
     model?: string | null;
@@ -49,6 +53,9 @@ export function createCodexV4Command(
     options: { commandId: string; now?: number },
 ): CodexCommandEntityV4 {
     const now = Math.max(0, Math.trunc(options.now ?? Date.now()));
+    const queueEntryId = draft.command === 'turn.queue'
+        ? draft.queueEntryId ?? options.commandId
+        : draft.queueEntryId ?? null;
     return {
         schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
         entityType: 'codex.command',
@@ -62,6 +69,8 @@ export function createCodexV4Command(
         payload: draft.payload,
         clientUserMessageId: options.commandId,
         replacesCommandId: draft.replacesCommandId ?? null,
+        queueEntryId,
+        ...(queueEntryId ? { queuedAt: draft.queuedAt ?? now } : {}),
         ...(draft.bindingGeneration !== undefined
             ? { bindingGeneration: draft.bindingGeneration }
             : {}),
@@ -149,6 +158,7 @@ export function commandForCodexV4Input(options: {
     threadId?: string | null;
     mode: CodexV4TurnMode;
     attachments?: CodexV4AttachmentReference[];
+    followUpMode?: CodexV4FollowUpMode;
 }): CodexV4CommandDraft {
     const bindingGeneration = (options.projection.runtime as GatewayRuntime | null)?.gateway?.generation;
     const threadId = options.threadId !== undefined
@@ -185,8 +195,18 @@ export function commandForCodexV4Input(options: {
             })),
         } : {}),
     };
-    return activeTurnId ? {
+    const runtimeIsActive = options.projection.runtime?.execution?.type === 'active';
+    if (activeTurnId && options.followUpMode === 'steer') return {
         command: 'turn.steer',
+        threadId,
+        expectedTurnId: activeTurnId,
+        payload,
+        ...(bindingGeneration !== undefined
+            ? { bindingGeneration }
+            : {}),
+    };
+    return activeTurnId || runtimeIsActive ? {
+        command: 'turn.queue',
         threadId,
         expectedTurnId: activeTurnId,
         payload,

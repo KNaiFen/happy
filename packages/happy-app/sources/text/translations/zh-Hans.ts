@@ -348,6 +348,8 @@ export const zhHans: TranslationStructure = {
         forkErrorMissingUuid: '选定的回退点已不存在于源会话中 — 请尝试不截断地分叉。',
         forkErrorMissingMetadata: '缺少分叉所需的会话元数据。',
         forkErrorGeneric: '分叉会话失败。',
+        followUpQueue: '排队',
+        followUpSteer: '引导',
     },
 
     commandPalette: {

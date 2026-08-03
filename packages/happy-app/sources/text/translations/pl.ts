@@ -364,6 +364,8 @@ export const pl: TranslationStructure = {
         forkErrorMissingUuid: 'Wybrany punkt cofnięcia nie istnieje już w sesji źródłowej — spróbuj rozwidlić bez przycinania.',
         forkErrorMissingMetadata: 'Brak metadanych sesji wymaganych do rozwidlenia.',
         forkErrorGeneric: 'Nie udało się rozwidlić sesji.',
+        followUpQueue: 'Kolejka',
+        followUpSteer: 'Pokieruj',
     },
 
     commandPalette: {
