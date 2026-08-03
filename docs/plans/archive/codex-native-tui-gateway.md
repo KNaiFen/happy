@@ -2,9 +2,9 @@
 
 ## 状态
 
-- 当前状态：实施中
+- 当前状态：实施与云端验收完成，归档；后续物理设备验收转入 `.agents/open-items.md`
 - 日期：2026-08-02
-- 基线：`main` / `8c9f7f1a`
+- 基线：`main` / `07f22cc9`
 - 目标版本：CLI `1.4.32`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
@@ -577,12 +577,21 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     聚焦 `104/104` 和全量 CLI unit `110` 文件、`982` 项均通过；尚待 `1.4.32` 云端的
     最新 stable 官方 app-server lifecycle、真实 TUI 往返、release archive、Android field
     与 aggregate gate 验收。
-- [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
-- [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
+  - 第二十九轮最终云端验收全部通过：CLI release `30777321964`、主 CI `30777322112` 和
+    Android API 36 field `30777322086` 均为 success。主 CI 使用最新 stable 官方 Codex
+    source，官方 lifecycle 和真实 PTY 的 terminal/App、detach/attach、normal stop 往返均
+    成功；Android field 也完成真实 relay、官方 Codex、App、MCP 与恢复场景。已下载并验证
+    `happy-1.4.32.tgz`（SHA-256
+    `9d0d6f4f07046c16b935ba0579ce666ef24fd2a606ebd6724744f8a384f999dd`），包含 macOS
+    ARM64 的 `ripgrep` 与 `difftastic` 归档。实现计划至此完成，物理 SSH/设备验收另列
+    本机 open item。
+- [x] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms：主 CI 的真实 Happy relay
+      scenario 对该阈值进行硬性断言并已通过。
+- [x] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.32`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [x] CLI 升至 `1.4.32`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -629,11 +638,13 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.31` release `30775583482` 已通过；main CI `30775583548` 的 terminal TUI
       已得到官方回复而 App 仍零投影，且 lifecycle 场景仅因测试临时目录 `ENOTEMPTY` 收尾失败。
       两项修复均改变可分发 Gateway/CI 验收行为，已运行版本不得复用，目标推进到 `1.4.32`。
-- [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
-- [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.32.tgz` 到
+- [x] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
+- [x] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
+- [x] CLI workflow 成功后下载并验证 `happy-1.4.32.tgz` 到
       `dist/release-artifacts`。
-- [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
+- [x] Android workflow 成功；Artifact
+      `https://github.com/KNaiFen/happy/actions/runs/30777322086/artifacts/8842850317`
+      已解析，不默认下载 APK。
 
 ## 本地安全边界
 
