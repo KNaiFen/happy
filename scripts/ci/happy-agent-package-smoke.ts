@@ -168,7 +168,7 @@ async function main(): Promise<void> {
             '--agent', 'claude',
         ], env);
         assert.notEqual(removedAgentResult.exitCode, 0);
-        assert.match(removedAgentResult.stderr, /--agent must be one of: codex, gemini, openclaw, agy/);
+        assert.match(removedAgentResult.stderr, /unknown option '--agent'/);
         console.log('happy-agent packaged Codex spawn and removed-agent rejection passed');
     } finally {
         await close(server, io);
