@@ -50,6 +50,7 @@ import {
 } from './codexGatewayRuntimeFactory';
 import {
     codexGatewayPaths,
+    CodexGatewaySocketPathTooLongError,
     readCodexGatewayDescriptor,
     readCodexGatewaySecret,
     writeCodexGatewayDescriptor,
@@ -1308,6 +1309,7 @@ function startupFailureKind(stage: CodexGatewayStartupStage, error: unknown): st
 }
 
 function safeErrorKind(error: unknown): string {
+    if (error instanceof CodexGatewaySocketPathTooLongError) return 'socketPathTooLong';
     if (error instanceof CodexGatewayRootBindingError) {
         const causeKind = classifySyncV4DiagnosticError(error.diagnosticCause);
         return `rootBinding:${error.phase}:${causeKind}`;

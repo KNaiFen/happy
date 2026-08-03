@@ -9,6 +9,7 @@ import {
     type CodexCliVersion,
 } from '../codexCliVersion';
 import type { CodexAppServerWebSocketEndpoint } from '../codexAppServerWebSocket';
+import { assertCodexGatewayUnixSocketPath } from './codexGatewayState';
 
 const DEFAULT_READY_TIMEOUT_MS = 10_000;
 const DEFAULT_STOP_TIMEOUT_MS = 2_000;
@@ -124,6 +125,9 @@ export class CodexGatewayProvider {
     async start(): Promise<void> {
         if (this.state !== 'stopped') return;
         this.stopping = false;
+        if (this.options.endpoint.socketPath) {
+            assertCodexGatewayUnixSocketPath(this.options.endpoint.socketPath);
+        }
         assertMinimumCodexCliVersion(
             this.options.codexCliVersion ?? readCodexCliVersion(),
         );

@@ -10,6 +10,7 @@ import {
     buildCodexGatewayProviderArgs,
     CodexGatewayProvider,
 } from './codexGatewayProvider';
+import { CodexGatewaySocketPathTooLongError } from './codexGatewayState';
 
 describe('Codex Gateway provider supervisor', () => {
     it('builds official Unix and authenticated loopback app-server arguments', () => {
@@ -115,6 +116,19 @@ describe('Codex Gateway provider supervisor', () => {
             cwd: '/workspace',
             endpoint: { url: 'ws://127.0.0.1:4500' },
         })).toThrow('capability-token');
+    });
+
+    it('rejects an oversized Unix socket before spawning Codex', async () => {
+        const spawn = vi.fn();
+        const provider = new CodexGatewayProvider({
+            cwd: '/workspace',
+            endpoint: { socketPath: `/${'a'.repeat(103)}` },
+            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            spawn,
+        });
+
+        await expect(provider.start()).rejects.toThrow(CodexGatewaySocketPathTooLongError);
+        expect(spawn).not.toHaveBeenCalled();
     });
 
     it('terminates the owned child when post-listen initialization fails', async () => {

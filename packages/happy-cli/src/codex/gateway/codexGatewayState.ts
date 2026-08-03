@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
     chmod,
+    lstat,
     mkdir,
     open,
     readFile,
@@ -16,6 +17,20 @@ import { z } from 'zod';
 import { configuration } from '@/configuration';
 
 export const CODEX_GATEWAY_STATE_VERSION = 1;
+export const MAX_CODEX_GATEWAY_UNIX_SOCKET_PATH_BYTES = 103;
+
+const CODEX_GATEWAY_PROFILE_HASH_LENGTH = 12;
+const CODEX_GATEWAY_RUNTIME_ID_LENGTH = 16;
+const CODEX_GATEWAY_FALLBACK_TMP_DIR = '/tmp';
+
+export class CodexGatewaySocketPathTooLongError extends Error {
+    constructor() {
+        super(
+            `Codex Gateway Unix socket path exceeds ${MAX_CODEX_GATEWAY_UNIX_SOCKET_PATH_BYTES} bytes`,
+        );
+        this.name = 'CodexGatewaySocketPathTooLongError';
+    }
+}
 
 const idSchema = z.string().min(1).max(256);
 const pathSchema = z.string().min(1).max(8_192);
@@ -87,9 +102,31 @@ export function codexGatewayStateRoot(happyHomeDir = configuration.happyHomeDir)
 export function codexGatewayRuntimeRoot(
     happyHomeDir = configuration.happyHomeDir,
     systemTmpDir = tmpdir(),
+    platform: NodeJS.Platform = process.platform,
 ): string {
-    const profileHash = createHash('sha256').update(happyHomeDir).digest('hex').slice(0, 12);
-    return join(systemTmpDir, `happy-codex-${profileHash}`);
+    const profileHash = createHash('sha256')
+        .update(happyHomeDir)
+        .digest('hex')
+        .slice(0, CODEX_GATEWAY_PROFILE_HASH_LENGTH);
+    const directoryName = `happy-codex-${profileHash}`;
+    const preferredRoot = join(systemTmpDir, directoryName);
+    if (
+        platform === 'win32'
+        || unixSocketPathFits(runtimeProviderSocketPath(preferredRoot))
+    ) {
+        return preferredRoot;
+    }
+    const fallbackRoot = join(CODEX_GATEWAY_FALLBACK_TMP_DIR, directoryName);
+    assertCodexGatewayUnixSocketPath(runtimeProviderSocketPath(fallbackRoot), platform);
+    return fallbackRoot;
+}
+
+export function assertCodexGatewayUnixSocketPath(
+    path: string,
+    platform: NodeJS.Platform = process.platform,
+): void {
+    if (platform === 'win32') return;
+    if (!unixSocketPathFits(path)) throw new CodexGatewaySocketPathTooLongError();
 }
 
 export function codexGatewayPaths(
@@ -100,7 +137,7 @@ export function codexGatewayPaths(
     const happyHomeDir = options.happyHomeDir ?? configuration.happyHomeDir;
     const stateRoot = codexGatewayStateRoot(happyHomeDir);
     const runtimeRoot = options.runtimeRoot ?? codexGatewayRuntimeRoot(happyHomeDir);
-    const shortId = safeId.replaceAll('-', '').slice(0, 16);
+    const shortId = safeId.replaceAll('-', '').slice(0, CODEX_GATEWAY_RUNTIME_ID_LENGTH);
     const gatewayDir = join(stateRoot, safeId);
     const runtimeDir = join(runtimeRoot, shortId);
     return {
@@ -237,7 +274,28 @@ export async function assertPrivateFile(path: string): Promise<void> {
 
 async function ensurePrivateDirectory(path: string): Promise<void> {
     await mkdir(path, { recursive: true, mode: 0o700 });
-    if (process.platform !== 'win32') await chmod(path, 0o700);
+    if (process.platform === 'win32') return;
+    const metadata = await lstat(path);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+        throw new Error('Codex Gateway private directory is not a directory');
+    }
+    const uid = process.getuid?.();
+    if (uid !== undefined && metadata.uid !== uid) {
+        throw new Error('Codex Gateway private directory is owned by another user');
+    }
+    await chmod(path, 0o700);
+}
+
+function runtimeProviderSocketPath(runtimeRoot: string): string {
+    return join(
+        runtimeRoot,
+        '0'.repeat(CODEX_GATEWAY_RUNTIME_ID_LENGTH),
+        'provider.sock',
+    );
+}
+
+function unixSocketPathFits(path: string): boolean {
+    return Buffer.byteLength(path, 'utf8') <= MAX_CODEX_GATEWAY_UNIX_SOCKET_PATH_BYTES;
 }
 
 async function writePrivateJson(path: string, value: unknown): Promise<void> {

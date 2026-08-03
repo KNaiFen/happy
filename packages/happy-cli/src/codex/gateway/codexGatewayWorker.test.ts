@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
     rejectHungSnapshot: null as ((error: Error) => void) | null,
     disconnectCalls: 0,
     providerStopDelayMs: 0,
+    providerStartError: null as Error | null,
 }));
 
 vi.mock('@/api/api', () => ({
@@ -99,6 +100,7 @@ vi.mock('./codexGatewayProvider', () => ({
             ready?(event: { epoch: number; recovered: boolean }): Promise<void>;
         } }) {}
         async start() {
+            if (mocks.providerStartError) throw mocks.providerStartError;
             this.currentEpoch += 1;
             this.pid = 123;
             this.options.hooks?.stateChanged?.('starting');
@@ -221,6 +223,7 @@ vi.mock('../codexAppServerClient', () => ({
 }));
 
 import {
+    CodexGatewaySocketPathTooLongError,
     createCodexGatewayFiles,
     readCodexGatewayDescriptor,
     writeCodexGatewayDescriptor,
@@ -251,6 +254,7 @@ afterEach(async () => {
     mocks.rejectHungSnapshot = null;
     mocks.disconnectCalls = 0;
     mocks.providerStopDelayMs = 0;
+    mocks.providerStartError = null;
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -284,6 +288,31 @@ describe('Codex Gateway worker composition', () => {
             path: created.paths.journalPath,
         });
         await reopenedJournal.close();
+    });
+
+    it('persists an explicit diagnostic when the provider socket path is too long', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.providerStartError = new CodexGatewaySocketPathTooLongError();
+
+        await expect(runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+        })).rejects.toThrow(CodexGatewaySocketPathTooLongError);
+
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            state: 'stopped',
+            lastError: 'startup:provider:socketPathTooLong',
+        });
     });
 
     it('retries a transient initial provider bridge failure in the same worker', async () => {
