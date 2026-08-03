@@ -24,6 +24,9 @@ import {
     copyLabRatProject,
 } from '../../environments/environments';
 
+const TEMP_ROOT_CLEANUP_RETRY_DELAYS_MS = [0, 25, 100, 250, 500, 1_000] as const;
+const RETRYABLE_TEMP_ROOT_CLEANUP_CODES = new Set(['ENOTEMPTY', 'EBUSY', 'EPERM']);
+
 async function main(): Promise<void> {
     const root = await mkdtemp(join(tmpdir(), 'happy-codex-official-app-server-'));
     const codexHome = join(root, 'codex-home');
@@ -279,7 +282,7 @@ async function main(): Promise<void> {
         restoreEnvironment('HAPPY_FAKE_CODEX_SCENARIO', originalFakeScenario);
         restoreEnvironment('CODEX_HOME', originalCodexHome);
         restoreEnvironment('PATH', originalPath);
-        await rm(root, { recursive: true, force: true });
+        await removeTemporaryRoot(root);
     }
 }
 
@@ -767,6 +770,27 @@ function configureOfficialCodexPath(): string {
 function restoreEnvironment(name: string, value: string | undefined): void {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
+}
+
+async function removeTemporaryRoot(root: string): Promise<void> {
+    let lastError: unknown = null;
+    for (const delayMs of TEMP_ROOT_CLEANUP_RETRY_DELAYS_MS) {
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        try {
+            await rm(root, { recursive: true, force: true });
+            return;
+        } catch (error) {
+            if (!isRetryableTemporaryRootCleanupError(error)) throw error;
+            lastError = error;
+        }
+    }
+    throw lastError;
+}
+
+function isRetryableTemporaryRootCleanupError(error: unknown): boolean {
+    if (!error || typeof error !== 'object' || Array.isArray(error)) return false;
+    const code = (error as Record<string, unknown>).code;
+    return typeof code === 'string' && RETRYABLE_TEMP_ROOT_CLEANUP_CODES.has(code);
 }
 
 async function withTimeout<T>(

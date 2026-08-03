@@ -535,6 +535,9 @@ async function runCodexGatewayWorkerInternal(
         threadMaterialized: (threadId) => {
             noteFreshSubscriptionActivity(threadId);
         },
+        terminalNotification: (notification) => {
+            requireCoordinator().observeTerminalNotification(notification);
+        },
         rootFailed: async (request) => {
             const reservation = rootReservations.get(rootRequestKey(request));
             rootReservations.delete(rootRequestKey(request));

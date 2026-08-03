@@ -493,6 +493,19 @@ export class CodexAppServerClient {
         return this.threads.selectedTurnId;
     }
 
+    // A terminal's successful root response is authoritative for that terminal
+    // connection. The Gateway may adopt it locally so an App command can use an
+    // explicit turn/start.threadId before its independent observer materializes.
+    // This never sends an RPC, emits a notification, or persists provider data.
+    adoptThreadSnapshot(
+        snapshot: ProtocolThread,
+        options: { selectThread?: boolean } = {},
+    ): void {
+        const thread = this.registerThreadSnapshot(snapshot, 'snapshot', false);
+        if (!thread) throw new Error('Codex Gateway received an invalid terminal thread snapshot');
+        if (options.selectThread !== false) this.threads.selectThread(thread.id);
+    }
+
     supportsGoalActions(): boolean {
         return isGoalActionsAvailable(this.readCodexCliVersionOnce());
     }

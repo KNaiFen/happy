@@ -312,6 +312,7 @@ describe('Codex Gateway JSON-RPC proxy', () => {
             });
         });
         let rejectHookOnce = true;
+        const terminalNotification = vi.fn();
         const threadMaterialized = vi.fn(async () => {
             if (!rejectHookOnce) return;
             rejectHookOnce = false;
@@ -321,7 +322,7 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         const proxy = new CodexGatewayProxy(
             { socketPath: downstreamPath },
             { socketPath: upstreamPath },
-            { threadMaterialized, protocolError },
+            { terminalNotification, threadMaterialized, protocolError },
         );
         await proxy.start();
         cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
@@ -335,6 +336,7 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         client.send(turnStart);
         await vi.waitFor(() => expect(received).toEqual([response, notification]));
         await vi.waitFor(() => expect(threadMaterialized).toHaveBeenCalledTimes(2));
+        expect(terminalNotification).toHaveBeenCalledWith(JSON.parse(notification));
         expect(threadMaterialized).toHaveBeenNthCalledWith(1, 'thread-a');
         expect(threadMaterialized).toHaveBeenNthCalledWith(2, 'thread-a');
         expect(protocolError).toHaveBeenCalledWith(expect.objectContaining({
@@ -346,6 +348,45 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         await vi.waitFor(() => expect(received).toEqual([response, notification, rejection]));
         expect(threadMaterialized).toHaveBeenCalledTimes(2);
         expect(upstreamMessages).toEqual([turnStart, rejectedTurn]);
+    });
+
+    it('forwards provider requests and malformed notifications without mirroring them', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
+        const upstreamPath = join(root, 'upstream.sock');
+        const downstreamPath = join(root, 'downstream.sock');
+        const request = '{"id":15,"method":"item/request","params":{"threadId":"thread-a"}}';
+        const malformed = '{"method":"item/started","params":null}';
+        const upstream = await startWebSocketServer(upstreamPath, (socket) => {
+            socket.on('message', (data) => {
+                const message = JSON.parse(data.toString()) as { id: number; method: string };
+                if (message.method !== 'initialize') return;
+                socket.send(JSON.stringify({ id: message.id, result: { userAgent: 'test' } }));
+                socket.send(request);
+                socket.send(malformed);
+            });
+        });
+        const terminalNotification = vi.fn();
+        const proxy = new CodexGatewayProxy(
+            { socketPath: downstreamPath },
+            { socketPath: upstreamPath },
+            { terminalNotification },
+        );
+        await proxy.start();
+        cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
+        const client = connectCodexGatewayWebSocket({ socketPath: downstreamPath });
+        cleanups.push(async () => { client.close(); });
+        await opened(client);
+
+        const received: string[] = [];
+        client.on('message', (data) => received.push(data.toString()));
+        client.send(JSON.stringify({ id: 14, method: 'initialize', params: {} }));
+
+        await vi.waitFor(() => expect(received).toEqual([
+            '{"id":14,"result":{"userAgent":"test"}}',
+            request,
+            malformed,
+        ]));
+        expect(terminalNotification).not.toHaveBeenCalled();
     });
 
     it('passes binary frames through without coercing their payload', async () => {

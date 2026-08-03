@@ -215,6 +215,7 @@ vi.mock('../codexAppServerClient', () => ({
             }
             return { thread: thread(options.threadId) };
         }
+        adoptThreadSnapshot() {}
         async startThread() { return await mocks.startThread(); }
     },
 }));

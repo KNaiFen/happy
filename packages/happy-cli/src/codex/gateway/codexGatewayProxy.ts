@@ -8,7 +8,7 @@ import {
     connectCodexAppServerWebSocket,
     type CodexAppServerWebSocketEndpoint,
 } from '../codexAppServerWebSocket';
-import type { Thread } from '../protocol';
+import type { ServerNotification, Thread } from '../protocol';
 
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const ROOT_METHODS = new Set(['thread/start', 'thread/resume', 'thread/fork']);
@@ -35,6 +35,9 @@ export interface CodexGatewayProxyHooks {
     beforeRootRequest?(request: CodexGatewayRootRequest): Promise<void> | void;
     rootBound?(binding: CodexGatewayRootBinding): Promise<void> | void;
     rootFailed?(request: CodexGatewayRootRequest): Promise<void> | void;
+    // The provider frame itself stays transparent to the terminal. This hook only
+    // mirrors parsed server notifications into Happy's independent projection path.
+    terminalNotification?(notification: ServerNotification): Promise<void> | void;
     threadMaterialized?(threadId: string): Promise<void> | void;
     claimTerminal?(connectionId: string, bearerToken: string | null): boolean;
     terminalConnected?(connectionId: string): Promise<void> | void;
@@ -279,6 +282,8 @@ export class CodexGatewayProxy {
         const parsed = parseJsonRpcObject(data);
         if (!parsed) return;
         if (!isJsonRpcResponse(parsed)) {
+            const notification = serverNotification(parsed);
+            if (notification) this.notifyTerminalNotification(notification);
             const threadId = providerActivityThreadId(parsed);
             if (threadId) await this.notifyThreadMaterialized(threadId);
             return;
@@ -312,6 +317,16 @@ export class CodexGatewayProxy {
     private async notifyThreadMaterialized(threadId: string): Promise<void> {
         try {
             await this.hooks.threadMaterialized?.(threadId);
+        } catch (error) {
+            this.hooks.protocolError?.(error);
+        }
+    }
+
+    private notifyTerminalNotification(notification: ServerNotification): void {
+        try {
+            void Promise.resolve(this.hooks.terminalNotification?.(notification)).catch((error) => {
+                this.hooks.protocolError?.(error);
+            });
         } catch (error) {
             this.hooks.protocolError?.(error);
         }
@@ -390,6 +405,21 @@ function isJsonRpcResponse(message: Record<string, unknown>): message is Record<
     return isJsonRpcId(message.id)
         && typeof message.method !== 'string'
         && ('result' in message || 'error' in message);
+}
+
+function serverNotification(message: Record<string, unknown>): ServerNotification | null {
+    const params = message.params;
+    if (
+        Object.prototype.hasOwnProperty.call(message, 'id')
+        || typeof message.method !== 'string'
+        || !Object.prototype.hasOwnProperty.call(message, 'params')
+        || !params
+        || typeof params !== 'object'
+        || Array.isArray(params)
+    ) {
+        return null;
+    }
+    return { method: message.method, params } as ServerNotification;
 }
 
 function safeRootRejectionMessage(error: unknown): string {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { AsyncLock } from '@/utils/lock';
 import type {
     CodexAppServerClient,
@@ -11,6 +12,20 @@ import type { ServerNotification, Thread } from '../protocol';
 const MAX_PENDING_NOTIFICATIONS_PER_THREAD = 1_000;
 const MAX_PENDING_NOTIFICATIONS_TOTAL = 10_000;
 const OWNERSHIP_WAIT_MS = 5_000;
+const CROSS_SOURCE_NOTIFICATION_DEDUP_TTL_MS = 15_000;
+const MAX_RECENT_CROSS_SOURCE_NOTIFICATIONS = 4_096;
+
+type CodexGatewayNotificationSource = 'bridge' | 'terminal';
+
+interface PendingGatewayNotification {
+    notification: ServerNotification;
+    source: CodexGatewayNotificationSource;
+}
+
+interface RecentGatewayNotification {
+    source: CodexGatewayNotificationSource;
+    observedAt: number;
+}
 
 export type CodexGatewayBindingRole = 'current' | 'draining' | 'inactive' | 'recovering';
 
@@ -123,7 +138,8 @@ export class CodexGatewayCoordinator {
     private readonly bindingLock = new AsyncLock();
     private readonly roots = new Map<string, ManagedRoot>();
     private readonly ownerByThread = new Map<string, ManagedRoot>();
-    private readonly pendingNotifications = new Map<string, ServerNotification[]>();
+    private readonly pendingNotifications = new Map<string, PendingGatewayNotification[]>();
+    private readonly recentNotificationSources = new Map<string, RecentGatewayNotification>();
     private readonly ownershipWaiters = new Map<string, Set<() => void>>();
     private notificationPipeline: Promise<void> = Promise.resolve();
     private current: ManagedRoot | null = null;
@@ -162,6 +178,13 @@ export class CodexGatewayCoordinator {
         return this.orderedRoots()
             .filter((root) => root.subscriptionPending)
             .map((root) => root.threadId);
+    }
+
+    // The terminal owns a separate official app-server connection. Its stable-v2
+    // notifications may arrive before the bridge can resume a newly-live thread.
+    // They are projection input only; bridge lifecycle remains the subscription proof.
+    observeTerminalNotification(notification: ServerNotification): void {
+        this.enqueueNotification(notification, 'terminal');
     }
 
     async connect(recovered = false): Promise<void> {
@@ -215,6 +238,15 @@ export class CodexGatewayCoordinator {
         }
         return await this.bindingLock.inLock(async () => {
             if (this.current?.threadId === threadId) {
+                if (subscription === 'terminalRootResponse' && options.providerSnapshot) {
+                    this.current.title = safeThreadTitle(options.providerSnapshot);
+                    this.current.rootActiveTurnId = activeTurnIdFromSnapshot(options.providerSnapshot);
+                    await rootBindingStep(
+                        'runtimeProjection',
+                        () => this.current!.runtime.reconcile(options.providerSnapshot!),
+                    );
+                    this.options.client.adoptThreadSnapshot(options.providerSnapshot);
+                }
                 if (subscription === 'resume' && this.current.subscriptionPending) {
                     await this.subscribeMaterializedRootLocked(this.current);
                 } else if (subscription === 'bridgeStartedNewThread') {
@@ -293,6 +325,8 @@ export class CodexGatewayCoordinator {
             }
 
             let previousMarkedDraining = false;
+            target.subscriptionPending = subscription === 'deferredNewThread'
+                || subscription === 'terminalRootResponse';
             try {
                 const providerSnapshot = await rootBindingStep('providerSnapshot', async () => {
                     if (options.providerSnapshot) {
@@ -343,8 +377,9 @@ export class CodexGatewayCoordinator {
                 }));
                 target.role = 'current';
                 target.generation = nextGeneration;
-                target.subscriptionPending = subscription === 'deferredNewThread'
-                    || subscription === 'terminalRootResponse';
+                if (subscription === 'terminalRootResponse' && options.providerSnapshot) {
+                    this.options.client.adoptThreadSnapshot(options.providerSnapshot);
+                }
                 this.current = target;
                 this.generation = nextGeneration;
             } catch (error) {
@@ -564,6 +599,8 @@ export class CodexGatewayCoordinator {
             }));
             this.roots.clear();
             this.ownerByThread.clear();
+            this.pendingNotifications.clear();
+            this.recentNotificationSources.clear();
         });
         await this.options.client.disconnect();
         this.connected = false;
@@ -669,10 +706,7 @@ export class CodexGatewayCoordinator {
         if (this.handlersInstalled) return;
         this.handlersInstalled = true;
         this.options.client.setStableNotificationHandler((notification) => {
-            const routed = this.notificationPipeline.then(() => this.routeNotification(notification));
-            this.notificationPipeline = routed.catch((error) => {
-                this.options.onError?.(error);
-            });
+            this.enqueueNotification(notification, 'bridge');
         });
         this.options.client.setServerRequestHandler(async (request) => {
             await this.notificationPipeline;
@@ -689,34 +723,59 @@ export class CodexGatewayCoordinator {
         });
     }
 
-    private async routeNotification(notification: ServerNotification): Promise<void> {
+    private enqueueNotification(
+        notification: ServerNotification,
+        source: CodexGatewayNotificationSource,
+    ): void {
+        const routed = this.notificationPipeline.then(() => this.routeNotification(notification, source));
+        this.notificationPipeline = routed.catch((error) => {
+            this.options.onError?.(error);
+        });
+    }
+
+    private async routeNotification(
+        notification: ServerNotification,
+        source: CodexGatewayNotificationSource,
+    ): Promise<void> {
         if (this.stopped) return;
         const threadId = notificationThreadId(notification);
         if (!threadId) return;
         let owner = this.ownerByThread.get(threadId) ?? this.findRuntimeOwner(threadId);
         if (!owner) owner = await this.resolveOwnerFromSnapshot(notification, threadId);
         if (!owner) {
-            this.bufferNotification(threadId, notification);
+            this.bufferNotification(threadId, notification, source);
             return;
         }
+        const handled = await this.applyOwnedNotification(owner, notification, source);
+        if (handled && owner.role === 'draining') {
+            await this.bindingLock.inLock(() => this.maybeRetireLocked(owner!));
+        }
+    }
+
+    private async applyOwnedNotification(
+        owner: ManagedRoot,
+        notification: ServerNotification,
+        source: CodexGatewayNotificationSource,
+    ): Promise<boolean> {
         // Receiving stable lifecycle on the bridge proves this connection is already
         // subscribed. Re-resuming here could import a snapshot containing the same
         // delta and then apply that delta twice.
-        if (owner.subscriptionPending) {
-            await this.bindingLock.inLock(async () => {
-                if (this.roots.get(owner!.threadId) === owner) {
-                    owner!.subscriptionPending = false;
-                }
-            });
+        if (
+            source === 'bridge'
+            && owner.subscriptionPending
+            && this.roots.get(owner.threadId) === owner
+        ) {
+            owner.subscriptionPending = false;
         }
+        if (this.isCrossSourceDuplicate(notification, source)) return false;
+        const threadId = notificationThreadId(notification);
+        if (!threadId) return false;
         this.registerOwnership(threadId, owner);
         trackRootActivity(owner, notification);
         trackRootTitle(owner, notification);
         await owner.runtime.handleNotification(notification);
         await this.drainNewlyOwnedPending(owner);
-        if (owner.role === 'draining') {
-            await this.bindingLock.inLock(() => this.maybeRetireLocked(owner!));
-        }
+        return true;
     }
 
     private async resolveRequestOwner(request: CodexServerRequest): Promise<ManagedRoot> {
@@ -799,9 +858,8 @@ export class CodexGatewayCoordinator {
         const pending = this.pendingNotifications.get(threadId);
         if (!pending) return;
         this.pendingNotifications.delete(threadId);
-        for (const notification of pending) {
-            trackRootActivity(owner, notification);
-            await owner.runtime.handleNotification(notification);
+        for (const entry of pending) {
+            await this.applyOwnedNotification(owner, entry.notification, entry.source);
         }
     }
 
@@ -814,9 +872,40 @@ export class CodexGatewayCoordinator {
         }
     }
 
-    private bufferNotification(threadId: string, notification: ServerNotification): void {
+    private isCrossSourceDuplicate(
+        notification: ServerNotification,
+        source: CodexGatewayNotificationSource,
+    ): boolean {
+        const fingerprint = notificationFingerprint(notification);
+        if (!fingerprint) return false;
+        const observedAt = this.now();
+        this.pruneRecentNotificationSources(observedAt);
+        const previous = this.recentNotificationSources.get(fingerprint);
+        if (previous && previous.source !== source) return true;
+        this.recentNotificationSources.delete(fingerprint);
+        this.recentNotificationSources.set(fingerprint, { source, observedAt });
+        while (this.recentNotificationSources.size > MAX_RECENT_CROSS_SOURCE_NOTIFICATIONS) {
+            const oldest = this.recentNotificationSources.keys().next().value as string | undefined;
+            if (!oldest) break;
+            this.recentNotificationSources.delete(oldest);
+        }
+        return false;
+    }
+
+    private pruneRecentNotificationSources(observedAt: number): void {
+        for (const [fingerprint, entry] of this.recentNotificationSources) {
+            if (observedAt - entry.observedAt < CROSS_SOURCE_NOTIFICATION_DEDUP_TTL_MS) break;
+            this.recentNotificationSources.delete(fingerprint);
+        }
+    }
+
+    private bufferNotification(
+        threadId: string,
+        notification: ServerNotification,
+        source: CodexGatewayNotificationSource,
+    ): void {
         const current = this.pendingNotifications.get(threadId) ?? [];
-        current.push(notification);
+        current.push({ notification, source });
         if (current.length > MAX_PENDING_NOTIFICATIONS_PER_THREAD) current.shift();
         this.pendingNotifications.set(threadId, current);
         while (this.pendingNotificationCount() > MAX_PENDING_NOTIFICATIONS_TOTAL) {
@@ -967,6 +1056,16 @@ function notificationThreadId(notification: ServerNotification): string | null {
     return typeof params.threadId === 'string' && params.threadId.length > 0
         ? params.threadId
         : null;
+}
+
+function notificationFingerprint(notification: ServerNotification): string | null {
+    try {
+        return createHash('sha256')
+            .update(JSON.stringify(notification))
+            .digest('base64url');
+    } catch {
+        return null;
+    }
 }
 
 function requestThreadId(request: CodexServerRequest): string | null {

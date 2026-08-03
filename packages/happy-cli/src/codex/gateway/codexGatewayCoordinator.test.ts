@@ -180,8 +180,51 @@ describe('Codex Gateway coordinator', () => {
 
         expect(harness.client.readThread).not.toHaveBeenCalled();
         expect(harness.client.subscribeThread).not.toHaveBeenCalled();
+        expect(harness.client.adoptThreadSnapshot).toHaveBeenCalledWith(fresh);
         expect(harness.runtimes.get('thread-fresh')!.activatedSnapshots).toEqual([fresh]);
         expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual(['thread-fresh']);
+    });
+
+    it('projects terminal lifecycle while waiting for bridge confirmation without duplicating it', async () => {
+        const fresh = thread('thread-fresh', 'idle');
+        const lifecycle = threadStatus('thread-fresh', 'active');
+        const harness = createHarness({ 'thread-fresh': fresh });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-fresh', {
+            subscription: 'terminalRootResponse',
+            providerSnapshot: fresh,
+        });
+
+        harness.coordinator.observeTerminalNotification(lifecycle);
+        harness.coordinator.observeTerminalNotification(lifecycle);
+        await harness.coordinator.flush();
+
+        const runtime = harness.runtimes.get('thread-fresh')!;
+        expect(runtime.notifications).toEqual([lifecycle, lifecycle]);
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual(['thread-fresh']);
+
+        harness.client.emitNotification(lifecycle);
+        await harness.coordinator.flush();
+
+        expect(runtime.notifications).toEqual([lifecycle, lifecycle]);
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
+    });
+
+    it('keeps a bridge lifecycle that arrives before a terminal root binding as subscription proof', async () => {
+        const fresh = thread('thread-fresh', 'idle');
+        const lifecycle = threadStatus('thread-fresh', 'active');
+        const harness = createHarness({ 'thread-fresh': fresh });
+        await harness.coordinator.connect();
+
+        harness.client.emitNotification(lifecycle);
+        await harness.coordinator.flush();
+        await harness.coordinator.bindRoot('thread-fresh', {
+            subscription: 'terminalRootResponse',
+            providerSnapshot: fresh,
+        });
+
+        expect(harness.runtimes.get('thread-fresh')!.notifications).toEqual([lifecycle]);
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
     });
 
     it('rejects a terminal response snapshot with a different thread ID', async () => {
@@ -578,6 +621,7 @@ class FakeClient {
     readonly readThreadComplete = vi.fn(async (options: { threadId: string }) => ({
         thread: this.threads.get(options.threadId)!,
     }));
+    readonly adoptThreadSnapshot = vi.fn((_snapshot: Thread) => undefined);
 
     constructor(private readonly threads: Map<string, Thread>) {}
 

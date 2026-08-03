@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxConfig } from '@/persistence';
 import { logger } from '@/ui/logger';
+import type { Thread } from './protocol';
 
 const {
     mockExecFileSync,
@@ -235,6 +236,24 @@ describe('CodexAppServerClient sandbox integration', () => {
         expect(record).toHaveBeenCalledWith('inbound', expect.objectContaining({ result: { userAgent: 'test' } }));
         expect(record).toHaveBeenCalledWith('outbound', expect.objectContaining({ method: 'initialized' }));
         await client.disconnect();
+    });
+
+    it('adopts a terminal root snapshot locally without sending a duplicate lifecycle event', async () => {
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const notifications = vi.fn();
+        client.setStableNotificationHandler(notifications);
+        const snapshot = {
+            id: 'thread-terminal-root',
+            parentThreadId: null,
+            status: { type: 'idle' },
+            turns: [],
+        } as unknown as Thread;
+
+        client.adoptThreadSnapshot(snapshot);
+
+        expect(client.threadId).toBe('thread-terminal-root');
+        expect(notifications).not.toHaveBeenCalled();
     });
 
     it('emits exact 0.145 stable-v2 initialize, thread, and turn request shapes', async () => {

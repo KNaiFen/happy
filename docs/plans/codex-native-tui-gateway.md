@@ -4,8 +4,8 @@
 
 - 当前状态：实施中
 - 日期：2026-08-02
-- 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.31`、App `1.11.22`、Wire `0.1.6`
+- 基线：`main` / `8c9f7f1a`
+- 目标版本：CLI `1.4.32`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -44,7 +44,11 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 - 代理透传 JSON-RPC，不改写 provider payload。仅观察、预检并记录成功的根
   `thread/start`、`thread/resume`、`thread/fork` 绑定变化。
 - Happy bridge 在 thread 已物化后作为 app-server 的独立订阅者；TUI 和 bridge 同时
-  接收通知。终端根 RPC 成功响应中的官方 `Thread` 快照只在进程内短暂交给 coordinator
+  接收通知。独立订阅尚未 materialize 的 terminal-origin 阶段，透明代理从已认证 TUI
+  上游连接镜像 stable-v2 notification 到同一 coordinator，使首轮官方 lifecycle 能被
+  同步；镜像不改写或持久化原 frame，不能证明 bridge 已订阅，也不能自行结束 pending。
+  coordinator 对 terminal/bridge 两个来源的同一 notification 仅在内存以有界哈希短暂去重，
+  仍只以 bridge 生命周期确认订阅成功。终端根 RPC 成功响应中的官方 `Thread` 快照只在进程内短暂交给 coordinator
   激活对应 root，绝不写日志、descriptor 或第二套 mapper；不得在把该响应交给 TUI 前
   再以独立 observer 的 `thread/read` 取得同一快照。终端新建或切换的 root 随后立即建立
   一个可取消的后台协调器：它以有界指数退避安全重试 stable `thread/resume`，并在尚未订阅
@@ -544,12 +548,41 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     作为一个含换行的原子 accessibility text，而 recovery 断言将 marker 当作整个文本节点
     匹配。恢复门禁改为 DOTALL 全文本正则，仍要求 marker 出现在可见的持久 output 中，不能仅以
     工具卡存在或服务端诊断代替；这只修正测试选择器，不改变 App 或协议行为。
+  - 第二十七轮 CLI `1.4.31` 的 release `30775583482` 已成功，但主 CI
+    `30775583548` 的真实 PTY 仍证明 terminal 已完成真实官方回复，而 descriptor 保持
+    `observerRetry:protocol`、App projection 的 agent/reasoning/tool/response 计数全为 0。
+    这表明不能把 terminal-origin 首轮同步建立在第二连接的 `thread/resume` 先成功之上：
+    官方 stable-v2 对刚由 TUI 创建的 live thread 允许该 observer 暂时不可恢复。修复应让
+    透明 proxy 把它已收到的 stable-v2 notification 原样、按上游顺序交给 coordinator；
+    terminal 来源只投影和唤醒 observer，绝不清除 `subscriptionPending`。bridge 后续真正
+    收到同一 lifecycle 时才清除 pending，两个来源的等价 notification 通过仅内存、容量和
+    TTL 均受限的摘要去重，避免重复 delta/工具卡。根响应 snapshot 同时仅在 bridge client
+    内注册为当前 thread，令带显式 `threadId` 的 App turn 在独立 resume 尚未完成时可以按
+    stable-v2 直达已运行 thread；真实 PTY 门禁必须验证这一轮 App -> provider -> terminal/
+    App 回流。任何 proxy 镜像或 App command 失败都不得关闭 TUI。另一个独立 CI 失败发生在
+    官方 lifecycle 业务断言已通过后的临时 `CODEX_HOME` 删除，Codex 的插件 clone 尚在收尾，
+    所以测试 cleanup 仅针对 `ENOTEMPTY`/`EBUSY`/`EPERM` 做有界重试，不能吞掉其它错误或
+    改变产品运行时。`1.4.31` 已运行不可复用，目标推进到 `1.4.32`。
+  - 第二十八轮已实现并完成源码级验证：transparent proxy 只对不带 JSON-RPC `id` 的
+    stable-v2 provider notification 建立解析镜像，并始终原样转发原 frame 给 TUI；镜像
+    callback 仅排入 coordinator 队列，任何投影异常只走既有 payload-free 诊断，不能阻塞
+    或关闭终端。coordinator 为 terminal/bridge 标记来源：terminal 生命周期可以在 observer
+    仍 pending 时投影，bridge 生命周期才清除 pending；同一跨来源 notification 只以 15 秒、
+    4096 条容量受限的内存 SHA-256 摘要去重，同来源重复不丢弃。提前到达的 bridge 通知也
+    必须在 terminal root 绑定前保留其订阅证明。成功 terminal root response 的快照只在
+    bridge client 内存注册为 selected thread，不发 RPC、不发第二个 lifecycle、不持久化，
+    从而让 App 使用 stable `turn/start.threadId` 直达该 thread。官方 lifecycle fixture 的
+    临时根目录 cleanup 仅对 `ENOTEMPTY`、`EBUSY`、`EPERM` 进行最多六次有界重试。新增
+    proxy、coordinator、client、worker 回归后，CLI TypeScript、PTY fixture TypeScript、
+    聚焦 `104/104` 和全量 CLI unit `110` 文件、`982` 项均通过；尚待 `1.4.32` 云端的
+    最新 stable 官方 app-server lifecycle、真实 TUI 往返、release archive、Android field
+    与 aggregate gate 验收。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.31`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.32`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -593,9 +626,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.30` release `30773936092` 已通过并下载验证，但真实 PTY
       `30773936190` 暴露了成功根响应被 observer 二次读取抢占的协议竞态；该已运行版本
       不得复用，目标推进到 `1.4.31`。
+      `1.4.31` release `30775583482` 已通过；main CI `30775583548` 的 terminal TUI
+      已得到官方回复而 App 仍零投影，且 lifecycle 场景仅因测试临时目录 `ENOTEMPTY` 收尾失败。
+      两项修复均改变可分发 Gateway/CI 验收行为，已运行版本不得复用，目标推进到 `1.4.32`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.31.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.32.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
