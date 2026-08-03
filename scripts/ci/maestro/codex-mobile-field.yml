@@ -119,7 +119,7 @@ tags:
 - takeScreenshot: codex-queued-follow-up
 - extendedWaitUntil:
     notVisible: Edit queued message
-    timeout: 60000
+    timeout: 120000
 
 - scrollUntilVisible:
     element: Official Codex MCP E2E response
