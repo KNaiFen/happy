@@ -147,7 +147,7 @@ jobs:
             echo "Removed Claude command unexpectedly succeeded" >&2
             exit 1
           fi
-          if ! grep -Fq 'This removed command is no longer supported' "$RUNNER_TEMP/happy-removed-command.err"; then
+          if ! grep -Fq 'Unknown Happy command: claude' "$RUNNER_TEMP/happy-removed-command.err"; then
             echo "Removed Claude command returned an unexpected error:" >&2
             cat "$RUNNER_TEMP/happy-removed-command.err" >&2
             exit 1

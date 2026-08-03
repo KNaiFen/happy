@@ -350,7 +350,7 @@ const mutation = {
     ciphertext: "encrypted-v1",
 };
 
-async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.36"): Promise<Fastify> {
+async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.37"): Promise<Fastify> {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
@@ -384,23 +384,23 @@ async function createApp(defaultHappyClient: string | null = "cli-coding-session
 
 describe("v4SessionRoutes", () => {
     it("accepts only coordinated CLI, App, and happy-agent versions on v4 data routes", async () => {
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.36")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.37")).toEqual({ compatible: true });
         expect(getSyncV4ClientCompatibility("android/1.11.24")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("cli-control-plane/0.1.3")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.35")).toEqual({
+        expect(getSyncV4ClientCompatibility("cli-control-plane/0.1.4")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.36")).toEqual({
             compatible: false,
             clientType: "happy-cli",
-            minimumVersion: "1.4.36",
+            minimumVersion: "1.4.37",
         });
         expect(getSyncV4ClientCompatibility("test/9.0.0")).toEqual({
             compatible: false,
             clientType: "unknown",
             minimumVersion: null,
         });
-        expect(getSyncV4ClientCompatibility("cli-control-plane/0.1.2")).toEqual({
+        expect(getSyncV4ClientCompatibility("cli-control-plane/0.1.3")).toEqual({
             compatible: false,
             clientType: "happy-agent",
-            minimumVersion: "0.1.3",
+            minimumVersion: "0.1.4",
         });
 
         seedSession("session-1", "user-1", { orphan: true });
@@ -687,9 +687,9 @@ describe("v4SessionRoutes", () => {
             codex: {
                 enabled: true,
                 protocolVersion: 4,
-                minimumHappyCliVersion: "1.4.36",
+                minimumHappyCliVersion: "1.4.37",
                 minimumHappyAppVersion: "1.11.24",
-                minimumHappyAgentVersion: "0.1.3",
+                minimumHappyAgentVersion: "0.1.4",
                 minimumCodexCliVersion: "0.145.0",
             },
         });

@@ -164,7 +164,7 @@ function mockCapabilities(): void {
             codex: {
                 enabled: true,
                 protocolVersion: 4,
-                minimumHappyAgentVersion: '0.1.3',
+                minimumHappyAgentVersion: '0.1.4',
             },
         },
     });
