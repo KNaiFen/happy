@@ -1,6 +1,6 @@
 # Codex Gateway 真实配置传输修复计划
 
-状态：本地实现与源码验证完成，等待云端验收
+状态：已完成并归档
 
 ## 现场结论
 
@@ -65,3 +65,17 @@
 - Gateway 聚焦回归：`36/36`；Responses/MCP fixture：`8/8`。
 - CLI 全量源码单测：`110/110` 文件、`992/992` 测试通过。
 - 未在本地构建 CLI、官方 Codex、Web、Android、Rust/Tauri、Docker 或发布产物。
+
+## 云端验收
+
+- CLI `1.4.34` 发布包：<https://github.com/KNaiFen/happy/actions/runs/30802014336>，
+  验证、构建、打包、真实安装和 smoke test 全部通过。
+- 主 CI：<https://github.com/KNaiFen/happy/actions/runs/30802014582>，所有 required jobs
+  通过。官方 Codex TUI Gateway job 使用 source-built `codex-cli 0.146.0`，空窗口、失败
+  MCP、成功 MCP、终端/App 双向、异常 detach、同 provider attach 和正常停止测试 `2/2`
+  通过。
+- API 36 Android field：<https://github.com/KNaiFen/happy/actions/runs/30802014488>，App、relay、
+  CLI 和 source-built 官方 Codex 全链路通过。
+- 已下载并验证 `dist/release-artifacts/happy-1.4.34.tgz`；SHA-256 为
+  `667d0b383d4b09ffe12f3b3f5dab66a1f7d6a2e5189d752abc967b1dc292afb7`，包内版本为
+  `1.4.34`，并包含 macOS ARM64 ripgrep 与 difftastic 归档。
