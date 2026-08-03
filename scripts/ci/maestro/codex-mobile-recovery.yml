@@ -11,10 +11,11 @@ tags:
     visible: New chat
     timeout: 45000
 - tapOn: New chat
+- hideKeyboard
 - scrollUntilVisible:
     element:
       id: codex-mcp-tool-message
-    direction: DOWN
+    direction: UP
     timeout: 60000
 - tapOn:
     id: codex-mcp-tool-message
@@ -26,12 +27,12 @@ tags:
 - back
 - scrollUntilVisible:
     element: resume-history-from-android-e2e
-    direction: DOWN
+    direction: UP
     timeout: 45000
 - assertVisible: resume-history-from-android-e2e
 - scrollUntilVisible:
     element: H
-    direction: UP
+    direction: DOWN
     timeout: 45000
 - assertVisible: H
 - scrollUntilVisible:

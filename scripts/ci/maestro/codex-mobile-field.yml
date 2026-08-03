@@ -150,6 +150,7 @@ tags:
 - pressKey: home
 - launchApp:
     stopApp: false
+- hideKeyboard
 - scrollUntilVisible:
     element:
       id: codex-timeline-context-compaction
@@ -159,7 +160,7 @@ tags:
     id: codex-timeline-context-compaction
 - scrollUntilVisible:
     element: Official Codex MCP E2E response
-    direction: DOWN
+    direction: UP
     timeout: 60000
 - assertVisible: Official Codex MCP E2E response
 - assertNotVisible: Used 2 tools
