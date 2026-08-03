@@ -26,6 +26,12 @@ tags:
     visible:
       id: agent-input-message
     timeout: 45000
+- runFlow:
+    when:
+      visible:
+        id: "com.google.android.inputmethod.latin:id/0_resource_name_obfuscated"
+    commands:
+      - hideKeyboard
 - scrollUntilVisible:
     element:
       id: codex-mcp-tool-message
