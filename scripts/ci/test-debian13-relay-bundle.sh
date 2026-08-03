@@ -44,17 +44,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-assert_capability() {
-    expected="$1"
+assert_codex_v4_capability() {
     # JavaScript is single-quoted so the shell cannot expand template literals.
     # shellcheck disable=SC2016
     container_node -e '
-        const expected = process.argv[1] === "true";
         fetch("http://127.0.0.1:3005/v4/capabilities")
             .then(async response => {
                 if (!response.ok) throw new Error(`capability request failed: ${response.status}`);
                 const body = await response.json();
-                if (body?.codex?.enabled !== expected || body?.codex?.protocolVersion !== 4) {
+                const codex = body?.codex;
+                const minimumVersions = [
+                    codex?.minimumHappyCliVersion,
+                    codex?.minimumHappyAppVersion,
+                    codex?.minimumHappyAgentVersion,
+                    codex?.minimumCodexCliVersion,
+                ];
+                if (
+                    codex?.enabled !== true
+                    || codex?.protocolVersion !== 4
+                    || minimumVersions.some(value => (
+                        typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value)
+                    ))
+                ) {
                     throw new Error(`unexpected v4 capabilities: ${JSON.stringify(body)}`);
                 }
             })
@@ -62,7 +73,7 @@ assert_capability() {
                 console.error(error);
                 process.exit(1);
             });
-    ' "$expected"
+    '
 }
 
 create_encrypted_business_state() {
@@ -361,7 +372,7 @@ container_node -e '
         })
         .catch(() => process.exit(1));
 '
-assert_capability false
+assert_codex_v4_capability
 business_state="$(create_encrypted_business_state)"
 
 container_node -e '
@@ -385,13 +396,8 @@ container_node -e '
     const fs = require("node:fs");
     if (fs.readFileSync("/data/ci-persistence-marker", "utf8") !== "persisted\n") process.exit(1);
 '
-assert_capability false
+assert_codex_v4_capability
 assert_encrypted_business_state "$business_state"
-
-"$bundle_root/relayctl.sh" enable-v4
-assert_capability true
-"$bundle_root/relayctl.sh" disable-v4
-assert_capability false
 
 container_id="$(compose ps --quiet happy-relay)"
 [[ "$(docker inspect "$container_id" --format '{{.HostConfig.ReadonlyRootfs}}')" == "true" ]] \
@@ -435,4 +441,4 @@ container_node -e '
     if (fs.readFileSync("/data/ci-persistence-marker", "utf8") !== "persisted\n") process.exit(1);
 '
 
-echo "Verified install, encrypted business state, persistence, security, and v4 toggling for Happy relay $expected_version"
+echo "Verified install, encrypted business state, persistence, security, and always-on Codex v4 for Happy relay $expected_version"
