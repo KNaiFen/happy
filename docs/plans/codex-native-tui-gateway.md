@@ -5,7 +5,7 @@
 - 当前状态：实施中
 - 日期：2026-08-02
 - 基线：`main` / `4cce2cb4`
-- 目标版本：CLI `1.4.29`、App `1.11.22`、Wire `0.1.6`
+- 目标版本：CLI `1.4.30`、App `1.11.22`、Wire `0.1.6`
 - Server 保持 `1.1.33`，除非实现过程中确认必须修改中继契约
 - 本文件是本次重构的唯一权威实施基线。发现新事实时，必须先更新本文件，
   再改变代码方向。
@@ -44,9 +44,11 @@ TUI，而不是创建或 resume 第二份 provider 运行时。
 - 代理透传 JSON-RPC，不改写 provider payload。仅观察、预检并记录成功的根
   `thread/start`、`thread/resume`、`thread/fork` 绑定变化。
 - Happy bridge 在 thread 已物化后作为 app-server 的独立订阅者；TUI 和 bridge 同时
-  接收通知。终端新建的未物化 thread 先由代理只观察稳定 RPC 的方法、线程归属和受理
-  边界，首个 turn 已受理或出现 thread activity 后立即用 `thread/resume` 正式订阅并
-  以权威 snapshot 补齐早期状态。代理不得把 provider payload 复制进第二套 mapper。
+  接收通知。终端新建的未物化 thread 在根 RPC 成功后立即建立一个可取消的后台协调器：
+  它以有界指数退避安全重试 stable `thread/resume`，并在尚未订阅时读取权威
+  `thread/read` 快照补齐早期状态。协调器一直持续到订阅成功、root 被权威退休或 worker
+  停止，不能依赖一次 `turn/start`/activity 通知或有限次数重试；代理 activity 只可加速
+  已存在的协调器。代理不得把 provider payload 复制进第二套 mapper。
 - 只同步官方 reasoning summary；raw reasoning text 只允许本地计数诊断，永不
   写入 Sync v4 或日志。
 
@@ -503,12 +505,30 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
     “activity 在 rootBound 前、rollout 在首次 stable resume 后才可用”，且不发送第二条
     activity。`1.4.28` release `30771395978` 已完成并下载验证，不可复用；目标推进到
     `1.4.29`，App/Wire/Server 保持不变。
+  - 第二十四轮主 CI `30772327426` 证明早到 activity 缓存仍不能作为正确性前提：官方
+    PTY trace 在约 3.5 秒内完成 prompt、shell tool 和最终回复，Gateway/provider 保持
+    running、无 root error，但投影仍为零；同一运行中的独立官方 observer 验收已证明
+    stable-v2 `thread/resume` 在首 turn 开始后可订阅。因此不能再把漏订阅的恢复寄托于
+    某条代理 activity 是否被解析。此项取代第二十二、二十三轮的 activity 缓存和有限
+    retry 设计；每个 `deferredNewThread` root 在成功根 RPC 后必须
+    无条件启动一个单一、可取消的协调任务；任务在 root 仍 pending 时持续以有界指数
+    退避尝试 safe resume，并在未订阅时以 `thread/read` 完整快照重协调已有历史。成功
+    resume 后才清除 pending；root 被退休或 worker stop 时终止任务。停止时必须先持久化
+    `stopping` descriptor；既有的权威 interrupt 协调结束后，再主动断开 Gateway 自己的
+    observer transport，最后才等待 coordinator 的 lifecycle/stop lock；这样卡住的安全
+    resume/read RPC 会被拒绝并释放 root lock。这只把该 RPC 标记为结果未知，绝不能推断
+    turn 已结束，也不得把预期的 shutdown cancellation 覆盖成持久 `rootBinding` 错误。
+    activity 只用于立即唤醒既有任务，不再决定任务是否存在。新增测试
+    必须覆盖“根绑定后没有任何可识别 activity、超过旧六次有限重试后才 materialize”、
+    pending snapshot reconcile 不会把 root 误标为已订阅，以及 stop 发生在 resume RPC
+    无响应时仍能完成清理。这个变化只改 CLI，`1.4.29` release
+    `30772327334` 已通过并下载验证，版本不可复用，目标推进到 `1.4.30`。
 - [ ] 性能门禁保持健康本地链路流式更新 p95 小于 750 ms。
 - [ ] 不使用空转十分钟作为验收；长 turn 通过虚拟时钟和有实际阶段动作的生命周期验证。
 
 ### 8. 发布
 
-- [ ] CLI 升至 `1.4.29`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
+- [ ] CLI 升至 `1.4.30`，App 保持 `1.11.22`，Wire 保持 `0.1.6`。
       `1.4.15` 和 `1.4.16` 的制品均成功构建安装，但发布冒烟仍断言已删除的旧帮助文案
       `Start Codex`，并且后续 removed-command 断言还存在未执行到的大小写错误；按不可
       复用已运行版本的规则推进补丁版。冒烟测试改为检查当前原生 Codex 命令面，并为
@@ -546,9 +566,12 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
       `1.4.28` release `30771395978` 已通过、制品已下载验证，但真实 PTY `30771396112`
       暴露 early activity 在 root bind 前被丢弃的竞态；该已运行版本不得复用，目标推进到
       `1.4.29`。
+      `1.4.29` release `30772327334` 已通过、制品已下载验证，但主 CI
+      `30772327426` 的真实 PTY 仍零投影，证明 activity 缓存与短有限重试不能构成
+      订阅正确性保证；该已运行版本不得复用，目标推进到 `1.4.30`。
 - [ ] 分阶段使用简短中文主题提交，`.agents` 和本地 Codex 文件永不暂存。
 - [ ] 普通推送 `origin/main`，观察所有 Actions 并修复到全绿。
-- [ ] CLI workflow 成功后下载并验证 `happy-1.4.29.tgz` 到
+- [ ] CLI workflow 成功后下载并验证 `happy-1.4.30.tgz` 到
       `dist/release-artifacts`。
 - [x] Android workflow 成功后提供 GitHub Artifact URL，不默认下载 APK。
 
@@ -697,3 +720,10 @@ provider thread ID 只存在于加密 entity、加密 metadata 或受权限保�
   official-source 场景的有状态 Responses fixture 完全隔离；同时保留正常 stop 的严格
   worker-PID 门禁，因为安全 artifact 证明业务清理已完成但专用 worker 仍不退出。隐藏
   worker 入口在所有 awaited cleanup 后显式成功退出，产品修复推进 CLI `1.4.27`。
+- 2026-08-02：主 CI `30772327426` 的官方 PTY 再次证明 terminal thread 的 observer
+  订阅不能以代理 activity 或六次短退避作为存活条件。改为根 RPC 成功即启动可取消的
+  持续 resume/snapshot 协调；它只在权威订阅、root retirement 或 worker stop 时结束，
+  保持不依赖时间推断 turn 完成的边界。worker stop 会先持久化 lifecycle，再在等待
+  coordinator lock 前于 interrupt 协调后关闭 observer transport，解除可能持有 root lock
+  的安全读/订阅 RPC，但不把该取消解释为 turn 完成或持久 rootBinding 失败。
+  该分发行为修复推进 CLI `1.4.30`。

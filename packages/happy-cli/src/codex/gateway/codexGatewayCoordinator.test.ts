@@ -193,6 +193,28 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
     });
 
+    it('imports an authoritative snapshot while a terminal root still awaits stable subscription', async () => {
+        const fresh = thread('thread-fresh', 'idle');
+        const materialized = thread('thread-fresh', 'active', 'turn-1');
+        const harness = createHarness({ 'thread-fresh': fresh });
+        harness.client.unmaterializedThreads.add('thread-fresh');
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-fresh', {
+            subscription: 'deferredNewThread',
+        });
+        harness.client.setThread(materialized);
+
+        await expect(harness.coordinator.reconcilePendingRootSnapshot('thread-fresh'))
+            .resolves.toBe(true);
+
+        expect(harness.client.readThreadComplete).toHaveBeenCalledWith({
+            threadId: 'thread-fresh',
+            emitSnapshot: false,
+        });
+        expect(harness.runtimes.get('thread-fresh')!.reconcile).toHaveBeenCalledWith(materialized);
+        expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual(['thread-fresh']);
+    });
+
     it('does not retire a draining root before its deferred subscription reconciles', async () => {
         const initial = thread('thread-a', 'idle');
         const materialized = thread('thread-a', 'idle');

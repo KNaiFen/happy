@@ -378,6 +378,35 @@ export class CodexGatewayCoordinator {
         });
     }
 
+    async reconcilePendingRootSnapshot(threadId: string): Promise<boolean> {
+        validateThreadId(threadId);
+        if (this.stopped) return false;
+        return await this.bindingLock.inLock(async () => {
+            const root = this.roots.get(threadId);
+            if (!root?.subscriptionPending) return false;
+            const providerSnapshot = await rootBindingStep(
+                'providerSnapshot',
+                async () => (
+                    await this.options.client.readThreadComplete({
+                        threadId,
+                        emitSnapshot: false,
+                    })
+                ).thread,
+            );
+            root.title = safeThreadTitle(providerSnapshot);
+            root.rootActiveTurnId = activeTurnIdFromSnapshot(providerSnapshot);
+            await rootBindingStep(
+                'runtimeProjection',
+                () => root.runtime.reconcile(providerSnapshot),
+            );
+            await rootBindingStep(
+                'pendingNotifications',
+                () => this.drainPending(threadId, root),
+            );
+            return true;
+        });
+    }
+
     async restoreBindings(bindings: readonly CodexGatewayRecoveredBinding[]): Promise<void> {
         if (bindings.length === 0) return;
         validateRecoveredBindings(bindings);

@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
     unmaterializedThreads: new Set<string>(),
     materializeOnSubscriptionCall: null as number | null,
     materializedSubscriptionCalls: [] as string[],
+    completeSnapshotCalls: [] as string[],
+    subscriptionHang: false,
+    rejectHungSubscription: null as ((error: Error) => void) | null,
+    snapshotHang: false,
+    rejectHungSnapshot: null as ((error: Error) => void) | null,
+    disconnectCalls: 0,
     providerStopDelayMs: 0,
 }));
 
@@ -149,7 +155,20 @@ vi.mock('../codexAppServerClient', () => ({
             this.connected = true;
             this.connectionHandler?.({ connection: 'connected', statusUnknown: false, error: null });
         }
-        async disconnect() { this.connected = false; }
+        async disconnect() {
+            this.connected = false;
+            mocks.disconnectCalls += 1;
+            mocks.rejectHungSubscription?.(Object.assign(
+                new Error('observer transport closed during subscription'),
+                { code: 'ECONNRESET' },
+            ));
+            mocks.rejectHungSubscription = null;
+            mocks.rejectHungSnapshot?.(Object.assign(
+                new Error('observer transport closed during snapshot'),
+                { code: 'ECONNRESET' },
+            ));
+            mocks.rejectHungSnapshot = null;
+        }
         async reconnectExternalTransportPreservingThreads() {}
         setStableNotificationHandler() {}
         setServerRequestHandler() {}
@@ -164,6 +183,11 @@ vi.mock('../codexAppServerClient', () => ({
         }
         async subscribeThreadIfMaterialized(threadId: string) {
             mocks.materializedSubscriptionCalls.push(threadId);
+            if (mocks.subscriptionHang) {
+                return await new Promise<never>((_resolve, reject) => {
+                    mocks.rejectHungSubscription = reject;
+                });
+            }
             if (
                 mocks.materializeOnSubscriptionCall !== null
                 && mocks.materializedSubscriptionCalls.length >= mocks.materializeOnSubscriptionCall
@@ -182,6 +206,12 @@ vi.mock('../codexAppServerClient', () => ({
             return { thread: thread(options.threadId) };
         }
         async readThreadComplete(options: { threadId: string }) {
+            mocks.completeSnapshotCalls.push(options.threadId);
+            if (mocks.snapshotHang) {
+                return await new Promise<never>((_resolve, reject) => {
+                    mocks.rejectHungSnapshot = reject;
+                });
+            }
             return { thread: thread(options.threadId) };
         }
         async startThread() { return await mocks.startThread(); }
@@ -212,6 +242,12 @@ afterEach(async () => {
     mocks.unmaterializedThreads.clear();
     mocks.materializeOnSubscriptionCall = null;
     mocks.materializedSubscriptionCalls.length = 0;
+    mocks.completeSnapshotCalls.length = 0;
+    mocks.subscriptionHang = false;
+    mocks.rejectHungSubscription = null;
+    mocks.snapshotHang = false;
+    mocks.rejectHungSnapshot = null;
+    mocks.disconnectCalls = 0;
     mocks.providerStopDelayMs = 0;
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -366,7 +402,7 @@ describe('Codex Gateway worker composition', () => {
         });
     }, 5_000);
 
-    it('retries a terminal-started subscription after its only activity precedes rollout persistence', async () => {
+    it('retries a terminal-started subscription after the root RPC is bound', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);
         const happyHomeDir = join(root, 'happy');
@@ -394,7 +430,6 @@ describe('Codex Gateway worker composition', () => {
             threadId: 'thread-a',
         });
 
-        await mocks.proxyHooks!.threadMaterialized?.('thread-a');
         await vi.waitFor(() => expect(mocks.materializedSubscriptionCalls).toEqual(['thread-a']));
 
         mocks.unmaterializedThreads.delete('thread-a');
@@ -424,7 +459,7 @@ describe('Codex Gateway worker composition', () => {
         await worker;
     }, 5_000);
 
-    it('retains terminal activity observed before root binding until the thread can be subscribed', async () => {
+    it('starts terminal root reconciliation even when no provider activity can be parsed', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);
         const happyHomeDir = join(root, 'happy');
@@ -446,8 +481,6 @@ describe('Codex Gateway worker composition', () => {
         });
         await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
 
-        await mocks.proxyHooks!.threadMaterialized?.('thread-a');
-        expect(mocks.materializedSubscriptionCalls).toEqual([]);
         await mocks.proxyHooks!.rootBound?.({
             connectionId: 'connection-a',
             requestId: 1,
@@ -458,6 +491,7 @@ describe('Codex Gateway worker composition', () => {
         await vi.waitFor(() => expect(
             mocks.materializedSubscriptionCalls,
         ).toHaveLength(2));
+        expect(mocks.completeSnapshotCalls).toContain('thread-a');
 
         const callsAfterSubscription = mocks.materializedSubscriptionCalls.length;
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -467,7 +501,7 @@ describe('Codex Gateway worker composition', () => {
         await worker;
     }, 5_000);
 
-    it('rearms an activity-backed subscription from heartbeat after bounded retries expire', async () => {
+    it('continues terminal root reconciliation beyond the former bounded retry budget', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);
         const happyHomeDir = join(root, 'happy');
@@ -485,7 +519,7 @@ describe('Codex Gateway worker composition', () => {
             gatewayId: created.descriptor.gatewayId,
             happyHomeDir,
             runtimeRoot,
-            heartbeatMs: 25,
+            heartbeatMs: 60_000,
         });
         await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
         await mocks.proxyHooks!.rootBound?.({
@@ -495,10 +529,9 @@ describe('Codex Gateway worker composition', () => {
             requestedThreadId: null,
             threadId: 'thread-a',
         });
-        await mocks.proxyHooks!.threadMaterialized?.('thread-a');
         await vi.waitFor(() => expect(
             mocks.materializedSubscriptionCalls,
-        ).toHaveLength(7), { timeout: 3_000 });
+        ).toHaveLength(7), { timeout: 6_000 });
 
         const callsAfterSubscription = mocks.materializedSubscriptionCalls.length;
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -507,6 +540,78 @@ describe('Codex Gateway worker composition', () => {
         await mocks.controlHandlers!.stop({ force: true });
         await worker;
     }, 8_000);
+
+    it('cancels a hung pending subscription before taking the coordinator stop lock', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.subscriptionHang = true;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
+        await mocks.proxyHooks!.rootBound?.({
+            connectionId: 'connection-a',
+            requestId: 1,
+            method: 'thread/start',
+            requestedThreadId: null,
+            threadId: 'thread-a',
+        });
+        await vi.waitFor(() => expect(mocks.materializedSubscriptionCalls).toEqual(['thread-a']));
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await expect(worker).resolves.toBeUndefined();
+        expect(mocks.disconnectCalls).toBeGreaterThanOrEqual(1);
+    }, 5_000);
+
+    it('does not persist an observer snapshot cancellation as a root binding failure', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.unmaterializedThreads.add('thread-a');
+        mocks.snapshotHang = true;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
+        await mocks.proxyHooks!.rootBound?.({
+            connectionId: 'connection-a',
+            requestId: 1,
+            method: 'thread/start',
+            requestedThreadId: null,
+            threadId: 'thread-a',
+        });
+        await vi.waitFor(() => expect(mocks.completeSnapshotCalls).toEqual(['thread-a']));
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            state: 'stopped',
+            lastError: null,
+        });
+    }, 5_000);
 
     it('persists a payload-free root binding stage before closing the TUI transport', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
