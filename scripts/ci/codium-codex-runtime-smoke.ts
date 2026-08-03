@@ -90,7 +90,12 @@ async function main(): Promise<void> {
         else process.env.CODEX_HOME = originalCodexHome;
         if (originalPath === undefined) delete process.env.PATH;
         else process.env.PATH = originalPath;
-        await rm(root, { recursive: true, force: true });
+        await rm(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 100,
+        });
     }
 }
 
