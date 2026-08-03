@@ -1,6 +1,6 @@
 # macOS Codex Gateway Socket Path 修复计划
 
-状态：执行中
+状态：已完成（2026-08-03）
 
 ## 问题与证据
 
@@ -39,4 +39,14 @@
 - 本地 CLI TypeScript `--noEmit`、`110` 个单测文件与 `989/989` 项测试、
   `git diff --check` 全部通过。
 - 差异审查未发现 Sync v4、stable-v2、App、中继、Windows loopback 或会话生命周期变更。
-- 云端 CLI 发布、主线验收和发布包下载校验仍待完成。
+- 云端 CLI 发布已通过：
+  `https://github.com/KNaiFen/happy/actions/runs/30792876174`。
+- 主线 CI 已通过：
+  `https://github.com/KNaiFen/happy/actions/runs/30792876322`；包含官方 app-server 生命周期、
+  真实 PTY Gateway 终端/App 往返、detach/attach 与正常停止。
+- API 36 Android field E2E 已通过：
+  `https://github.com/KNaiFen/happy/actions/runs/30792876349`。
+- `dist/release-artifacts/happy-1.4.33.tgz` 已校验为单一可安装 npm 归档，
+  包含 macOS ARM64 `ripgrep` 和 `difftastic`；SHA-256 为
+  `e3cc7e4c5127d1e4f30220e3c5f457085bcc364ee45db1bd310e1a8828c85610`。
+- 安装云端产物后的物理 macOS 验证保留在 `.agents/open-items.md`，不阻塞本计划完成。
