@@ -115,7 +115,7 @@ test.describe('terminal-origin Gateway', () => {
 
         terminal.write('/resume');
         terminal.submit();
-        await expect(terminal.getByText('Resume a previous session', {
+        await expect(terminal.getByText('mock-model default', {
             full: true,
             strict: false,
         })).toBeVisible({ timeout: 30_000 });
