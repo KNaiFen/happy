@@ -15,6 +15,8 @@ import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nacl from 'tweetnacl';
+import { decrypt } from '../../packages/happy-cli/src/api/encryption';
+import { deriveKey } from '../../packages/happy-cli/src/utils/deriveKey';
 import {
     type CodexResponsesFixture,
     startCodexResponsesFixture,
@@ -45,7 +47,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 8;
+    schemaVersion: 9;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -62,6 +64,10 @@ interface FieldDiagnostic {
     providerToolSearchOutputObserved: boolean;
     providerMcpToolCallCount: number;
     providerMcpToolOutputObserved: boolean;
+    sessionDataKeyDecryptable: boolean | null;
+    sessionMetadataDecryptable: boolean | null;
+    sessionMetadataCodexV4: boolean | null;
+    sessionActive: boolean | null;
 }
 
 interface ManagedProcess {
@@ -153,7 +159,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 8,
+        schemaVersion: 9,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -170,11 +176,15 @@ async function main(): Promise<void> {
         providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
+        sessionDataKeyDecryptable: null,
+        sessionMetadataDecryptable: null,
+        sessionMetadataCodexV4: null,
+        sessionActive: null,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 8,
+            schemaVersion: 9,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -191,6 +201,10 @@ async function main(): Promise<void> {
             providerToolSearchOutputObserved: false,
             providerMcpToolCallCount: 0,
             providerMcpToolOutputObserved: false,
+            sessionDataKeyDecryptable: null,
+            sessionMetadataDecryptable: null,
+            sessionMetadataCodexV4: null,
+            sessionActive: null,
         });
     }
 
@@ -220,7 +234,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 8,
+        schemaVersion: 9,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -237,6 +251,10 @@ async function main(): Promise<void> {
         providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
+        sessionDataKeyDecryptable: null,
+        sessionMetadataDecryptable: null,
+        sessionMetadataCodexV4: null,
+        sessionActive: null,
     });
 
     console.log(`Mobile field fixture ready for machine ${hashForLog(machineId)}`);
@@ -246,6 +264,7 @@ async function main(): Promise<void> {
         verificationFile,
         diagnosticsFile,
         codexVersion,
+        sharedSecret,
     ).catch((error) => {
         console.error(
             `Mobile field round trip failed: ${
@@ -499,10 +518,11 @@ async function verifyFieldRoundTrip(
     verificationFile: string,
     diagnosticsFile: string,
     codexVersion: string,
+    sharedSecret: Uint8Array,
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 8,
+        schemaVersion: 9,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -519,6 +539,10 @@ async function verifyFieldRoundTrip(
         providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
+        sessionDataKeyDecryptable: null,
+        sessionMetadataDecryptable: null,
+        sessionMetadataCodexV4: null,
+        sessionActive: null,
     };
     let lastDiagnostic = '';
     const persistDiagnostic = async (): Promise<void> => {
@@ -548,6 +572,9 @@ async function verifyFieldRoundTrip(
                 sessions?: Array<{
                     id?: unknown;
                     originMachineId?: unknown;
+                    metadata?: unknown;
+                    dataEncryptionKey?: unknown;
+                    active?: unknown;
                 }>;
             };
             const session = sessionsBody.sessions?.find((candidate) => (
@@ -556,6 +583,11 @@ async function verifyFieldRoundTrip(
             ));
             if (!session || typeof session.id !== 'string') return false;
             diagnostic.sessionObserved = true;
+            const sessionCrypto = await inspectSessionCrypto(session, sharedSecret);
+            diagnostic.sessionDataKeyDecryptable = sessionCrypto.dataKeyDecryptable;
+            diagnostic.sessionMetadataDecryptable = sessionCrypto.metadataDecryptable;
+            diagnostic.sessionMetadataCodexV4 = sessionCrypto.metadataCodexV4;
+            diagnostic.sessionActive = session.active === true;
 
             const v3Response = await fetch(
                 `${serverUrl}/v3/sessions/${encodeURIComponent(session.id)}/messages?after_seq=0&limit=100`,
@@ -634,10 +666,78 @@ async function verifyFieldRoundTrip(
             providerToolSearchOutputObserved: diagnostic.providerToolSearchOutputObserved,
             providerMcpToolCallCount: diagnostic.providerMcpToolCallCount,
             providerMcpToolOutputObserved: diagnostic.providerMcpToolOutputObserved,
+            sessionDataKeyDecryptable: diagnostic.sessionDataKeyDecryptable,
+            sessionMetadataDecryptable: diagnostic.sessionMetadataDecryptable,
+            sessionMetadataCodexV4: diagnostic.sessionMetadataCodexV4,
+            sessionActive: diagnostic.sessionActive,
             verifiedAt: Date.now(),
         }, null, 2),
         { encoding: 'utf8', mode: 0o600 },
     );
+}
+
+async function inspectSessionCrypto(
+    session: { dataEncryptionKey?: unknown; metadata?: unknown },
+    sharedSecret: Uint8Array,
+): Promise<{
+    dataKeyDecryptable: boolean;
+    metadataDecryptable: boolean;
+    metadataCodexV4: boolean;
+}> {
+    if (
+        typeof session.dataEncryptionKey !== 'string'
+        || typeof session.metadata !== 'string'
+    ) {
+        return {
+            dataKeyDecryptable: false,
+            metadataDecryptable: false,
+            metadataCodexV4: false,
+        };
+    }
+
+    const wrappedKey = new Uint8Array(Buffer.from(session.dataEncryptionKey, 'base64'));
+    if (wrappedKey[0] !== 0 || wrappedKey.length <= 1 + 32 + nacl.box.nonceLength) {
+        return {
+            dataKeyDecryptable: false,
+            metadataDecryptable: false,
+            metadataCodexV4: false,
+        };
+    }
+
+    const contentSeed = await deriveKey(sharedSecret, 'Happy EnCoder', ['content']);
+    const recipientSecretKey = new Uint8Array(
+        createHash('sha512').update(contentSeed).digest().subarray(0, 32),
+    );
+    const encryptedKey = wrappedKey.slice(1);
+    const ephemeralPublicKey = encryptedKey.slice(0, nacl.box.publicKeyLength);
+    const nonce = encryptedKey.slice(
+        nacl.box.publicKeyLength,
+        nacl.box.publicKeyLength + nacl.box.nonceLength,
+    );
+    const ciphertext = encryptedKey.slice(nacl.box.publicKeyLength + nacl.box.nonceLength);
+    const dataKey = nacl.box.open(ciphertext, nonce, ephemeralPublicKey, recipientSecretKey);
+    if (!dataKey) {
+        return {
+            dataKeyDecryptable: false,
+            metadataDecryptable: false,
+            metadataCodexV4: false,
+        };
+    }
+
+    const metadata = decrypt(
+        new Uint8Array(dataKey),
+        'dataKey',
+        new Uint8Array(Buffer.from(session.metadata, 'base64')),
+    );
+    const metadataRecord = metadata && typeof metadata === 'object'
+        ? metadata as Record<string, unknown>
+        : null;
+    return {
+        dataKeyDecryptable: true,
+        metadataDecryptable: metadataRecord !== null,
+        metadataCodexV4: metadataRecord?.flavor === 'codex'
+            && metadataRecord.codexSyncVersion === 4,
+    };
 }
 
 function appHeaders(token: string): Record<string, string> {

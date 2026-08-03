@@ -10,6 +10,10 @@ tags:
 - extendedWaitUntil:
     visible: New chat
     timeout: 45000
+- extendedWaitUntil:
+    notVisible:
+      id: empty-main-new-session
+    timeout: 45000
 - runFlow:
     when:
       visible: Terminals
