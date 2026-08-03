@@ -47,6 +47,9 @@ interface FixtureStatus {
     responseAfterCommand: boolean | null;
     providerRequestCount: number;
     providerToolOutputObserved: boolean;
+    providerFixtureMcpOfferCount: number;
+    providerMcpToolOutputObserved: boolean;
+    failedMcpAttempted: boolean;
     v3MessageCount: number;
     projectionLagSamples: number;
     projectionLagP95Ms: number | null;
@@ -69,21 +72,55 @@ test.describe('terminal-origin Gateway', () => {
                 cliEntrypoint,
                 'codex',
                 '--no-alt-screen',
-                terminalPrompt,
             ],
         },
     });
 
     test('keeps terminal and App on one official provider before abnormal detach', async ({ terminal }) => {
+        const welcomeLocator = terminal.getByText('OpenAI Codex', {
+            full: false,
+            strict: false,
+        });
+        await waitUntil(async () => {
+            const status = await readStatus({});
+            throwOnGatewayTransportFailure(status);
+            try {
+                await expect(welcomeLocator).toBeVisible({ timeout: 100 });
+                return true;
+            } catch {
+                return false;
+            }
+        }, 120_000, 'empty Codex terminal startup');
+        const idleGateway = await waitForStatus(
+            {},
+            (status) => Boolean(
+                status.gateway?.state === 'running'
+                && status.gateway.terminalState === 'attached'
+                && status.gateway.workerAlive
+                && status.gateway.providerAlive
+                && status.gateway.lastError === null
+                && status.failedMcpAttempted
+            ),
+            'empty Gateway health',
+        );
+        await delay(3_000);
+        const stableIdleGateway = await readStatus({});
+        throwOnGatewayTransportFailure(stableIdleGateway);
+        assert.equal(stableIdleGateway.gateway?.gatewayId, idleGateway.gateway?.gatewayId);
+        assert.equal(stableIdleGateway.gateway?.providerPid, idleGateway.gateway?.providerPid);
+        assert.equal(stableIdleGateway.gateway?.state, 'running');
+        assert.equal(stableIdleGateway.gateway?.terminalState, 'attached');
+        assert.equal(stableIdleGateway.gateway?.workerAlive, true);
+        assert.equal(stableIdleGateway.gateway?.providerAlive, true);
+
+        terminal.write(terminalPrompt);
         const terminalPromptLocator = terminal.getByText(terminalPrompt, {
             full: true,
             strict: false,
         });
         await waitUntil(async () => {
             const status = await readStatus({});
-            if (status.gateway?.lastError?.startsWith('rootBinding:')) {
-                throw new Error(`Codex Gateway failed with ${status.gateway.lastError}`);
-            }
+            throwOnGatewayTransportFailure(status);
             try {
                 await expect(terminalPromptLocator).toBeVisible({ timeout: 100 });
                 return true;
@@ -91,15 +128,14 @@ test.describe('terminal-origin Gateway', () => {
                 return false;
             }
         }, 120_000, 'terminal prompt or root binding diagnosis');
+        terminal.submit();
         const officialResponseLocator = terminal.getByText(officialResponse, {
             full: true,
             strict: false,
         });
         await waitUntil(async () => {
             const status = await readStatus({});
-            if (status.gateway?.lastError?.startsWith('rootBinding:')) {
-                throw new Error(`Codex Gateway failed with ${status.gateway.lastError}`);
-            }
+            throwOnGatewayTransportFailure(status);
             try {
                 await expect(officialResponseLocator).toBeVisible({ timeout: 100 });
                 return true;
@@ -122,7 +158,7 @@ test.describe('terminal-origin Gateway', () => {
                 && status.reasoningSummaryCount >= 1
                 && status.commandOutputCount >= 1
                 && status.officialResponseCount >= 1
-                && status.providerToolOutputObserved,
+                && status.providerToolOutputObserved
             ),
             'terminal prompt projection',
         );
@@ -145,6 +181,8 @@ test.describe('terminal-origin Gateway', () => {
                 && status.providerUserMessageObserved
                 && status.responseAfterCommand
                 && status.commandResultStatus === 'succeeded'
+                && status.providerFixtureMcpOfferCount >= 1
+                && status.providerMcpToolOutputObserved
                 && status.projectionLagSamples >= 1,
             ),
             'App prompt provider round trip',
@@ -284,6 +322,7 @@ async function waitForStatus(
     let latest: FixtureStatus | null = null;
     await waitUntil(async () => {
         latest = await readStatus(query);
+        throwOnGatewayTransportFailure(latest);
         return predicate(latest);
     }, timeoutMs, label);
     assert(latest);
@@ -324,6 +363,16 @@ async function waitUntil(
         await delay(100);
     }
     throw new Error(`Timed out waiting for ${label}`);
+}
+
+function throwOnGatewayTransportFailure(status: FixtureStatus): void {
+    const diagnostic = status.gateway?.lastError;
+    if (
+        diagnostic?.startsWith('rootBinding:')
+        || diagnostic?.startsWith('proxy:')
+    ) {
+        throw new Error(`Codex Gateway failed with ${diagnostic}`);
+    }
 }
 
 function requiredEnvironment(name: string): string {

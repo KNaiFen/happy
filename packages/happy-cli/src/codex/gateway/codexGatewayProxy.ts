@@ -42,7 +42,20 @@ export interface CodexGatewayProxyHooks {
     claimTerminal?(connectionId: string, bearerToken: string | null): boolean;
     terminalConnected?(connectionId: string): Promise<void> | void;
     terminalDisconnected?(connectionId: string): Promise<void> | void;
-    protocolError?(error: unknown): void;
+    protocolError?(error: unknown, context: CodexGatewayProxyErrorContext): void;
+}
+
+export type CodexGatewayProxyErrorPhase =
+    | 'providerMessage'
+    | 'providerSocket'
+    | 'terminalMessage'
+    | 'terminalSocket'
+    | 'threadMaterializedHook'
+    | 'terminalNotificationHook';
+
+export interface CodexGatewayProxyErrorContext {
+    phase: CodexGatewayProxyErrorPhase;
+    closesTransport: boolean;
 }
 
 interface PendingRootRequest extends CodexGatewayRootRequest {}
@@ -161,12 +174,18 @@ export class CodexGatewayProxy {
                     downstream.send(normalized, { binary: isBinary });
                 }
             }).catch((error) => {
-                this.hooks.protocolError?.(error);
+                this.hooks.protocolError?.(error, {
+                    phase: 'providerMessage',
+                    closesTransport: true,
+                });
                 closePair();
             });
         });
         upstream.on('error', (error) => {
-            this.hooks.protocolError?.(error);
+            this.hooks.protocolError?.(error, {
+                phase: 'providerSocket',
+                closesTransport: true,
+            });
             closePair();
         });
         upstream.on('close', (code, reason) => {
@@ -206,12 +225,18 @@ export class CodexGatewayProxy {
                     }));
                 },
             })).catch((error) => {
-                this.hooks.protocolError?.(error);
+                this.hooks.protocolError?.(error, {
+                    phase: 'terminalMessage',
+                    closesTransport: true,
+                });
                 closePair();
             });
         });
         downstream.on('error', (error) => {
-            this.hooks.protocolError?.(error);
+            this.hooks.protocolError?.(error, {
+                phase: 'terminalSocket',
+                closesTransport: true,
+            });
             closePair();
         });
         downstream.on('close', () => {
@@ -318,17 +343,26 @@ export class CodexGatewayProxy {
         try {
             await this.hooks.threadMaterialized?.(threadId);
         } catch (error) {
-            this.hooks.protocolError?.(error);
+            this.hooks.protocolError?.(error, {
+                phase: 'threadMaterializedHook',
+                closesTransport: false,
+            });
         }
     }
 
     private notifyTerminalNotification(notification: ServerNotification): void {
         try {
             void Promise.resolve(this.hooks.terminalNotification?.(notification)).catch((error) => {
-                this.hooks.protocolError?.(error);
+                this.hooks.protocolError?.(error, {
+                    phase: 'terminalNotificationHook',
+                    closesTransport: false,
+                });
             });
         } catch (error) {
-            this.hooks.protocolError?.(error);
+            this.hooks.protocolError?.(error, {
+                phase: 'terminalNotificationHook',
+                closesTransport: false,
+            });
         }
     }
 }

@@ -745,6 +745,59 @@ describe('Codex Gateway worker composition', () => {
         await worker;
     });
 
+    it('persists a payload-free provider transport diagnosis until a root binds', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 10,
+        });
+        await vi.waitFor(() => expect(mocks.proxyHooks).not.toBeNull());
+
+        mocks.proxyHooks!.protocolError?.(Object.assign(
+            new Error('provider payload must stay private'),
+            { code: 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH' },
+        ), {
+            phase: 'providerSocket',
+            closesTransport: true,
+        });
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.lastError,
+        ).toBe('proxy:providerSocket:unsupportedMessageLength'));
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            state: 'running',
+            lastError: 'proxy:providerSocket:unsupportedMessageLength',
+        });
+
+        await mocks.proxyHooks!.rootBound?.({
+            connectionId: 'connection-b',
+            requestId: 2,
+            method: 'thread/start',
+            requestedThreadId: null,
+            threadId: 'thread-b',
+        });
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            current: expect.objectContaining({ threadId: 'thread-b' }),
+            lastError: null,
+        });
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
     it('does not repeat an App thread/start after provider acceptance while relay materialization is pending', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);

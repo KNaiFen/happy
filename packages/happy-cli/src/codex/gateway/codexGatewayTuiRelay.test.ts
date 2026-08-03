@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -60,11 +61,46 @@ describe('Codex Gateway TUI attachment relay', () => {
         await expect(opened(duplicate)).rejects.toThrow('Unexpected server response: 401');
         expect(upstream.connections).toHaveBeenCalledTimes(1);
     });
+
+    it('forwards a provider frame larger than the former 4 MiB transport limit', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-tui-relay-'));
+        const socketPath = join(root, 'tui.sock');
+        const token = 'attachment-token-that-is-at-least-thirty-two-bytes';
+        const providerResponse = 'p'.repeat((5 * 1024 * 1024) + 37);
+        const upstream = await startAuthenticatedUnixServer(socketPath, token, {
+            providerResponse,
+        });
+        const relay = await startCodexGatewayTuiRelay({
+            upstreamSocketPath: socketPath,
+            bearerToken: token,
+        });
+        cleanups.push(async () => {
+            await relay.close();
+            await upstream.close();
+            await rm(root, { recursive: true, force: true });
+        });
+
+        const client = connectCodexGatewayWebSocket({
+            url: relay.remoteUrl,
+            bearerToken: token,
+        });
+        cleanups.push(async () => client.terminate());
+        await opened(client);
+        const response = nextMessage(client);
+        client.send('request-large-provider-frame');
+        const received = await response;
+
+        expect(Buffer.byteLength(received, 'utf8')).toBe(Buffer.byteLength(providerResponse, 'utf8'));
+        expect(createHash('sha256').update(received).digest('hex')).toBe(
+            createHash('sha256').update(providerResponse).digest('hex'),
+        );
+    });
 });
 
 async function startAuthenticatedUnixServer(
     socketPath: string,
     expectedToken: string,
+    options: { providerResponse?: string } = {},
 ): Promise<{
     authorizationHeaders: Array<string | undefined>;
     connections: ReturnType<typeof vi.fn>;
@@ -94,7 +130,9 @@ async function startAuthenticatedUnixServer(
     webSocketServer.on('connection', (socket) => {
         connections();
         socket.on('message', (data, isBinary) => {
-            socket.send(`provider:${data.toString()}`, { binary: isBinary });
+            socket.send(options.providerResponse ?? `provider:${data.toString()}`, {
+                binary: isBinary,
+            });
         });
     });
     await new Promise<void>((resolve, reject) => {

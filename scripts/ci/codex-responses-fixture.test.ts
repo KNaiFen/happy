@@ -75,6 +75,12 @@ describe('official Codex Responses fixture', () => {
                 command: '/usr/bin/node',
                 args: ['/tmp/codex-field-mcp-server.mjs'],
             },
+            additionalMcpServers: [{
+                name: 'startup_failure_e2e',
+                command: '/usr/bin/node',
+                args: ['-e', 'process.exit(17)'],
+                required: false,
+            }],
         });
 
         const config = await readFile(join(root, 'config.toml'), 'utf8');
@@ -82,6 +88,9 @@ describe('official Codex Responses fixture', () => {
         expect(config).toContain('command = "/usr/bin/node"');
         expect(config).toContain('args = ["/tmp/codex-field-mcp-server.mjs"]');
         expect(config).toContain('default_tools_approval_mode = "approve"');
+        expect(config).toContain('[mcp_servers.startup_failure_e2e]');
+        expect(config).toContain('args = ["-e", "process.exit(17)"]');
+        expect(config).toContain('required = false');
         expect(config).not.toContain('[mcp_servers.happy]');
     });
 

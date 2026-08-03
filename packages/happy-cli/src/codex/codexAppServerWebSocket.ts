@@ -1,6 +1,8 @@
 import WebSocket, { type RawData } from 'ws';
 
-export const CODEX_APP_SERVER_MAX_RPC_BYTES = 4 * 1024 * 1024;
+// Match the official Codex remote client. Real app/list updates can exceed
+// 4 MiB when several connector-backed apps are available.
+export const CODEX_APP_SERVER_MAX_RPC_BYTES = 128 * 1024 * 1024;
 
 export interface CodexAppServerWebSocketEndpoint {
     socketPath?: string;

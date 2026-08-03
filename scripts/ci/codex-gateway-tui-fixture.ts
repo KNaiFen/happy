@@ -54,6 +54,7 @@ const cliRoot = join(repoRoot, 'packages', 'happy-cli');
 const serverRoot = join(repoRoot, 'packages', 'happy-server');
 const cliEntrypoint = join(cliRoot, 'bin', 'happy.mjs');
 const tsxEntrypoint = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const fieldMcpServerEntrypoint = join(repoRoot, 'scripts', 'ci', 'codex-field-mcp-server.mjs');
 const appVersion = packageVersion(join(repoRoot, 'packages', 'happy-app', 'package.json'));
 const cliVersion = packageVersion(join(cliRoot, 'package.json'));
 const rawReasoningCanary = Buffer.from('b'.repeat(550)).toString('base64');
@@ -156,6 +157,7 @@ const outerFixtureLog = requiredAbsolutePath(
 );
 const happyHomeDir = join(fixtureRoot, 'happy-home');
 const codexHome = join(fixtureRoot, 'codex-home');
+const failedMcpMarkerPath = join(fixtureRoot, 'failed-mcp-started');
 const relayMasterSecret = randomBytes(32).toString('base64url');
 const accountSecret = randomBytes(32);
 const machineId = randomUUID();
@@ -178,8 +180,25 @@ async function main(): Promise<void> {
     await mkdir(dirname(stateFile), { recursive: true });
 
     const codexVersion = configureOfficialCodexPath();
-    responsesFixture = await startCodexResponsesFixture();
-    await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl);
+    responsesFixture = await startCodexResponsesFixture({
+        preferFixtureMcpTool: true,
+    });
+    await writeCodexResponsesConfig(codexHome, responsesFixture.baseUrl, {
+        fieldMcp: {
+            command: process.execPath,
+            args: [fieldMcpServerEntrypoint],
+        },
+        additionalMcpServers: [{
+            name: 'startup_failure_e2e',
+            command: process.execPath,
+            args: [
+                '-e',
+                'require("node:fs").writeFileSync(process.argv[1], "started", { mode: 0o600 }); process.exit(17)',
+                failedMcpMarkerPath,
+            ],
+            required: false,
+        }],
+    });
 
     const relayPort = await reservePort();
     relayServerUrl = `http://127.0.0.1:${relayPort}`;
@@ -366,6 +385,9 @@ async function fixtureStatus(options: {
             : null,
         providerRequestCount: provider?.requestCount ?? 0,
         providerToolOutputObserved: provider?.toolOutputObserved ?? false,
+        providerFixtureMcpOfferCount: provider?.fixtureMcpOfferCount ?? 0,
+        providerMcpToolOutputObserved: provider?.mcpToolOutputObserved ?? false,
+        failedMcpAttempted: await fileExists(failedMcpMarkerPath),
         v3MessageCount,
         projectionLagSamples: projectionLags.length,
         projectionLagP95Ms: percentile(projectionLags, 0.95),
@@ -538,6 +560,15 @@ async function readGatewayDescriptors(): Promise<GatewayDescriptorShape[]> {
         }
     }
     return descriptors.sort((left, right) => right.createdAt - left.createdAt);
+}
+
+async function fileExists(path: string): Promise<boolean> {
+    try {
+        await stat(path);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 async function readV3MessageCount(sessionId: string): Promise<number> {

@@ -20,6 +20,24 @@ import type {
 export type CodexGatewayLifecycleState = CodexGatewayRuntimeProjection['state'];
 export type CodexGatewayTerminalState = CodexTerminalRuntimeProjection['state'];
 
+export type CodexGatewayRuntimeBindingUpdatePhase =
+    | 'metadata'
+    | 'runtimeProjection'
+    | 'mapperFlush'
+    | 'transportFlush'
+    | 'archive';
+
+export class CodexGatewayRuntimeBindingUpdateError extends Error {
+    readonly name = 'CodexGatewayRuntimeBindingUpdateError';
+
+    constructor(
+        readonly phase: CodexGatewayRuntimeBindingUpdatePhase,
+        readonly diagnosticCause: unknown,
+    ) {
+        super(`Codex Gateway runtime binding update failed during ${phase}`);
+    }
+}
+
 export interface CodexGatewaySyncRuntimeOptions {
     gatewayId: string;
     origin: 'terminal' | 'app';
@@ -90,15 +108,32 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
     async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
         this.assertOpen();
         const next = { ...binding };
-        await this.options.session.updateMetadataAndWait((metadata) => this.bindingMetadata(metadata, next));
-        await this.options.rootBinding.mapper.setGatewayState({
-            gateway: this.gatewayProjection(next),
-            terminal: this.terminalProjection(),
-        });
-        await this.options.rootBinding.mapper.flush();
-        await this.options.rootBinding.syncClient.flushOutboundOnce();
+        await runtimeBindingUpdateStep(
+            'metadata',
+            () => this.options.session.updateMetadataAndWait((metadata) => (
+                this.bindingMetadata(metadata, next)
+            )),
+        );
+        await runtimeBindingUpdateStep(
+            'runtimeProjection',
+            () => this.options.rootBinding.mapper.setGatewayState({
+                gateway: this.gatewayProjection(next),
+                terminal: this.terminalProjection(),
+            }),
+        );
+        await runtimeBindingUpdateStep(
+            'mapperFlush',
+            () => this.options.rootBinding.mapper.flush(),
+        );
+        await runtimeBindingUpdateStep(
+            'transportFlush',
+            () => this.options.rootBinding.syncClient.flushOutboundOnce(),
+        );
         if (next.role === 'inactive') {
-            const archived = await this.options.archiveSession(this.sessionId);
+            const archived = await runtimeBindingUpdateStep(
+                'archive',
+                () => this.options.archiveSession(this.sessionId),
+            );
             if (!archived) throw new Error('Codex Gateway session archive is pending relay recovery');
         }
         this.binding = next;
@@ -236,6 +271,18 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
 
     private assertOpen(): void {
         if (this.closed) throw new Error('Codex Gateway Sync runtime is closed');
+    }
+}
+
+async function runtimeBindingUpdateStep<T>(
+    phase: CodexGatewayRuntimeBindingUpdatePhase,
+    operation: () => Promise<T>,
+): Promise<T> {
+    try {
+        return await operation();
+    } catch (error) {
+        if (error instanceof CodexGatewayRuntimeBindingUpdateError) throw error;
+        throw new CodexGatewayRuntimeBindingUpdateError(phase, error);
     }
 }
 

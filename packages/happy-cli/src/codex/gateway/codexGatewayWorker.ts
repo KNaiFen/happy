@@ -42,12 +42,14 @@ import {
 } from './codexGatewayProcessIdentity';
 import {
     CodexGatewayProxy,
+    type CodexGatewayProxyErrorContext,
     type CodexGatewayRootRequest,
 } from './codexGatewayProxy';
 import {
     CodexGatewayRuntimeFactory,
     type CodexGatewayRootSessionConfig,
 } from './codexGatewayRuntimeFactory';
+import { CodexGatewayRuntimeBindingUpdateError } from './codexGatewaySyncRuntime';
 import {
     codexGatewayPaths,
     CodexGatewaySocketPathTooLongError,
@@ -526,7 +528,10 @@ async function runCodexGatewayWorkerInternal(
                 }
             }
             try {
-                await syncDescriptorBindings({ clearRootBindingError: true });
+                await syncDescriptorBindings({
+                    clearRootBindingError: true,
+                    clearProxyError: true,
+                });
             } catch (error) {
                 const diagnosed = new CodexGatewayRootBindingError('descriptor', error);
                 await persistWorkerError(diagnosed);
@@ -547,7 +552,13 @@ async function runCodexGatewayWorkerInternal(
             }
         },
         terminalDisconnected: (connectionId) => terminal.disconnect(connectionId),
-        protocolError: recordWorkerError,
+        protocolError: (error, context) => {
+            if (!context.closesTransport) {
+                recordWorkerError(error);
+                return;
+            }
+            void persistWorkerProxyError(error, context);
+        },
     });
 
     const controlHandlers: CodexGatewayControlHandlers = {
@@ -970,6 +981,7 @@ async function runCodexGatewayWorkerInternal(
         options: {
             clearRootBindingError?: boolean;
             clearObserverRetryError?: boolean;
+            clearProxyError?: boolean;
         } = {},
     ): Promise<void> {
         if (!coordinator) return;
@@ -984,6 +996,7 @@ async function runCodexGatewayWorkerInternal(
             lastError: (
                 (options.clearRootBindingError && descriptor.lastError?.startsWith('rootBinding:'))
                 || (options.clearObserverRetryError && descriptor.lastError?.startsWith('observerRetry:'))
+                || (options.clearProxyError && descriptor.lastError?.startsWith('proxy:'))
             ) ? null : descriptor.lastError,
         }));
     }
@@ -1117,6 +1130,17 @@ async function runCodexGatewayWorkerInternal(
         await descriptorStore.update((descriptor) => ({
             ...descriptor,
             lastError: diagnostic,
+            heartbeatAt: Date.now(),
+        }));
+    }
+
+    async function persistWorkerProxyError(
+        error: unknown,
+        context: CodexGatewayProxyErrorContext,
+    ): Promise<void> {
+        await descriptorStore.update((descriptor) => ({
+            ...descriptor,
+            lastError: `proxy:${context.phase}:${safeProxyTransportErrorKind(error)}`,
             heartbeatAt: Date.now(),
         }));
     }
@@ -1311,11 +1335,58 @@ function startupFailureKind(stage: CodexGatewayStartupStage, error: unknown): st
 function safeErrorKind(error: unknown): string {
     if (error instanceof CodexGatewaySocketPathTooLongError) return 'socketPathTooLong';
     if (error instanceof CodexGatewayRootBindingError) {
+        if (error.diagnosticCause instanceof CodexGatewayRuntimeBindingUpdateError) {
+            const causeKind = classifySyncV4DiagnosticError(
+                error.diagnosticCause.diagnosticCause,
+            );
+            return `rootBinding:${error.phase}:${error.diagnosticCause.phase}:${causeKind}`;
+        }
         const causeKind = classifySyncV4DiagnosticError(error.diagnosticCause);
         return `rootBinding:${error.phase}:${causeKind}`;
     }
     const classified = classifySyncV4DiagnosticError(error);
     return [...classified].slice(0, 128).join('');
+}
+
+function safeProxyTransportErrorKind(error: unknown): string {
+    const record = error && typeof error === 'object' && !Array.isArray(error)
+        ? error as Record<string, unknown>
+        : {};
+    const code = typeof record.code === 'string' ? record.code : '';
+    switch (code) {
+        case 'EPIPE':
+            return 'brokenPipe';
+        case 'ECONNRESET':
+            return 'connectionReset';
+        case 'ECONNREFUSED':
+            return 'connectionRefused';
+        case 'ERR_STREAM_WRITE_AFTER_END':
+            return 'writeAfterEnd';
+        case 'WS_ERR_EXPECTED_FIN':
+            return 'expectedFinalFrame';
+        case 'WS_ERR_EXPECTED_MASK':
+            return 'expectedMask';
+        case 'WS_ERR_INVALID_CLOSE_CODE':
+            return 'invalidCloseCode';
+        case 'WS_ERR_INVALID_CONTROL_PAYLOAD_LENGTH':
+            return 'invalidControlPayloadLength';
+        case 'WS_ERR_INVALID_OPCODE':
+            return 'invalidOpcode';
+        case 'WS_ERR_INVALID_UTF8':
+            return 'invalidUtf8';
+        case 'WS_ERR_UNEXPECTED_MASK':
+            return 'unexpectedMask';
+        case 'WS_ERR_UNEXPECTED_RSV_1':
+            return 'unexpectedRsv1';
+        case 'WS_ERR_UNEXPECTED_RSV_2_3':
+            return 'unexpectedRsv23';
+        case 'WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH':
+            return 'unsupportedDataPayloadLength';
+        case 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH':
+            return 'unsupportedMessageLength';
+        default:
+            return safeErrorKind(error);
+    }
 }
 
 function observerRetryDiagnostic(error: unknown): string {
@@ -1327,7 +1398,8 @@ function observerRetryDiagnostic(error: unknown): string {
 
 function isPersistentGatewayDiagnostic(value: string | null): boolean {
     return value?.startsWith('rootBinding:') === true
-        || value?.startsWith('observerRetry:') === true;
+        || value?.startsWith('observerRetry:') === true
+        || value?.startsWith('proxy:') === true;
 }
 
 function processAlive(pid: number): boolean {

@@ -339,9 +339,15 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         expect(terminalNotification).toHaveBeenCalledWith(JSON.parse(notification));
         expect(threadMaterialized).toHaveBeenNthCalledWith(1, 'thread-a');
         expect(threadMaterialized).toHaveBeenNthCalledWith(2, 'thread-a');
-        expect(protocolError).toHaveBeenCalledWith(expect.objectContaining({
-            message: 'transient bridge subscription failure',
-        }));
+        expect(protocolError).toHaveBeenCalledWith(
+            expect.objectContaining({
+                message: 'transient bridge subscription failure',
+            }),
+            {
+                phase: 'threadMaterializedHook',
+                closesTransport: false,
+            },
+        );
 
         const rejectedTurn = '{"id":12,"method":"turn/start","params":{"threadId":"thread-a","input":[]}}';
         client.send(rejectedTurn);

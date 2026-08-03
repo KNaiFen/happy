@@ -50,6 +50,11 @@ export interface CodexResponsesFixtureOptions {
 export interface CodexResponsesFixtureMcpConfig {
     command: string;
     args: readonly string[];
+    required?: boolean;
+}
+
+export interface CodexResponsesFixtureNamedMcpConfig extends CodexResponsesFixtureMcpConfig {
+    name: string;
 }
 
 export interface CodexResponsesFixture {
@@ -115,18 +120,19 @@ export async function startCodexResponsesFixture(
 export async function writeCodexResponsesConfig(
     codexHome: string,
     fixtureBaseUrl: string,
-    options: { fieldMcp?: CodexResponsesFixtureMcpConfig } = {},
+    options: {
+        fieldMcp?: CodexResponsesFixtureMcpConfig;
+        additionalMcpServers?: readonly CodexResponsesFixtureNamedMcpConfig[];
+    } = {},
 ): Promise<void> {
     assert.match(fixtureBaseUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
     if (options.fieldMcp) {
-        assert.equal(
-            isAbsolute(options.fieldMcp.command),
-            true,
-            'field MCP command must be absolute',
-        );
-        for (const arg of options.fieldMcp.args) {
-            assert.equal(typeof arg, 'string', 'field MCP arguments must be strings');
-        }
+        validateMcpConfig(options.fieldMcp, 'field MCP');
+    }
+    for (const server of options.additionalMcpServers ?? []) {
+        assert.match(server.name, /^[a-zA-Z0-9_-]+$/, 'additional MCP name must be TOML-safe');
+        assert.notEqual(server.name, OFFICIAL_CODEX_FIELD_MCP_SERVER);
+        validateMcpConfig(server, `additional MCP ${server.name}`);
     }
     await mkdir(codexHome, { recursive: true });
     const config = [
@@ -152,11 +158,28 @@ export async function writeCodexResponsesConfig(
             'default_tools_approval_mode = "approve"',
             '',
         ] : []),
+        ...(options.additionalMcpServers ?? []).flatMap((server) => [
+            `[mcp_servers.${server.name}]`,
+            `command = ${tomlString(server.command)}`,
+            `args = [${server.args.map(tomlString).join(', ')}]`,
+            `required = ${server.required === true ? 'true' : 'false'}`,
+            '',
+        ]),
     ].join('\n');
     await writeFile(join(codexHome, 'config.toml'), config, {
         encoding: 'utf8',
         mode: 0o600,
     });
+}
+
+function validateMcpConfig(
+    config: CodexResponsesFixtureMcpConfig,
+    label: string,
+): void {
+    assert.equal(isAbsolute(config.command), true, `${label} command must be absolute`);
+    for (const arg of config.args) {
+        assert.equal(typeof arg, 'string', `${label} arguments must be strings`);
+    }
 }
 
 async function handleRequest(

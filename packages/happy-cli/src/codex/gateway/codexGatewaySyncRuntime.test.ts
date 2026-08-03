@@ -4,6 +4,7 @@ import type { Metadata } from '@/api/types';
 import type { CodexV4SessionBinding, CodexV4ThreadRouter } from '../codexV4ThreadRouter';
 import type { Thread } from '../protocol';
 import {
+    CodexGatewayRuntimeBindingUpdateError,
     CodexGatewaySyncRuntime,
     type CodexGatewaySyncRuntimeOptions,
 } from './codexGatewaySyncRuntime';
@@ -183,6 +184,27 @@ describe('CodexGatewaySyncRuntime', () => {
         expect(harness.mapper.setGatewayState).toHaveBeenLastCalledWith({
             gateway: expect.objectContaining({ role: 'recovering', generation: 4 }),
         });
+    });
+
+    it('reports the payload-free binding phase while retaining the cause in memory', async () => {
+        const harness = createHarness();
+        const cause = new Error('provider payload must stay private');
+        vi.mocked(harness.mapper.flush).mockRejectedValueOnce(cause);
+
+        const update = harness.runtime.updateBinding({
+            role: 'current',
+            generation: 5,
+            previousSessionId: null,
+            nextSessionId: null,
+            changedAt: 300,
+        });
+
+        await expect(update).rejects.toMatchObject({
+            name: 'CodexGatewayRuntimeBindingUpdateError',
+            message: 'Codex Gateway runtime binding update failed during mapperFlush',
+            phase: 'mapperFlush',
+            diagnosticCause: cause,
+        } satisfies Partial<CodexGatewayRuntimeBindingUpdateError>);
     });
 
     it('rolls terminal state back when durable metadata cannot be updated', async () => {
