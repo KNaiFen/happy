@@ -21,8 +21,7 @@ import { enableAuthentication } from "./utils/enableAuthentication";
 import { userRoutes } from "./routes/userRoutes";
 import { feedRoutes } from "./routes/feedRoutes";
 import { kvRoutes } from "./routes/kvRoutes";
-import { v3SessionRoutes } from "./routes/v3SessionRoutes";
-import { isCodexSyncV4Enabled, v4CapabilitiesRoutes, v4SessionRoutes } from "./routes/v4SessionRoutes";
+import { v4CapabilitiesRoutes, v4SessionRoutes } from "./routes/v4SessionRoutes";
 import { attachmentRoutes } from "./routes/attachmentRoutes";
 import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
 import * as path from "path";
@@ -119,13 +118,8 @@ export async function startApi(opts: StartApiOptions = {}) {
     userRoutes(typed);
     feedRoutes(typed);
     kvRoutes(typed);
-    v3SessionRoutes(typed);
     v4CapabilitiesRoutes(typed);
-    if (isCodexSyncV4Enabled()) {
-        v4SessionRoutes(typed);
-    } else {
-        log('Codex Sync v4 routes are disabled');
-    }
+    v4SessionRoutes(typed);
     attachmentRoutes(typed);
 
     // Static webapp (self-host mode)

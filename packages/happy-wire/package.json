@@ -1,7 +1,7 @@
 {
   "name": "@slopus/happy-wire",
-  "version": "0.1.7",
-  "description": "Shared message wire types and Zod schemas for Happy clients and services",
+  "version": "0.1.8",
+  "description": "Codex Sync V4 wire types and shared Happy control-plane schemas",
   "author": "Kirill Dubovitskiy",
   "license": "MIT",
   "type": "module",
@@ -36,7 +36,6 @@
     "release": "npx --no-install release-it"
   },
   "dependencies": {
-    "@paralleldrive/cuid2": "^2.2.2",
     "zod": "^4.0.0"
   },
   "devDependencies": {

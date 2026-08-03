@@ -302,12 +302,6 @@ export default function RootLayout() {
                 }}
             />
             <Stack.Screen
-                name="dev/rig-preview"
-                options={{
-                    headerTitle: 'Rig Preview',
-                }}
-            />
-            <Stack.Screen
                 name="session/recent"
                 options={{
                     headerShown: true,

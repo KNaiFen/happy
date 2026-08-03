@@ -1,6 +1,6 @@
 # Session Protocol Unification v2 — Draft
 
-Status: **DRAFT**
+Status: **ARCHIVED - superseded by the Codex Sync v4-only product boundary on 2026-08-03.**
 
 ## Overview
 

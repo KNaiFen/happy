@@ -59,7 +59,7 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
                 : parsed.mode === 'json'
                     ? jsonContent ?? undefined
                     : undefined;
-            await sessionAllow(sessionId, tool.permission.id, undefined, undefined, 'approved', content);
+            await sessionAllow(sessionId, tool.permission.id, 'approved', content);
             setSubmittedAction('accept');
         } finally {
             setSubmitting(null);
@@ -70,7 +70,7 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
         if (interactionReadOnly || !sessionId || !tool.permission?.id || !canInteract || submitting) return;
         setSubmitting('cancel');
         try {
-            await sessionDeny(sessionId, tool.permission.id, undefined, undefined, 'abort');
+            await sessionDeny(sessionId, tool.permission.id, 'abort');
             setSubmittedAction('cancel');
         } finally {
             setSubmitting(null);

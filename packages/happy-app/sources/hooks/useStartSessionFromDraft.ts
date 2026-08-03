@@ -51,16 +51,15 @@ export function useStartSessionFromDraft() {
             return false;
         }
 
-        const defaults = resolveAgentDefaultConfig(defaultOverrides, draft.agentType);
-        const permissionOptions = getHardcodedPermissionModes(draft.agentType, t);
+        const defaults = resolveAgentDefaultConfig(defaultOverrides, 'codex');
+        const permissionOptions = getHardcodedPermissionModes('codex', t);
         const modelOptions = getAvailableModelsForMachine(
-            draft.agentType,
+            'codex',
             machine.metadata,
             t,
             draft.modelMode ?? defaults.modelMode,
         );
-        const capabilityState = draft.agentType === 'codex'
-            && !machine.metadata?.agentCapabilities?.codex
+        const capabilityState = !machine.metadata?.agentCapabilities?.codex
             ? 'unknown'
             : 'authoritative';
         const config = resolveNewSessionAgentConfig({
@@ -73,7 +72,7 @@ export function useStartSessionFromDraft() {
             permissionOptions,
             modelOptions,
             effortOptionsForModel: (modelKey) => getEffortLevelsForModelOnMachine(
-                draft.agentType,
+                'codex',
                 modelKey,
                 machine.metadata,
                 draft.effortLevel ?? defaults.effortLevel,
@@ -106,7 +105,7 @@ export function useStartSessionFromDraft() {
             const operationFingerprint = JSON.stringify({
                 machineId: machine.id,
                 directory: spawnDirectory,
-                agent: draft.agentType,
+                agent: 'codex',
                 permissionMode: config.permissionMode,
                 modelMode: config.modelMode,
                 effortLevel: config.effortLevel ?? null,
@@ -125,10 +124,8 @@ export function useStartSessionFromDraft() {
                     machineId: machine.id,
                     directory: spawnDirectory,
                     approvedNewDirectoryCreation,
-                    agent: draft.agentType,
-                    permissionMode: draft.agentType === 'codex' || config.permissionMode !== 'default'
-                        ? config.permissionMode
-                        : undefined,
+                    agent: 'codex',
+                    permissionMode: config.permissionMode,
                     modelMode: config.modelMode !== 'default' ? config.modelMode : undefined,
                     effortLevel: config.effortLevel ?? undefined,
                 });

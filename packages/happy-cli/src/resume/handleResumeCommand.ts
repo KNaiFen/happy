@@ -2,12 +2,11 @@ import { existsSync } from 'node:fs';
 
 import type { Metadata } from '@/api/types';
 import { encodeBase64 } from '@/api/encryption';
-import { hasLocalHappyAgentAuth } from '@/resume/localHappyAgentAuth';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 import { buildSessionChildEnvironment, sanitizeSessionEnvironment } from '@/daemon/sessionEnvironment';
 
 import { LocalResumeSessionError, resolveLocalReconnectableSession } from './localResumeStore';
-import { resolveHappySession, type ReconnectableHappySession, type ResumableHappySession } from './resolveHappySession';
+import { type ReconnectableHappySession, type ResumableHappySession } from './resolveHappySession';
 
 export type ResumeLaunch = {
     cwd: string;
@@ -43,7 +42,7 @@ export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; ses
 }
 
 function resolveFlavor(metadata: Metadata): 'codex' | null {
-    if (metadata.flavor === 'codex' || metadata.codexThreadId) {
+    if (metadata.flavor === 'codex' && metadata.codexSyncVersion === 4) {
         return 'codex';
     }
     return null;
@@ -122,13 +121,6 @@ function spawnResumeChild(launch: ResumeLaunch, env: NodeJS.ProcessEnv = sanitiz
     });
 }
 
-async function resolveLegacySessionIfAvailable(sessionId: string): Promise<ResumableHappySession | null> {
-    if (!hasLocalHappyAgentAuth()) {
-        return null;
-    }
-    return resolveHappySession(sessionId);
-}
-
 export async function handleResumeCommand(args: string[]): Promise<void> {
     const parsed = parseResumeCommandArgs(args);
     if (parsed.showHelp) {
@@ -136,42 +128,23 @@ export async function handleResumeCommand(args: string[]): Promise<void> {
         return;
     }
 
-    let localError: unknown;
-    let reconnectableSession: ReconnectableHappySession | null = null;
+    let reconnectableSession: ReconnectableHappySession;
     try {
         reconnectableSession = await resolveLocalReconnectableSession(parsed.sessionId);
     } catch (error) {
-        localError = error;
         if (error instanceof LocalResumeSessionError && error.code === 'ambiguous') {
             throw error;
         }
+        throw error;
     }
 
-    if (reconnectableSession) {
-        const launch = buildResumeLaunch(reconnectableSession);
-
-        if (!existsSync(launch.cwd)) {
-            throw new Error(`Saved session path does not exist: ${launch.cwd}`);
-        }
-
-        const exitCode = await spawnResumeChild(launch, buildReconnectEnv(reconnectableSession));
-        if (typeof exitCode === 'number' && exitCode !== 0) {
-            process.exit(exitCode);
-        }
-        return;
-    }
-
-    const session = await resolveLegacySessionIfAvailable(parsed.sessionId);
-    if (!session) {
-        throw localError;
-    }
-    const launch = buildResumeLaunch(session);
+    const launch = buildResumeLaunch(reconnectableSession);
 
     if (!existsSync(launch.cwd)) {
         throw new Error(`Saved session path does not exist: ${launch.cwd}`);
     }
 
-    const exitCode = await spawnResumeChild(launch);
+    const exitCode = await spawnResumeChild(launch, buildReconnectEnv(reconnectableSession));
     if (typeof exitCode === 'number' && exitCode !== 0) {
         process.exit(exitCode);
     }

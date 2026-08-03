@@ -5,12 +5,11 @@ import { Purchases, purchasesDefaults, purchasesParse } from './purchases';
 import { Profile, profileDefaults, profileParse } from './profile';
 import {
     parseNewSessionDraft,
-    type NewSessionAgentType,
     type NewSessionDraft,
     type NewSessionSessionType,
 } from './newSessionDraftModel';
 
-export type { NewSessionAgentType, NewSessionDraft, NewSessionSessionType } from './newSessionDraftModel';
+export type { NewSessionDraft, NewSessionSessionType } from './newSessionDraftModel';
 
 const mmkv = new MMKV();
 const NEW_SESSION_DRAFT_KEY = 'new-session-draft-v2';

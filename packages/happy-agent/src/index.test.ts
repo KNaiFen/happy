@@ -32,7 +32,7 @@ describe('happy-agent CLI', () => {
     it('should display help output', () => {
         const { stdout } = runCli('--help');
         expect(stdout).toContain('happy-agent');
-        expect(stdout).toContain('CLI client for controlling Happy Coder agents remotely');
+        expect(stdout).toContain('CLI client for controlling Codex sessions remotely');
     });
 
     it('should display version', () => {
@@ -100,14 +100,12 @@ describe('happy-agent CLI', () => {
     });
 
     describe('spawn command', () => {
-        it('should show spawn help with machine, path, agent, and json options', () => {
+        it('should show Codex-only spawn help without an agent selector', () => {
             const { stdout } = runCli('spawn', '--help');
-            expect(stdout).toContain('Spawn a new session on a machine');
+            expect(stdout).toContain('Spawn a new Codex session on a machine');
             expect(stdout).toContain('--machine');
             expect(stdout).toContain('--path');
-            expect(stdout).toContain('--agent');
-            expect(stdout).toContain('codex, gemini, openclaw, agy');
-            expect(stdout).not.toContain('claude');
+            expect(stdout).not.toContain('--agent');
             expect(stdout).toContain('--json');
         });
 
@@ -118,10 +116,10 @@ describe('happy-agent CLI', () => {
         });
     });
 
-    it('rejects an explicit removed Claude agent before authentication', () => {
+    it('rejects the removed agent option', () => {
         const { stderr, exitCode } = runCli('spawn', '--machine', 'fake-machine', '--agent', 'claude');
         expect(exitCode).not.toBe(0);
-        expect(stderr).toContain('--agent must be one of: codex, gemini, openclaw, agy');
+        expect(stderr).toContain('unknown option');
         expect(stderr).not.toContain('happy-agent auth login');
     });
 
@@ -177,7 +175,7 @@ describe('happy-agent CLI', () => {
     describe('stop command', () => {
         it('should show stop help with session-id argument', () => {
             const { stdout } = runCli('stop', '--help');
-            expect(stdout).toContain('Stop a session');
+            expect(stdout).toContain('Interrupt the active Codex turn');
             expect(stdout).toContain('session-id');
         });
 

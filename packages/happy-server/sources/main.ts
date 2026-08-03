@@ -10,6 +10,7 @@ import { startDatabaseMetricsUpdater } from "@/app/monitoring/metrics2";
 import { initEncrypt } from "./modules/encrypt";
 import { initGithub } from "./modules/github";
 import { loadFiles } from "./storage/files";
+import { purgeUnsupportedSessions } from "./app/session/purgeUnsupportedSessions";
 
 async function main() {
 
@@ -31,6 +32,7 @@ async function main() {
     await initEncrypt();
     await initGithub();
     await loadFiles();
+    await purgeUnsupportedSessions();
     await auth.init();
 
     //

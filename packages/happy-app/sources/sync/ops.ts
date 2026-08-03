@@ -9,15 +9,6 @@ import { storage } from './storage';
 import { isCodexV4SyncEligible } from './codexV4ClientRegistry';
 import type { MachineMetadata, SessionAgentModesPatch } from './storageTypes';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
-import {
-    isRigMetadata,
-    rigCanAbort,
-    rigCanReadFiles,
-    rigCanSearchFiles,
-    rigCanUseShell,
-    rigCanWriteFiles,
-    rigHasRpcMethod,
-} from './rig';
 import { codexV4RequestResponse, findActiveCodexV4Turn } from './codexV4Commands';
 import { codexV4QueuedMessages } from './codexV4Projection';
 import {
@@ -46,17 +37,6 @@ function assertSessionInteractionAllowed(sessionId: string): void {
 }
 
 // Strict type definitions for all operations
-
-// Permission operation types
-interface SessionPermissionRequest {
-    id: string;
-    approved: boolean;
-    reason?: string;
-    mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-    allowTools?: string[];
-    updatedInput?: Record<string, unknown>;
-    decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort';
-}
 
 // Mode change operation types
 interface SessionModeChangeRequest {
@@ -183,7 +163,7 @@ export interface SpawnSessionOptions {
     directory: string;
     approvedNewDirectoryCreation?: boolean;
     token?: string;
-    agent?: 'codex' | 'gemini' | 'openclaw' | 'agy';
+    agent?: 'codex';
     permissionMode?: string;
     modelMode?: string;
     effortLevel?: string;
@@ -245,7 +225,7 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
             approvedNewDirectoryCreation?: boolean,
             operationId: string,
             token?: string,
-            agent?: 'codex' | 'gemini' | 'openclaw' | 'agy',
+            agent?: 'codex',
             permissionMode?: string,
             modelMode?: string,
             effortLevel?: string,
@@ -512,14 +492,9 @@ async function sessionUpdateAgentModesMetadata(
         throw new Error(`Session ${sessionId} is not ready for metadata updates`);
     }
 
-    // Defensive copy: retries drop fields from the patch (see below)
-    const withoutRemovedProviderFields = (metadata: Record<string, unknown>): Record<string, unknown> => {
-        const { claudeSessionId: _removedSessionId, ...retained } = metadata;
-        return retained;
-    };
     let pendingPatch: SessionAgentModesPatch = { ...patch };
     let currentVersion = session.metadataVersion;
-    let currentMetadata = withoutRemovedProviderFields({ ...session.metadata, ...pendingPatch });
+    let currentMetadata = { ...session.metadata, ...pendingPatch };
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         const encrypted = await encryption.encryptRaw(currentMetadata);
@@ -555,7 +530,7 @@ async function sessionUpdateAgentModesMetadata(
             if (Object.keys(pendingPatch).length === 0) {
                 return;
             }
-            currentMetadata = withoutRemovedProviderFields({ ...latest, ...pendingPatch });
+            currentMetadata = { ...latest, ...pendingPatch };
             continue;
         }
         throw new Error('Failed to update session metadata');
@@ -632,29 +607,20 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
 export async function sessionAbort(sessionId: string): Promise<void> {
     const metadata = storage.getState().sessions[sessionId]?.metadata;
     assertSessionInteractionAllowed(sessionId);
-    if (!rigCanAbort(metadata)) {
-        throw new Error('Abort is not available for this session');
-    }
-    if (sync.isCodexV4Eligible(sessionId)) {
-        const projection = storage.getState().codexV4Sessions[sessionId];
-        const threadId = resolveCodexV4SessionCapabilities(metadata, projection).ownedThreadId;
-        const activeTurn = projection ? findActiveCodexV4Turn(projection, threadId) : null;
-        if (!threadId || !activeTurn) {
-            if (projection?.runtime?.execution.type === 'active') {
-                throw new Error('The active Codex turn identity is not available yet');
-            }
-            return;
+    const projection = storage.getState().codexV4Sessions[sessionId];
+    const threadId = resolveCodexV4SessionCapabilities(metadata, projection).ownedThreadId;
+    const activeTurn = projection ? findActiveCodexV4Turn(projection, threadId) : null;
+    if (!threadId || !activeTurn) {
+        if (projection?.runtime?.execution.type === 'active') {
+            throw new Error('The active Codex turn identity is not available yet');
         }
-        await sync.publishCodexV4Command(sessionId, {
-            command: 'turn.interrupt',
-            threadId,
-            expectedTurnId: activeTurn.turnId,
-            payload: { expectedTurnId: activeTurn.turnId },
-        });
         return;
     }
-    await apiSocket.sessionRPC(sessionId, 'abort', isRigMetadata(metadata) ? {} : {
-        reason: `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.`
+    await sync.publishCodexV4Command(sessionId, {
+        command: 'turn.interrupt',
+        threadId,
+        expectedTurnId: activeTurn.turnId,
+        payload: { expectedTurnId: activeTurn.turnId },
     });
 }
 
@@ -728,27 +694,26 @@ function commandBindingGeneration(command: unknown): number | undefined {
 /**
  * Allow a permission request
  */
-export async function sessionAllow(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'approved' | 'approved_for_session', updatedInput?: Record<string, unknown>): Promise<void> {
+export async function sessionAllow(
+    sessionId: string,
+    id: string,
+    decision?: 'approved' | 'approved_for_session',
+    updatedInput?: Record<string, unknown>,
+): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    if (sync.isCodexV4Eligible(sessionId)) {
-        await resolveCodexV4Request(sessionId, id, true, decision, updatedInput);
-        return;
-    }
-    const request: SessionPermissionRequest = { id, approved: true, mode, allowTools: allowedTools, decision, updatedInput };
-    await apiSocket.sessionRPC(sessionId, 'permission', request);
+    await resolveCodexV4Request(sessionId, id, true, decision, updatedInput);
 }
 
 /**
  * Deny a permission request
  */
-export async function sessionDeny(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'denied' | 'abort'): Promise<void> {
+export async function sessionDeny(
+    sessionId: string,
+    id: string,
+    decision?: 'denied' | 'abort',
+): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    if (sync.isCodexV4Eligible(sessionId)) {
-        await resolveCodexV4Request(sessionId, id, false, decision);
-        return;
-    }
-    const request: SessionPermissionRequest = { id, approved: false, mode, allowTools: allowedTools, decision };
-    await apiSocket.sessionRPC(sessionId, 'permission', request);
+    await resolveCodexV4Request(sessionId, id, false, decision);
 }
 
 /**
@@ -774,39 +739,33 @@ export async function sessionGoalAction(
     objective?: string,
 ): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
-    if (sync.isCodexV4Eligible(sessionId)) {
-        const state = storage.getState();
-        const threadId = resolveCodexV4SessionCapabilities(
-            state.sessions[sessionId]?.metadata,
-            state.codexV4Sessions[sessionId],
-        ).ownedThreadId;
-        if (!threadId) throw new Error('Codex thread is not available');
-        if (action === 'clear') {
-            await sync.publishCodexV4Command(sessionId, {
-                command: 'goal.clear',
-                threadId,
-                payload: {},
-            });
-            return;
-        }
-        if (action === 'edit' && objective) {
-            await sync.publishCodexV4Command(sessionId, {
-                command: 'goal.set',
-                threadId,
-                payload: { objective },
-            });
-            return;
-        }
-        if (action === 'stop') {
-            await sessionAbort(sessionId);
-            return;
-        }
-        throw new Error('Codex goal action is incomplete');
+    const state = storage.getState();
+    const threadId = resolveCodexV4SessionCapabilities(
+        state.sessions[sessionId]?.metadata,
+        state.codexV4Sessions[sessionId],
+    ).ownedThreadId;
+    if (!threadId) throw new Error('Codex thread is not available');
+    if (action === 'clear') {
+        await sync.publishCodexV4Command(sessionId, {
+            command: 'goal.clear',
+            threadId,
+            payload: {},
+        });
+        return;
     }
-    await apiSocket.sessionRPC(sessionId, 'goal-action', {
-        action,
-        ...(objective !== undefined ? { objective } : {}),
-    } satisfies SessionGoalActionRequest);
+    if (action === 'edit' && objective) {
+        await sync.publishCodexV4Command(sessionId, {
+            command: 'goal.set',
+            threadId,
+            payload: { objective },
+        });
+        return;
+    }
+    if (action === 'stop') {
+        await sessionAbort(sessionId);
+        return;
+    }
+    throw new Error('Codex goal action is incomplete');
 }
 
 async function resolveCodexV4Request(
@@ -847,10 +806,6 @@ async function resolveCodexV4Request(
 export async function sessionBash(sessionId: string, request: SessionBashRequest): Promise<SessionBashResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
-        const metadata = storage.getState().sessions[sessionId]?.metadata;
-        if (!rigCanUseShell(metadata)) {
-            throw new Error('Shell access is not available for this session');
-        }
         const response = await apiSocket.sessionRPC<SessionBashResponse, SessionBashRequest>(
             sessionId,
             'bash',
@@ -874,10 +829,6 @@ export async function sessionBash(sessionId: string, request: SessionBashRequest
 export async function sessionReadFile(sessionId: string, path: string): Promise<SessionReadFileResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
-        const metadata = storage.getState().sessions[sessionId]?.metadata;
-        if (!rigCanReadFiles(metadata)) {
-            throw new Error('File reading is not available for this session');
-        }
         const request: SessionReadFileRequest = { path };
         const response = await apiSocket.sessionRPC<SessionReadFileResponse, SessionReadFileRequest>(
             sessionId,
@@ -904,10 +855,6 @@ export async function sessionWriteFile(
 ): Promise<SessionWriteFileResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
-        const metadata = storage.getState().sessions[sessionId]?.metadata;
-        if (!rigCanWriteFiles(metadata)) {
-            throw new Error('File writing is not available for this session');
-        }
         const request: SessionWriteFileRequest = { path, content, expectedHash };
         const response = await apiSocket.sessionRPC<SessionWriteFileResponse, SessionWriteFileRequest>(
             sessionId,
@@ -929,10 +876,6 @@ export async function sessionWriteFile(
 export async function sessionListDirectory(sessionId: string, path: string): Promise<SessionListDirectoryResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
-        const metadata = storage.getState().sessions[sessionId]?.metadata;
-        if (isRigMetadata(metadata) && !rigHasRpcMethod(metadata, 'listDirectory')) {
-            throw new Error('Directory listing is not advertised by this Rig session');
-        }
         const request: SessionListDirectoryRequest = { path };
         const response = await apiSocket.sessionRPC<SessionListDirectoryResponse, SessionListDirectoryRequest>(
             sessionId,
@@ -958,10 +901,6 @@ export async function sessionGetDirectoryTree(
 ): Promise<SessionGetDirectoryTreeResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
-        const metadata = storage.getState().sessions[sessionId]?.metadata;
-        if (isRigMetadata(metadata) && !rigHasRpcMethod(metadata, 'getDirectoryTree')) {
-            throw new Error('Directory tree is not advertised by this Rig session');
-        }
         const request: SessionGetDirectoryTreeRequest = { path, maxDepth };
         const response = await apiSocket.sessionRPC<SessionGetDirectoryTreeResponse, SessionGetDirectoryTreeRequest>(
             sessionId,
@@ -987,10 +926,6 @@ export async function sessionRipgrep(
 ): Promise<SessionRipgrepResponse> {
     try {
         assertSessionInteractionAllowed(sessionId);
-        const metadata = storage.getState().sessions[sessionId]?.metadata;
-        if (!rigCanSearchFiles(metadata)) {
-            throw new Error('File search is not available for this session');
-        }
         const request: SessionRipgrepRequest = { args, cwd };
         const response = await apiSocket.sessionRPC<SessionRipgrepResponse, SessionRipgrepRequest>(
             sessionId,
@@ -1007,8 +942,7 @@ export async function sessionRipgrep(
 }
 
 /**
- * Stop the session runtime. Codex Gateway sessions use the machine-scoped,
- * authenticated graceful-stop RPC; legacy sessions retain killSession.
+ * Stop the Codex Gateway runtime through its authenticated machine RPC.
  */
 export async function sessionKill(
     sessionId: string,
@@ -1017,42 +951,36 @@ export async function sessionKill(
     try {
         assertSessionInteractionAllowed(sessionId);
         const metadata = storage.getState().sessions[sessionId]?.metadata;
-        if (isCodexGatewaySession(metadata)) {
-            if (!metadata?.machineId) {
-                throw new Error('Codex Gateway session is missing its machine identity');
-            }
-            const binding = resolveCodexGatewayBinding(metadata);
-            if (!binding) {
-                throw new Error('Codex Gateway session is missing its binding identity');
-            }
-            const response = await apiSocket.machineRPC<{
-                message: string;
-            }, {
-                sessionId: string;
-                expectedGatewayId: string;
-                bindingGeneration: number;
-            }>(
-                metadata.machineId,
-                'stop-session',
-                {
-                    sessionId,
-                    expectedGatewayId: binding.gatewayId,
-                    bindingGeneration: binding.generation,
-                },
-                options,
-            );
-            return {
-                success: true,
-                message: response.message,
-            };
+        if (!isCodexGatewaySession(metadata)) {
+            throw new Error('Codex Gateway binding is unavailable');
         }
-        const response = await apiSocket.sessionRPC<SessionKillResponse, {}>(
-            sessionId,
-            'killSession',
-            {},
+        if (!metadata?.machineId) {
+            throw new Error('Codex Gateway session is missing its machine identity');
+        }
+        const binding = resolveCodexGatewayBinding(metadata);
+        if (!binding) {
+            throw new Error('Codex Gateway session is missing its binding identity');
+        }
+        const response = await apiSocket.machineRPC<{
+            message: string;
+        }, {
+            sessionId: string;
+            expectedGatewayId: string;
+            bindingGeneration: number;
+        }>(
+            metadata.machineId,
+            'stop-session',
+            {
+                sessionId,
+                expectedGatewayId: binding.gatewayId,
+                bindingGeneration: binding.generation,
+            },
             options,
         );
-        return response;
+        return {
+            success: true,
+            message: response.message,
+        };
     } catch (error) {
         return {
             success: false,
@@ -1062,14 +990,15 @@ export async function sessionKill(
 }
 
 /**
- * Archive a session through its lifecycle protocol. Codex v4 uses a durable
- * tombstone; legacy providers keep their existing transient v1 behavior.
+ * Archive a Codex v4 session through its durable lifecycle tombstone.
  */
 export async function sessionArchive(sessionId: string): Promise<{ success: boolean; archivedAt?: number; message?: string }> {
     try {
         const metadata = storage.getState().sessions[sessionId]?.metadata;
-        const archiveVersion = isCodexV4SyncEligible(metadata) ? 'v4' : 'v1';
-        const response = await apiSocket.request(`/${archiveVersion}/sessions/${encodeURIComponent(sessionId)}/archive`, {
+        if (!isCodexV4SyncEligible(metadata)) {
+            return { success: false, message: 'Only Codex Sync v4 sessions can be archived' };
+        }
+        const response = await apiSocket.request(`/v4/sessions/${encodeURIComponent(sessionId)}/archive`, {
             method: 'POST'
         });
         if (!response.ok) {

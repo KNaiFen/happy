@@ -24,7 +24,6 @@ describe('terminal tool display helpers', () => {
     it('detects command-like terminal tools', () => {
         expect(isTerminalToolName('Bash')).toBe(true);
         expect(isTerminalToolName('CodexBash')).toBe(true);
-        expect(isTerminalToolName('GeminiBash')).toBe(true);
         expect(isTerminalToolName('execute')).toBe(true);
         expect(isTerminalToolName('Read')).toBe(false);
     });
@@ -41,7 +40,7 @@ describe('terminal tool display helpers', () => {
         ))).toBe('git status --short');
     });
 
-    it('extracts Gemini execute titles without cwd metadata', () => {
+    it('extracts execute tool titles without cwd metadata', () => {
         expect(getTerminalToolCommand(tool(
             'execute',
             { toolCall: { title: 'rm tmp.txt [current working directory /repo] (cleanup)' } },

@@ -15,8 +15,6 @@ import { Modal } from '@/modal';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { layout } from '@/components/layout';
-import { useSession } from '@/sync/storage';
-import { rigCanWriteFiles } from '@/sync/rig';
 
 interface FileViewPanelProps {
     sessionId: string;
@@ -133,8 +131,7 @@ export const FileViewPanel = React.memo(function FileViewPanel({
     onHeaderRightSlotChange,
 }: FileViewPanelProps) {
     const { theme } = useUnistyles();
-    const session = useSession(sessionId);
-    const canWrite = rigCanWriteFiles(session?.metadata);
+    const canWrite = true;
     const [fileState, setFileState] = React.useState<FileState>({ kind: 'loading' });
     const [editContent, setEditContent] = React.useState('');
     const [isSaving, setIsSaving] = React.useState(false);

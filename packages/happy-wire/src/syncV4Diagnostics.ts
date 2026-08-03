@@ -202,6 +202,7 @@ export type SyncV4DiagnosticRpcFamily = z.infer<typeof SyncV4DiagnosticRpcFamily
 
 export const SyncV4DiagnosticClientTypeSchema = z.enum([
   'cli-coding-session',
+  'cli-control-plane',
   'ios',
   'android',
   'web',

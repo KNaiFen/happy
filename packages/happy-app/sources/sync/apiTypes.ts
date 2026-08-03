@@ -1,10 +1,7 @@
 import { z } from 'zod';
 import {
-    ApiMessageSchema,
     ApiUpdateMachineStateSchema,
-    ApiUpdateNewMessageSchema,
     ApiUpdateSessionStateSchema,
-    type ApiMessage,
     SyncInvalidationV4Schema,
 } from '@slopus/happy-wire';
 import { GitHubProfileSchema, ImageRefSchema } from './profile';
@@ -12,12 +9,9 @@ import { RelationshipStatusSchema, UserProfileSchema } from './friendTypes';
 import { FeedBodySchema } from './feedTypes';
 
 export {
-    ApiMessageSchema,
     ApiUpdateMachineStateSchema,
-    ApiUpdateNewMessageSchema,
     ApiUpdateSessionStateSchema,
 };
-export type { ApiMessage };
 
 //
 // Updates
@@ -142,7 +136,6 @@ export const ApiKvBatchUpdateSchema = z.object({
 // Use a plain union here to avoid runtime discriminator extraction issues
 // when some schemas come from shared package exports.
 export const ApiUpdateSchema = z.union([
-    ApiUpdateNewMessageSchema,
     ApiUpdateNewSessionSchema,
     ApiDeleteSessionSchema,
     ApiUpdateSessionStateSchema,
@@ -158,7 +151,6 @@ export const ApiUpdateSchema = z.union([
     ApiKvBatchUpdateSchema
 ]);
 
-export type ApiUpdateNewMessage = z.infer<typeof ApiUpdateNewMessageSchema>;
 export type ApiRelationshipUpdated = z.infer<typeof ApiRelationshipUpdatedSchema>;
 export type ApiKvBatchUpdate = z.infer<typeof ApiKvBatchUpdateSchema>;
 export type ApiUpdate = z.infer<typeof ApiUpdateSchema>;

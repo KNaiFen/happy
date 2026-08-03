@@ -37,7 +37,6 @@ import {
     getSupportsWorktree,
     type ModeOption,
 } from './modelModeOptions';
-import type { NewSessionAgentType } from '@/sync/persistence';
 import { useImagePicker } from '@/hooks/useImagePicker';
 import { Modal } from '@/modal';
 import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
@@ -45,16 +44,9 @@ import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
 export const MOBILE_HOME_DOCK_CONTENT_INSET = 108;
 
 type EnvironmentSetting = 'machine' | 'project' | 'worktree';
-type AgentSetting = 'agent' | 'model' | 'permission' | 'effort';
+type AgentSetting = 'model' | 'permission' | 'effort';
 
 const CUSTOM_PROJECT_PATH_KEY = '__custom_project_path__';
-
-const AGENTS: Array<{ key: NewSessionAgentType; name: string }> = [
-    { key: 'codex', name: 'Codex' },
-    { key: 'openclaw', name: 'OpenClaw' },
-    { key: 'gemini', name: 'Gemini' },
-    { key: 'agy', name: 'Agy' },
-];
 
 const styles = StyleSheet.create((theme) => ({
     keyboardFollower: {
@@ -470,7 +462,6 @@ export const HomeDock = React.memo(({
     const [focusModeVisible, setFocusModeVisible] = React.useState(false);
     const expImageUpload = useSetting('expImageUpload');
     const { selectedImages, pickImages, removeImage, clearImages } = useImagePicker();
-    const agentType = useNewSessionDraft((state) => state.agentType);
     const selectedMachineId = useNewSessionDraft((state) => state.selectedMachineId);
     const selectedPath = useNewSessionDraft((state) => state.selectedPath);
     const sessionType = useNewSessionDraft((state) => state.sessionType);
@@ -479,7 +470,6 @@ export const HomeDock = React.memo(({
     const modelMode = useNewSessionDraft((state) => state.modelMode);
     const effortLevel = useNewSessionDraft((state) => state.effortLevel);
     const setMachineId = useNewSessionDraft((state) => state.setMachineId);
-    const setAgentType = useNewSessionDraft((state) => state.setAgentType);
     const setPath = useNewSessionDraft((state) => state.setPath);
     const setSessionType = useNewSessionDraft((state) => state.setSessionType);
     const setWorktreeKey = useNewSessionDraft((state) => state.setWorktreeKey);
@@ -537,7 +527,7 @@ export const HomeDock = React.memo(({
         });
     }, [selectedMachine, selectedMachineId, selectedPath, sessions]);
     const currentProject = resolveOption(projectOptions, [selectedPath, '~']);
-    const supportsWorktree = getSupportsWorktree(agentType);
+    const supportsWorktree = getSupportsWorktree('codex');
     const selectedWorktreeKey = sessionType === 'worktree'
         ? worktreeKey ?? '__new__'
         : '__none__';
@@ -576,7 +566,7 @@ export const HomeDock = React.memo(({
             return [{
                 key: '__none__',
                 name: 'No worktree',
-                description: `Not supported by ${AGENTS.find((agent) => agent.key === agentType)?.name ?? agentType}`,
+                description: 'Not supported by Codex',
             }];
         }
         const options: ModeOption[] = [
@@ -591,50 +581,45 @@ export const HomeDock = React.memo(({
             options.push({ key: worktreeKey, name: worktreeKey });
         }
         return options;
-    }, [agentType, existingWorktrees, supportsWorktree, worktreeKey]);
+    }, [existingWorktrees, supportsWorktree, worktreeKey]);
     const currentWorktree = resolveOption(worktreeOptions, [selectedWorktreeKey]);
-    const availableAgents = React.useMemo(() => {
-        const availability = selectedMachine?.metadata?.cliAvailability;
-        if (!availability) return AGENTS;
-        return AGENTS.filter((agent) => availability[agent.key]);
-    }, [selectedMachine]);
     const defaults = React.useMemo(
-        () => resolveAgentDefaultConfig(defaultOverrides, agentType),
-        [agentType, defaultOverrides],
+        () => resolveAgentDefaultConfig(defaultOverrides, 'codex'),
+        [defaultOverrides],
     );
     const permissionOptions = React.useMemo(
-        () => getHardcodedPermissionModes(agentType, t),
-        [agentType],
+        () => getHardcodedPermissionModes('codex', t),
+        [],
     );
     const modelOptions = React.useMemo(
         () => getAvailableModelsForMachine(
-            agentType,
+            'codex',
             selectedMachine?.metadata,
             t,
             modelMode ?? defaults.modelMode,
         ),
-        [agentType, defaults.modelMode, modelMode, selectedMachine?.metadata],
+        [defaults.modelMode, modelMode, selectedMachine?.metadata],
     );
     const currentPermission = resolveOption(permissionOptions, [permissionMode, defaults.permissionMode]);
     const currentModel = resolveOption(modelOptions, [modelMode, defaults.modelMode]);
     const effortOptions = React.useMemo(
         () => getEffortLevelsForModelOnMachine(
-            agentType,
+            'codex',
             currentModel?.key ?? 'default',
             selectedMachine?.metadata,
             effortLevel ?? defaults.effortLevel,
         ),
-        [agentType, currentModel?.key, defaults.effortLevel, effortLevel, selectedMachine?.metadata],
+        [currentModel?.key, defaults.effortLevel, effortLevel, selectedMachine?.metadata],
     );
     const currentEffort = resolveOption(effortOptions, [effortLevel, defaults.effortLevel]);
     React.useEffect(() => {
         if (!effortLevel) return;
         if (effortOptions.some((level) => level.key === effortLevel)) return;
-        if (agentType !== 'codex' || selectedMachine?.metadata?.agentCapabilities?.codex) {
+        if (selectedMachine?.metadata?.agentCapabilities?.codex) {
             setEffortLevel(currentModel?.defaultThinkingLevel ?? effortOptions[0]?.key ?? null);
         }
-    }, [agentType, currentModel?.defaultThinkingLevel, effortLevel, effortOptions, selectedMachine?.metadata?.agentCapabilities?.codex, setEffortLevel]);
-    const currentAgent = availableAgents.find((agent) => agent.key === agentType) ?? availableAgents[0] ?? AGENTS[0];
+    }, [currentModel?.defaultThinkingLevel, effortLevel, effortOptions, selectedMachine?.metadata?.agentCapabilities?.codex, setEffortLevel]);
+    const currentAgent = { name: 'Codex' } as const;
     const canSubmit = !isSubmitting && (
         prompt.trim().length > 0 || (expImageUpload && selectedImages.length > 0)
     );
@@ -776,16 +761,6 @@ export const HomeDock = React.memo(({
         });
     }, [finishCloseFocusMode, focusPresentation]);
 
-    const selectAgent = React.useCallback((agent: NewSessionAgentType) => {
-        setAgentType(agent);
-    }, [setAgentType]);
-
-    React.useEffect(() => {
-        if (availableAgents.length > 0 && !availableAgents.some((agent) => agent.key === agentType)) {
-            selectAgent(availableAgents[0].key);
-        }
-    }, [agentType, availableAgents, selectAgent]);
-
     type SettingsRow = {
         page: string;
         label: string;
@@ -799,7 +774,6 @@ export const HomeDock = React.memo(({
         { page: 'worktree', label: 'WORKTREE', value: currentWorktree?.name ?? 'No worktree', icon: 'git-branch-outline' },
     ];
     const agentRows: SettingsRow[] = [
-        { page: 'agent', label: 'AGENT', value: currentAgent.name, icon: 'hardware-chip-outline' },
         ...(currentModel ? [{ page: 'model', label: t('agentInput.model.title'), value: currentModel.name, icon: 'cube-outline' as const }] : []),
         ...(currentPermission ? [{ page: 'permission', label: t('agentInput.permissionMode.title'), value: currentPermission.name, icon: 'shield-outline' as const }] : []),
         ...(currentEffort ? [{ page: 'effort', label: t('agentInput.effort.title'), value: currentEffort.name, icon: 'speedometer-outline' as const }] : []),
@@ -870,9 +844,6 @@ export const HomeDock = React.memo(({
     };
 
     const getAgentPickerConfig = (setting: AgentSetting): PickerConfig => {
-        if (setting === 'agent') {
-            return { title: 'Agent', options: availableAgents, selectedKey: agentType, onSelect: (key) => selectAgent(key as NewSessionAgentType) };
-        }
         if (setting === 'model') {
             return {
                 title: t('agentInput.model.title'),
@@ -903,7 +874,6 @@ export const HomeDock = React.memo(({
             key: row.page,
             label: row.value || config.title,
             systemImage: {
-                agent: 'cpu',
                 model: 'cube',
                 permission: 'shield',
                 effort: 'bolt',
@@ -914,7 +884,7 @@ export const HomeDock = React.memo(({
         };
     });
     const gearSettingsGroups = agentSettingsGroups.filter((group) => (
-        group.key === 'agent' || group.key === 'permission'
+        group.key === 'permission'
     ));
     const modelSettingsGroup = agentSettingsGroups.find((group) => group.key === 'model');
     const effortSettingsGroup = agentSettingsGroups.find((group) => group.key === 'effort');

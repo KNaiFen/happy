@@ -70,8 +70,8 @@ cd happy-relay
 
 The installer verifies checksums, generates a file-backed master secret, runs
 database migrations, and waits for a database-backed health check. It binds to
-`127.0.0.1:3005` and leaves Codex Sync v4 disabled by default. See the bundled
-`README.md` before exposing plain HTTP on a trusted LAN or enabling v4.
+`127.0.0.1:3005`; Codex Sync v4 is the only session message protocol. See the
+bundled `README.md` before exposing plain HTTP on a trusted LAN.
 
 ### Environment Variables
 
@@ -82,7 +82,6 @@ database migrations, and waits for a database-backed health check. It binds to
 | `PORT` | No | `3005` | Server port |
 | `DATA_DIR` | No | `/data` | Base data directory |
 | `PGLITE_DIR` | No | `/data/pglite` | PGlite database directory |
-| `HAPPY_CODEX_SYNC_V4_ENABLED` | No | `false` | Register Codex Sync v4 routes; set to `true` only for a coordinated App/CLI cutover |
 
 ### Optional: External Services
 

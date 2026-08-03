@@ -1,6 +1,6 @@
 # Session Protocol v2 Design
 
-Status: **DRAFT — under review**
+Status: **ARCHIVED - superseded by the Codex Sync v4-only product boundary on 2026-08-03.**
 
 Provider scope note: this draft applies only to retained v3/ACP agents. Codex
 uses Sync v4 entities, and historical vendor evidence below is research rather

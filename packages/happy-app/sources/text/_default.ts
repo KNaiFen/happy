@@ -506,8 +506,6 @@ export const en = {
         },
         agent: {
             codex: 'Codex',
-            gemini: 'Gemini',
-            openclaw: 'OpenClaw',
         },
         model: {
             title: 'MODEL',
@@ -539,16 +537,6 @@ export const en = {
             gpt5Low: 'GPT-5 Low',
             gpt5Medium: 'GPT-5 Medium',
             gpt5High: 'GPT-5 High',
-        },
-        geminiPermissionMode: {
-            title: 'GEMINI PERMISSION MODE',
-            default: 'default permissions',
-            autoEdit: 'auto edit',
-            yolo: 'yolo',
-            plan: 'plan',
-            badgeAutoEdit: 'auto edit',
-            badgeYolo: 'yolo',
-            badgePlan: 'plan',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `${percent}% left`,
@@ -981,16 +969,6 @@ export const en = {
         permissions: {
             yesForSession: "Yes, and don't ask for a session",
             stopAndExplain: 'Stop, and explain what to do',
-        }
-    },
-
-    agentPermissions: {
-        // Provider-neutral v3 permission dialog buttons
-        permissions: {
-            yesAllowAllEdits: 'Yes, allow all edits during this session',
-            yesAllowEverything: 'Yes, allow everything during this session',
-            yesForTool: "Yes, don't ask again for this tool",
-            noProvideFeedback: 'No, and provide feedback',
         }
     },
 

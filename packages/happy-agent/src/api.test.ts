@@ -10,7 +10,7 @@ import {
 } from './encryption';
 import type { Config } from './config';
 import type { Credentials } from './credentials';
-import type { RawSession, RawMessage } from './api';
+import type { RawSession } from './api';
 
 // Mock axios
 vi.mock('axios', () => {
@@ -37,7 +37,6 @@ import {
     listSessions,
     listActiveSessions,
     deleteSession,
-    getSessionMessages,
     resolveSessionEncryption,
 } from './api';
 
@@ -206,7 +205,7 @@ describe('api', () => {
             expect(sessions).toHaveLength(1);
             expect(sessions[0].id).toBe('sess-1');
             expect(sessions[0].metadata).toEqual(metadata);
-            expect(sessions[0].agentState).toEqual(agentState);
+            expect(sessions[0]).not.toHaveProperty('agentState');
             expect(sessions[0].encryption.variant).toBe('dataKey');
         });
 
@@ -226,7 +225,7 @@ describe('api', () => {
             expect(sessions).toHaveLength(1);
             expect(sessions[0].id).toBe('sess-legacy');
             expect(sessions[0].metadata).toEqual(metadata);
-            expect(sessions[0].agentState).toBeNull();
+            expect(sessions[0]).not.toHaveProperty('agentState');
             expect(sessions[0].encryption.variant).toBe('legacy');
         });
 
@@ -330,101 +329,6 @@ describe('api', () => {
             expect(sessions).toHaveLength(1);
             expect(sessions[0].id).toBe('active-1');
             expect(sessions[0].metadata).toEqual(metadata);
-        });
-    });
-
-    describe('getSessionMessages', () => {
-        it('fetches and decrypts messages with dataKey encryption', async () => {
-            const { raw: rawSession, sessionKey } = makeRawSessionWithDataKey(
-                creds,
-                { path: '/project' },
-                null,
-                { id: 'msg-session' },
-            );
-
-            const encryption = resolveSessionEncryption(rawSession, creds);
-
-            // Create encrypted messages
-            const msgContent1 = { role: 'user', text: 'Hello agent' };
-            const msgContent2 = { role: 'assistant', text: 'Hello! How can I help?' };
-            const encMsg1 = encryptWithDataKey(msgContent1, sessionKey);
-            const encMsg2 = encryptWithDataKey(msgContent2, sessionKey);
-
-            const rawMessages: RawMessage[] = [
-                {
-                    id: 'msg-1',
-                    seq: 1,
-                    content: { t: 'encrypted', c: encodeBase64(encMsg1) },
-                    localId: 'local-1',
-                    createdAt: 1000,
-                    updatedAt: 1000,
-                },
-                {
-                    id: 'msg-2',
-                    seq: 2,
-                    content: { t: 'encrypted', c: encodeBase64(encMsg2) },
-                    localId: null,
-                    createdAt: 2000,
-                    updatedAt: 2000,
-                },
-            ];
-
-            mockedAxios.get.mockResolvedValueOnce({
-                data: { messages: rawMessages },
-            });
-
-            const messages = await getSessionMessages(config, creds, 'msg-session', encryption);
-
-            expect(messages).toHaveLength(2);
-            expect(messages[0].content).toEqual(msgContent1);
-            expect(messages[0].id).toBe('msg-1');
-            expect(messages[1].content).toEqual(msgContent2);
-            expect(messages[1].id).toBe('msg-2');
-        });
-
-        it('fetches and decrypts messages with legacy encryption', async () => {
-            const rawSession = makeRawSessionLegacy(
-                creds,
-                { path: '/legacy-project' },
-                null,
-                { id: 'legacy-msg-session' },
-            );
-
-            const encryption = resolveSessionEncryption(rawSession, creds);
-
-            const msgContent = { role: 'user', text: 'Legacy message' };
-            const encMsg = encryptLegacy(msgContent, creds.secret);
-
-            const rawMessages: RawMessage[] = [
-                {
-                    id: 'legacy-msg-1',
-                    seq: 1,
-                    content: { t: 'encrypted', c: encodeBase64(encMsg) },
-                    localId: null,
-                    createdAt: 1000,
-                    updatedAt: 1000,
-                },
-            ];
-
-            mockedAxios.get.mockResolvedValueOnce({
-                data: { messages: rawMessages },
-            });
-
-            const messages = await getSessionMessages(config, creds, 'legacy-msg-session', encryption);
-
-            expect(messages).toHaveLength(1);
-            expect(messages[0].content).toEqual(msgContent);
-        });
-
-        it('throws on 404 for messages endpoint', async () => {
-            const { AxiosError } = await import('axios');
-            const err = new (AxiosError as any)('Not Found', { response: { status: 404 } });
-            mockedAxios.get.mockRejectedValueOnce(err);
-
-            const encryption = { key: creds.secret, variant: 'legacy' as const };
-            await expect(
-                getSessionMessages(config, creds, 'bad-id', encryption),
-            ).rejects.toThrow('Not found');
         });
     });
 

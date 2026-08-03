@@ -46,17 +46,7 @@ vi.mock('@/api/rpc/RpcHandlerManager', () => ({
 vi.mock('@/utils/detectCLI', () => ({
     detectCLIAvailability: vi.fn(() => ({
         codex: false,
-        gemini: false,
-        openclaw: false
-    }))
-}));
-
-vi.mock('@/resume/localHappyAgentAuth', () => ({
-    detectResumeSupport: vi.fn(() => ({
-        rpcAvailable: false,
-        requiresSameMachine: false,
-        requiresHappyAgentAuth: false,
-        happyAgentAuthenticated: false
+        detectedAt: 0,
     }))
 }));
 

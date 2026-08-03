@@ -492,8 +492,6 @@ export const zhHant: TranslationStructure = {
         },
         agent: {
             codex: 'Codex',
-            gemini: 'Gemini',
-            openclaw: 'OpenClaw',
         },
         model: {
             title: '模型',
@@ -525,16 +523,6 @@ export const zhHant: TranslationStructure = {
             gpt5Low: 'GPT-5 低',
             gpt5Medium: 'GPT-5 中',
             gpt5High: 'GPT-5 高',
-        },
-        geminiPermissionMode: {
-            title: 'GEMINI 權限模式',
-            default: '預設',
-            autoEdit: '自動編輯',
-            yolo: 'YOLO',
-            plan: '計畫',
-            badgeAutoEdit: '自動編輯',
-            badgeYolo: 'YOLO',
-            badgePlan: '計畫',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `剩餘 ${percent}%`,
@@ -966,16 +954,6 @@ export const zhHant: TranslationStructure = {
         permissions: {
             yesForSession: '是，並且本次工作階段不再詢問',
             stopAndExplain: '停止，並說明該做什麼',
-        }
-    },
-
-    agentPermissions: {
-        // 通用 v3 權限對話框按鈕
-        permissions: {
-            yesAllowAllEdits: '是，允許本次工作階段的所有編輯',
-            yesAllowEverything: '是，允許本次工作階段的所有操作',
-            yesForTool: '是，不再詢問此工具',
-            noProvideFeedback: '否，並提供回饋',
         }
     },
 

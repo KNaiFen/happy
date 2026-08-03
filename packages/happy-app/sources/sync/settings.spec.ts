@@ -473,7 +473,7 @@ describe('settings', () => {
             const pendingChanges: Partial<Settings> = {
                 experiments: true,
                 dismissedCLIWarnings: {
-                    perMachine: { 'machine-2': { gemini: true } },
+                    perMachine: { 'machine-2': { codex: false } },
                     global: {}
                 }
             };

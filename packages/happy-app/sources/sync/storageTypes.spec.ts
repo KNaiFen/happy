@@ -1,37 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import { AgentGoalStatusSchema, AgentStateSchema, MachineMetadataSchema, MetadataSchema } from './storageTypes';
-import { rigMetadataFixture } from './__testdata__/rigMetadata';
 
 describe('MetadataSchema', () => {
-    it('preserves archive lifecycle metadata', () => {
+    it('preserves Codex launch origin metadata', () => {
         const metadata = MetadataSchema.parse({
             path: '/tmp/project',
             host: 'local-machine',
             startedBy: 'daemon',
             startedFromDaemon: true,
-            lifecycleState: 'archived',
-            lifecycleStateSince: 123,
-            archivedBy: 'cli',
-            archiveReason: 'User terminated',
         });
 
         expect(metadata.startedBy).toBe('daemon');
         expect(metadata.startedFromDaemon).toBe(true);
-        expect(metadata.lifecycleState).toBe('archived');
-        expect(metadata.lifecycleStateSince).toBe(123);
-        expect(metadata.archivedBy).toBe('cli');
-        expect(metadata.archiveReason).toBe('User terminated');
     });
 
-    it('parses the additive Rig v1 extension and tolerates future fields', () => {
+    it('parses the Codex V4 metadata and tolerates future fields', () => {
         const metadata = MetadataSchema.parse({
-            ...rigMetadataFixture,
-            rigMetadataVersion: 2,
+            path: '/tmp/project',
+            host: 'local-machine',
+            flavor: 'codex',
+            codexSyncVersion: 4,
+            models: [{
+                code: 'gpt-test',
+                value: 'GPT Test',
+                thinkingLevels: ['low', 'high'],
+            }],
             futureCapability: { supported: true },
         });
-        expect(metadata.client?.id).toBe('rig');
-        expect(metadata.models).toHaveLength(2);
-        expect(metadata.activity?.subagents.queued).toBe(2);
+        expect(metadata.flavor).toBe('codex');
+        expect(metadata.codexSyncVersion).toBe(4);
+        expect(metadata.models).toHaveLength(1);
         expect((metadata as any).futureCapability).toEqual({ supported: true });
     });
 
@@ -43,28 +41,6 @@ describe('MetadataSchema', () => {
         });
 
         expect(metadata.codexCapabilities?.queueSteering).toBe(true);
-    });
-});
-
-describe('AgentStateSchema Codex message queue', () => {
-    it('preserves the authoritative FIFO snapshot', () => {
-        const state = AgentStateSchema.parse({
-            codexMessageQueue: {
-                revision: 3,
-                messages: [
-                    { id: 'queued-1', text: 'first', createdAt: 100 },
-                    { id: 'queued-2', text: 'second', createdAt: 200 },
-                ],
-            },
-        });
-
-        expect(state.codexMessageQueue).toEqual({
-            revision: 3,
-            messages: [
-                { id: 'queued-1', text: 'first', createdAt: 100 },
-                { id: 'queued-2', text: 'second', createdAt: 200 },
-            ],
-        });
     });
 });
 

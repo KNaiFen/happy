@@ -1,24 +1,24 @@
 {
   "entries": [
     {
-      "title": "July 24 — Liquid glass, Opus 5",
-      "summary": "A full mobile refresh and a new top model.",
-      "markdown": "- Liquid-glass mobile UI — glass surfaces across navigation, headers, modals, and session lists.\n- Opus 5 in the Claude model picker.\n- Side chats — fork a parallel conversation right next to your session.\n- Redesigned new-session screen — prompt, attachments, voice, model, effort, and permissions in one place. Drafts are preserved.\n- Pick your own sidebar panels, with keyboard shortcuts.\n- Session launch and resume are more reliable."
+      "title": "August 3 — Queue control and resume fixes",
+      "summary": "Codex follow-ups are durable and native session switching is reliable.",
+      "markdown": "- While Codex is working, choose Queue or Steer directly in the composer before sending.\n- Queued follow-ups appear as durable cards and can still be edited or steered later.\n- The native Codex `/resume` picker now works through the persistent Gateway.\n- New and writable sessions use Codex Sync V4 exclusively."
     },
     {
-      "title": "July 11 — GPT-5.6, Antigravity, bugfixes",
-      "summary": "New models, a new agent, and live subagent rendering.",
-      "markdown": "- GPT-5.6 Sol, Terra, and Luna in the Codex model picker.\n- New agent: Antigravity (agy) — Google's CLI (update the CLI first: `npm i -g happy`).\n- Claude and Codex subagents render live in chat.\n- Codex yolo actually stops asking for permissions.\n- New status bar — branch, model, effort, context. Tap to switch model or effort.\n- Your first machine appears immediately during onboarding.\n- Resuming phone-created sessions works reliably.\n- Message bubble colors in Settings → Appearance.\n- Model/permission/effort picks reset once — they now sync across devices."
+      "title": "July 24 — Liquid glass and session polish",
+      "summary": "A full mobile refresh and more reliable Codex sessions.",
+      "markdown": "- Liquid-glass mobile UI — glass surfaces across navigation, headers, modals, and session lists.\n- Side chats — fork a parallel conversation right next to your session.\n- Redesigned new-session screen — prompt, attachments, voice, model, effort, and permissions in one place. Drafts are preserved.\n- Pick your own sidebar panels, with keyboard shortcuts.\n- Session launch and resume are more reliable."
     },
     {
-      "title": "July 2 — Fable in Claude Code",
-      "summary": "Fable is available from the Claude Code model picker.",
-      "markdown": ""
+      "title": "July 11 — GPT-5.6 and bugfixes",
+      "summary": "New Codex models and live subagent rendering.",
+      "markdown": "- GPT-5.6 Sol, Terra, and Luna in the Codex model picker.\n- Codex subagents render live in chat.\n- Codex yolo actually stops asking for permissions.\n- New status bar — branch, model, effort, context. Tap to switch model or effort.\n- Your first machine appears immediately during onboarding.\n- Resuming phone-created sessions works reliably.\n- Message bubble colors in Settings → Appearance.\n- Model/permission/effort picks reset once — they now sync across devices."
     },
     {
       "title": "June 22 — Goals and cleaner commands",
       "summary": "Agent goals and slash commands are easier to follow, with steadier remote sessions.",
-      "markdown": "- Active goals appear above the composer for supported Claude and Codex sessions.\n- `/goal` and skill commands render cleanly in chat instead of showing raw command internals.\n- Codex skills now appear in the slash-command menu.\n- Remote sessions handle first messages and resumed transcripts more reliably."
+      "markdown": "- Active goals appear above the composer for Codex sessions.\n- `/goal` and skill commands render cleanly in chat instead of showing raw command internals.\n- Codex skills now appear in the slash-command menu.\n- Remote sessions handle first messages and resumed transcripts more reliably."
     },
     {
       "title": "May 15 — Cleaner, steadier chat",
@@ -33,7 +33,7 @@
     {
       "title": "May 7 — Session retention, new sidebar, code editor, session branching",
       "summary": "Desktop got a full refresh with a file browser, built-in editor, and zen mode. Sessions can now be branched or rewound.",
-      "markdown": "**Session retention: 2 months.** Older sessions are cleaned up automatically to keep storage costs manageable.\n\n## Features and fixes\n\n- Thinking effort selection bug fixed.\n- Smarter push notifications — suppressed when you're already in the app.\n- Unread dots persist on sessions until you open them.\n- Redesigned sidebar with file browser, code editor, and zen mode.\n- Fixed stale sessions refusing to load, blank screen on launch, dual cursors in remote mode, `claude --resume` not finding Happy sessions.\n\n## Experimental\n\nEnable in Settings → Features:\n\n- File diffs sidebar — see git changes next to chat on desktop.\n- Session fork & rewind — branch off any session or roll back to any message."
+      "markdown": "**Session retention: 2 months.** Older sessions are cleaned up automatically to keep storage costs manageable.\n\n## Features and fixes\n\n- Thinking effort selection bug fixed.\n- Smarter push notifications — suppressed when you're already in the app.\n- Unread dots persist on sessions until you open them.\n- Redesigned sidebar with file browser, code editor, and zen mode.\n- Fixed stale sessions refusing to load, blank screen on launch, dual cursors in remote mode, and `/resume` not finding Happy sessions.\n\n## Experimental\n\nEnable in Settings → Features:\n\n- File diffs sidebar — see git changes next to chat on desktop.\n- Session fork & rewind — branch off any session or roll back to any message."
     },
     {
       "title": "April 26 — Voice fixes, diffs, scroll",
@@ -41,24 +41,24 @@
       "markdown": "- Voice calls no longer break on second session.\n- Tables and code blocks scroll horizontally.\n- New diff viewer with syntax highlighting and unified/split toggle.\n- Model and effort choices persist on mobile.\n- Permission prompts no longer get lost.\n- Settings stop randomly resetting during sync.\n- Scroll-to-bottom button in chat.\n- Delete machines from settings."
     },
     {
-      "title": "April 8 — Gemini models, voice onboarding, CLI fixes",
+      "title": "April 8 — Codex models, voice onboarding, CLI fixes",
       "summary": "New models, smoother onboarding, fewer CLI hangs.",
-      "markdown": "- Latest Gemini models in the picker.\n- Better voice onboarding — clearer first-run prompts.\n- CLI plan approval buttons actually show up now.\n- CLI background tasks and Codex turns no longer hang."
+      "markdown": "- Latest Codex models in the picker.\n- Better voice onboarding — clearer first-run prompts.\n- CLI plan approval buttons actually show up now.\n- CLI background tasks and Codex turns no longer hang."
     },
     {
-      "title": "March 19 — New session screen, git worktrees, more agents",
-      "summary": "Completely new way to start sessions, plus worktree support and more agents.",
-      "markdown": "- New session composer — pick machine, worktree, draft persists.\n- Git worktree management from the app. Auto-cleanup on delete.\n- Auto plan mode when your agent enters planning.\n- OpenClaw as a selectable agent.\n- Session quick actions, resume, delete from info screen.\n- \"Bypass\" renamed to \"yolo\"."
+      "title": "March 19 — New session screen and git worktrees",
+      "summary": "A new way to start Codex sessions, plus worktree support.",
+      "markdown": "- New session composer — pick machine, worktree, draft persists.\n- Git worktree management from the app. Auto-cleanup on delete.\n- Auto plan mode when Codex enters planning.\n- Session quick actions, resume, delete from info screen.\n- \"Bypass\" renamed to \"yolo\"."
     },
     {
       "title": "December 22 — Agent updates, voice changes, tables",
       "summary": "Agent config changes and voice pricing heads-up.",
-      "markdown": "- Gemini support coming via ACP.\n- Model config removed from app — use CLI defaults.\n- Voice going subscription after 3 free trials.\n- Markdown tables render properly now."
+      "markdown": "- Model config removed from app — use Codex CLI defaults.\n- Voice going subscription after 3 free trials.\n- Markdown tables render properly now."
     },
     {
       "title": "September 12 — Codex, daemon mode, one-tap launch",
       "summary": "Sessions start instantly now. No more manual CLI startup.",
-      "markdown": "- Codex support for code completion and generation.\n- Daemon mode — sessions start instantly without manual CLI startup.\n- One-tap launch from mobile.\n- Connect Anthropic and GPT accounts."
+      "markdown": "- Codex support for code completion and generation.\n- Daemon mode — sessions start instantly without manual CLI startup.\n- One-tap launch from mobile.\n- Connect an OpenAI account."
     },
     {
       "title": "August 29 — GitHub integration",
@@ -76,5 +76,5 @@
       "markdown": "- E2E encrypted sessions.\n- Voice assistant.\n- File manager with syntax highlighting.\n- Real-time sync across devices."
     }
   ],
-  "latestTitle": "July 24 — Liquid glass, Opus 5"
+  "latestTitle": "August 3 — Queue control and resume fixes"
 }

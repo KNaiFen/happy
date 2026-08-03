@@ -10,8 +10,8 @@ import { Context } from "@/context";
 import { db } from "@/storage/db";
 import { diagnosticHash } from "@/utils/diagnosticHash";
 
-export const supportedInferenceVendorSchema = z.enum(['openai', 'gemini']);
-const supportedInferenceVendors = supportedInferenceVendorSchema.options;
+export const supportedInferenceVendorSchema = z.literal('openai');
+const supportedInferenceVendors = ['openai'] as const;
 
 export function connectRoutes(app: Fastify) {
 

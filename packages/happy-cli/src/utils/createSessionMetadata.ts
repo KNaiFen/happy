@@ -1,8 +1,7 @@
 /**
  * Session Metadata Factory
  *
- * Creates session state and metadata objects for retained backends.
- * This follows DRY principles by providing a single implementation for all backends.
+ * Creates session state and metadata objects for Codex Sync V4 sessions.
  *
  * @module createSessionMetadata
  */
@@ -20,7 +19,7 @@ import packageJson from '../../package.json';
 /**
  * Backend flavor identifier for session metadata.
  */
-export type BackendFlavor = 'codex' | 'gemini' | 'opencode' | 'openclaw' | 'agy' | 'acp';
+export type BackendFlavor = 'codex';
 
 /**
  * Options for creating session metadata.
@@ -73,24 +72,11 @@ function getGitBranch(cwd: string): string | undefined {
 }
 
 /**
- * Creates session state and metadata for backend agents.
- *
- * This utility consolidates the common session metadata creation logic used by
- * Codex and Gemini backends, ensuring consistency across all backend implementations.
+ * Creates session state and metadata for Codex.
  *
  * @param opts - Options specifying flavor, machineId, and startedBy
  * @returns Object containing state and metadata for session creation
  *
- * @example
- * ```typescript
- * const { state, metadata } = createSessionMetadata({
- *     flavor: 'gemini',
- *     machineId: settings.machineId,
- *     startedBy: opts.startedBy
- * });
- *
- * const response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
- * ```
  */
 export function createSessionMetadata(opts: CreateSessionMetadataOptions): SessionMetadataResult {
     const state: AgentState = {
@@ -112,8 +98,6 @@ export function createSessionMetadata(opts: CreateSessionMetadataOptions): Sessi
         startedFromDaemon: opts.startedBy === 'daemon',
         hostPid: process.pid,
         startedBy: opts.startedBy || 'terminal',
-        lifecycleState: 'running',
-        lifecycleStateSince: Date.now(),
         flavor: opts.flavor,
         sandbox: opts.sandbox?.enabled ? opts.sandbox : null,
         dangerouslySkipPermissions: opts.dangerouslySkipPermissions ?? null,

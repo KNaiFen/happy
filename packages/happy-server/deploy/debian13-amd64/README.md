@@ -32,18 +32,14 @@ cd happy-relay
 服务进程；secret 不复制，也不进入容器环境或 `.env`。安装器和管理脚本会拒绝
 符号链接、非普通 secret 文件和多重硬链接，避免 root 命令跟随被替换的路径。
 
-新安装默认仅监听 `127.0.0.1:3005`，Codex Sync v4 默认关闭。常用管理命令：
+新安装默认仅监听 `127.0.0.1:3005`，并始终使用 Codex Sync v4。常用管理命令：
 
 ```bash
 ./relayctl.sh status
 ./relayctl.sh health
 ./relayctl.sh logs --tail 100
 ./relayctl.sh restart
-./relayctl.sh enable-v4
 ```
-
-仅在匹配版本的 App/CLI 已安装、且没有旧版 Codex turn 运行时执行
-`enable-v4`。脚本不会删除数据库卷，也不会自动重新生成已有 secret。
 
 ## 局域网 HTTP
 

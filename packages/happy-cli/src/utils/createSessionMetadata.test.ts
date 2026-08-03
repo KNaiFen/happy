@@ -47,7 +47,7 @@ describe('createSessionMetadata', () => {
     it('sets metadata.sandbox to null when sandbox is disabled', () => {
         const sandbox = createSandboxConfig({ enabled: false });
         const { metadata } = createSessionMetadata({
-            flavor: 'gemini',
+            flavor: 'codex',
             machineId: 'machine-2',
             startedBy: 'daemon',
             sandbox,

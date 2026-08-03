@@ -82,6 +82,10 @@ describe('Api server error handling', () => {
 
     beforeEach(async () => {
         vi.clearAllMocks();
+        mockGet.mockReset();
+        mockPost.mockReset();
+        mockIsAxiosError.mockReset();
+        mockIsAxiosError.mockReturnValue(true);
         connectionState.reset(); // Reset offline state between tests
 
         // Create a mock credential
@@ -106,6 +110,7 @@ describe('Api server error handling', () => {
                         protocolVersion: 4,
                         minimumHappyCliVersion: '1.4.7',
                         minimumHappyAppVersion: '1.11.12',
+                        minimumHappyAgentVersion: '0.1.3',
                         minimumCodexCliVersion: '0.145.0',
                     },
                 },
@@ -153,7 +158,7 @@ describe('Api server error handling', () => {
             expect(mockGet).not.toHaveBeenCalled();
         });
 
-        it('retains v3 only when the server explicitly disables v4 or lacks the endpoint', async () => {
+        it('rejects startup when v4 is disabled or the endpoint is absent', async () => {
             const diagnostics: SyncV4DiagnosticInput[] = [];
             const sink = { record: (input: SyncV4DiagnosticInput) => diagnostics.push(input) };
             mockGet.mockResolvedValueOnce({
@@ -163,6 +168,7 @@ describe('Api server error handling', () => {
                         protocolVersion: 4,
                         minimumHappyCliVersion: '9.0.0',
                         minimumHappyAppVersion: '9.0.0',
+                        minimumHappyAgentVersion: '0.1.3',
                         minimumCodexCliVersion: '9.0.0',
                     },
                 },
@@ -173,24 +179,24 @@ describe('Api server error handling', () => {
                 '0.145.0',
                 '00000000000000000000000000000001',
                 sink,
-            )).resolves.toBe(false);
+            )).rejects.toThrow('Codex Sync v4 disabled');
             await expect(api.isCodexSyncV4Enabled(
                 '0.145.0',
                 '00000000000000000000000000000002',
                 sink,
-            )).resolves.toBe(false);
-            expect(diagnostics.filter((record) => record.phase === 'completed')).toEqual([
+            )).rejects.toThrow('required Codex Sync v4 capability endpoint');
+            expect(diagnostics.filter((record) => record.phase === 'failed')).toEqual([
                 expect.objectContaining({
                     traceId: '00000000000000000000000000000001',
-                    state: 'stopped',
                     httpStatus: 200,
                     featureEnabled: false,
+                    errorKind: 'protocol',
                 }),
                 expect.objectContaining({
                     traceId: '00000000000000000000000000000002',
-                    state: 'stopped',
                     httpStatus: 404,
                     featureEnabled: false,
+                    errorKind: 'protocol',
                 }),
             ]);
         });
@@ -209,7 +215,7 @@ describe('Api server error handling', () => {
                 '0.145.0',
                 '00000000000000000000000000000003',
                 sink,
-            )).rejects.toThrow('unsafe v3 fallback');
+            )).rejects.toThrow('Codex Sync v4 is required');
             await expect(api.isCodexSyncV4Enabled(
                 '0.145.0',
                 '00000000000000000000000000000004',
@@ -241,7 +247,7 @@ describe('Api server error handling', () => {
                 '0.145.0',
                 '00000000000000000000000000000005',
                 { record: (input) => diagnostics.push(input) },
-            )).rejects.toThrow('unsafe v3 fallback');
+            )).rejects.toThrow('Codex Sync v4 is required');
 
             expect(JSON.stringify(diagnostics)).not.toContain(secret);
             expect(diagnostics.at(-1)).toMatchObject({
@@ -258,6 +264,7 @@ describe('Api server error handling', () => {
                     protocolVersion: 4,
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
+                    minimumHappyAgentVersion: '0.1.3',
                     minimumCodexCliVersion: '0.145.0',
                 },
             };
@@ -292,6 +299,7 @@ describe('Api server error handling', () => {
                     protocolVersion: 4,
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
+                    minimumHappyAgentVersion: '0.1.3',
                     minimumCodexCliVersion: '0.146.0',
                 },
             };
@@ -599,7 +607,7 @@ describe('Api server error handling', () => {
                             seq: 42,
                             metadata: JSON.stringify(testMetadata),
                             metadataVersion: 7,
-                            agentState: JSON.stringify({ codexMessageQueue: { revision: 3, messages: [] } }),
+                            agentState: JSON.stringify({}),
                             agentStateVersion: 9,
                             dataEncryptionKey: 'wrapped-key',
                             active: false,

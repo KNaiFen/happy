@@ -28,7 +28,7 @@ const {
     const row = (data: any) => ({
         id: data.id ?? "session-1",
         accountId: data.accountId ?? "user-1",
-        tag: data.tag ?? "tag-1",
+        tag: data.tag ?? "codex-gateway-root-v1-test",
         seq: 0,
         metadata: data.metadata ?? "encrypted-metadata",
         metadataVersion: 0,
@@ -141,6 +141,8 @@ const terminalHeaders = {
     "x-credential-id": "credential-1",
 };
 
+const supportedTag = "codex-gateway-root-v1-test";
+
 describe("sessionRoutes terminal machine origin", () => {
     let app: Fastify;
 
@@ -153,6 +155,23 @@ describe("sessionRoutes terminal machine origin", () => {
         if (app) await app.close();
     });
 
+    it("rejects unsupported session tags", async () => {
+        app = await createApp();
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/sessions",
+            headers: terminalHeaders,
+            payload: {
+                tag: "legacy-provider-session",
+                metadata: "encrypted-metadata",
+                machineId: "machine-1",
+            },
+        });
+
+        expect(response.statusCode).toBe(400);
+        expect(state.createdData).toBeNull();
+    });
+
     it("requires a machine ID for terminal-created sessions", async () => {
         app = await createApp();
         const response = await app.inject({
@@ -160,7 +179,7 @@ describe("sessionRoutes terminal machine origin", () => {
             url: "/v1/sessions",
             headers: terminalHeaders,
             payload: {
-                tag: "tag-1",
+                tag: supportedTag,
                 metadata: "encrypted-metadata",
             },
         });
@@ -177,7 +196,7 @@ describe("sessionRoutes terminal machine origin", () => {
             url: "/v1/sessions",
             headers: terminalHeaders,
             payload: {
-                tag: "tag-1",
+                tag: supportedTag,
                 metadata: "encrypted-metadata",
                 machineId: "machine-1",
             },
@@ -194,7 +213,7 @@ describe("sessionRoutes terminal machine origin", () => {
             url: "/v1/sessions",
             headers: terminalHeaders,
             payload: {
-                tag: "tag-1",
+                tag: supportedTag,
                 metadata: "encrypted-metadata",
                 agentState: "encrypted-agent-state",
                 machineId: "machine-1",
@@ -219,7 +238,7 @@ describe("sessionRoutes terminal machine origin", () => {
         state.existingSession = {
             id: "session-1",
             accountId: "user-1",
-            tag: "tag-1",
+            tag: supportedTag,
             seq: 0,
             metadata: "encrypted-metadata",
             metadataVersion: 0,
@@ -239,7 +258,7 @@ describe("sessionRoutes terminal machine origin", () => {
             url: "/v1/sessions",
             headers: terminalHeaders,
             payload: {
-                tag: "tag-1",
+                tag: supportedTag,
                 metadata: "encrypted-metadata",
                 machineId: "machine-1",
             },
@@ -261,7 +280,7 @@ describe("sessionRoutes terminal machine origin", () => {
             url: "/v1/sessions",
             headers: terminalHeaders,
             payload: {
-                tag: "tag-1",
+                tag: supportedTag,
                 metadata: "encrypted-metadata",
                 machineId: "machine-1",
             },
@@ -404,23 +423,6 @@ describe("sessionRoutes terminal machine origin", () => {
         ]);
     });
 
-    it("keeps the legacy v1 shutdown endpoint transient for Claude v3", async () => {
-        app = await createApp();
-        state.existingSession = row({ id: "session-1", originMachineId: "machine-1" });
-
-        const response = await app.inject({
-            method: "POST",
-            url: "/v1/sessions/session-1/archive",
-            headers: terminalHeaders,
-        });
-
-        expect(response.statusCode).toBe(200);
-        expect(response.json()).toEqual({ success: true });
-        expect(state.existingSession.active).toBe(false);
-        expect(state.existingSession.archivedAt).toBeNull();
-        expect(invalidateSessionsMock).toHaveBeenCalledWith(["session-1"]);
-    });
-
     it("allows only the original terminal machine to unarchive", async () => {
         app = await createApp();
         const archivedAt = new Date(Date.now() + 10_000);
@@ -471,7 +473,7 @@ describe("sessionRoutes terminal machine origin", () => {
             url: "/v1/sessions",
             headers: terminalHeaders,
             payload: {
-                tag: "tag-1",
+                tag: supportedTag,
                 metadata: "encrypted-metadata",
                 machineId: "machine-1",
             },

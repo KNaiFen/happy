@@ -12,7 +12,6 @@ import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
-import { detectResumeSupport, type ResumeSupport } from '@/resume/localHappyAgentAuth';
 import { shouldReconnect } from '@/utils/lidState';
 import { CodexAppServerClient } from '@/codex/codexAppServerClient';
 import {
@@ -150,7 +149,6 @@ export class ApiMachineClient {
     private socket!: Socket<ServerToDaemonEvents, DaemonToServerEvents>;
     private keepAliveInterval: NodeJS.Timeout | null = null;
     private lastKnownCLIAvailability: CLIAvailability | null = null;
-    private lastKnownResumeSupport: ResumeSupport | null = null;
     private rpcHandlerManager: RpcHandlerManager;
     private resumeSessionHandler: ((sessionId: string, options?: {
         operationId?: string;
@@ -592,23 +590,18 @@ export class ApiMachineClient {
         // Re-detect CLI availability and push metadata update if changed
         const newAvailability = detectCLIAvailability();
         const prev = this.lastKnownCLIAvailability;
-        const newResumeSupport = detectResumeSupport();
-        const prevResume = this.lastKnownResumeSupport;
-        const cliAvailabilityChanged = !prev || prev.codex !== newAvailability.codex || prev.gemini !== newAvailability.gemini || prev.openclaw !== newAvailability.openclaw;
-        const resumeSupportChanged = !prevResume
-            || prevResume.rpcAvailable !== newResumeSupport.rpcAvailable
-            || prevResume.happyAgentAuthenticated !== newResumeSupport.happyAgentAuthenticated;
+        const cliAvailabilityChanged = !prev || prev.codex !== newAvailability.codex;
 
-        if (cliAvailabilityChanged || resumeSupportChanged) {
+        if (cliAvailabilityChanged) {
             this.lastKnownCLIAvailability = newAvailability;
-            this.lastKnownResumeSupport = newResumeSupport;
             this.updateMachineMetadata((metadata) => ({
                 ...(metadata || {} as any),
                 cliAvailability: newAvailability,
                 resumeSupport: {
-                    ...newResumeSupport,
                     rpcAvailable: !!this.resumeSessionHandler,
                     codexThreadHistoryRpcAvailable: true,
+                    requiresSameMachine: true,
+                    detectedAt: Date.now(),
                 },
             })).catch((err) => {
                 logger.debug('[API MACHINE] Failed to update machine capabilities:', err);

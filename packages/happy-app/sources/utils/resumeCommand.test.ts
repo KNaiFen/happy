@@ -2,13 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { buildResumeCommand, buildResumeCommandBlock } from './resumeCommand';
 
 describe('buildResumeCommand', () => {
-    it('never offers a native CLI resume command for Rig sessions', () => {
+    it('never offers a native CLI resume command for unsupported providers', () => {
         expect(buildResumeCommand({
             path: '/tmp/project',
-            flavor: 'codex',
+            flavor: 'gemini',
             codexThreadId: 'thread-1',
-            client: { id: 'rig' },
-            capabilities: { resume: false },
         })).toBeNull();
     });
     it('builds a Codex resume command that enters the session directory first', () => {

@@ -21,9 +21,6 @@ interface AvatarProps {
 
 const flavorIcons = {
     codex: require('@/assets/images/icon-gpt.png'),
-    gemini: require('@/assets/images/icon-gemini.png'),
-    openclaw: require('@/assets/images/icon-openclaw.png'),
-    rig: require('@/assets/images/icon-rig.png'),
 };
 
 const styles = StyleSheet.create((theme) => ({
@@ -43,17 +40,10 @@ const styles = StyleSheet.create((theme) => ({
         shadowRadius: 2,
         elevation: 3,
     },
-    rigFlavorIcon: {
-        backgroundColor: 'transparent',
-        padding: 0,
-        shadowOpacity: 0,
-        shadowRadius: 0,
-        elevation: 0,
-    },
 }));
 
 export const Avatar = React.memo((props: AvatarProps) => {
-    const { flavor, clientId, size = 48, imageUrl, thumbhash, ...avatarProps } = props;
+    const { flavor, clientId: _clientId, size = 48, imageUrl, thumbhash, ...avatarProps } = props;
     const avatarStyle = useSetting('avatarStyle');
     const showFlavorIcons = useSetting('showFlavorIcons');
     const { theme } = useUnistyles();
@@ -74,19 +64,16 @@ export const Avatar = React.memo((props: AvatarProps) => {
         );
 
         // Add flavor icon overlay if enabled
-        if (showFlavorIcons && (flavor || clientId === 'rig')) {
-            const effectiveFlavor = clientId === 'rig' ? 'rig' : flavor;
-            const flavorIcon = effectiveFlavor ? flavorIcons[effectiveFlavor as keyof typeof flavorIcons] : undefined;
+        if (showFlavorIcons && flavor === 'codex') {
+            const flavorIcon = flavorIcons.codex;
             if (!flavorIcon) return imageElement;
             const circleSize = Math.round(size * 0.35);
-            const iconSize = effectiveFlavor === 'codex'
-                ? Math.round(size * 0.25)
-                : Math.round(size * 0.35);
+            const iconSize = Math.round(size * 0.25);
 
             return (
                 <View style={[styles.container, { width: size, height: size }]}>
                     {imageElement}
-                    <View style={[styles.flavorIcon, effectiveFlavor === 'rig' && styles.rigFlavorIcon, {
+                    <View style={[styles.flavorIcon, {
                         width: circleSize,
                         height: circleSize,
                         alignItems: 'center',
@@ -96,7 +83,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
                             source={flavorIcon}
                             style={{ width: iconSize, height: iconSize }}
                             contentFit="contain"
-                            tintColor={effectiveFlavor === 'codex' ? theme.colors.text : undefined}
+                            tintColor={theme.colors.text}
                         />
                     </View>
                 </View>
@@ -118,20 +105,17 @@ export const Avatar = React.memo((props: AvatarProps) => {
     }
 
     // Determine flavor icon for generated avatars
-    const effectiveFlavor = clientId === 'rig' ? 'rig' : flavor;
-    const flavorIcon = effectiveFlavor ? flavorIcons[effectiveFlavor as keyof typeof flavorIcons] : undefined;
+    const flavorIcon = flavor === 'codex' ? flavorIcons.codex : undefined;
     // Make icons smaller while keeping same circle size
     const circleSize = Math.round(size * 0.35);
-    const iconSize = effectiveFlavor === 'codex'
-        ? Math.round(size * 0.25)
-        : Math.round(size * 0.35);
+    const iconSize = Math.round(size * 0.25);
 
     // Only wrap in container if showing flavor icons and flavor was provided
     if (showFlavorIcons && flavorIcon) {
         return (
             <View style={[styles.container, { width: size, height: size }]}>
                 <AvatarComponent {...avatarProps} size={size} />
-                <View style={[styles.flavorIcon, effectiveFlavor === 'rig' && styles.rigFlavorIcon, {
+                <View style={[styles.flavorIcon, {
                     width: circleSize,
                     height: circleSize,
                     alignItems: 'center',
@@ -141,7 +125,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
                         source={flavorIcon}
                         style={{ width: iconSize, height: iconSize }}
                         contentFit="contain"
-                        tintColor={effectiveFlavor === 'codex' ? theme.colors.text : undefined}
+                        tintColor={theme.colors.text}
                     />
                 </View>
             </View>

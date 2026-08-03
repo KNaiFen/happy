@@ -103,7 +103,6 @@ function createDraft(overrides: Record<string, unknown> = {}) {
         attachments: [{ uri: 'file:///image.jpg' }],
         selectedMachineId: 'machine-1',
         selectedPath: '~/project',
-        agentType: 'codex',
         permissionMode: null,
         modelMode: null,
         effortLevel: null,

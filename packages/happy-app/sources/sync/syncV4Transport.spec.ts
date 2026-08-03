@@ -48,6 +48,7 @@ describe('HttpAppSyncV4Transport', () => {
                     protocolVersion: 4,
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
+                    minimumHappyAgentVersion: '0.1.3',
                     minimumCodexCliVersion: '0.145.0',
                 },
             }, traceIds.capabilities))
@@ -124,6 +125,7 @@ describe('HttpAppSyncV4Transport', () => {
                     protocolVersion: 4,
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
+                    minimumHappyAgentVersion: '0.1.3',
                     minimumCodexCliVersion: '0.145.0',
                 },
             }))
@@ -133,6 +135,7 @@ describe('HttpAppSyncV4Transport', () => {
                     protocolVersion: 4,
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
+                    minimumHappyAgentVersion: '0.1.3',
                     minimumCodexCliVersion: '0.145.0',
                 },
             }, 'f'.repeat(32)));
@@ -170,6 +173,7 @@ describe('HttpAppSyncV4Transport', () => {
                 protocolVersion: 4,
                 minimumHappyCliVersion: '1.4.7',
                 minimumHappyAppVersion: '1.11.12',
+                minimumHappyAgentVersion: '0.1.3',
                 minimumCodexCliVersion: '0.145.0',
             },
         }, traceIds.capabilities));

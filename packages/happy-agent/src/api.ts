@@ -1,5 +1,4 @@
 import axios, { AxiosError } from 'axios';
-import type { SessionMessage as WireSessionMessage } from '@slopus/happy-wire';
 import type { Config } from './config';
 import { HAPPY_AGENT_CLIENT_HEADER } from './clientVersion';
 import type { Credentials } from './credentials';
@@ -43,7 +42,6 @@ export type DecryptedSession = {
     active: boolean;
     activeAt: number;
     metadata: unknown;
-    agentState: unknown | null;
     dataEncryptionKey: string | null;
     encryption: RecordEncryption;
 };
@@ -75,17 +73,6 @@ export type DecryptedMachine = {
     daemonStateVersion: number;
     dataEncryptionKey: string | null;
     encryption: RecordEncryption;
-};
-
-export type RawMessage = WireSessionMessage;
-
-export type DecryptedMessage = {
-    id: string;
-    seq: number;
-    content: unknown;
-    localId: string | null;
-    createdAt: number;
-    updatedAt: number;
 };
 
 // --- Session encryption key resolution ---
@@ -147,7 +134,6 @@ function decryptSession(raw: RawSession, creds: Credentials): DecryptedSession {
         active: raw.active,
         activeAt: raw.activeAt,
         metadata: decryptField(raw.metadata, encryption),
-        agentState: decryptField(raw.agentState, encryption),
         dataEncryptionKey: raw.dataEncryptionKey,
         encryption,
     };
@@ -269,31 +255,4 @@ export async function deleteSession(
     } catch (err) {
         handleApiError(err, `deleting session ${sessionId}`);
     }
-}
-
-export async function getSessionMessages(
-    config: Config,
-    creds: Credentials,
-    sessionId: string,
-    encryption: SessionEncryption,
-): Promise<DecryptedMessage[]> {
-    let data: { messages: RawMessage[] };
-    try {
-        const resp = await axios.get(
-            `${config.serverUrl}/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
-            { headers: authHeaders(creds) },
-        );
-        data = resp.data as { messages: RawMessage[] };
-    } catch (err) {
-        handleApiError(err, `session ${sessionId} messages`);
-    }
-
-    return data.messages.map(msg => ({
-        id: msg.id,
-        seq: msg.seq,
-        content: decryptField(msg.content.c, encryption),
-        localId: msg.localId ?? null,
-        createdAt: msg.createdAt,
-        updatedAt: msg.updatedAt,
-    }));
 }

@@ -344,9 +344,9 @@ function hasPendingPermission(messages: Message[]): boolean {
 // Tool name → category mapping for summary generation
 const TOOL_CATEGORIES: Record<string, string> = {
     Edit: 'edit', MultiEdit: 'edit', Write: 'edit',
-    CodexPatch: 'edit', GeminiPatch: 'edit', edit: 'edit', NotebookEdit: 'edit',
+    CodexPatch: 'edit', edit: 'edit', NotebookEdit: 'edit',
     Read: 'read', read: 'read', NotebookRead: 'read',
-    Bash: 'terminal', CodexBash: 'terminal', GeminiBash: 'terminal',
+    Bash: 'terminal', CodexBash: 'terminal',
     shell: 'terminal', execute: 'terminal',
     Grep: 'search', Glob: 'search', LS: 'search', search: 'search', WebSearch: 'search',
     WebFetch: 'web',

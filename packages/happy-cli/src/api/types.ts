@@ -3,26 +3,17 @@ import type { SyncInvalidationV4, Update, UpdateMachineBody } from '@slopus/happ
 import type { SandboxConfig } from '@/persistence'
 
 export {
-  SessionMessageContentSchema,
-  SessionMessageSchema,
-  UpdateBodySchema,
   UpdateMachineBodySchema,
   UpdateSchema,
   UpdateSessionBodySchema,
 } from '@slopus/happy-wire';
 export type {
-  SessionMessage,
-  SessionMessageContent,
   Update,
-  UpdateBody,
   UpdateMachineBody,
   UpdateSessionBody,
 } from '@slopus/happy-wire';
 
-/**
- * Permission modes accepted by the retained Codex and generic agent paths.
- * The broader legacy values remain because Agy and ACP still consume them.
- */
+/** Permission modes recognized by the Codex execution-policy mapper. */
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo'
 
 /**
@@ -47,14 +38,6 @@ export interface ServerToClientEvents {
  * Socket events from client to server
  */
 export interface ClientToServerEvents {
-  message: (data: { sid: string, message: any }) => void
-  'session-alive': (data: {
-    sid: string;
-    time: number;
-    thinking: boolean;
-    mode?: 'local' | 'remote';
-  }) => void
-  'session-end': (data: { sid: string, time: number }) => void,
   'update-metadata': (data: { sid: string, expectedVersion: number, metadata: string }, cb: (answer: {
     result: 'error'
   } | {
@@ -65,17 +48,6 @@ export interface ClientToServerEvents {
     result: 'success',
     version: number,
     metadata: string
-  }) => void) => void,
-  'update-state': (data: { sid: string, expectedVersion: number, agentState: string | null }, cb: (answer: {
-    result: 'error'
-  } | {
-    result: 'version-mismatch'
-    version: number,
-    agentState: string | null
-  } | {
-    result: 'success',
-    version: number,
-    agentState: string | null
   }) => void) => void,
   'ping': (callback: () => void) => void
   'rpc-register': (data: { method: string }) => void
@@ -139,16 +111,12 @@ export const MachineMetadataSchema = z.object({
   happyLibDir: z.string(),
   cliAvailability: z.object({
     codex: z.boolean(),
-    gemini: z.boolean(),
-    openclaw: z.boolean(),
     detectedAt: z.number(),
-  }).optional(),
+  }).passthrough().optional(),
   resumeSupport: z.object({
     rpcAvailable: z.boolean(),
     codexThreadHistoryRpcAvailable: z.boolean().optional(),
     requiresSameMachine: z.boolean(),
-    requiresHappyAgentAuth: z.boolean(),
-    happyAgentAuthenticated: z.boolean(),
     detectedAt: z.number(),
   }).optional(),
   agentCapabilities: z.object({
@@ -190,24 +158,6 @@ export type Machine = {
 }
 
 /**
- * Message metadata schema
- */
-export const MessageMetaSchema = z.object({
-  sentFrom: z.string().optional(), // Source identifier
-  permissionMode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'read-only', 'safe-yolo', 'yolo']).optional(), // Permission mode for this message
-  model: z.string().nullable().optional(), // Model name for this message (null = reset)
-  fallbackModel: z.string().nullable().optional(), // Fallback model for this message (null = reset)
-  customSystemPrompt: z.string().nullable().optional(), // Custom system prompt for this message (null = reset)
-  appendSystemPrompt: z.string().nullable().optional(), // Append to system prompt for this message (null = reset)
-  allowedTools: z.array(z.string()).nullable().optional(), // Allowed tools for this message (null = reset)
-  disallowedTools: z.array(z.string()).nullable().optional(), // Disallowed tools for this message (null = reset)
-  effort: z.string().nullable().optional(),
-  followUpMode: z.literal('queue').optional(),
-})
-
-export type MessageMeta = z.infer<typeof MessageMetaSchema>
-
-/**
  * API response types
  */
 export const CreateSessionResponseSchema = z.object({
@@ -226,68 +176,6 @@ export const CreateSessionResponseSchema = z.object({
 
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
 
-export const UserMessageSchema = z.object({
-  role: z.literal('user'),
-  content: z.object({
-    type: z.literal('text'),
-    text: z.string()
-  }),
-  localKey: z.string().optional(), // Mobile messages include this
-  meta: MessageMetaSchema.optional()
-})
-
-export type UserMessage = z.infer<typeof UserMessageSchema>
-
-/**
- * File event message — sent by the app as a session envelope before the text message.
- * Contains a ref pointing to the encrypted blob on the server.
- */
-export const FileEventMessageSchema = z.object({
-  role: z.literal('session'),
-  content: z.object({
-    type: z.literal('session'),
-    data: z.object({
-      id: z.string(),
-      time: z.number(),
-      role: z.literal('user'),
-      ev: z.object({
-        t: z.literal('file'),
-        ref: z.string(),
-        name: z.string(),
-        size: z.number(),
-        mimeType: z.string().optional(),
-        image: z.object({
-          width: z.number(),
-          height: z.number(),
-          // Optional — native iOS picker has no Canvas to compute thumbhash.
-          // App-side schema relaxed this in the same commit; keeping CLI in
-          // sync so the file event isn't silently rejected by Zod and the
-          // attachment never reaches the provider runtime.
-          thumbhash: z.string().optional(),
-        }).optional(),
-      }),
-    }),
-  }),
-  meta: MessageMetaSchema.optional(),
-})
-
-export type FileEventMessage = z.infer<typeof FileEventMessageSchema>
-
-export const AgentMessageSchema = z.object({
-  role: z.literal('agent'),
-  content: z.object({
-    type: z.literal('output'),
-    data: z.any()
-  }),
-  meta: MessageMetaSchema.optional()
-})
-
-export type AgentMessage = z.infer<typeof AgentMessageSchema>
-
-export const MessageContentSchema = z.union([UserMessageSchema, AgentMessageSchema])
-
-export type MessageContent = z.infer<typeof MessageContentSchema>
-
 export type CodexGatewayBindingMetadata = {
   gatewayId: string
   generation: number
@@ -300,10 +188,6 @@ export type CodexGatewayBindingMetadata = {
 }
 
 export type Metadata = {
-  /**
-   * ACP session config option value (normalized for UI metadata consumers).
-   */
-  // `code` = protocol value ID, `value` = human label
   models?: Array<{
     code: string;
     value: string;
@@ -313,10 +197,6 @@ export type Metadata = {
     isDefault?: boolean;
   }>,
   currentModelCode?: string,
-  operatingModes?: Array<{ code: string; value: string; description?: string | null }>,
-  currentOperatingModeCode?: string,
-  thoughtLevels?: Array<{ code: string; value: string; description?: string | null }>,
-  currentThoughtLevelCode?: string,
   path: string,
   host: string,
   version?: string,
@@ -348,11 +228,6 @@ export type Metadata = {
   startedFromDaemon?: boolean,
   hostPid?: number,
   startedBy?: 'daemon' | 'terminal',
-  // Lifecycle state management
-  lifecycleState?: 'running' | 'archiveRequested' | 'archived' | string,
-  lifecycleStateSince?: number,
-  archivedBy?: string,
-  archiveReason?: string,
   flavor?: string
   codexCapabilities?: {
     queueSteering?: boolean
@@ -456,12 +331,4 @@ export type AgentState = {
     }
   }
   agentGoalStatus?: AgentGoalStatus
-  codexMessageQueue?: {
-    revision: number,
-    messages: Array<{
-      id: string,
-      text: string,
-      createdAt: number,
-    }>,
-  }
 }

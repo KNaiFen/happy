@@ -10,106 +10,12 @@ export const MetadataSchema = z.object({
         code: z.string(),
         value: z.string(),
         description: z.string().nullish(),
-        id: z.string().optional(),
-        name: z.string().optional(),
-        providerId: z.string().optional(),
-        providerKind: z.string().optional(),
-        providerName: z.string().optional(),
-        provider: z.object({
-            id: z.string(),
-            kind: z.string(),
-            name: z.string(),
-        }).passthrough().optional(),
-        contextWindow: z.number().optional(),
-        serviceTiers: z.array(z.string()).optional(),
         thinkingLevels: z.array(z.string()).optional(),
         defaultThinkingLevel: z.string().optional(),
         isDefault: z.boolean().optional(),
     }).passthrough()).optional(),
     currentModelCode: z.string().optional(),
-    operatingModes: z.array(z.object({
-        code: z.string(),
-        value: z.string(),
-        description: z.string().nullish(),
-        kind: z.string().optional(),
-    }).passthrough()).optional(),
     currentOperatingModeCode: z.string().optional(),
-    thoughtLevels: z.array(z.object({
-        code: z.string(),
-        value: z.string(),
-        description: z.string().nullish(),
-    })).optional(),
-    currentThoughtLevelCode: z.string().optional(),
-    rigMetadataVersion: z.number().int().positive().optional(),
-    client: z.object({
-        id: z.string(),
-        name: z.string(),
-        version: z.string(),
-    }).passthrough().optional(),
-    provider: z.object({
-        id: z.string(),
-        kind: z.string(),
-        name: z.string(),
-    }).passthrough().optional(),
-    providers: z.array(z.object({
-        id: z.string(),
-        kind: z.string(),
-        name: z.string(),
-    }).passthrough()).optional(),
-    model: z.object({
-        providerId: z.string(),
-        id: z.string(),
-    }).passthrough().optional(),
-    currentModelProviderId: z.string().optional(),
-    reasoning: z.object({
-        current: z.string().nullable(),
-        levels: z.array(z.string()),
-    }).passthrough().optional(),
-    session: z.object({
-        status: z.string(),
-        permissionMode: z.string(),
-        modelLocked: z.boolean(),
-        serviceTier: z.string().optional(),
-    }).passthrough().optional(),
-    capabilities: z.object({
-        abort: z.boolean(),
-        attachments: z.object({
-            enabled: z.boolean(),
-            maxBytes: z.number(),
-            mediaTypes: z.array(z.string()),
-        }).passthrough(),
-        files: z.object({
-            browse: z.boolean(),
-            read: z.boolean(),
-            search: z.boolean(),
-            write: z.boolean(),
-        }).passthrough(),
-        modelSelection: z.boolean(),
-        reasoningSelection: z.boolean(),
-        permissionModeSelection: z.boolean(),
-        resume: z.boolean(),
-        rpcMethods: z.array(z.string()),
-        shell: z.boolean(),
-        steering: z.boolean(),
-    }).passthrough().optional(),
-    activity: z.object({
-        subagents: z.object({
-            running: z.number(),
-            queued: z.number(),
-            total: z.number(),
-        }).passthrough(),
-        workflows: z.object({
-            running: z.number(),
-            total: z.number(),
-        }).passthrough(),
-        processes: z.object({ running: z.number() }).passthrough(),
-        tasks: z.object({
-            pending: z.number(),
-            inProgress: z.number(),
-            completed: z.number(),
-            total: z.number(),
-        }).passthrough(),
-    }).passthrough().optional(),
     path: z.string(),
     host: z.string(),
     version: z.string().optional(),
@@ -138,10 +44,6 @@ export const MetadataSchema = z.object({
     flavor: z.string().nullish(), // Session flavor/variant identifier
     sandbox: z.any().nullish(), // Sandbox config metadata from CLI (or null when disabled)
     dangerouslySkipPermissions: z.boolean().nullish(), // Provider permission bypass state (or null when unknown)
-    lifecycleState: z.string().optional(),
-    lifecycleStateSince: z.number().optional(),
-    archivedBy: z.string().optional(),
-    archiveReason: z.string().optional(),
     /**
      * Lineage for sessions created via the fork / duplicate flow.
      * `parentSessionId` is the Happy session this one was branched from.
@@ -232,15 +134,6 @@ const UsageLimitsSchema = z.object({
     }).passthrough()),
 }).passthrough().optional().catch(undefined);
 
-export const CodexMessageQueueSchema = z.object({
-    revision: z.number().int().nonnegative(),
-    messages: z.array(z.object({
-        id: z.string().min(1),
-        text: z.string(),
-        createdAt: z.number(),
-    }).strict()),
-}).strict().optional().catch(undefined);
-
 export const AgentStateSchema = z.object({
     controlledByUser: z.boolean().nullish(),
     // Ephemeral runtime state. A malformed snapshot must not invalidate
@@ -267,7 +160,6 @@ export const AgentStateSchema = z.object({
         toolUseId: z.string().nullish()
     })).nullish(),
     agentGoalStatus: AgentGoalStatusSchema.optional(),
-    codexMessageQueue: CodexMessageQueueSchema,
 });
 
 export type AgentState = z.infer<typeof AgentStateSchema>;
@@ -347,14 +239,6 @@ export interface Session {
     } | null;
 }
 
-export interface DecryptedMessage {
-    id: string,
-    seq: number | null,
-    localId: string | null,
-    content: any,
-    createdAt: number,
-}
-
 //
 // Machine states
 //
@@ -376,17 +260,12 @@ export const MachineMetadataSchema = z.object({
     shutdownSource: z.enum(['happy-app', 'happy-cli', 'os-signal', 'unknown']).optional(),
     cliAvailability: z.object({
         codex: z.boolean(),
-        gemini: z.boolean(),
-        openclaw: z.boolean(),
-        agy: z.boolean().optional(), // optional: older CLIs don't report agy
         detectedAt: z.number(),
     }).optional(),
     resumeSupport: z.object({
         rpcAvailable: z.boolean(),
         codexThreadHistoryRpcAvailable: z.boolean().optional(),
         requiresSameMachine: z.boolean(),
-        requiresHappyAgentAuth: z.boolean(),
-        happyAgentAuthenticated: z.boolean(),
         detectedAt: z.number(),
     }).optional(),
     agentCapabilities: z.object({

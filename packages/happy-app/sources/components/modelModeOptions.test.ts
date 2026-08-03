@@ -1,285 +1,87 @@
 import { describe, expect, it } from 'vitest';
 import {
-    getAgyModelModes,
     getAvailableModels,
     getAvailableModelsForMachine,
     getAvailablePermissionModes,
-    getCodexModelModes,
-    getDefaultEffortKey,
+    getCodexEffortLevels,
+    getDefaultEffortKeyForModel,
     getDefaultModelKey,
-    getDefaultPermissionModeKey,
     getEffortLevelsForModel,
-    getEffortLevelsForModelOnMachine,
-    mapMetadataModels,
-    mapMetadataOptions,
+    getSupportsWorktree,
     resolveCurrentOption,
 } from './modelModeOptions';
-import { rigMetadataFixture } from '@/sync/__testdata__/rigMetadata';
+import type { MachineMetadata, Metadata } from '@/sync/storageTypes';
 
-const translate = (key: string) => `tr:${key}`;
+const translate = (key: string) => key;
 
-describe('modelModeOptions', () => {
-    it('maps metadata option shape into mode options', () => {
-        expect(mapMetadataOptions([
-            { code: 'm1', value: 'Model One', description: 'Primary model' },
-            { code: 'm2', value: 'Model Two' },
-        ])).toEqual([
-            { key: 'm1', name: 'Model One', description: 'Primary model' },
-            { key: 'm2', name: 'Model Two', description: null },
-        ]);
+describe('Codex model and mode options', () => {
+    it('returns no options for unsupported providers', () => {
+        expect(getAvailableModels('gemini', null, translate)).toEqual([]);
+        expect(getAvailablePermissionModes('openclaw', null, translate)).toEqual([]);
+        expect(getEffortLevelsForModel('agy', 'default')).toEqual([]);
     });
 
-    it('preserves model-specific effort metadata', () => {
-        expect(mapMetadataModels([{
-            code: 'gpt-sol',
-            value: 'GPT Sol',
-            thinkingLevels: ['low', 'ultra'],
-            defaultThinkingLevel: 'low',
-        }])).toEqual([{
-            key: 'gpt-sol',
-            name: 'GPT Sol',
-            description: null,
-            thinkingLevels: ['low', 'ultra'],
-            defaultThinkingLevel: 'low',
-        }]);
-    });
-
-    it('builds codex model fallbacks', () => {
-        const models = getCodexModelModes();
-        expect(models.map((model) => model.key)).toEqual([
-            'default',
-            'gpt-5.6-sol',
-            'gpt-5.6-terra',
-            'gpt-5.6-luna',
-            'gpt-5.5',
-            'gpt-5.4',
-            'gpt-5.3-codex',
-            'gpt-5.2-codex',
-            'gpt-5.1-codex-max',
-            'gpt-5.2',
-            'gpt-5.1-codex-mini',
-        ]);
-        expect(models[0].name).toBe('default model');
-        expect(models[1].name).toBe('gpt-5.6 sol');
-    });
-
-    it('uses code defaults for agent defaults', () => {
-        expect(getDefaultPermissionModeKey('codex')).toBe('yolo');
+    it('uses only Codex defaults', () => {
         expect(getDefaultModelKey('codex')).toBe('gpt-5.5');
-        expect(getDefaultEffortKey('codex')).toBe('medium');
-    });
-
-    it('prefers metadata models over hardcoded fallbacks', () => {
-        const models = getAvailableModels('gemini', {
-            models: [
-                { code: 'custom-gemini', value: 'Gemini Custom', description: 'From metadata' },
-            ],
-        } as any, translate);
-
-        expect(models).toEqual([
-            { key: 'custom-gemini', name: 'Gemini Custom', description: 'From metadata' },
+        expect(getCodexEffortLevels().map((level) => level.key)).toEqual([
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+            'max',
         ]);
+        expect(getSupportsWorktree('codex')).toBe(true);
+        expect(getSupportsWorktree('gemini')).toBe(false);
     });
 
-    it('adds codex default model option when metadata models are present', () => {
-        const models = getAvailableModels('codex', {
-            models: [
-                { code: 'gpt-5.4', value: 'gpt-5.4', description: 'Latest' },
-            ],
-        } as any, translate);
-
-        expect(models).toEqual([
-            { key: 'default', name: 'default model', description: null },
-            { key: 'gpt-5.4', name: 'gpt-5.4', description: 'Latest' },
-        ]);
-    });
-
-    it('uses machine-advertised Codex models and effort levels', () => {
+    it('prefers the Codex model catalog advertised by the session', () => {
         const metadata = {
-            agentCapabilities: {
-                codex: {
-                    codexCliVersion: 'codex-cli 0.145.0',
-                    detectedAt: 123,
-                    models: [
-                        {
-                            code: 'gpt-5.6-sol',
-                            value: 'GPT-5.6-Sol',
-                            description: 'Frontier',
-                            thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-                            defaultThinkingLevel: 'low',
-                            isDefault: true,
-                        },
-                        {
-                            code: 'gpt-5.6-luna',
-                            value: 'GPT-5.6-Luna',
-                            description: 'Efficient',
-                            thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
-                            defaultThinkingLevel: 'medium',
-                        },
-                        {
-                            code: 'gpt-5.5',
-                            value: 'GPT-5.5',
-                            thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
-                            defaultThinkingLevel: 'medium',
-                        },
-                    ],
-                },
-            },
-        } as any;
+            models: [{
+                code: 'gpt-test',
+                value: 'GPT Test',
+                description: 'Advertised by Codex',
+                thinkingLevels: ['low', 'high'],
+                defaultThinkingLevel: 'high',
+            }],
+        } as Metadata;
 
-        expect(getAvailableModelsForMachine('codex', metadata, translate).map((model) => model.key)).toEqual([
-            'default', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-5.5',
-        ]);
-        expect(getAvailableModelsForMachine('codex', metadata, translate)[0]).toMatchObject({
-            key: 'default',
-            thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
-            defaultThinkingLevel: 'medium',
-        });
-        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.6-sol', metadata).map((level) => level.key)).toEqual([
-            'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
-        ]);
-        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.6-luna', metadata).map((level) => level.key)).toEqual([
-            'low', 'medium', 'high', 'xhigh', 'max',
-        ]);
-    });
-
-    it('keeps advertised 5.5 and 5.4 catalogs capped at xhigh', () => {
-        const metadata = {
-            agentCapabilities: {
-                codex: {
-                    codexCliVersion: 'codex-cli 0.145.0',
-                    detectedAt: 123,
-                    models: ['gpt-5.5', 'gpt-5.4'].map((code) => ({
-                        code,
-                        value: code,
-                        thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
-                        defaultThinkingLevel: 'medium',
-                    })),
-                },
-            },
-        } as any;
-
-        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.5', metadata).at(-1)?.key).toBe('xhigh');
-        expect(getEffortLevelsForModelOnMachine('codex', 'gpt-5.4', metadata).at(-1)?.key).toBe('xhigh');
-    });
-
-    it('uses session-advertised effort levels and keeps the old CLI fallback', () => {
-        const sessionMetadata = {
-            models: [
-                {
-                    code: 'gpt-5.6-terra',
-                    value: 'GPT-5.6-Terra',
-                    thinkingLevels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-                    defaultThinkingLevel: 'medium',
-                    isDefault: true,
-                },
-                {
-                    code: 'gpt-5.5',
-                    value: 'GPT-5.5',
-                    thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
-                    defaultThinkingLevel: 'medium',
-                    isDefault: false,
-                },
-            ],
-        } as any;
-
-        expect(getEffortLevelsForModel('codex', 'gpt-5.6-terra', sessionMetadata).at(-1)?.key).toBe('ultra');
-        expect(getEffortLevelsForModel('codex', 'default', sessionMetadata).at(-1)?.key).toBe('xhigh');
-        expect(getEffortLevelsForModel('codex', 'gpt-5.5', null).at(-1)?.key).toBe('max');
-    });
-
-    it('keeps codex permission modes hardcoded even when metadata modes exist', () => {
-        const modes = getAvailablePermissionModes('codex', {
-            operatingModes: [{ code: 'metadata-only', value: 'Metadata Mode', description: null }],
-        } as any, translate);
-
-        expect(modes.map((mode) => mode.key)).toEqual(['default', 'read-only', 'safe-yolo', 'yolo']);
-        expect(modes.find((mode) => mode.key === 'safe-yolo')?.description).toBe('tr:agentInput.codexPermissionMode.safeYoloDescription');
-    });
-
-    it('applies hacks to metadata-provided operating modes', () => {
-        const modes = getAvailablePermissionModes('gemini', {
-            operatingModes: [
-                { code: 'build', value: 'build, build', description: 'Do build steps' },
-                { code: 'plan', value: 'plan/plan', description: 'Plan first' },
-            ],
-        } as any, translate);
-
-        expect(modes).toEqual([
-            { key: 'build', name: 'Build', description: 'Do build steps' },
-            { key: 'plan', name: 'Plan', description: 'Plan first' },
-        ]);
-    });
-
-    it('gives agy its own models, not the claude fallback', () => {
-        const models = getAvailableModels('agy', null, translate);
-        // must be agy's own list, not claude's opus/sonnet/haiku
-        expect(models).toEqual(getAgyModelModes());
-        const keys = models.map((m) => m.key);
-        // the agentDefaults agy default must be selectable
-        expect(keys).toContain('Gemini 3.1 Pro (High)');
-        expect(getDefaultModelKey('agy')).toBe('Gemini 3.1 Pro (High)');
-        // no 'default' entry — agy would receive the literal string "default" as --model
-        expect(keys).not.toContain('default');
-        // not the claude list
-        expect(keys).not.toContain('opus');
-        expect(keys).not.toContain('sonnet');
-    });
-
-    it('resolves the first matching preferred key', () => {
-        const options = [
-            { key: 'a', name: 'A' },
-            { key: 'b', name: 'B' },
-        ];
-
-        expect(resolveCurrentOption(options, ['missing', 'b', 'a'])).toEqual({ key: 'b', name: 'B' });
-        expect(resolveCurrentOption(options, ['missing'])).toBeNull();
-    });
-
-    it('builds the Rig catalog dynamically with provider-qualified keys', () => {
-        const models = getAvailableModels('codex', rigMetadataFixture, translate);
-        expect(models.map((model) => [model.key, model.name, model.providerName])).toEqual([
-            ['codex:shared-model', 'GPT Shared', 'OpenAI Codex'],
-            ['claude:shared-model', 'Claude Shared', 'Anthropic Claude'],
-        ]);
-        expect(models.some((model) => model.key === 'default')).toBe(false);
-    });
-
-    it('renders all native Rig permission codes and semantic kinds without flavor fallbacks', () => {
-        const modes = getAvailablePermissionModes('codex', rigMetadataFixture, translate);
-        expect(modes.map((mode) => [mode.key, mode.name, mode.semanticKind])).toEqual([
-            ['auto', 'Auto', 'safe-yolo'],
-            ['workspace_write', 'Workspace write', 'default'],
-            ['read_only', 'Read only', 'read-only'],
-            ['full_access', 'Full access', 'yolo'],
-        ]);
-    });
-
-    it('shows a missing current Rig model as unavailable instead of selecting another model', () => {
-        const metadata = {
-            ...rigMetadataFixture,
-            currentModelProviderId: 'custom-provider',
-            currentModelCode: 'temporarily-missing',
-        };
         const models = getAvailableModels('codex', metadata, translate);
-        expect(models[0]).toMatchObject({
-            key: 'custom-provider:temporarily-missing',
-            unavailable: true,
-            disabled: true,
-        });
+        expect(models.map((model) => model.key)).toEqual(['default', 'gpt-test']);
+        expect(getEffortLevelsForModel('codex', 'gpt-test', metadata).map((level) => level.key)).toEqual([
+            'low',
+            'high',
+        ]);
+        expect(getDefaultEffortKeyForModel('codex', 'gpt-test', metadata)).toBe('high');
     });
 
-    it('retains flavor-based catalogs before the Rig metadata extension', () => {
-        const metadata = {
-            path: '/tmp/rig',
+    it('uses the machine Codex catalog and retains a selected fallback model', () => {
+        const advertised = {
             host: 'host',
-            flavor: 'codex',
-            client: { id: 'rig', name: 'Rig', version: '0.9.0' },
-        } as any;
-
-        expect(getAvailableModels('codex', metadata, translate)).toEqual(getCodexModelModes());
-        expect(getAvailablePermissionModes('codex', metadata, translate).map((mode) => mode.key)).toEqual([
-            'default', 'read-only', 'safe-yolo', 'yolo',
+            platform: 'darwin',
+            happyCliVersion: '1.0.0',
+            happyHomeDir: '/tmp/happy',
+            homeDir: '/tmp',
+            agentCapabilities: {
+                codex: {
+                    codexCliVersion: '0.145.0',
+                    detectedAt: 1,
+                    models: [{ code: 'gpt-machine', value: 'GPT Machine' }],
+                },
+            },
+        } as MachineMetadata;
+        expect(getAvailableModelsForMachine('codex', advertised, translate).map((model) => model.key)).toEqual([
+            'default',
+            'gpt-machine',
         ]);
+
+        const fallback = getAvailableModelsForMachine('codex', null, translate, 'gpt-custom');
+        expect(fallback[0]?.key).toBe('gpt-custom');
+    });
+
+    it('resolves the first available preferred option', () => {
+        expect(resolveCurrentOption([
+            { key: 'first', name: 'First' },
+            { key: 'second', name: 'Second' },
+        ], ['missing', 'second', 'first'])?.key).toBe('second');
     });
 });

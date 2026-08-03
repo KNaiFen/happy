@@ -33,7 +33,6 @@ import { getCurrentRealtimeSessionId, getVoiceSession } from '@/realtime/Realtim
 import { isMutableTool } from "@/components/tools/knownTools";
 import { DecryptedArtifact } from "./artifactTypes";
 import { FeedItem } from "./feedTypes";
-import { getRigActivityIndicators, getRigIdentity } from './rig';
 import { indexSessionsById } from './sessionIdentity';
 import {
     applyCodexV4SyncState,
@@ -159,21 +158,17 @@ function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): 
         state = 'waiting';
     }
 
-    const rigIdentity = getRigIdentity(session.metadata);
-    const rigActivity = getRigActivityIndicators(session.metadata);
     return {
         id: session.id,
         name: getSessionName(session),
         subtitle: getSessionSubtitle(session),
         avatarId: getSessionAvatarId(session),
-        flavor: session.metadata?.flavor ?? null,
-        clientId: session.metadata?.client?.id ?? null,
-        identityLine: rigIdentity ? `${rigIdentity.clientName} · ${rigIdentity.providerName}` : null,
-        providerKind: session.metadata?.provider?.kind ?? null,
-        modelName: rigIdentity?.modelName ?? null,
-        activitySummary: rigActivity.length > 0
-            ? rigActivity.map((item) => `${item.count}${item.queued ? `+${item.queued}` : ''} ${item.key}`).join(' · ')
-            : null,
+        flavor: 'codex',
+        clientId: null,
+        identityLine: null,
+        providerKind: 'openai',
+        modelName: session.metadata?.currentModelCode ?? null,
+        activitySummary: null,
         state,
         statusUnknown,
         ...(!session.active && { activeAt: session.activeAt, createdAt: session.createdAt }),
@@ -1664,8 +1659,8 @@ function toCodexSessionState(projection: CodexV4Projection): CodexSessionStateV4
  * Resolve the live "side chat" sessions belonging to a given parent session.
  * A side chat is a forked child flagged `metadata.isSideChat` whose
  * `metadata.parentSessionId` points at the parent. A parent can have several;
- * closing one archives it (`lifecycleState === 'archived'`), which drops it
- * from this list so the sidebar panel only shows open side chats. Sorted
+ * closing one applies the authoritative v4 archive tombstone (`active=false`),
+ * which drops it from this list so the sidebar panel only shows open side chats. Sorted
  * oldest-first so tab order stays stable as new ones are created. Empty when
  * none are open (the panel then offers to start one).
  */
@@ -1679,7 +1674,7 @@ export function useSideChatSessions(parentSessionId: string | null): Session[] {
             if (
                 session.metadata?.isSideChat
                 && session.metadata?.parentSessionId === parentSessionId
-                && session.metadata?.lifecycleState !== 'archived'
+                && session.active
             ) {
                 result.push(session);
             }

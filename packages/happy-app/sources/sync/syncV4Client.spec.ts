@@ -77,6 +77,8 @@ const fakeCrypto: AppSyncV4Crypto = {
     decryptEntity: async (_aad, ciphertext) => JSON.parse(ciphertext) as CodexEntityV4,
 };
 
+const happyAgentCompatibility = { minimumHappyAgentVersion: '0.1.3' } as const;
+
 class FakeTransport implements AppSyncV4Transport {
     readonly posted: SyncMutationV4[][] = [];
     readonly committed = new Map<string, number>();
@@ -91,6 +93,7 @@ class FakeTransport implements AppSyncV4Transport {
             protocolVersion: 4,
             minimumHappyCliVersion: '1.4.7',
             minimumHappyAppVersion: '1.11.12',
+            ...happyAgentCompatibility,
             minimumCodexCliVersion: '0.145.0',
         },
     };

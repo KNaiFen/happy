@@ -59,13 +59,9 @@ export const SettingsSchema = z.object({
     dismissedCLIWarnings: z.object({
         perMachine: z.record(z.string(), z.object({
             codex: z.boolean().optional(),
-            gemini: z.boolean().optional(),
-            openclaw: z.boolean().optional(),
         })).default({}),
         global: z.object({
             codex: z.boolean().optional(),
-            gemini: z.boolean().optional(),
-            openclaw: z.boolean().optional(),
         }).default({}),
     }).default({ perMachine: {}, global: {} }).describe('Tracks which CLI installation warnings user has dismissed (per-machine or globally)'),
 });
@@ -192,14 +188,10 @@ export function settingsToSyncPayload(settings: Settings): Partial<Settings> {
         perMachine: Object.fromEntries(Object.entries(settings.dismissedCLIWarnings.perMachine).map(
             ([machineId, warning]) => [machineId, {
                 codex: warning.codex,
-                gemini: warning.gemini,
-                openclaw: warning.openclaw,
             }],
         )),
         global: {
             codex: settings.dismissedCLIWarnings.global.codex,
-            gemini: settings.dismissedCLIWarnings.global.gemini,
-            openclaw: settings.dismissedCLIWarnings.global.openclaw,
         },
     };
     const compactAgentOverrides = Object.fromEntries(

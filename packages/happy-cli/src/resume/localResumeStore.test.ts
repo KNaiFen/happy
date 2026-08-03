@@ -37,6 +37,7 @@ describe('resolveLocalReconnectableSession', () => {
                 metadata: {
                     path: '/tmp/repo',
                     flavor: 'codex',
+                    codexSyncVersion: 4,
                     codexThreadId: 'thread-1',
                     host: 'localhost',
                     homeDir: '/tmp',

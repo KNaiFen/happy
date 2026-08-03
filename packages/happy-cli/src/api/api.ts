@@ -136,15 +136,17 @@ export class ApiClient {
       const httpStatus = safeAxiosStatus(error);
       if (httpStatus === 404) {
         recordCapability({
-          phase: 'completed',
+          level: 'warn',
+          phase: 'failed',
           direction: 'inbound',
-          state: 'stopped',
           featureEnabled: false,
           httpStatus: 404,
+          errorKind: 'protocol',
           durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
         });
-        logger.debug('[API] Sync v4 capability endpoint absent; using retained Codex v3 rollback adapter');
-        return false;
+        throw new CodexSyncV4CapabilityError(
+          'Happy Server does not expose the required Codex Sync v4 capability endpoint. Update the Server before starting Codex.',
+        );
       }
       recordCapability({
         level: 'warn',
@@ -155,7 +157,7 @@ export class ApiClient {
         durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
       });
       throw new CodexSyncV4CapabilityError(
-        'Cannot verify Codex Sync v4 compatibility because the Happy Server is unavailable. Codex was not started to avoid an unsafe v3 fallback.',
+        'Cannot verify Codex Sync v4 compatibility because the Happy Server is unavailable. Codex Sync v4 is required, so Codex was not started.',
       );
     }
 
@@ -193,14 +195,17 @@ export class ApiClient {
     const capability = parsed.data.codex;
     if (!capability.enabled) {
       recordCapability({
-        phase: 'completed',
+        level: 'warn',
+        phase: 'failed',
         direction: 'inbound',
-        state: 'stopped',
         featureEnabled: false,
         httpStatus: response.status ?? 200,
+        errorKind: 'protocol',
         durationMs: Math.max(0, Math.trunc(Date.now() - startedAt)),
       });
-      return false;
+      throw new CodexSyncV4CapabilityError(
+        'Happy Server has Codex Sync v4 disabled. Codex Sync v4 is required, so Codex was not started.',
+      );
     }
     if (!isSyncV4VersionAtLeast(configuration.currentCliVersion, capability.minimumHappyCliVersion)) {
       recordCapability({
@@ -645,7 +650,7 @@ export class ApiClient {
    * Register a vendor API token with the server
    * The token is sent as a JSON string - server handles encryption
    */
-  async registerVendorToken(vendor: 'openai' | 'gemini', apiKey: any): Promise<void> {
+  async registerVendorToken(vendor: 'openai', apiKey: any): Promise<void> {
     try {
       const response = await axios.post(
         `${configuration.serverUrl}/v1/connect/${vendor}/register`,
@@ -681,7 +686,7 @@ export class ApiClient {
    * Get vendor API token from the server
    * Returns the token if it exists, null otherwise
    */
-  async getVendorToken(vendor: 'openai' | 'gemini'): Promise<any | null> {
+  async getVendorToken(vendor: 'openai'): Promise<any | null> {
     try {
       const response = await axios.get(
         `${configuration.serverUrl}/v1/connect/${vendor}/token`,
@@ -765,33 +770,6 @@ export class ApiClient {
         httpStatus: safeAxiosStatus(error),
       });
       return null;
-    }
-  }
-
-  /**
-   * Mark a legacy v3 session inactive during graceful shutdown. This endpoint
-   * intentionally does not create the Codex v4 archive tombstone.
-   */
-  async deactivateSession(sessionId: string): Promise<boolean> {
-    try {
-      const response = await axios.post(
-        `${configuration.serverUrl}/v1/sessions/${encodeURIComponent(sessionId)}/archive`,
-        {},
-        {
-          headers: {
-            'Authorization': `Bearer ${this.credential.token}`,
-            'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`,
-          },
-          timeout: 3000,
-        },
-      );
-      return response.status >= 200 && response.status < 300;
-    } catch (error) {
-      logger.debug('[API] deactivateSession failed', {
-        errorKind: classifySyncV4DiagnosticError(error),
-        httpStatus: safeAxiosStatus(error),
-      });
-      return false;
     }
   }
 

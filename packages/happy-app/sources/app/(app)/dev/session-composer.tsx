@@ -38,15 +38,11 @@ import {
 // Agent icon assets
 const agentIcons = {
     codex: require('@/assets/images/icon-gpt.png'),
-    openclaw: require('@/assets/images/icon-openclaw.png'),
-    gemini: require('@/assets/images/icon-gemini.png'),
 };
 
-type AgentKey = 'codex' | 'openclaw' | 'gemini';
+type AgentKey = 'codex';
 const AGENTS: { key: AgentKey; label: string }[] = [
     { key: 'codex', label: 'codex' },
-    { key: 'openclaw', label: 'openclaw' },
-    { key: 'gemini', label: 'gemini' },
 ];
 
 // Sample data for pickers

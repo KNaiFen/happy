@@ -16,7 +16,6 @@ services:
       PORT: "3005"
       PUBLIC_URL: "${HAPPY_RELAY_PUBLIC_URL:-http://localhost:3005}"
       METRICS_ENABLED: "false"
-      HAPPY_CODEX_SYNC_V4_ENABLED: "${HAPPY_CODEX_SYNC_V4_ENABLED:-false}"
       HAPPY_MASTER_SECRET_FILE: /run/secrets/happy_master_secret
     volumes:
       - happy-data:/data

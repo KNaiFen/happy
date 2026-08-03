@@ -1,10 +1,12 @@
 import { GitHubProfile as GitHubProfileType, GitHubOrg as GitHubOrgType } from "../app/api/types";
 import { ImageRef as ImageRefType } from "./files";
-import type { SessionMessageContent as WireSessionMessageContent } from "@slopus/happy-wire";
 declare global {
     namespace PrismaJson {
-        // Session message content types
-        type SessionMessageContent = WireSessionMessageContent;
+        // Purge-only compatibility shape for rows in the retired v3 message table.
+        type SessionMessageContent = {
+            c: string;
+            t: 'encrypted';
+        };
 
         // Usage report data structure
         type UsageReportData = {
@@ -18,19 +20,7 @@ declare global {
             };
         };
 
-        // Update content types
         type UpdateBody = {
-            t: 'new-message';
-            sid: string;
-            message: {
-                id: string;
-                seq: number;
-                content: SessionMessageContent;
-                localId: string | null;
-                createdAt: number;
-                updatedAt: number;
-            }
-        } | {
             t: 'new-session';
             id: string;
             seq: number;

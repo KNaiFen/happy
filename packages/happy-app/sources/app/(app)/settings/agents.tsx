@@ -40,9 +40,6 @@ type FieldConfig = {
 
 const agentLabels: Record<AgentKey, string> = {
     codex: 'Codex',
-    gemini: 'Gemini',
-    openclaw: 'OpenClaw',
-    agy: 'Agy',
 };
 
 function optionName(options: ModeOption[], key: string | null | undefined): string {
@@ -163,7 +160,7 @@ export default function AgentDefaultsSettingsScreen() {
             >
                 <Item
                     title="Clear Overrides"
-                    subtitle="Return every agent to code defaults"
+                    subtitle="Return Codex to its code defaults"
                     icon={<Ionicons name="refresh-outline" size={29} color="#FF9500" />}
                     onPress={() => setAgentDefaultOverrides({})}
                     disabled={Object.keys(agentDefaultOverrides).length === 0}

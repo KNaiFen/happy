@@ -1,4 +1,5 @@
-import type { DecryptedMachine, DecryptedSession, DecryptedMessage } from './api';
+import type { DecryptedMachine, DecryptedSession } from './api';
+import type { CodexV4HistoryEntry, CodexV4Snapshot } from './session';
 
 // --- Types ---
 
@@ -8,12 +9,6 @@ type SessionMetadata = {
     tag?: string;
     summary?: string | { text?: unknown; [key: string]: unknown };
     lifecycleState?: string;
-    [key: string]: unknown;
-};
-
-type AgentState = {
-    controlledByUser?: boolean;
-    requests?: Record<string, unknown>;
     [key: string]: unknown;
 };
 
@@ -142,9 +137,8 @@ export function formatMachineTable(machines: DecryptedMachine[]): string {
 
 // --- Session status formatting ---
 
-export function formatSessionStatus(session: DecryptedSession): string {
+export function formatSessionStatus(session: DecryptedSession, snapshot: CodexV4Snapshot): string {
     const meta = (session.metadata ?? {}) as SessionMetadata;
-    const state = (session.agentState ?? null) as AgentState | null;
     const tag = toNonEmptyString(meta.tag);
     const summary = extractSessionSummary(meta);
     const path = toNonEmptyString(meta.path);
@@ -163,57 +157,37 @@ export function formatSessionStatus(session: DecryptedSession): string {
     if (lifecycleState) lines.push(`- Lifecycle: ${lifecycleState}`);
     lines.push(`- Active: ${session.active ? 'yes' : 'no'}`);
     lines.push(`- Last Active: ${formatLastActive(session.activeAt)}`);
-
-    if (state) {
-        const requests = state.requests != null && typeof state.requests === 'object' ? Object.keys(state.requests).length : 0;
-        const busy = state.controlledByUser === true || requests > 0;
-        const agentStatus = busy ? 'busy' : 'idle';
-        lines.push(`- Agent: ${agentStatus}`);
-        if (requests > 0) {
-            lines.push(`- Pending Requests: ${requests}`);
-        }
-    } else {
-        lines.push('- Agent: no state');
-    }
+    lines.push(`- Sync Watermark: ${snapshot.highWatermark}`);
+    lines.push(`- Codex Thread: ${snapshot.thread?.threadId ?? 'unavailable'}`);
+    lines.push(`- Codex Connection: ${snapshot.runtime?.connection ?? 'unknown'}`);
+    lines.push(`- Codex Execution: ${snapshot.runtime?.statusUnknown
+        ? 'unknown'
+        : snapshot.runtime?.execution.type ?? snapshot.thread?.status.type ?? 'unknown'}`);
+    lines.push(`- Pending Approvals: ${snapshot.runtime?.pendingApprovalCount ?? 0}`);
+    lines.push(`- Pending User Input: ${snapshot.runtime?.pendingUserInputCount ?? 0}`);
 
     return lines.join('\n');
 }
 
 // --- Message history formatting ---
 
-type MessageContent = {
-    role?: string;
-    content?: { type?: string; text?: string } | string;
-    [key: string]: unknown;
-};
-
-export function formatMessageHistory(messages: DecryptedMessage[]): string {
+export function formatMessageHistory(messages: CodexV4HistoryEntry[]): string {
     if (messages.length === 0) {
         return '## Message History\n\n- Count: 0\n- Items: none';
     }
 
     const sections = messages.map((msg, index) => {
-        const content = msg.content as MessageContent | null;
-        const role = content?.role ?? 'unknown';
         const timestamp = formatIsoTime(msg.createdAt);
-
-        let text: string;
-        if (content?.content && typeof content.content === 'object' && content.content.text) {
-            text = String(content.content.text);
-        } else if (content?.content && typeof content.content === 'string') {
-            text = content.content;
-        } else {
-            text = JSON.stringify(content);
-        }
 
         return [
             `### Message ${index + 1}`,
             `- ID: ${toMarkdownInline(msg.id)}`,
             `- Time: ${timestamp}`,
-            `- Role: ${role}`,
+            `- Role: ${msg.role}`,
+            `- Kind: ${msg.kind}`,
             '- Text:',
             '```text',
-            normalizeCodeBlockText(text),
+            normalizeCodeBlockText(msg.text),
             '```',
         ].join('\n');
     });

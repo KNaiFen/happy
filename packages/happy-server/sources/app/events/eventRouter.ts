@@ -3,7 +3,6 @@ import { log } from "@/utils/log";
 import { GitHubProfile } from "@/app/api/types";
 import { AccountProfile } from "@/types";
 import { getPublicUrl } from "@/storage/files";
-import type { SessionMessageContent } from "@slopus/happy-wire";
 
 // === CONNECTION TYPES ===
 
@@ -47,17 +46,6 @@ export type RecipientFilter =
 // === UPDATE EVENT TYPES (Persistent) ===
 
 export type UpdateEvent = {
-    type: 'new-message';
-    sessionId: string;
-    message: {
-        id: string;
-        seq: number;
-        content: SessionMessageContent;
-        localId: string | null;
-        createdAt: number;
-        updatedAt: number;
-    }
-} | {
     type: 'new-session';
     sessionId: string;
     seq: number;
@@ -387,33 +375,6 @@ export function buildNewSessionUpdate(session: {
             activeAt: session.lastActiveAt.getTime(),
             createdAt: session.createdAt.getTime(),
             updatedAt: session.updatedAt.getTime()
-        },
-        createdAt: Date.now()
-    };
-}
-
-export function buildNewMessageUpdate(message: {
-    id: string;
-    seq: number;
-    content: SessionMessageContent;
-    localId: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-}, sessionId: string, updateSeq: number, updateId: string): UpdatePayload {
-    return {
-        id: updateId,
-        seq: updateSeq,
-        body: {
-            t: 'new-message',
-            sid: sessionId,
-            message: {
-                id: message.id,
-                seq: message.seq,
-                content: message.content,
-                localId: message.localId,
-                createdAt: message.createdAt.getTime(),
-                updatedAt: message.updatedAt.getTime()
-            }
         },
         createdAt: Date.now()
     };

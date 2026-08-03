@@ -2,7 +2,6 @@ import os from 'node:os';
 import type { MachineMetadata } from '@/api/types';
 import { configuration } from '@/configuration';
 import { projectPath } from '@/projectPath';
-import { detectResumeSupport } from '@/resume/localHappyAgentAuth';
 import { detectCLIAvailability } from '@/utils/detectCLI';
 import packageJson from '../../package.json';
 
@@ -19,8 +18,9 @@ export const initialMachineMetadata: MachineMetadata = {
   happyLibDir: projectPath(),
   cliAvailability: detectCLIAvailability(),
   resumeSupport: {
-    ...detectResumeSupport(),
     rpcAvailable: true,
     codexThreadHistoryRpcAvailable: true,
+    requiresSameMachine: true,
+    detectedAt: Date.now(),
   },
 };

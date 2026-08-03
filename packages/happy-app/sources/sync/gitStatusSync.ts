@@ -18,7 +18,7 @@ export class GitStatusSync {
     private projectSyncMap = new Map<string, InvalidateSync>();
     // Map session IDs to project keys for cleanup
     private sessionToProjectKey = new Map<string, string>();
-    // Debounce timers to coalesce rapid invalidations (e.g. new-message + update-session arriving together)
+    // Debounce timers to coalesce rapid metadata and V4 invalidations.
     private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
     /**
@@ -55,7 +55,7 @@ export class GitStatusSync {
 
     /**
      * Invalidate git status for a session (triggers refresh for the entire project).
-     * Debounces rapid calls (e.g. new-message + update-session arriving together)
+     * Debounces rapid metadata and V4 invalidations.
      * to avoid duplicate RPC round-trips.
      */
     invalidate(sessionId: string): void {

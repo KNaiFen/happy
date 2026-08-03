@@ -1,7 +1,7 @@
 {
   "name": "happy",
-  "version": "1.4.35",
-  "description": "Mobile and Web remote control for Codex and retained agent runtimes",
+  "version": "1.4.36",
+  "description": "Mobile and Web remote control for Codex",
   "author": "Kirill Dubovitskiy",
   "license": "MIT",
   "type": "module",
@@ -66,7 +66,6 @@
     "postinstall": "node scripts/unpack-tools.cjs"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.14.1",
     "@anthropic-ai/sandbox-runtime": "^0.0.37",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@noble/ed25519": "^3.0.0",
@@ -79,7 +78,6 @@
     "@types/qrcode-terminal": "^0.12.2",
     "@types/react": "^19.2.7",
     "@types/tmp": "^0.2.6",
-    "ai": "^5.0.107",
     "axios": "^1.13.2",
     "chalk": "^5.6.2",
     "cross-spawn": "^7.0.6",

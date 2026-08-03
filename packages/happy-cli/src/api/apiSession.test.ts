@@ -1,86 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiSessionClient } from './apiSession';
-import { decodeBase64, decrypt, decryptBlob, encodeBase64, encrypt } from './encryption';
+import { encodeBase64, encrypt } from './encryption';
 import { SyncV4Client } from './syncV4Client';
-import type { Update } from './types';
-import { logger } from '@/ui/logger';
 
-const {
-    mockIo,
-    mockAxiosGet,
-    mockAxiosPost,
-    mockAxiosPut,
-    mockBackoff,
-    mockDelay,
-    mockShouldReconnect
-} = vi.hoisted(() => ({
-    mockIo: vi.fn(),
-    mockAxiosGet: vi.fn(),
-    mockAxiosPost: vi.fn(),
-    mockAxiosPut: vi.fn(),
-    mockBackoff: vi.fn(async <T>(callback: () => Promise<T>) => {
-        let lastError: unknown;
-        for (let i = 0; i < 20; i += 1) {
-            try {
-                return await callback();
-            } catch (error) {
-                lastError = error;
-            }
-        }
-        throw lastError;
-    }),
-    mockDelay: vi.fn(async () => undefined),
-    mockShouldReconnect: vi.fn(() => true)
+const mocks = vi.hoisted(() => ({
+    io: vi.fn(),
+    axiosGet: vi.fn(),
+    axiosPost: vi.fn(),
+    shouldReconnect: vi.fn(() => true),
 }));
 
-vi.mock('socket.io-client', () => ({
-    io: mockIo
-}));
-
+vi.mock('socket.io-client', () => ({ io: mocks.io }));
 vi.mock('axios', () => ({
     default: {
-        get: mockAxiosGet,
-        post: mockAxiosPost,
-        put: mockAxiosPut
-    }
+        get: mocks.axiosGet,
+        post: mocks.axiosPost,
+    },
 }));
-
 vi.mock('@/configuration', () => ({
     configuration: {
-        serverUrl: 'https://server.test'
-    }
+        serverUrl: 'https://server.test',
+        currentCliVersion: '1.4.36',
+    },
 }));
-
 vi.mock('@/ui/logger', () => ({
-    logger: {
-        debug: vi.fn(),
-        debugLargeJson: vi.fn()
-    }
+    logger: { debug: vi.fn() },
 }));
-
 vi.mock('@/api/rpc/RpcHandlerManager', () => ({
     RpcHandlerManager: class {
         onSocketConnect = vi.fn();
         onSocketDisconnect = vi.fn();
         handleRequest = vi.fn(async () => '');
-    }
+    },
 }));
-
 vi.mock('@/modules/common/registerCommonHandlers', () => ({
-    registerCommonHandlers: vi.fn()
+    registerCommonHandlers: vi.fn(),
 }));
-
-vi.mock('@/utils/time', () => ({
-    backoff: mockBackoff,
-    delay: mockDelay
-}));
-
 vi.mock('@/utils/lidState', () => ({
-    shouldReconnect: mockShouldReconnect
+    shouldReconnect: mocks.shouldReconnect,
 }));
 
 type SocketHandler = (...args: any[]) => void;
-type SocketHandlers = Record<string, SocketHandler[]>;
 
 class Deferred<T> {
     readonly promise: Promise<T>;
@@ -108,92 +68,61 @@ function makeSession() {
             homeDir: '/home/user',
             happyHomeDir: '/home/user/.happy',
             happyLibDir: '/home/user/.happy/lib',
-            happyToolsDir: '/home/user/.happy/tools'
+            happyToolsDir: '/home/user/.happy/tools',
+            flavor: 'codex',
+            codexSyncVersion: 4 as const,
         },
         metadataVersion: 0,
         agentState: null,
         agentStateVersion: 0,
         encryptionKey: new Uint8Array(32),
-        encryptionVariant: 'legacy' as const
+        encryptionVariant: 'legacy' as const,
     };
 }
 
-function encryptContent(session: ReturnType<typeof makeSession>, content: unknown): string {
-    return encodeBase64(encrypt(session.encryptionKey, session.encryptionVariant, content));
-}
-
-function createNewMessageUpdate(seq: number, encryptedContent: string): Update {
+function syncClient(overrides: Partial<SyncV4Client> = {}): SyncV4Client {
     return {
-        id: `upd-${seq}`,
-        seq,
-        createdAt: Date.now(),
-        body: {
-            t: 'new-message',
-            sid: 'test-session-id',
-            message: {
-                id: `msg-${seq}`,
-                seq,
-                localId: null,
-                content: {
-                    t: 'encrypted',
-                    c: encryptedContent
-                },
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-            }
-        }
+        start: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+        invalidate: vi.fn(),
+        ...overrides,
+    } as unknown as SyncV4Client;
+}
+
+describe('ApiSessionClient Codex V4 control plane', () => {
+    let handlers: Record<string, SocketHandler[]>;
+    let socket: {
+        connected: boolean;
+        connect: ReturnType<typeof vi.fn>;
+        close: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
+        emitWithAck: ReturnType<typeof vi.fn>;
     };
-}
-
-async function waitForCheck(check: () => void, timeoutMs = 2000) {
-    const startedAt = Date.now();
-    let lastError: unknown;
-    while (Date.now() - startedAt < timeoutMs) {
-        try {
-            check();
-            return;
-        } catch (error) {
-            lastError = error;
-            await new Promise((resolve) => setTimeout(resolve, 5));
-        }
-    }
-    throw lastError;
-}
-
-describe('ApiSessionClient v3 messages API migration', () => {
-    let socketHandlers: SocketHandlers;
-    let mockSocket: any;
     let session: ReturnType<typeof makeSession>;
 
-    const emitSocketEvent = (event: string, ...args: any[]) => {
-        const handlers = socketHandlers[event] || [];
-        handlers.forEach((handler) => handler(...args));
+    const emit = (event: string, ...args: any[]) => {
+        for (const handler of handlers[event] ?? []) handler(...args);
     };
 
     beforeEach(() => {
         vi.clearAllMocks();
-        mockShouldReconnect.mockReturnValue(true);
-        socketHandlers = {};
+        mocks.io.mockReset();
+        mocks.axiosGet.mockReset();
+        mocks.axiosPost.mockReset();
+        mocks.shouldReconnect.mockReset();
+        mocks.shouldReconnect.mockReturnValue(true);
+        handlers = {};
         session = makeSession();
-        mockSocket = {
+        socket = {
             connected: true,
             connect: vi.fn(),
+            close: vi.fn(),
             on: vi.fn((event: string, handler: SocketHandler) => {
-                if (!socketHandlers[event]) {
-                    socketHandlers[event] = [];
-                }
-                socketHandlers[event].push(handler);
+                (handlers[event] ??= []).push(handler);
             }),
-            off: vi.fn(),
-            emit: vi.fn(),
             emitWithAck: vi.fn(async () => ({ result: 'error' })),
-            volatile: {
-                emit: vi.fn()
-            },
-            close: vi.fn()
         };
-
-        mockIo.mockReturnValue(mockSocket);
+        mocks.io.mockReturnValue(socket);
     });
 
     afterEach(() => {
@@ -201,84 +130,69 @@ describe('ApiSessionClient v3 messages API migration', () => {
         vi.restoreAllMocks();
     });
 
-    it('registers core socket handlers and connects', () => {
-        new ApiSessionClient('fake-token', session);
-
-        expect(mockSocket.on).toHaveBeenCalledWith('connect', expect.any(Function));
-        expect(mockSocket.on).toHaveBeenCalledWith('disconnect', expect.any(Function));
-        expect(mockSocket.on).toHaveBeenCalledWith('update', expect.any(Function));
-        expect(mockSocket.connect).toHaveBeenCalledTimes(1);
-    });
-
-    it('ignores malformed Sync v4 invalidations and forwards only a valid watermark', () => {
+    it('connects the session RPC socket and registers V4 invalidations', () => {
         const client = new ApiSessionClient('fake-token', session);
-        const syncV4 = { invalidate: vi.fn() };
-        (client as any).syncV4Client = syncV4;
-        const hostile = new Proxy({}, {
-            get() {
-                throw new Error('hostile invalidation getter');
-            },
-        });
+        const v4 = syncClient();
+        (client as unknown as { syncV4Client: SyncV4Client }).syncV4Client = v4;
 
-        expect(() => emitSocketEvent('ephemeral', null)).not.toThrow();
-        expect(() => emitSocketEvent('ephemeral', hostile)).not.toThrow();
-        expect(() => emitSocketEvent('ephemeral', {
-            type: 'sync-v4-invalidate',
-            sessionId: session.id,
-            highWatermark: '42',
-        })).not.toThrow();
-        expect(syncV4.invalidate).not.toHaveBeenCalled();
+        emit('ephemeral', { type: 'sync-v4-invalidate', sessionId: session.id, highWatermark: '42' });
+        emit('ephemeral', { type: 'sync-v4-invalidate', sessionId: 'other', highWatermark: 42 });
+        expect(v4.invalidate).not.toHaveBeenCalled();
 
-        emitSocketEvent('ephemeral', {
-            type: 'sync-v4-invalidate',
-            sessionId: session.id,
-            highWatermark: 42,
-        });
-        expect(syncV4.invalidate).toHaveBeenCalledOnce();
-        expect(syncV4.invalidate).toHaveBeenCalledWith(42);
+        emit('ephemeral', { type: 'sync-v4-invalidate', sessionId: session.id, highWatermark: 42 });
+        expect(v4.invalidate).toHaveBeenCalledWith(42);
+        expect(socket.connect).toHaveBeenCalledOnce();
     });
 
-    it('installs the Sync v4 entity handler before the client starts', async () => {
+    it('installs the entity handler before starting Sync V4', async () => {
         const order: string[] = [];
-        const syncV4 = {
+        const v4 = syncClient({
             start: vi.fn(async () => { order.push('start'); }),
-            stop: vi.fn(),
-            close: vi.fn(async () => undefined),
-        } as unknown as SyncV4Client;
-        vi.spyOn(SyncV4Client, 'create').mockResolvedValue(syncV4);
+        });
+        vi.spyOn(SyncV4Client, 'create').mockResolvedValue(v4);
         const client = new ApiSessionClient('fake-token', session);
 
-        const result = await client.enableSyncV4(() => {
+        await client.enableSyncV4(() => {
             order.push('handler');
             return async () => undefined;
         });
 
-        expect(result).toBe(syncV4);
         expect(order).toEqual(['handler', 'start']);
         await client.close();
-        expect(syncV4.close).toHaveBeenCalledTimes(1);
+        expect(v4.close).toHaveBeenCalledOnce();
     });
 
-    it('forwards a Sync v4 archive tombstone through the session lifecycle event', async () => {
-        const syncV4 = {
-            start: vi.fn(async () => undefined),
-            stop: vi.fn(),
-            close: vi.fn(async () => undefined),
-        } as unknown as SyncV4Client;
-        const create = vi.spyOn(SyncV4Client, 'create').mockResolvedValue(syncV4);
+    it('forwards only the authoritative V4 archive tombstone', async () => {
+        const v4 = syncClient();
+        const create = vi.spyOn(SyncV4Client, 'create').mockResolvedValue(v4);
         const client = new ApiSessionClient('fake-token', session);
         const archived = vi.fn();
         client.on('archived', archived);
-
         await client.enableSyncV4(() => async () => undefined);
+
+        const legacyMetadata = { ...session.metadata, lifecycleState: 'archived' };
+        emit('update', {
+            body: {
+                t: 'update-session',
+                metadata: {
+                    value: encodeBase64(encrypt(
+                        session.encryptionKey,
+                        session.encryptionVariant,
+                        legacyMetadata,
+                    )),
+                    version: 1,
+                },
+            },
+        });
+        expect(archived).not.toHaveBeenCalled();
+
         const options = create.mock.calls[0][0] as { onSessionArchived?: () => void };
         options.onSessionArchived?.();
-
         expect(archived).toHaveBeenCalledOnce();
         await client.close();
     });
 
-    it('refuses to start Sync v4 when decrypted machine identity is unavailable', async () => {
+    it('requires a machine identity before starting Sync V4', async () => {
         const create = vi.spyOn(SyncV4Client, 'create');
         const client = new ApiSessionClient('fake-token', session);
         (client as unknown as { metadata: null }).metadata = null;
@@ -289,983 +203,63 @@ describe('ApiSessionClient v3 messages API migration', () => {
         await client.close();
     });
 
-    it('shares one in-flight Sync v4 initialization across concurrent callers', async () => {
+    it('shares concurrent Sync V4 initialization', async () => {
         const created = new Deferred<SyncV4Client>();
-        const syncV4 = {
-            start: vi.fn(async () => undefined),
-            stop: vi.fn(),
-            close: vi.fn(async () => undefined),
-        } as unknown as SyncV4Client;
+        const v4 = syncClient();
         const create = vi.spyOn(SyncV4Client, 'create').mockReturnValue(created.promise);
         const client = new ApiSessionClient('fake-token', session);
         const createHandler = vi.fn(() => async () => undefined);
 
         const first = client.enableSyncV4(createHandler);
         const second = client.enableSyncV4(createHandler);
-        expect(create).toHaveBeenCalledTimes(1);
-        created.resolve(syncV4);
+        created.resolve(v4);
 
-        await expect(Promise.all([first, second])).resolves.toEqual([syncV4, syncV4]);
-        expect(createHandler).toHaveBeenCalledTimes(1);
-        expect(syncV4.start).toHaveBeenCalledTimes(1);
+        await expect(Promise.all([first, second])).resolves.toEqual([v4, v4]);
+        expect(create).toHaveBeenCalledOnce();
+        expect(createHandler).toHaveBeenCalledOnce();
         await client.close();
     });
 
-    it('invalidates an unfinished Sync v4 initialization when the session closes', async () => {
+    it('closes a client that finishes initialization after the session closes', async () => {
         const created = new Deferred<SyncV4Client>();
-        const syncV4 = {
-            start: vi.fn(async () => undefined),
-            stop: vi.fn(),
-            close: vi.fn(async () => undefined),
-        } as unknown as SyncV4Client;
+        const v4 = syncClient();
         vi.spyOn(SyncV4Client, 'create').mockReturnValue(created.promise);
         const client = new ApiSessionClient('fake-token', session);
 
         const enabling = client.enableSyncV4(() => async () => undefined);
         await client.close();
-        created.resolve(syncV4);
+        created.resolve(v4);
 
         await expect(enabling).rejects.toThrow('API session has been closed');
-        expect(syncV4.start).not.toHaveBeenCalled();
-        expect(syncV4.close).toHaveBeenCalledTimes(1);
+        expect(v4.start).not.toHaveBeenCalled();
+        expect(v4.close).toHaveBeenCalledOnce();
     });
 
-    it('retries after initial socket connection error', async () => {
+    it('never reconnects after close', async () => {
         vi.useFakeTimers();
-        mockSocket.connected = false;
-
+        socket.connected = false;
         const client = new ApiSessionClient('fake-token', session);
 
-        expect(mockSocket.connect).toHaveBeenCalledTimes(1);
-
-        emitSocketEvent('connect_error', new Error('ECONNREFUSED'));
-
-        await vi.advanceTimersByTimeAsync(1000);
-        expect(mockSocket.connect).toHaveBeenCalledTimes(2);
-
-        await vi.advanceTimersByTimeAsync(3000);
-        expect(mockSocket.connect).toHaveBeenCalledTimes(3);
-
+        emit('connect_error', new Error('offline'));
         await client.close();
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(socket.connect).toHaveBeenCalledOnce();
     });
 
-    it('queues codex message to v3 outbox, sends once, and drains outbox', async () => {
+    it('does not send bearer credentials to a lookalike attachment origin', async () => {
+        mocks.axiosPost.mockResolvedValueOnce({
+            data: { downloadUrl: 'https://server.test.evil.example/download' },
+        });
+        mocks.axiosGet.mockResolvedValueOnce({ data: new Uint8Array([1, 2, 3]).buffer });
         const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [
-                    {
-                        id: 'msg-1',
-                        seq: 1,
-                        localId: 'local-1',
-                        createdAt: 1,
-                        updatedAt: 1
-                    }
-                ]
-            }
-        });
-
-        client.sendAgentMessage('codex', { type: 'message', message: 'hello' });
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        const payload = mockAxiosPost.mock.calls[0][1];
-        expect(payload.messages).toHaveLength(1);
-        expect(typeof payload.messages[0].localId).toBe('string');
-        expect((client as any).pendingOutbox).toHaveLength(0);
-        expect((client as any).lastSeq).toBe(1);
-
-        const decrypted = decrypt(
-            session.encryptionKey,
-            session.encryptionVariant,
-            decodeBase64(payload.messages[0].content)
-        );
-        expect(decrypted).toEqual({
-            role: 'agent',
-            content: {
-                type: 'acp',
-                provider: 'codex',
-                data: { type: 'message', message: 'hello' }
-            },
-            meta: {
-                sentFrom: 'cli'
-            }
-        });
-    });
-
-    it('accumulates multiple pending outbox messages into one follow-up batch', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-
-        type PostResponse = {
-            data: {
-                messages: Array<{ id: string; seq: number; localId: string; createdAt: number; updatedAt: number }>;
-            };
-        };
-        let resolveFirstPost!: (value: PostResponse) => void;
-        mockAxiosPost
-            .mockImplementationOnce(() => new Promise<PostResponse>((resolve) => {
-                resolveFirstPost = resolve;
-            }))
-            .mockResolvedValueOnce({
-                data: {
-                    messages: [
-                        { id: 'msg-2', seq: 2, localId: 'local-2', createdAt: 2, updatedAt: 2 },
-                        { id: 'msg-3', seq: 3, localId: 'local-3', createdAt: 3, updatedAt: 3 }
-                    ]
-                }
-            });
-
-        client.sendAgentMessage('codex', { type: 'message', message: 'first' });
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        client.sendAgentMessage('codex', { type: 'message', message: 'second' });
-        client.sendAgentMessage('codex', { type: 'message', message: 'third' });
-
-        resolveFirstPost({
-            data: {
-                messages: [
-                    { id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }
-                ]
-            }
-        });
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(2);
-        });
-
-        const secondPayload = mockAxiosPost.mock.calls[1][1];
-        expect(secondPayload.messages).toHaveLength(2);
-        expect((client as any).pendingOutbox).toHaveLength(0);
-        expect((client as any).lastSeq).toBe(3);
-    });
-
-    it('retries failed POST and succeeds without dropping queued messages', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-
-        mockAxiosPost
-            .mockRejectedValueOnce(new Error('network down'))
-            .mockResolvedValueOnce({
-                data: {
-                    messages: [
-                        { id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }
-                    ]
-                }
-            });
-
-        client.sendAgentMessage('codex', { type: 'message', message: 'retry-me' });
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(2);
-        });
-
-        const firstPayload = mockAxiosPost.mock.calls[0][1];
-        const secondPayload = mockAxiosPost.mock.calls[1][1];
-        expect(secondPayload).toEqual(firstPayload);
-        expect((client as any).pendingOutbox).toHaveLength(0);
-        expect((client as any).lastSeq).toBe(1);
-    });
-
-    it('uploads local Codex image files with codex item ids', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const pngBytes = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
-
-        mockAxiosPost.mockImplementation(async (url: string, payload: any) => {
-            if (url.endsWith('/attachments/request-upload')) {
-                expect(payload).toMatchObject({
-                    filename: 'codex-image-1.png',
-                });
-                return {
-                    data: {
-                        ref: 'sessions/test-session-id/attachments/codex-image.enc',
-                        uploadUrl: 'https://server.test/v1/sessions/test-session-id/attachments/codex-image.enc',
-                        method: 'PUT',
-                    },
-                };
-            }
-
-            return {
-                data: {
-                    messages: payload.messages.map((_message: unknown, index: number) => ({
-                        id: `msg-${index + 1}`,
-                        seq: index + 1,
-                        localId: `local-${index + 1}`,
-                        createdAt: 1,
-                        updatedAt: 1,
-                    })),
-                },
-            };
-        });
-        mockAxiosPut.mockResolvedValueOnce({ data: { ok: true } });
-
-        const envelope = await client.uploadLocalImageAttachmentEnvelope({
-            data: pngBytes,
-            mimeType: 'image/png',
-            name: 'codex-image-1.png',
-        }, {
-            codexItemId: 'codex-user-item-1',
-        });
-
-        expect(envelope).toMatchObject({
-            role: 'user',
-            codexItemId: 'codex-user-item-1',
-            ev: {
-                t: 'file',
-                ref: 'sessions/test-session-id/attachments/codex-image.enc',
-                name: 'codex-image-1.png',
-                size: pngBytes.length,
-                mimeType: 'image/png',
-            },
-        });
-
-        const uploadBody = mockAxiosPut.mock.calls[0][1];
-        const blobKey = await client.getBlobKey();
-        expect(decryptBlob(new Uint8Array(uploadBody), blobKey)).toEqual(pngBytes);
-    });
-
-    it('does not send the bearer token to a lookalike attachment upload origin', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                ref: 'sessions/test-session-id/attachments/lookalike.enc',
-                uploadUrl: 'https://server.test.evil.example/upload',
-                method: 'PUT',
-            },
-        });
-        mockAxiosPut.mockResolvedValueOnce({ data: { ok: true } });
-
-        await client.uploadLocalImageAttachmentEnvelope({
-            data: new Uint8Array([1, 2, 3]),
-            mimeType: 'image/png',
-            name: 'lookalike.png',
-        });
-
-        expect(mockAxiosPut).toHaveBeenCalledWith(
-            'https://server.test.evil.example/upload',
-            expect.any(Buffer),
-            expect.objectContaining({
-                headers: {
-                    'Content-Type': 'application/octet-stream',
-                },
-            }),
-        );
-    });
-
-    it('does not send the bearer token to a lookalike attachment download origin', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                downloadUrl: 'https://server.test.evil.example/download',
-            },
-        });
-        mockAxiosGet.mockResolvedValueOnce({
-            data: new Uint8Array([1, 2, 3]).buffer,
-        });
 
         await client.downloadAttachment('attachment-ref');
 
-        expect(mockAxiosGet).toHaveBeenCalledWith(
+        expect(mocks.axiosGet).toHaveBeenCalledWith(
             'https://server.test.evil.example/download',
-            expect.objectContaining({
-                headers: {},
-            }),
+            expect.objectContaining({ headers: {} }),
         );
-    });
-
-    it('sends session protocol messages through enqueueMessage with session envelope', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }]
-            }
-        });
-
-        const envelope = {
-            id: 'env-1',
-            time: 1000,
-            role: 'agent' as const,
-            turn: 'turn-1',
-            ev: { t: 'text' as const, text: 'hello from session protocol' }
-        };
-        client.sendSessionProtocolMessage(envelope);
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        const payload = mockAxiosPost.mock.calls[0][1];
-        const decrypted = decrypt(
-            session.encryptionKey,
-            session.encryptionVariant,
-            decodeBase64(payload.messages[0].content)
-        );
-
-        expect(decrypted).toEqual({
-            role: 'session',
-            content: envelope,
-            meta: {
-                sentFrom: 'cli'
-            }
-        });
-    });
-
-    it('sends only modern payload for user session envelopes', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }]
-            }
-        });
-
-        client.sendSessionProtocolMessage({
-            id: 'env-user-1',
-            time: 1001,
-            role: 'user',
-            ev: { t: 'text', text: 'shadow this' }
-        });
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        const payload = mockAxiosPost.mock.calls[0][1];
-        expect(payload.messages).toHaveLength(1);
-
-        const sessionUser = decrypt(
-            session.encryptionKey,
-            session.encryptionVariant,
-            decodeBase64(payload.messages[0].content)
-        );
-        expect(sessionUser).toMatchObject({
-            role: 'session',
-            content: {
-                id: 'env-user-1',
-                time: 1001,
-                role: 'user',
-                ev: { t: 'text', text: 'shadow this' }
-            }
-        });
-    });
-
-    it('sends modern session envelope for user text', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }]
-            }
-        });
-
-        client.sendSessionProtocolMessage({
-            id: 'env-user-flag-on-1',
-            time: 1002,
-            role: 'user',
-            ev: { t: 'text', text: 'session only' }
-        });
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        const payload = mockAxiosPost.mock.calls[0][1];
-        expect(payload.messages).toHaveLength(1);
-
-        const sessionOnly = decrypt(
-            session.encryptionKey,
-            session.encryptionVariant,
-            decodeBase64(payload.messages[0].content)
-        );
-
-        expect(sessionOnly).toMatchObject({
-            role: 'session',
-            content: {
-                role: 'user',
-                ev: { t: 'text', text: 'session only' }
-            },
-            meta: {
-                sentFrom: 'cli'
-            }
-        });
-        expect(typeof (sessionOnly as any).content.time).toBe('number');
-    });
-
-    it('sends ACP agent messages through enqueueMessage', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }]
-            }
-        });
-
-        client.sendAgentMessage('codex', {
-            type: 'message',
-            message: 'hi'
-        });
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        const payload = mockAxiosPost.mock.calls[0][1];
-        const decrypted = decrypt(
-            session.encryptionKey,
-            session.encryptionVariant,
-            decodeBase64(payload.messages[0].content)
-        );
-
-        expect(decrypted).toEqual({
-            role: 'agent',
-            content: {
-                type: 'acp',
-                provider: 'codex',
-                data: {
-                    type: 'message',
-                    message: 'hi'
-                }
-            },
-            meta: {
-                sentFrom: 'cli'
-            }
-        });
-    });
-
-    it('sends session events through enqueueMessage', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-1', seq: 1, localId: 'local-1', createdAt: 1, updatedAt: 1 }]
-            }
-        });
-
-        client.sendSessionEvent({ type: 'ready' }, 'event-1');
-
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        const payload = mockAxiosPost.mock.calls[0][1];
-        const decrypted = decrypt(
-            session.encryptionKey,
-            session.encryptionVariant,
-            decodeBase64(payload.messages[0].content)
-        );
-
-        expect(decrypted).toEqual({
-            role: 'agent',
-            content: {
-                id: 'event-1',
-                type: 'event',
-                data: {
-                    type: 'ready'
-                }
-            }
-        });
-    });
-
-    it('fetchMessages uses after_seq=0 initially and routes user messages to callback', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const onUserMessage = vi.fn();
-        client.onUserMessage(onUserMessage);
-
-        const userMessage = {
-            role: 'user',
-            content: {
-                type: 'text',
-                text: 'from fetch'
-            }
-        };
-
-        mockAxiosGet.mockResolvedValueOnce({
-            data: {
-                messages: [
-                    {
-                        id: 'msg-1',
-                        seq: 1,
-                        content: {
-                            t: 'encrypted',
-                            c: encryptContent(session, userMessage)
-                        },
-                        localId: null,
-                        createdAt: 1000,
-                        updatedAt: 1000
-                    }
-                ],
-                hasMore: false
-            }
-        });
-
-        await (client as any).fetchMessages();
-
-        expect(mockAxiosGet).toHaveBeenCalledTimes(1);
-        expect(mockAxiosGet.mock.calls[0][0]).toBe('https://server.test/v3/sessions/test-session-id/messages');
-        expect(mockAxiosGet.mock.calls[0][1].params).toEqual({
-            after_seq: 0,
-            limit: 100
-        });
-        expect(onUserMessage).toHaveBeenCalledWith(userMessage);
-        expect((client as any).lastSeq).toBe(1);
-    });
-
-    it('fetchMessages uses incremental cursor and paginates while hasMore is true', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const onUserMessage = vi.fn();
-        client.onUserMessage(onUserMessage);
-
-        (client as any).lastSeq = 2;
-
-        const message3 = {
-            role: 'user',
-            content: { type: 'text', text: 'm3' }
-        };
-        const message4 = {
-            role: 'user',
-            content: { type: 'text', text: 'm4' }
-        };
-
-        mockAxiosGet
-            .mockResolvedValueOnce({
-                data: {
-                    messages: [
-                        {
-                            id: 'msg-3',
-                            seq: 3,
-                            content: { t: 'encrypted', c: encryptContent(session, message3) },
-                            localId: null,
-                            createdAt: 3000,
-                            updatedAt: 3000
-                        }
-                    ],
-                    hasMore: true
-                }
-            })
-            .mockResolvedValueOnce({
-                data: {
-                    messages: [
-                        {
-                            id: 'msg-4',
-                            seq: 4,
-                            content: { t: 'encrypted', c: encryptContent(session, message4) },
-                            localId: null,
-                            createdAt: 4000,
-                            updatedAt: 4000
-                        }
-                    ],
-                    hasMore: false
-                }
-            });
-
-        await (client as any).fetchMessages();
-
-        expect(mockAxiosGet).toHaveBeenCalledTimes(2);
-        expect(mockAxiosGet.mock.calls[0][1].params.after_seq).toBe(2);
-        expect(mockAxiosGet.mock.calls[1][1].params.after_seq).toBe(3);
-        expect(onUserMessage).toHaveBeenCalledTimes(2);
-        expect((client as any).lastSeq).toBe(4);
-    });
-
-    it('fetchMessages stops pagination when hasMore is true but seq cursor does not advance', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        (client as any).lastSeq = 2;
-
-        mockAxiosGet
-            .mockResolvedValueOnce({
-                data: {
-                    messages: [],
-                    hasMore: true
-                }
-            })
-            .mockRejectedValueOnce(new Error('should not request another page when cursor is stalled'));
-
-        await expect((client as any).fetchMessages()).resolves.toBeUndefined();
-
-        expect(mockAxiosGet).toHaveBeenCalledTimes(1);
-        expect(mockAxiosGet.mock.calls[0][1].params.after_seq).toBe(2);
-        expect((client as any).lastSeq).toBe(2);
-    });
-
-    it('routes non-user fetched messages through EventEmitter message event', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const onUserMessage = vi.fn();
-        const onMessage = vi.fn();
-        client.onUserMessage(onUserMessage);
-        client.on('message', onMessage);
-
-        const userMessage = {
-            role: 'user',
-            content: { type: 'text', text: 'user text' }
-        };
-        const agentMessage = {
-            role: 'agent',
-            content: {
-                type: 'output',
-                data: { answer: 'agent response' }
-            }
-        };
-
-        mockAxiosGet.mockResolvedValueOnce({
-            data: {
-                messages: [
-                    {
-                        id: 'msg-1',
-                        seq: 1,
-                        content: { t: 'encrypted', c: encryptContent(session, userMessage) },
-                        localId: null,
-                        createdAt: 1000,
-                        updatedAt: 1000
-                    },
-                    {
-                        id: 'msg-2',
-                        seq: 2,
-                        content: { t: 'encrypted', c: encryptContent(session, agentMessage) },
-                        localId: null,
-                        createdAt: 2000,
-                        updatedAt: 2000
-                    }
-                ],
-                hasMore: false
-            }
-        });
-
-        await (client as any).fetchMessages();
-
-        expect(onUserMessage).toHaveBeenCalledTimes(1);
-        expect(onUserMessage).toHaveBeenCalledWith(userMessage);
-        expect(onMessage).toHaveBeenCalledTimes(1);
-        expect(onMessage).toHaveBeenCalledWith(agentMessage);
-    });
-
-    it('routes file events without logging sensitive names or refs', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const onFileEvent = vi.fn();
-        const sensitiveName = 'https://upload.example.test/image.png?token=secret';
-        const sensitiveRef = 'sessions/test-session-id/attachments/secret-ref.enc?signature=secret';
-        client.onFileEvent(onFileEvent);
-
-        const fileMessage = {
-            role: 'session',
-            content: {
-                type: 'session',
-                data: {
-                    id: 'file-event-1',
-                    time: 1000,
-                    role: 'user',
-                    ev: {
-                        t: 'file',
-                        ref: sensitiveRef,
-                        name: sensitiveName,
-                        size: 42,
-                        mimeType: 'image/png',
-                    }
-                }
-            }
-        };
-
-        mockAxiosGet.mockResolvedValueOnce({
-            data: {
-                messages: [
-                    {
-                        id: 'msg-1',
-                        seq: 1,
-                        content: { t: 'encrypted', c: encryptContent(session, fileMessage) },
-                        localId: null,
-                        createdAt: 1000,
-                        updatedAt: 1000
-                    }
-                ],
-                hasMore: false
-            }
-        });
-
-        await (client as any).fetchMessages();
-
-        expect(onFileEvent).toHaveBeenCalledWith(fileMessage);
-        const debugOutput = JSON.stringify(vi.mocked(logger.debug).mock.calls);
-        expect(debugOutput).not.toContain(sensitiveName);
-        expect(debugOutput).not.toContain(sensitiveRef);
-        expect(debugOutput).not.toContain('signature=secret');
-    });
-
-    it('applies file event socket updates directly without logging sensitive names or refs', () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const onFileEvent = vi.fn();
-        const sensitiveName = 'https://upload.example.test/image.png?token=socket-secret';
-        const sensitiveRef = 'sessions/test-session-id/attachments/socket-secret-ref.enc?signature=socket-secret';
-        client.onFileEvent(onFileEvent);
-
-        (client as any).lastSeq = 1;
-        const fileMessage = {
-            role: 'session',
-            content: {
-                type: 'session',
-                data: {
-                    id: 'file-event-2',
-                    time: 1000,
-                    role: 'user',
-                    ev: {
-                        t: 'file',
-                        ref: sensitiveRef,
-                        name: sensitiveName,
-                        size: 64,
-                        mimeType: 'image/png',
-                    }
-                }
-            }
-        };
-
-        emitSocketEvent('update', createNewMessageUpdate(2, encryptContent(session, fileMessage)));
-
-        expect(onFileEvent).toHaveBeenCalledWith(fileMessage);
-        expect((client as any).lastSeq).toBe(2);
-        const debugOutput = JSON.stringify([
-            ...vi.mocked(logger.debug).mock.calls,
-            ...vi.mocked(logger.debugLargeJson).mock.calls,
-        ]);
-        expect(debugOutput).not.toContain(sensitiveName);
-        expect(debugOutput).not.toContain(sensitiveRef);
-        expect(debugOutput).not.toContain('socket-secret');
-    });
-
-    it('logs only bounded socket metadata and error classifications', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const ciphertext = 'ciphertext-prompt-reasoning-tool-secret';
-        emitSocketEvent('update', {
-            id: 'provider-secret-update-id',
-            seq: 1,
-            createdAt: Date.now(),
-            body: {
-                t: 'new-message',
-                sid: 'test-session-id',
-                message: {
-                    id: 'provider-secret-message-id',
-                    seq: 1,
-                    localId: null,
-                    content: { t: 'encrypted', c: ciphertext },
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                },
-            },
-        });
-        emitSocketEvent('error', {
-            secret: 'authorization-bearer-secret',
-            get response() {
-                throw new Error('hostile-error-getter-secret');
-            },
-        });
-        (client as any).agentState = {
-            requests: {
-                approval: {
-                    tool: 'tool-secret',
-                    arguments: { prompt: 'agent-state-prompt-secret' },
-                    createdAt: 1,
-                },
-            },
-        };
-        client.updateAgentState((state) => state);
-        const debugOutput = JSON.stringify([
-            ...vi.mocked(logger.debug).mock.calls,
-            ...vi.mocked(logger.debugLargeJson).mock.calls,
-        ]);
-        expect(debugOutput).toContain('"updateType":"new-message"');
-        expect(debugOutput).toContain('"updateSeq":1');
-        expect(debugOutput).toContain('"messageSeq":1');
-        expect(debugOutput).not.toContain(ciphertext);
-        expect(debugOutput).not.toContain('provider-secret');
-        expect(debugOutput).not.toContain('authorization-bearer-secret');
-        expect(debugOutput).not.toContain('hostile-error-getter-secret');
-        expect(debugOutput).not.toContain('agent-state-prompt-secret');
-        expect(debugOutput).not.toContain('tool-secret');
-        expect(logger.debugLargeJson).not.toHaveBeenCalled();
         await client.close();
-    });
-
-    it('applies consecutive new-message updates directly (fast path)', () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const onUserMessage = vi.fn();
-        client.onUserMessage(onUserMessage);
-
-        (client as any).lastSeq = 1;
-        const userMessage = {
-            role: 'user',
-            content: { type: 'text', text: 'fast-path' }
-        };
-
-        emitSocketEvent('update', createNewMessageUpdate(2, encryptContent(session, userMessage)));
-
-        expect(onUserMessage).toHaveBeenCalledTimes(1);
-        expect(onUserMessage).toHaveBeenCalledWith(userMessage);
-        expect((client as any).lastSeq).toBe(2);
-        expect(mockAxiosGet).not.toHaveBeenCalled();
-    });
-
-    it('invalidates receive sync and fetches on seq gap', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        (client as any).lastSeq = 1;
-
-        mockAxiosGet.mockResolvedValueOnce({
-            data: {
-                messages: [],
-                hasMore: false
-            }
-        });
-
-        emitSocketEvent('update', createNewMessageUpdate(3, encryptContent(session, {
-            role: 'user',
-            content: { type: 'text', text: 'gap' }
-        })));
-
-        await waitForCheck(() => {
-            expect(mockAxiosGet).toHaveBeenCalledTimes(1);
-        });
-        expect(mockAxiosGet.mock.calls[0][1].params.after_seq).toBe(1);
-    });
-
-    it('applies first live new-message update directly when lastSeq is 0', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        const onUserMessage = vi.fn();
-        client.onUserMessage(onUserMessage);
-        mockAxiosGet.mockResolvedValueOnce({
-            data: {
-                messages: [],
-                hasMore: false
-            }
-        });
-
-        const firstMessage = {
-            role: 'user',
-            content: { type: 'text', text: 'first' }
-        };
-
-        try {
-            emitSocketEvent('update', createNewMessageUpdate(1, encryptContent(session, firstMessage)));
-
-            expect(onUserMessage).toHaveBeenCalledTimes(1);
-            expect(onUserMessage).toHaveBeenCalledWith(firstMessage);
-            expect((client as any).lastSeq).toBe(1);
-            expect(mockAxiosGet).not.toHaveBeenCalled();
-        } finally {
-            await client.close();
-        }
-    });
-
-    it('invalidates receive sync for duplicate and stale seq values', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        (client as any).lastSeq = 5;
-
-        mockAxiosGet.mockResolvedValue({
-            data: {
-                messages: [],
-                hasMore: false
-            }
-        });
-
-        emitSocketEvent('update', createNewMessageUpdate(5, encryptContent(session, {
-            role: 'user',
-            content: { type: 'text', text: 'duplicate' }
-        })));
-        emitSocketEvent('update', createNewMessageUpdate(4, encryptContent(session, {
-            role: 'user',
-            content: { type: 'text', text: 'stale' }
-        })));
-
-        await waitForCheck(() => {
-            expect(mockAxiosGet).toHaveBeenCalledTimes(2);
-        });
-        expect(mockAxiosGet.mock.calls[0][1].params.after_seq).toBe(5);
-        expect(mockAxiosGet.mock.calls[1][1].params.after_seq).toBe(5);
-    });
-
-    it('updates lastSeq after successful outbox flush and never moves it backward', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        (client as any).lastSeq = 10;
-
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-9', seq: 9, localId: 'l9', createdAt: 9, updatedAt: 9 }]
-            }
-        });
-
-        client.sendAgentMessage('codex', { type: 'message', message: 'older' });
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-        expect((client as any).lastSeq).toBe(10);
-
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {
-                messages: [{ id: 'msg-11', seq: 11, localId: 'l11', createdAt: 11, updatedAt: 11 }]
-            }
-        });
-
-        client.sendAgentMessage('codex', { type: 'message', message: 'newer' });
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(2);
-        });
-        expect((client as any).lastSeq).toBe(11);
-    });
-
-    it('flushOutbox tolerates missing response.data.messages and keeps lastSeq unchanged', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        (client as any).lastSeq = 7;
-
-        mockAxiosPost.mockResolvedValueOnce({
-            data: {}
-        });
-
-        client.sendAgentMessage('codex', { type: 'message', message: 'no-messages-field' });
-        await waitForCheck(() => {
-            expect(mockAxiosPost).toHaveBeenCalledTimes(1);
-        });
-
-        expect((client as any).lastSeq).toBe(7);
-        expect((client as any).pendingOutbox).toHaveLength(0);
-    });
-
-    it('triggers receive catch-up fetch on socket reconnect', async () => {
-        new ApiSessionClient('fake-token', session);
-
-        mockAxiosGet.mockResolvedValueOnce({
-            data: {
-                messages: [],
-                hasMore: false
-            }
-        });
-
-        emitSocketEvent('connect');
-
-        await waitForCheck(() => {
-            expect(mockAxiosGet).toHaveBeenCalledTimes(1);
-        });
-        expect(mockAxiosGet.mock.calls[0][1].params.after_seq).toBe(0);
-    });
-
-    it('stops send and receive sync loops on close', async () => {
-        const client = new ApiSessionClient('fake-token', session);
-        await client.close();
-
-        mockAxiosGet.mockResolvedValue({
-            data: {
-                messages: [],
-                hasMore: false
-            }
-        });
-        mockAxiosPost.mockResolvedValue({
-            data: {
-                messages: []
-            }
-        });
-
-        emitSocketEvent('update', createNewMessageUpdate(1, encryptContent(session, {
-            role: 'user',
-            content: { type: 'text', text: 'after-close' }
-        })));
-        client.sendAgentMessage('codex', { type: 'message', message: 'after-close-send' });
-
-        await new Promise((resolve) => setTimeout(resolve, 20));
-
-        expect(mockSocket.close).toHaveBeenCalledTimes(1);
-        expect(mockAxiosGet).not.toHaveBeenCalled();
-        expect(mockAxiosPost).not.toHaveBeenCalled();
     });
 });

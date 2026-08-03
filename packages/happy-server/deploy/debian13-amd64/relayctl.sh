@@ -43,34 +43,6 @@ wait_for_health() {
     die "relay did not become healthy within 120 seconds"
 }
 
-set_env_value() {
-    key="$1"
-    value="$2"
-    temporary_env="$(mktemp "$script_dir/.env.tmp.XXXXXX")"
-
-    awk -v key="$key" -v replacement="$key=$value" '
-        BEGIN { replaced = 0 }
-        index($0, key "=") == 1 {
-            if (!replaced) print replacement
-            replaced = 1
-            next
-        }
-        { print }
-        END { if (!replaced) print replacement }
-    ' "$env_file" > "$temporary_env"
-
-    chmod 600 "$temporary_env"
-    mv "$temporary_env" "$env_file"
-}
-
-apply_v4_state() {
-    desired="$1"
-    set_env_value HAPPY_CODEX_SYNC_V4_ENABLED "$desired"
-    compose up --detach
-    wait_for_health
-    echo "HAPPY_CODEX_SYNC_V4_ENABLED=$desired"
-}
-
 usage() {
     cat <<'EOF'
 Usage: ./relayctl.sh <command>
@@ -82,8 +54,6 @@ Commands:
   status      Show container status
   logs        Show relay logs (extra docker compose logs flags are accepted)
   health      Query the deep database health endpoint
-  enable-v4   Enable Codex Sync v4 after the coordinated client cutover
-  disable-v4  Disable Codex Sync v4 without deleting data
 EOF
 }
 
@@ -145,15 +115,6 @@ case "$command_name" in
                     });
             '
         printf '\n'
-        ;;
-    enable-v4)
-        [ "$#" -eq 0 ] || die "enable-v4 does not accept additional arguments"
-        echo "Enabling v4 assumes matching App/CLI versions and no running legacy Codex turn."
-        apply_v4_state true
-        ;;
-    disable-v4)
-        [ "$#" -eq 0 ] || die "disable-v4 does not accept additional arguments"
-        apply_v4_state false
         ;;
     -h|--help|help|"")
         usage

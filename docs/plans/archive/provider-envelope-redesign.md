@@ -1,6 +1,6 @@
 # Provider Envelope Redesign
 
-Status: **DRAFT — v2 (OpenCode-derived)**
+Status: **ARCHIVED - superseded by the Codex Sync v4-only product boundary on 2026-08-03.**
 
 Provider scope note: this proposal targets retained v3/ACP agents. Codex uses
 its dedicated Sync v4 entity schema, and the removed Claude adapter is not a

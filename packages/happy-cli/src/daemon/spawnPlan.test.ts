@@ -20,22 +20,11 @@ describe('buildDaemonSpawnPlan', () => {
         }).args).toEqual([]);
     });
 
-    it('does not pass Codex modes to another retained agent', () => {
-        expect(buildDaemonSpawnPlan({
-            directory: '/workspace',
-            agent: 'gemini',
-            permissionMode: 'yolo',
-            modelMode: 'gpt-5.6-sol',
-            effortLevel: 'max',
-        })).toEqual({
-            agent: 'gemini',
-            args: ['gemini', '--happy-starting-mode', 'remote', '--started-by', 'daemon'],
-        });
-    });
-
-    it('rejects removed and unknown values instead of falling back', () => {
+    it('rejects every non-Codex value instead of falling back', () => {
+        expect(() => buildDaemonSpawnPlan({ directory: '/workspace', agent: 'gemini' as never }))
+            .toThrow("Unsupported agent type: 'gemini'");
         expect(() => buildDaemonSpawnPlan({ directory: '/workspace', agent: 'claude' as never }))
-            .toThrow('removed agent is no longer supported');
+            .toThrow("Unsupported agent type: 'claude'");
         expect(() => buildDaemonSpawnPlan({
             directory: '/workspace',
             agent: 'unknown' as never,

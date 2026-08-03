@@ -56,7 +56,7 @@ function ModeButton(props: {
             <Text style={[
                 styles.label,
                 props.selected && { color: props.activeColor },
-            ]}>
+            ]} numberOfLines={1}>
                 {props.label}
             </Text>
         </Pressable>
@@ -65,11 +65,14 @@ function ModeButton(props: {
 
 const styles = StyleSheet.create((theme) => ({
     container: {
-        alignSelf: 'flex-end',
+        alignSelf: 'center',
+        width: '100%',
+        maxWidth: 280,
         height: 34,
         flexDirection: 'row',
         alignItems: 'stretch',
         padding: 2,
+        marginTop: 6,
         marginBottom: 6,
         borderRadius: 7,
         borderWidth: 1,
@@ -77,9 +80,10 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surfaceHigh,
     },
     option: {
-        minWidth: 64,
+        flex: 1,
+        minWidth: 0,
         height: 28,
-        paddingHorizontal: 12,
+        paddingHorizontal: 8,
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 5,
@@ -94,6 +98,7 @@ const styles = StyleSheet.create((theme) => ({
         opacity: 0.4,
     },
     label: {
+        flexShrink: 1,
         color: theme.colors.textSecondary,
         fontSize: 13,
         lineHeight: 17,

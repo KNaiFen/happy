@@ -70,12 +70,6 @@ export const websocketConnectionsGauge = new Gauge({
     registers: [register]
 });
 
-export const sessionAliveEventsCounter = new Counter({
-    name: 'session_alive_events_total',
-    help: 'Total number of session-alive events',
-    registers: [register]
-});
-
 export const machineAliveEventsCounter = new Counter({
     name: 'machine_alive_events_total',
     help: 'Total number of machine-alive events',

@@ -45,8 +45,9 @@ const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
 const JOURNAL_CLEANUP_INTERVAL = 1_024;
 const RESPONSE_FETCH_CHUNK_SIZE = 16;
 const SYNC_V4_MUTATION_BODY_LIMIT = MAX_SYNC_V4_BATCH_CIPHERTEXT_LENGTH + 1024 * 1024;
-const MINIMUM_HAPPY_CLI_VERSION = "1.4.11";
-const MINIMUM_HAPPY_APP_VERSION = "1.11.18";
+const MINIMUM_HAPPY_CLI_VERSION = "1.4.36";
+const MINIMUM_HAPPY_APP_VERSION = "1.11.24";
+const MINIMUM_HAPPY_AGENT_VERSION = "0.1.3";
 const MINIMUM_CODEX_CLI_VERSION = "0.145.0";
 
 type SyncV4MetricOperation =
@@ -67,7 +68,7 @@ type SyncV4MetricOutcome =
 
 type SyncV4ClientCompatibility =
     | { compatible: true }
-    | { compatible: false; clientType: "happy-cli" | "happy-app" | "unknown"; minimumVersion: string | null };
+    | { compatible: false; clientType: "happy-cli" | "happy-app" | "happy-agent" | "unknown"; minimumVersion: string | null };
 
 class SyncV4SessionReadOnlyError extends Error {
     constructor() {
@@ -95,6 +96,11 @@ export function getSyncV4ClientCompatibility(header: unknown): SyncV4ClientCompa
             ? { compatible: true }
             : { compatible: false, clientType: "happy-cli", minimumVersion: MINIMUM_HAPPY_CLI_VERSION };
     }
+    if (rawClientType === "cli-control-plane") {
+        return isSyncV4VersionAtLeast(version, MINIMUM_HAPPY_AGENT_VERSION)
+            ? { compatible: true }
+            : { compatible: false, clientType: "happy-agent", minimumVersion: MINIMUM_HAPPY_AGENT_VERSION };
+    }
     if (["ios", "android", "web", "desktop", "macos", "windows"].includes(rawClientType)) {
         return isSyncV4VersionAtLeast(version, MINIMUM_HAPPY_APP_VERSION)
             ? { compatible: true }
@@ -113,21 +119,14 @@ async function requireCompatibleSyncV4Client(request: FastifyRequest, reply: Fas
     });
 }
 
-export function isCodexSyncV4Enabled(
-    value: string | undefined = process.env.HAPPY_CODEX_SYNC_V4_ENABLED,
-): boolean {
-    return value === "true" || value === "1";
-}
-
 export function v4CapabilitiesRoutes(app: Fastify): void {
-    registerServerSyncV4Lifecycle(app, isCodexSyncV4Enabled());
+    registerServerSyncV4Lifecycle(app, true);
     app.get("/v4/capabilities", {
         onRequest: [attachSyncV4Trace],
         onError: [syncV4RouteErrorHandler("capabilities")],
         onResponse: [syncV4RouteResponseHandler("capabilities")],
     }, async (request, reply) => {
         const startedAt = Date.now();
-        const enabled = isCodexSyncV4Enabled();
         logServerSyncV4Diagnostic(request, {
             level: "debug",
             event: "transport",
@@ -135,15 +134,16 @@ export function v4CapabilitiesRoutes(app: Fastify): void {
             transportOperation: "capabilities",
             httpStatus: 200,
             durationMs: elapsedMs(startedAt),
-            featureEnabled: enabled,
+            featureEnabled: true,
         });
         observeSyncV4Operation(request, "capabilities", "success", startedAt);
         return reply.send({
             codex: {
-                enabled,
+                enabled: true,
                 protocolVersion: 4,
                 minimumHappyCliVersion: MINIMUM_HAPPY_CLI_VERSION,
                 minimumHappyAppVersion: MINIMUM_HAPPY_APP_VERSION,
+                minimumHappyAgentVersion: MINIMUM_HAPPY_AGENT_VERSION,
                 minimumCodexCliVersion: MINIMUM_CODEX_CLI_VERSION,
             },
         });

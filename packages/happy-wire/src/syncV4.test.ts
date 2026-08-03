@@ -33,6 +33,7 @@ describe('Sync v4 wire schemas', () => {
         protocolVersion: 4,
         minimumHappyCliVersion: '1.4.2',
         minimumHappyAppVersion: '1.11.4',
+        minimumHappyAgentVersion: '0.1.3',
         minimumCodexCliVersion: '0.145.0',
       },
     }).codex.enabled).toBe(true);
@@ -43,6 +44,7 @@ describe('Sync v4 wire schemas', () => {
         protocolVersion: 4,
         minimumHappyCliVersion: 'latest',
         minimumHappyAppVersion: '1.11.4',
+        minimumHappyAgentVersion: '0.1.3',
         minimumCodexCliVersion: '0.145.0',
       },
     })).toThrow();
@@ -64,6 +66,7 @@ describe('Sync v4 wire schemas', () => {
         protocolVersion: 4,
         minimumHappyCliVersion: '01.4.2',
         minimumHappyAppVersion: '1.11.4',
+        minimumHappyAgentVersion: '0.1.3',
         minimumCodexCliVersion: '0.145.0',
       },
     }).success).toBe(false);

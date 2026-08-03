@@ -67,12 +67,8 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     let noStatus = false;
     let hideDefaultError = false;
     
-    // For Gemini: unknown tools should be rendered as minimal (hidden)
-    // This prevents showing raw INPUT/OUTPUT for internal Gemini tools
-    // that we haven't explicitly added to knownTools
-    const isProviderInternal = props.metadata?.flavor === 'gemini'
-        || props.metadata?.flavor === 'codex';
-    if (!knownTool && isProviderInternal) {
+    // Codex internal tools that lack a dedicated renderer stay compact.
+    if (!knownTool && props.metadata?.flavor === 'codex') {
         minimal = true;
     }
 

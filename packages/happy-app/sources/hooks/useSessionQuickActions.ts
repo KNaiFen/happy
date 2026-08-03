@@ -19,7 +19,6 @@ import { useRouter } from 'expo-router';
 import { useSession } from '@/sync/storage';
 import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
-import { isRigMetadata } from '@/sync/rig';
 import { canStopCodexGatewaySession } from '@/sync/codexV4Capabilities';
 
 export interface SessionActionItem {
@@ -48,8 +47,6 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
         session.metadata?.codexReadOnly === true
         || session.metadata?.flavor !== 'codex'
         || session.metadata?.codexSyncVersion !== 4
-        || isRigMetadata(session.metadata)
-        || session.metadata?.capabilities?.resume === false
     ) {
         return {
             canResume: false,
@@ -160,7 +157,6 @@ export function useSessionQuickActions(
     const canFork = Boolean(
         expResumeSession
         && !machineDeleted
-        && !isRigMetadata(session.metadata)
         && forkSource
         && machine
         && isMachineOnline(machine),

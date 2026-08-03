@@ -34,7 +34,6 @@ import Constants from 'expo-constants';
 import { useHeaderHeight } from '@/utils/responsive';
 import { t } from '@/text';
 import { useAgentDefaultOverrides, useAllMachines, useLocalSetting, useSessions, useSetting, storage } from '@/sync/storage';
-import type { NewSessionAgentType } from '@/sync/persistence';
 import { sync } from '@/sync/sync';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { machineSpawnNewSession, sessionSetAgentModes, type SessionAgentModesPatch } from '@/sync/ops';
@@ -58,7 +57,7 @@ import {
 } from '@/components/modelModeOptions';
 import { isRunningOnMac } from '@/utils/platform';
 import { getNewSessionSidebarLayout } from '@/utils/newSessionSidebarLayout';
-import { getAgentPickerItems, getModePickerItems } from '@/utils/newSessionPickerItems';
+import { getModePickerItems } from '@/utils/newSessionPickerItems';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
 import { resolveNewSessionAgentConfig } from '@/sync/newSessionConfig';
 import { MobileGlassSurface } from '@/components/MobileGlass';
@@ -73,30 +72,22 @@ import {
 } from '@/components/AnimatedOverlay';
 import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
 
-// Agent icon assets
 const agentIcons = {
     codex: require('@/assets/images/icon-gpt.png'),
-    openclaw: require('@/assets/images/icon-openclaw.png'),
-    gemini: require('@/assets/images/icon-gemini.png'),
-    agy: require('@/assets/images/icon-agy.png'),
 };
 
-type AgentKey = NewSessionAgentType;
+type AgentKey = 'codex';
 const ALL_AGENTS: { key: AgentKey; label: string }[] = [
     { key: 'codex', label: 'codex' },
-    { key: 'gemini', label: 'gemini' },
-    { key: 'openclaw', label: 'openclaw' },
-    { key: 'agy', label: 'agy' },
 ];
 
 type PickerItem = { key: string; label: string; subtitle?: string; dimmed?: boolean };
 
-type PickerType = 'machine' | 'path' | 'worktree' | 'agent' | 'model' | 'effort' | 'permission' | 'settings';
+type PickerType = 'machine' | 'path' | 'worktree' | 'model' | 'effort' | 'permission' | 'settings';
 
 const NATIVE_PICKER_TOP: Record<PickerType, number> = {
     machine: 48,
     path: 96,
-    agent: 144,
     model: 144,
     effort: 144,
     permission: 192,
@@ -746,8 +737,6 @@ function NewSessionScreen() {
         setMachineId: s.setMachineId,
         selectedPath: s.selectedPath,
         setPath: s.setPath,
-        agentType: s.agentType,
-        setAgentType: s.setAgentType,
         permissionMode: s.permissionMode,
         setPermissionMode: s.setPermissionMode,
         modelMode: s.modelMode,
@@ -759,8 +748,7 @@ function NewSessionScreen() {
         worktreeKey: s.worktreeKey,
         setWorktreeKey: s.setWorktreeKey,
     })));
-    const selectedAgent = draft.agentType;
-    const setSelectedAgent = draft.setAgentType;
+    const selectedAgent = 'codex' as const;
     const selectedMachineId = draft.selectedMachineId;
     const setSelectedMachineId = draft.setMachineId;
     const selectedPath = draft.selectedPath;
@@ -898,20 +886,6 @@ function NewSessionScreen() {
             setWorktreeKey('__none__');
         }
     }, [worktreeItems, worktreeKey]);
-
-    // Filter available agents based on CLI availability from machine metadata
-    const availableAgents = React.useMemo(() => {
-        const availability = selectedMachine?.metadata?.cliAvailability;
-        if (!availability) return ALL_AGENTS;
-        return ALL_AGENTS.filter(a => availability[a.key]);
-    }, [selectedMachine]);
-
-    // If current agent not available on this machine, switch to first available
-    React.useEffect(() => {
-        if (availableAgents.length > 0 && !availableAgents.find(a => a.key === selectedAgent)) {
-            setSelectedAgent(availableAgents[0].key);
-        }
-    }, [availableAgents, selectedAgent, setSelectedAgent]);
 
     // Derive options from agent type
     const permissionModes = React.useMemo<PermissionMode[]>(
@@ -1059,7 +1033,7 @@ function NewSessionScreen() {
     }, [activePicker, cancelPendingPickerOpen, isDesktop, pickerCoordinator]);
 
     const isOffline = selectedMachine ? !isMachineOnline(selectedMachine) : false;
-    const agent = availableAgents.find(a => a.key === selectedAgent) ?? ALL_AGENTS[0];
+    const agent = ALL_AGENTS[0];
     const currentPermission = permissionModes[permissionIndex] ?? permissionModes[0];
     const currentEffort = effortLevels[effortIndex] ?? effortLevels[0];
     const permissionStyle = currentPermission?.key !== 'default' ? getPermissionStyle(currentPermission.key) : null;
@@ -1119,8 +1093,6 @@ function NewSessionScreen() {
                 return { title: 'Machine', items: machineItems, selectedKey: selectedMachineId, searchPlaceholder: 'search machines...' };
             case 'worktree':
                 return { title: 'Worktree', fixedItems: WORKTREE_FIXED_ITEMS, items: worktreeItems, selectedKey: worktreeKey, searchPlaceholder: 'search worktrees...' };
-            case 'agent':
-                return { title: 'Agent', items: getAgentPickerItems(availableAgents), selectedKey: selectedAgent, searchPlaceholder: 'search agents...' };
             case 'model':
                 return { title: 'Model', items: getModePickerItems(modelModes), selectedKey: currentModelKey, searchPlaceholder: 'search models...' };
             case 'effort':
@@ -1132,7 +1104,6 @@ function NewSessionScreen() {
         }
     }, [
         activePicker,
-        availableAgents,
         currentEffort?.key,
         currentModelKey,
         currentPermission?.key,
@@ -1181,11 +1152,6 @@ function NewSessionScreen() {
             case 'worktree':
                 setWorktreeKey(key);
                 break;
-            case 'agent':
-                if (availableAgents.some((candidate) => candidate.key === key)) {
-                    setSelectedAgent(key as NewSessionAgentType);
-                }
-                break;
             case 'model': {
                 const next = modelModes.findIndex((mode) => mode.key === key);
                 if (next >= 0) {
@@ -1217,7 +1183,6 @@ function NewSessionScreen() {
         setActivePicker(null);
     }, [
         activePicker,
-        availableAgents,
         draft.setEffortLevel,
         draft.setModelMode,
         draft.setPermissionMode,
@@ -1225,7 +1190,6 @@ function NewSessionScreen() {
         effectiveAgentDefaults,
         modelModes,
         permissionModes,
-        setSelectedAgent,
         setSelectedMachineId,
         setWorktreeKey,
     ]);
@@ -1314,12 +1278,7 @@ function NewSessionScreen() {
                 directory: spawnDirectory,
                 approvedNewDirectoryCreation,
                 agent: selectedAgent,
-                // For codex, 'default' is a concrete ask-first mode (the codex
-                // launch default is yolo) — it must be forwarded. For other
-                // agents 'default' is the ambient no-override value.
-                permissionMode: selectedAgent === 'codex' || resolvedSessionConfig.permissionMode !== 'default'
-                    ? resolvedSessionConfig.permissionMode
-                    : undefined,
+                permissionMode: resolvedSessionConfig.permissionMode,
                 modelMode: resolvedSessionConfig.modelMode !== 'default'
                     ? resolvedSessionConfig.modelMode
                     : undefined,
@@ -1550,8 +1509,7 @@ function NewSessionScreen() {
             );
         }
         if (
-            activePicker === 'agent'
-            || activePicker === 'model'
+            activePicker === 'model'
             || activePicker === 'effort'
             || activePicker === 'permission'
         ) {
@@ -1573,7 +1531,6 @@ function NewSessionScreen() {
         const composerTop = windowHeight - safeArea.bottom - mobileComposerHeight;
         if (
             activePicker === 'settings'
-            || activePicker === 'agent'
             || activePicker === 'model'
             || activePicker === 'effort'
             || activePicker === 'permission'
@@ -1666,10 +1623,7 @@ function NewSessionScreen() {
                             {!isNativeMobile && (
                                 <>
                                     <View style={styles.configRow}>
-                                        <BubblePressable
-                                            onPress={() => togglePicker('agent')}
-                                            style={(p) => [styles.configInlineField, p.pressed && styles.configRowPressed]}
-                                        >
+                                        <View style={styles.configInlineField}>
                                             <RNImage
                                                 source={agentIcons[agent.key]}
                                                 style={[styles.agentIcon, { tintColor: theme.colors.textSecondary }]}
@@ -1678,8 +1632,7 @@ function NewSessionScreen() {
                                             <Text style={[styles.configLabel, styles.configInlineText]} numberOfLines={1}>
                                                 {agent.label}
                                             </Text>
-                                            <Ionicons name="chevron-down" size={12} color={theme.colors.textSecondary} />
-                                        </BubblePressable>
+                                        </View>
 
                                         {showModel && (
                                             <>
@@ -1705,7 +1658,6 @@ function NewSessionScreen() {
                                             </>
                                         )}
                                     </View>
-                                    {renderActivePickerPopover('agent')}
                                     {renderActivePickerPopover('model')}
                                     {renderActivePickerPopover('effort')}
 
@@ -1779,17 +1731,13 @@ function NewSessionScreen() {
 
                             {!isNativeMobile && (
                                 <>
-                                    <BubblePressable
-                                        onPress={() => togglePicker('agent')}
-                                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                                        style={(p) => [styles.collapsedIconButton, p.pressed && styles.configRowPressed]}
-                                    >
+                                    <View style={styles.collapsedIconButton}>
                                         <RNImage
                                             source={agentIcons[agent.key]}
                                             style={[styles.collapsedAgentIcon, { tintColor: theme.colors.textSecondary }]}
                                             resizeMode="contain"
                                         />
-                                    </BubblePressable>
+                                    </View>
 
                                     {showPermission && (
                                         <BubblePressable
@@ -1818,7 +1766,6 @@ function NewSessionScreen() {
                             )}
                         </View>
                         {renderActivePickerPopover('machine')}
-                        {!isNativeMobile && renderActivePickerPopover('agent')}
                         {!isNativeMobile && renderActivePickerPopover('permission')}
                         {renderActivePickerPopover('worktree')}
 
@@ -1842,7 +1789,7 @@ function NewSessionScreen() {
         </>
     );
 
-    const composerPlaceholder = selectedAgent === 'codex' ? 'Ask Codex' : `Ask ${agent.label}`;
+    const composerPlaceholder = 'Ask Codex';
     const mobilePrimaryActionActive = isNativeMobile && (canSend || isSpawning);
     const mobileSendButtonVisuals = resolveMobileSendButtonVisuals(mobilePrimaryActionActive);
     const sendButtonIconColor = isNativeMobile
@@ -1916,16 +1863,9 @@ function NewSessionScreen() {
                 {!isNativeMobile && <View style={styles.actionButtonsLeft} />}
                 {isNativeMobile && (
                     <View style={styles.mobileComposerLeftControls}>
-                        <BubblePressable
+                        <View
                             testID="new-session-agent-picker"
-                            onPress={() => togglePicker('agent')}
-                            style={(pressedState) => [
-                                styles.composerAgentButton,
-                                activePicker === 'agent' && styles.composerControlActive,
-                                pressedState.pressed && styles.configRowPressed,
-                            ]}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Agent: ${agent.label}`}
+                            style={styles.composerAgentButton}
                         >
                             <RNImage
                                 source={agentIcons[agent.key]}
@@ -1935,8 +1875,7 @@ function NewSessionScreen() {
                             <Text style={styles.composerAgentLabel} numberOfLines={1}>
                                 {agent.label}
                             </Text>
-                            <Ionicons name="chevron-down" size={12} color={theme.colors.textSecondary} />
-                        </BubblePressable>
+                        </View>
                         {composerSettingsItems.length > 0 && (
                             <BubblePressable
                                 onPress={() => {

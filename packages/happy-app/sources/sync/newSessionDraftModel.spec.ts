@@ -18,7 +18,6 @@ describe('parseNewSessionDraft', () => {
             input: 'hello',
             selectedMachineId: 'machine-1',
             selectedPath: '~/project',
-            agentType: 'codex',
             permissionMode: null,
             modelMode: null,
             effortLevel: null,
@@ -28,17 +27,18 @@ describe('parseNewSessionDraft', () => {
         });
     });
 
-    it('preserves explicit v2 overrides for retained agents', () => {
-        expect(parseNewSessionDraft({
-            agentType: 'codex',
-            permissionMode: 'read-only',
-            modelMode: 'gpt-5.6-sol',
-            effortLevel: 'max',
-        })).toMatchObject({
-            agentType: 'codex',
+    it('preserves explicit v2 Codex overrides and drops legacy provider metadata', () => {
+        const parsed = parseNewSessionDraft({
             permissionMode: 'read-only',
             modelMode: 'gpt-5.6-sol',
             effortLevel: 'max',
         });
+
+        expect(parsed).toMatchObject({
+            permissionMode: 'read-only',
+            modelMode: 'gpt-5.6-sol',
+            effortLevel: 'max',
+        });
+        expect(parsed).not.toHaveProperty('agentType');
     });
 });

@@ -8,7 +8,6 @@ import {
     loadNewSessionDraft,
     saveNewSessionDraft,
     type NewSessionDraft,
-    type NewSessionAgentType,
     type NewSessionSessionType,
 } from '@/sync/persistence';
 import type { PermissionModeKey } from '@/components/PermissionModeSelector';
@@ -19,7 +18,6 @@ interface NewSessionDraftState {
     attachments: AttachmentPreview[];
     selectedMachineId: string | null;
     selectedPath: string | null;
-    agentType: NewSessionAgentType;
     permissionMode: PermissionModeKey | null;
     modelMode: string | null;
     effortLevel: string | null;
@@ -30,7 +28,6 @@ interface NewSessionDraftState {
     setAttachments: (attachments: AttachmentPreview[]) => void;
     setMachineId: (id: string | null) => void;
     setPath: (path: string | null) => void;
-    setAgentType: (agent: NewSessionAgentType) => void;
     setPermissionMode: (mode: PermissionModeKey | null) => void;
     setModelMode: (mode: string | null) => void;
     setEffortLevel: (level: string | null) => void;
@@ -50,7 +47,6 @@ function persist(state: NewSessionDraftState) {
         input: state.input,
         selectedMachineId: state.selectedMachineId,
         selectedPath: state.selectedPath,
-        agentType: state.agentType,
         permissionMode: state.permissionMode,
         modelMode: state.modelMode,
         effortLevel: state.effortLevel,
@@ -69,7 +65,6 @@ export const useNewSessionDraft = create<NewSessionDraftState>()((set, get) => (
     attachments: [],
     selectedMachineId: initial?.selectedMachineId ?? null,
     selectedPath: initial?.selectedPath ?? null,
-    agentType: initial?.agentType ?? 'codex',
     permissionMode: initial?.permissionMode ?? null,
     modelMode: initial?.modelMode ?? null,
     effortLevel: initial?.effortLevel ?? null,
@@ -80,10 +75,6 @@ export const useNewSessionDraft = create<NewSessionDraftState>()((set, get) => (
     setAttachments: (attachments) => { set({ attachments }); },
     setMachineId: (id) => { set({ selectedMachineId: id, selectedPath: null, worktreeKey: null }); persist(get()); },
     setPath: (path) => { set({ selectedPath: path, worktreeKey: null }); persist(get()); },
-    setAgentType: (agent) => {
-        set({ agentType: agent, permissionMode: null, modelMode: null, effortLevel: null });
-        persist(get());
-    },
     setPermissionMode: (mode) => { set({ permissionMode: mode }); persist(get()); },
     setModelMode: (mode) => { set({ modelMode: mode }); persist(get()); },
     setEffortLevel: (level) => { set({ effortLevel: level }); persist(get()); },

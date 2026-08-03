@@ -7,17 +7,15 @@ import type { Config } from './config';
 import { requireCredentials } from './credentials';
 import type { Credentials } from './credentials';
 import { authLogin, authLogout, authStatus } from './auth';
-import { listSessions, listActiveSessions, getSessionMessages, listMachines } from './api';
+import { listSessions, listActiveSessions, listMachines } from './api';
 import type { DecryptedMachine, DecryptedSession } from './api';
-import { resumeSessionOnMachine, spawnSessionOnMachine, type SupportedAgent } from './machineRpc';
-import { SessionClient } from './session';
+import { resumeSessionOnMachine, spawnSessionOnMachine } from './machineRpc';
+import { SessionClient, codexHistoryFromSnapshot } from './session';
 import { formatMachineTable, formatSessionTable, formatSessionStatus, formatMessageHistory, formatJson } from './output';
 import { filterSupportedAgentSessions } from './sessionClassification';
 import { HAPPY_AGENT_VERSION } from './clientVersion';
 
 // --- Helpers ---
-
-const SUPPORTED_AGENTS: SupportedAgent[] = ['codex', 'gemini', 'openclaw', 'agy'];
 
 function resolveByPrefix<T extends { id: string }>(items: T[], value: string, label: string): T {
     if (!value || value.trim().length === 0) {
@@ -44,13 +42,16 @@ async function resolveMachine(config: Config, creds: Credentials, machineId: str
 }
 
 function createClient(session: DecryptedSession, creds: Credentials, config: Config): SessionClient {
+    const metadata = session.metadata && typeof session.metadata === 'object' && !Array.isArray(session.metadata)
+        ? session.metadata as Record<string, unknown>
+        : {};
     return new SessionClient({
         sessionId: session.id,
         encryptionKey: session.encryption.key,
-        encryptionVariant: session.encryption.variant,
         token: creds.token,
         serverUrl: config.serverUrl,
-        initialAgentState: session.agentState ?? null,
+        threadId: typeof metadata.codexThreadId === 'string' ? metadata.codexThreadId : null,
+        machineId: typeof metadata.machineId === 'string' ? metadata.machineId : null,
     });
 }
 
@@ -98,16 +99,11 @@ function ensureMachineCanResume(machine: DecryptedMachine): void {
     const metadata = (machine.metadata ?? {}) as {
         resumeSupport?: {
             rpcAvailable?: unknown;
-            happyAgentAuthenticated?: unknown;
         };
     };
 
     if (metadata.resumeSupport?.rpcAvailable === true) {
         return;
-    }
-
-    if (metadata.resumeSupport?.happyAgentAuthenticated === false) {
-        throw new Error('Resume is unavailable on this machine. Run `happy-agent auth login` in that machine environment first.');
     }
 
     throw new Error('Resume RPC is unavailable on this machine right now.');
@@ -119,7 +115,7 @@ const program = new Command();
 
 program
     .name('happy-agent')
-    .description('CLI client for controlling Happy Coder agents remotely')
+    .description('CLI client for controlling Codex sessions remotely')
     .version(HAPPY_AGENT_VERSION);
 
 program
@@ -181,7 +177,7 @@ program
 
 program
     .command('status')
-    .description('Get live session state')
+    .description('Get authoritative Codex Sync v4 session state')
     .argument('<session-id>', 'Session ID or prefix')
     .option('--json', 'Output as JSON')
     .action(async (sessionId: string, opts: { json?: boolean }) => {
@@ -189,66 +185,25 @@ program
         const creds = requireCredentials(config);
         const session = await resolveSession(config, creds, sessionId);
 
-        const client = createClient(session, creds, config);
-
-        let liveData = false;
-        try {
-            // Wait for connection, then wait for a state-change event or a short timeout
-            await new Promise<void>(resolve => {
-                let resolved = false;
-                const done = () => {
-                    if (resolved) return;
-                    resolved = true;
-                    clearTimeout(timeout);
-                    client.removeAllListeners('state-change');
-                    client.removeAllListeners('connect_error');
-                    resolve();
-                };
-
-                const timeout = setTimeout(done, 3000);
-
-                client.once('state-change', (data: { metadata: unknown; agentState: unknown }) => {
-                    session.metadata = data.metadata ?? session.metadata;
-                    session.agentState = data.agentState ?? session.agentState;
-                    liveData = true;
-                    done();
-                });
-
-                client.once('connect_error', () => {
-                    done();
-                });
-            });
-        } finally {
-            client.close();
-        }
+        const snapshot = await createClient(session, creds, config).readSnapshot();
 
         if (opts.json) {
-            console.log(formatJson(session));
+            console.log(formatJson({ session, codex: snapshot }));
         } else {
-            if (!liveData) {
-                console.log('> Note: showing cached data (could not get live status).');
-            }
-            console.log(formatSessionStatus(session));
+            console.log(formatSessionStatus(session, snapshot));
         }
     });
 
 program
     .command('spawn')
-    .description('Spawn a new session on a machine')
+    .description('Spawn a new Codex session on a machine')
     .requiredOption('--machine <machine-id>', 'Machine ID or prefix')
     .option('--path <path>', 'Working directory path (defaults to machine home directory)')
-    .option('--agent <agent>', `Agent to start (${SUPPORTED_AGENTS.join(', ')})`, (value: string) => {
-        if (!SUPPORTED_AGENTS.includes(value as SupportedAgent)) {
-            throw new Error(`--agent must be one of: ${SUPPORTED_AGENTS.join(', ')}`);
-        }
-        return value as SupportedAgent;
-    })
     .option('--create-dir', 'Allow creating the directory if it does not exist')
     .option('--json', 'Output as JSON')
     .action(async (opts: {
         machine: string;
         path?: string;
-        agent?: SupportedAgent;
         createDir?: boolean;
         json?: boolean;
     }) => {
@@ -256,18 +211,17 @@ program
         const creds = requireCredentials(config);
         const machine = await resolveMachine(config, creds, opts.machine);
         const directory = resolveRemotePath(opts.path, machine);
-        const agent = opts.agent ?? 'codex';
 
         const result = await spawnSessionOnMachine(config, machine, creds.token, {
             directory,
             approvedNewDirectoryCreation: opts.createDir,
-            agent,
+            agent: 'codex',
         });
 
         const payload = {
             machineId: machine.id,
             directory,
-            agent,
+            agent: 'codex',
             ...result,
         };
 
@@ -287,7 +241,7 @@ program
                     `- Machine ID: \`${machine.id}\``,
                     `- Session ID: \`${result.sessionId}\``,
                     `- Path: ${directory}`,
-                    `- Agent: ${agent}`,
+                    '- Agent: codex',
                 ].join('\n'));
                 break;
             case 'requestToApproveDirectoryCreation':
@@ -357,19 +311,12 @@ program
         const permissionMode = opts.yolo ? 'yolo' : null;
 
         const client = createClient(session, creds, config);
-        try {
-            await client.waitForConnect();
-            const completion = opts.wait ? client.waitForTurnCompletion() : null;
-            client.sendMessage(message, permissionMode ? { permissionMode } : undefined);
-
-            if (completion) {
-                await completion;
-            } else {
-                // Delay to allow the Socket.IO event to flush before closing
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
-        } finally {
-            client.close();
+        const published = await client.sendMessage(
+            message,
+            permissionMode ? { permissionMode } : undefined,
+        );
+        if (opts.wait) {
+            await client.waitForCommand(published.command.commandId);
         }
 
         if (opts.json) {
@@ -399,10 +346,8 @@ program
         const config = loadConfig();
         const creds = requireCredentials(config);
         const session = await resolveSession(config, creds, sessionId);
-        let messages = await getSessionMessages(config, creds, session.id, session.encryption);
-
-        // Sort chronologically by createdAt
-        messages.sort((a, b) => a.createdAt - b.createdAt);
+        const snapshot = await createClient(session, creds, config).readSnapshot();
+        let messages = codexHistoryFromSnapshot(snapshot);
 
         // Apply limit
         if (opts.limit && opts.limit > 0) {
@@ -418,7 +363,7 @@ program
 
 program
     .command('stop')
-    .description('Stop a session')
+    .description('Interrupt the active Codex turn')
     .argument('<session-id>', 'Session ID or prefix')
     .action(async (sessionId: string) => {
         const config = loadConfig();
@@ -426,14 +371,9 @@ program
         const session = await resolveSession(config, creds, sessionId);
 
         const client = createClient(session, creds, config);
-        try {
-            await client.waitForConnect();
-            client.sendStop();
-
-            // Delay to allow the Socket.IO event to flush before closing
-            await new Promise(resolve => setTimeout(resolve, 500));
-        } finally {
-            client.close();
+        const published = await client.sendStop();
+        if (published) {
+            await client.waitForCommand(published.command.commandId);
         }
 
         console.log([
@@ -457,10 +397,8 @@ program
         const creds = requireCredentials(config);
         const session = await resolveSession(config, creds, sessionId);
 
-        const client = createClient(session, creds, config);
         try {
-            await client.waitForConnect();
-            await client.waitForIdle(opts.timeout * 1000);
+            await createClient(session, creds, config).waitForIdle(opts.timeout * 1000);
             console.log([
                 '## Session Idle',
                 '',
@@ -470,8 +408,6 @@ program
             const msg = err instanceof Error ? err.message : String(err);
             console.error(msg);
             process.exitCode = 1;
-        } finally {
-            client.close();
         }
     });
 

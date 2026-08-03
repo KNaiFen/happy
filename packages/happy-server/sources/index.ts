@@ -10,6 +10,7 @@ import { startApi, StartApiOptions } from "./app/api/api";
 import { startDatabaseMetricsUpdater } from "./app/monitoring/metrics2";
 import { startTimeout } from "./app/presence/timeout";
 import { onShutdown } from "./utils/shutdown";
+import { purgeUnsupportedSessions } from "./app/session/purgeUnsupportedSessions";
 
 export { runMigrations } from "./standalone";
 export type { StartApiOptions } from "./app/api/api";
@@ -35,6 +36,7 @@ export async function startServer(opts: StartServerOptions): Promise<{ port: num
     await initEncrypt();
     await initGithub();
     await loadFiles();
+    await purgeUnsupportedSessions();
     await auth.init();
 
     const { port, host } = await startApi({

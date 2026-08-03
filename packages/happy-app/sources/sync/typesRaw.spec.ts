@@ -49,26 +49,13 @@ describe('RawRecordSchema', () => {
         });
     });
 
-    it('normalizes retained ACP providers and rejects the removed provider', () => {
-        const record = parseRecord({
+    it('rejects removed ACP envelopes', () => {
+        expect(RawRecordSchema.safeParse({
             role: 'agent',
             content: {
                 type: 'acp',
                 provider: 'gemini',
                 data: { type: 'message', message: 'hello from ACP' },
-            },
-        });
-        expect(normalizeRawMessage('acp-message', null, 3, record)).toMatchObject({
-            role: 'agent',
-            content: [{ type: 'text', text: 'hello from ACP' }],
-        });
-
-        expect(RawRecordSchema.safeParse({
-            role: 'agent',
-            content: {
-                type: 'acp',
-                provider: 'claude',
-                data: { type: 'message', message: 'unsupported' },
             },
         }).success).toBe(false);
     });

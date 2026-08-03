@@ -493,8 +493,6 @@ export const ja: TranslationStructure = {
         },
         agent: {
             codex: 'Codex',
-            gemini: 'Gemini',
-            openclaw: 'OpenClaw',
         },
         model: {
             title: 'モデル',
@@ -526,16 +524,6 @@ export const ja: TranslationStructure = {
             gpt5Low: 'GPT-5 低',
             gpt5Medium: 'GPT-5 中',
             gpt5High: 'GPT-5 高',
-        },
-        geminiPermissionMode: {
-            title: 'GEMINI権限モード',
-            default: 'デフォルト',
-            autoEdit: '自動編集',
-            yolo: 'YOLO',
-            plan: 'プラン',
-            badgeAutoEdit: '自動編集',
-            badgeYolo: 'YOLO',
-            badgePlan: 'プラン',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `残り ${percent}%`,
@@ -967,16 +955,6 @@ export const ja: TranslationStructure = {
         permissions: {
             yesForSession: "はい、このセッションでは確認しない",
             stopAndExplain: '停止して、何をすべきか説明',
-        }
-    },
-
-    agentPermissions: {
-        // プロバイダー共通の v3 権限ダイアログボタン
-        permissions: {
-            yesAllowAllEdits: 'はい、このセッション中のすべての編集を許可',
-            yesAllowEverything: 'はい、このセッション中のすべてを許可',
-            yesForTool: "はい、このツールについては確認しない",
-            noProvideFeedback: 'いいえ、フィードバックを提供',
         }
     },
 

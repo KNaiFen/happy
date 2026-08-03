@@ -1,5 +1,7 @@
 # Reliable HTTP Messages API (v3)
 
+Status: **ARCHIVED - superseded by the Codex Sync v4-only product boundary on 2026-08-03.**
+
 ## Overview
 Replace Socket.IO-based message read/write with simple HTTP endpoints optimized for CLI usage. The new v3 API provides:
 - **Cursor-based message reading** using the existing `seq` field — fetch from start, then poll for new messages after last known seq

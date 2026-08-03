@@ -249,7 +249,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
             // AskUserQuestion expects answers to be returned as part of the tool input,
             // not as a follow-up plain text message.
             if (tool.permission?.id) {
-                await sessionAllow(sessionId, tool.permission.id, undefined, undefined, 'approved', {
+                await sessionAllow(sessionId, tool.permission.id, 'approved', {
                     answers,
                     ...(Object.keys(codexAnswers).length > 0 ? { codexAnswers } : {}),
                 });

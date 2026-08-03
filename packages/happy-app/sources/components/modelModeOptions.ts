@@ -1,13 +1,6 @@
 import type { MachineMetadata, Metadata } from '@/sync/storageTypes';
 import { hackModes } from '@/sync/modeHacks';
 import { getCodeAgentDefaults } from '@/sync/agentDefaults';
-import {
-    getRigCurrentModel,
-    getRigModels,
-    getRigReasoningLevels,
-    getRigSelectedModelKey,
-    isRigMetadataV1,
-} from '@/sync/rig';
 
 export type ModeOption = {
     key: string;
@@ -35,7 +28,7 @@ export type EffortLevel = ModeOption;
 export type PermissionModeKey = string;
 export type ModelModeKey = string;
 
-export type AgentFlavor = 'codex' | 'gemini' | string | null | undefined;
+export type AgentFlavor = 'codex' | string | null | undefined;
 
 type Translate = (key: any) => string;
 
@@ -50,15 +43,6 @@ type MetadataModelOption = MetadataOption & {
     defaultThinkingLevel?: string | null;
     isDefault?: boolean;
 };
-
-const GEMINI_MODEL_FALLBACKS: ModelMode[] = [
-    { key: 'gemini-3.1-pro-preview', name: 'gemini 3.1 pro', description: 'latest & most capable' },
-    { key: 'gemini-3-flash-preview', name: 'gemini 3 flash', description: 'latest & fast' },
-    { key: 'gemini-3.1-flash-lite-preview', name: 'gemini 3.1 flash lite', description: 'latest & fastest' },
-    { key: 'gemini-2.5-pro', name: 'gemini 2.5 pro', description: 'most capable' },
-    { key: 'gemini-2.5-flash', name: 'gemini 2.5 flash', description: 'fast & efficient' },
-    { key: 'gemini-2.5-flash-lite', name: 'gemini 2.5 flash lite', description: 'fastest' },
-];
 
 export function mapMetadataOptions(options?: MetadataOption[] | null): ModeOption[] {
     if (!options || options.length === 0) {
@@ -120,15 +104,6 @@ export function getCodexPermissionModes(translate: Translate): PermissionMode[] 
     ];
 }
 
-export function getGeminiPermissionModes(translate: Translate): PermissionMode[] {
-    return [
-        { key: 'default', name: translate('agentInput.geminiPermissionMode.default'), description: null },
-        { key: 'auto_edit', name: translate('agentInput.geminiPermissionMode.autoEdit'), description: null },
-        { key: 'yolo', name: translate('agentInput.geminiPermissionMode.yolo'), description: null },
-        { key: 'plan', name: translate('agentInput.geminiPermissionMode.plan'), description: null },
-    ];
-}
-
 export function getCodexModelModes(): ModelMode[] {
     return [
         { key: 'default', name: 'default model', description: null },
@@ -145,78 +120,12 @@ export function getCodexModelModes(): ModelMode[] {
     ];
 }
 
-export function getGeminiModelModes(): ModelMode[] {
-    return GEMINI_MODEL_FALLBACKS;
-}
-
-export function getOpenClawPermissionModes(translate: Translate): PermissionMode[] {
-    return [
-        { key: 'default', name: translate('agentInput.permissionMode.default'), description: null },
-        { key: 'bypassPermissions', name: translate('agentInput.permissionMode.bypassPermissions'), description: null },
-    ];
-}
-
-// agy --print only distinguishes --sandbox (default) from --dangerously-skip-permissions,
-// so only these two modes are offered.
-export function getAgyPermissionModes(translate: Translate): PermissionMode[] {
-    return [
-        { key: 'default', name: translate('agentInput.permissionMode.default'), description: null },
-        { key: 'bypassPermissions', name: translate('agentInput.permissionMode.bypassPermissions'), description: null },
-    ];
-}
-
 export function getHardcodedPermissionModes(flavor: AgentFlavor, translate: Translate): PermissionMode[] {
-    if (flavor === 'codex') {
-        return getCodexPermissionModes(translate);
-    }
-    if (flavor === 'gemini') {
-        return getGeminiPermissionModes(translate);
-    }
-    if (flavor === 'openclaw') {
-        return getOpenClawPermissionModes(translate);
-    }
-    if (flavor === 'agy') {
-        return getAgyPermissionModes(translate);
-    }
-    return [
-        { key: 'default', name: translate('agentInput.permissionMode.default'), description: null },
-    ];
-}
-
-export function getOpenClawModelModes(): ModelMode[] {
-    return [
-        { key: 'default', name: 'default model', description: null },
-    ];
-}
-
-// Keys are the exact display names `agy --model` accepts (as printed by `agy models`).
-export function getAgyModelModes(): ModelMode[] {
-    return [
-        { key: 'Gemini 3.1 Pro (High)', name: 'gemini 3.1 pro (high)', description: null },
-        { key: 'Gemini 3.1 Pro (Low)', name: 'gemini 3.1 pro (low)', description: null },
-        { key: 'Gemini 3.5 Flash (High)', name: 'gemini 3.5 flash (high)', description: null },
-        { key: 'Gemini 3.5 Flash (Medium)', name: 'gemini 3.5 flash (medium)', description: null },
-        { key: 'Gemini 3.5 Flash (Low)', name: 'gemini 3.5 flash (low)', description: null },
-        { key: 'Claude Opus 4.6 (Thinking)', name: 'claude opus 4.6 (thinking)', description: null },
-        { key: 'Claude Sonnet 4.6 (Thinking)', name: 'claude sonnet 4.6 (thinking)', description: null },
-        { key: 'GPT-OSS 120B (Medium)', name: 'gpt-oss 120b (medium)', description: null },
-    ];
+    return flavor === 'codex' ? getCodexPermissionModes(translate) : [];
 }
 
 export function getHardcodedModelModes(flavor: AgentFlavor, _translate: Translate): ModelMode[] {
-    if (flavor === 'codex') {
-        return getCodexModelModes();
-    }
-    if (flavor === 'gemini') {
-        return getGeminiModelModes();
-    }
-    if (flavor === 'openclaw') {
-        return getOpenClawModelModes();
-    }
-    if (flavor === 'agy') {
-        return getAgyModelModes();
-    }
-    return [{ key: 'default', name: 'default model', description: null }];
+    return flavor === 'codex' ? getCodexModelModes() : [];
 }
 
 export function getAvailableModels(
@@ -225,55 +134,7 @@ export function getAvailableModels(
     translate: Translate,
     selectedKey?: string | null,
 ): ModelMode[] {
-    if (isRigMetadataV1(metadata)) {
-        const models: ModelMode[] = getRigModels(metadata).map((model) => ({
-            key: model.key,
-            name: model.name,
-            description: model.providerName,
-            modelId: model.id,
-            providerId: model.providerId,
-            providerName: model.providerName,
-            providerKind: model.providerKind,
-            contextWindow: model.contextWindow,
-            serviceTiers: model.serviceTiers,
-            thinkingLevels: model.thinkingLevels,
-            defaultThinkingLevel: model.defaultThinkingLevel,
-        }));
-        const current = getRigCurrentModel(metadata);
-        if (current?.unavailable && !models.some((model) => model.key === current.key)) {
-            models.unshift({
-                key: current.key,
-                name: current.name,
-                description: `${current.providerName} · unavailable`,
-                modelId: current.id,
-                providerId: current.providerId,
-                providerName: current.providerName,
-                providerKind: current.providerKind,
-                thinkingLevels: [],
-                serviceTiers: [],
-                unavailable: true,
-                disabled: true,
-            });
-        }
-        const locallySelectedKey = selectedKey ?? metadata?.modelMode;
-        if (locallySelectedKey && locallySelectedKey.includes(':') && !models.some((model) => model.key === locallySelectedKey)) {
-            const separator = locallySelectedKey.indexOf(':');
-            const providerId = locallySelectedKey.slice(0, separator);
-            const modelId = locallySelectedKey.slice(separator + 1);
-            models.unshift({
-                key: locallySelectedKey,
-                name: modelId,
-                description: `${providerId} · unavailable`,
-                modelId,
-                providerId,
-                providerName: providerId,
-                providerKind: 'custom',
-                unavailable: true,
-                disabled: true,
-            });
-        }
-        return models;
-    }
+    if (flavor !== 'codex') return [];
     const metadataModels = mapMetadataModels(metadata?.models);
     if (metadataModels.length > 0) {
         if (flavor === 'codex' && !metadataModels.some((model) => model.key === 'default')) {
@@ -314,37 +175,7 @@ export function getAvailablePermissionModes(
     translate: Translate,
     selectedKey?: string | null,
 ): PermissionMode[] {
-    if (isRigMetadataV1(metadata)) {
-        const modes: PermissionMode[] = (metadata?.operatingModes ?? []).map((mode) => ({
-            key: mode.code,
-            name: mode.value,
-            description: mode.description ?? null,
-            semanticKind: mode.kind ?? null,
-        }));
-        const current = selectedKey
-            ?? metadata?.currentOperatingModeCode
-            ?? metadata?.permissionMode
-            ?? metadata?.session?.permissionMode;
-        if (current && !modes.some((mode) => mode.key === current)) {
-            modes.unshift({
-                key: current,
-                name: current,
-                description: 'Unavailable in the current Rig mode catalog',
-                semanticKind: null,
-                disabled: true,
-            });
-        }
-        return modes;
-    }
-    if (flavor === 'codex' || flavor === 'openclaw' || flavor === 'agy') {
-        return hackModes(getHardcodedPermissionModes(flavor, translate));
-    }
-
-    const metadataModes = mapMetadataOptions(metadata?.operatingModes);
-    if (metadataModes.length > 0) {
-        return hackModes(metadataModes);
-    }
-
+    if (flavor !== 'codex') return [];
     return hackModes(getHardcodedPermissionModes(flavor, translate));
 }
 
@@ -403,12 +234,6 @@ export function getEffortLevelsForModel(
     modelKey: string,
     metadata?: Metadata | null,
 ): EffortLevel[] {
-    if (isRigMetadataV1(metadata)) {
-        return getRigReasoningLevels(metadata, modelKey).map((level) => ({
-            key: level,
-            name: level,
-        }));
-    }
     if (flavor === 'codex') {
         const advertisedModel = findCodexModel(mapMetadataModels(metadata?.models), modelKey);
         if (advertisedModel?.thinkingLevels) {
@@ -446,10 +271,6 @@ export function getEffortLevelsForModelOnMachine(
     return fallbacks;
 }
 
-export function getRigCurrentModelOptionKey(metadata: Metadata | null | undefined): string | null {
-    return getRigSelectedModelKey(metadata);
-}
-
 // Prefer the advertised model default, then fall back to Happy's code default.
 export function getDefaultEffortKeyForModel(
     flavor: AgentFlavor,
@@ -460,7 +281,7 @@ export function getDefaultEffortKeyForModel(
     if (levels.length === 0) return null;
     const advertisedDefault = flavor === 'codex'
         ? findCodexModel(mapMetadataModels(metadata?.models), modelKey)?.defaultThinkingLevel
-        : metadata?.models?.find((model) => model.code === modelKey)?.defaultThinkingLevel;
+        : null;
     if (advertisedDefault && levels.some((level) => level.key === advertisedDefault)) {
         return advertisedDefault;
     }
@@ -468,6 +289,5 @@ export function getDefaultEffortKeyForModel(
 }
 
 export function getSupportsWorktree(flavor: AgentFlavor): boolean {
-    if (flavor === 'openclaw') return false;
-    return true;
+    return flavor === 'codex';
 }

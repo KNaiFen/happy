@@ -35,6 +35,7 @@ export const SyncV4CapabilitiesSchema = z.object({
     protocolVersion: z.literal(CODEX_SYNC_V4_PROTOCOL_VERSION),
     minimumHappyCliVersion: SyncV4StableVersionSchema,
     minimumHappyAppVersion: SyncV4StableVersionSchema,
+    minimumHappyAgentVersion: SyncV4StableVersionSchema,
     minimumCodexCliVersion: SyncV4StableVersionSchema,
   }).strict(),
 }).strict();

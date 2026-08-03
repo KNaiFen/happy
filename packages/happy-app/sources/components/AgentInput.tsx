@@ -34,9 +34,8 @@ import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
-import { ProviderIcon } from './ProviderIcon';
-import { isRigMetadata } from '@/sync/rig';
 import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
+import { CodexFollowUpModeSelector } from './CodexFollowUpModeSelector';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -71,7 +70,6 @@ interface AgentInputProps {
         isPulsing?: boolean;
         cliStatus?: {
             codex: boolean | null;
-            gemini?: boolean | null;
         };
     };
     autocompletePrefixes: string[];
@@ -90,8 +88,6 @@ interface AgentInputProps {
     sessionStatusModelLabel?: string | null;
     sessionStatusEffortLabel?: string | null;
     onFileViewerPress?: () => void;
-    agentType?: 'codex' | 'gemini' | 'openclaw' | 'agy';
-    onAgentClick?: () => void;
     machineName?: string | null;
     onMachineClick?: () => void;
     currentPath?: string | null;
@@ -99,6 +95,9 @@ interface AgentInputProps {
     blockSend?: boolean;
     isSendDisabled?: boolean;
     isSending?: boolean;
+    followUpMode?: 'queue' | 'steer';
+    canSteerFollowUp?: boolean;
+    onFollowUpModeChange?: (mode: 'queue' | 'steer') => void;
     minHeight?: number;
     zenMode?: boolean;
     /** Image attachments waiting to be sent (expImageUpload feature). */
@@ -510,24 +509,6 @@ const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRow
                                         codex
                                     </Text>
                                 </View>
-                                {p.connectionStatus.cliStatus.gemini !== undefined && (
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: p.connectionStatus.cliStatus.gemini ? theme.colors.success : theme.colors.textDestructive,
-                                            ...Typography.default()
-                                        }}>
-                                            {p.connectionStatus.cliStatus.gemini ? '✓' : '✗'}
-                                        </Text>
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: p.connectionStatus.cliStatus.gemini ? theme.colors.success : theme.colors.textDestructive,
-                                            ...Typography.default()
-                                        }}>
-                                            gemini
-                                        </Text>
-                                    </View>
-                                )}
                             </>
                         )}
                     </>
@@ -674,12 +655,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const hasImages = (props.selectedImages?.length ?? 0) > 0;
     const hasComposerContent = hasText || hasImages;
 
-    // Check if this is a Codex, Gemini, or OpenClaw session
-    // Use metadata.flavor for existing sessions, agentType prop for new sessions
-    const isRig = isRigMetadata(props.metadata);
-    const isCodex = !isRig && (props.metadata?.flavor === 'codex' || props.agentType === 'codex');
-    const isGemini = props.metadata?.flavor === 'gemini' || props.agentType === 'gemini';
-    const isOpenClaw = props.metadata?.flavor === 'openclaw' || props.agentType === 'openclaw';
     const displayPermissionMode = React.useMemo(() => (
         props.permissionMode ? hackMode(props.permissionMode) : null
     ), [props.permissionMode]);
@@ -1012,17 +987,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onMicPress();
     }, [props.isSendDisabled, props.onMicPress]);
 
+    const handleFollowUpModePress = React.useCallback((mode: 'queue' | 'steer') => {
+        if (!props.onFollowUpModeChange || (mode === 'steer' && !props.canSteerFollowUp)) return;
+        hapticsLight();
+        props.onFollowUpModeChange(mode);
+    }, [props.canSteerFollowUp, props.onFollowUpModeChange]);
+
     const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         if (!props.onPermissionModeChange || availableModes.length === 0) {
             return [];
         }
         return [{
             key: 'permission',
-            label: isCodex
-                ? t('agentInput.codexPermissionMode.title')
-                : isGemini
-                    ? t('agentInput.geminiPermissionMode.title')
-                    : t('agentInput.permissionMode.title'),
+            label: t('agentInput.codexPermissionMode.title'),
             systemImage: 'shield',
             options: availableModes.map((mode) => ({ key: mode.key, label: withSandboxSuffix(mode.name, mode.key) })),
             selectedKey: permissionModeKey,
@@ -1031,7 +1008,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 if (mode) handleSettingsSelect(mode);
             },
         }];
-    }, [availableModes, handleSettingsSelect, isCodex, isGemini, permissionModeKey, props.onPermissionModeChange, withSandboxSuffix]);
+    }, [availableModes, handleSettingsSelect, permissionModeKey, props.onPermissionModeChange, withSandboxSuffix]);
 
     const modelSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         const groups: NativeSettingsMenuGroup[] = [];
@@ -1179,43 +1156,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 })}
                             >
                                 <Octicons name="gear" size={16} color={theme.colors.button.secondary.tint} />
-                            </Pressable>
-                        )}
-
-                        {props.agentType && props.onAgentClick && (
-                            <Pressable
-                                onPress={() => {
-                                    hapticsLight();
-                                    props.onAgentClick?.();
-                                }}
-                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                style={(p) => ({
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    borderRadius: Platform.select({ default: 16, android: 20 }),
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 6,
-                                    justifyContent: 'center',
-                                    height: 32,
-                                    opacity: p.pressed ? 0.7 : 1,
-                                    gap: 6,
-                                })}
-                            >
-                                <Octicons name="cpu" size={14} color={theme.colors.button.secondary.tint} />
-                                <Text style={{
-                                    fontSize: 13,
-                                    color: theme.colors.button.secondary.tint,
-                                    fontWeight: '600',
-                                    ...Typography.default('semiBold'),
-                                }}>
-                                    {props.agentType === 'codex'
-                                            ? t('agentInput.agent.codex')
-                                            : props.agentType === 'openclaw'
-                                                ? t('agentInput.agent.openclaw')
-                                                : props.agentType === 'agy'
-                                                    ? 'Agy'
-                                                    : t('agentInput.agent.gemini')}
-                                </Text>
                             </Pressable>
                         )}
 
@@ -1411,11 +1351,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                     <View style={styles.overlaySection}>
                         <Text style={styles.overlaySectionTitle}>
-                            {isCodex
-                                ? t('agentInput.codexPermissionMode.title')
-                                : isGemini
-                                    ? t('agentInput.geminiPermissionMode.title')
-                                    : t('agentInput.permissionMode.title')}
+                            {t('agentInput.codexPermissionMode.title')}
                         </Text>
                         {availableModes.map((mode) => renderDesktopPickerOption(
                             mode.key,
@@ -1560,7 +1496,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 {openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>
-                                            {isCodex ? t('agentInput.codexPermissionMode.title') : isGemini ? t('agentInput.geminiPermissionMode.title') : t('agentInput.permissionMode.title')}
+                                            {t('agentInput.codexPermissionMode.title')}
                                         </Text>
                                         {availableModes.map((mode) => {
                                             const isSelected = permissionModeKey === mode.key;
@@ -1685,26 +1621,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                             }} />}
                                                         </View>
                                                         <View style={{ flex: 1 }}>
-                                                            {model.providerName ? (
-                                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                                                                    <ProviderIcon kind={model.providerKind} size={12} />
-                                                                    <Text style={{
-                                                                        fontSize: 14,
-                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                        ...Typography.default(),
-                                                                    }}>
-                                                                        {model.name}
-                                                                    </Text>
-                                                                </View>
-                                                            ) : (
-                                                                <Text style={{
-                                                                    fontSize: 14,
-                                                                    color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                    ...Typography.default(),
-                                                                }}>
-                                                                    {model.name}
-                                                                </Text>
-                                                            )}
+                                                            <Text style={{
+                                                                fontSize: 14,
+                                                                color: isSelected ? theme.colors.radio.active : theme.colors.text,
+                                                                ...Typography.default(),
+                                                            }}>
+                                                                {model.name}
+                                                            </Text>
                                                             {!!model.description && (
                                                                 <Text style={{
                                                                     fontSize: 11,
@@ -1848,6 +1771,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             onRemove={props.onRemoveImage ?? (() => {})}
                         />
                     )}
+                    {props.followUpMode && props.onFollowUpModeChange ? (
+                        <CodexFollowUpModeSelector
+                            value={props.followUpMode}
+                            canSteer={props.canSteerFollowUp === true}
+                            onChange={handleFollowUpModePress}
+                        />
+                    ) : null}
                     {/* Input field */}
                     <View style={[
                         styles.inputContainer,
@@ -1906,9 +1836,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     hitSlop={6}
                                     style={styles.mobileIconButton}
                                     accessibilityRole="button"
-                                    accessibilityLabel={isCodex
-                                        ? t('agentInput.codexPermissionMode.title')
-                                        : t('agentInput.permissionMode.title')}
+                                    accessibilityLabel={t('agentInput.codexPermissionMode.title')}
                                 >
                                     <Ionicons name="settings-outline" size={20} color={theme.colors.text} />
                                 </BubblePressable>
@@ -1964,21 +1892,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 )}
                             </>
                         ) : <View style={{ flex: 1 }} />}
-
-                        {!compactMobileComposer && props.agentType && props.onAgentClick && (
-                            <BubblePressable
-                                onPress={() => {
-                                    hapticsLight();
-                                    props.onAgentClick?.();
-                                }}
-                                hitSlop={6}
-                                style={styles.mobileIconButton}
-                                accessibilityRole="button"
-                                accessibilityLabel={props.agentType}
-                            >
-                                <Octicons name="cpu" size={14} color={theme.colors.text} />
-                            </BubblePressable>
-                        )}
 
                         {!compactMobileComposer && (
                             <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />

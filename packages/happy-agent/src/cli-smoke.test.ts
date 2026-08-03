@@ -28,9 +28,9 @@ import {
 import { loadConfig } from './config';
 import type { Config } from './config';
 import type { Credentials } from './credentials';
-import type { RawSession, RawMessage, DecryptedSession, EncryptionVariant } from './api';
+import type { RawSession, DecryptedSession, EncryptionVariant } from './api';
 import { resolveSessionEncryption } from './api';
-import { formatSessionTable, formatSessionStatus, formatMessageHistory, formatJson } from './output';
+import { formatSessionTable, formatMessageHistory, formatJson } from './output';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sourceEntrypoint = resolve(__dirname, 'index.ts');
@@ -463,7 +463,6 @@ describe('Smoke: Output formatting', () => {
             active: raw.active,
             activeAt: raw.activeAt,
             metadata: { tag: 'my-project', path: '/home/user', summary: 'My Project' },
-            agentState: null,
             dataEncryptionKey: raw.dataEncryptionKey,
             encryption,
         };

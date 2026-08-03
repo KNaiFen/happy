@@ -67,6 +67,7 @@ class FakeTransport implements AppSyncV4Transport {
                 protocolVersion: 4 as const,
                 minimumHappyCliVersion: '1.4.7',
                 minimumHappyAppVersion: '1.11.12',
+                minimumHappyAgentVersion: '0.1.3',
                 minimumCodexCliVersion: '0.145.0',
             },
         };

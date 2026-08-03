@@ -508,8 +508,6 @@ export const ru: TranslationStructure = {
         },
         agent: {
             codex: 'Codex',
-            gemini: 'Gemini',
-            openclaw: 'OpenClaw',
         },
         model: {
             title: 'МОДЕЛЬ',
@@ -541,16 +539,6 @@ export const ru: TranslationStructure = {
             gpt5Low: 'GPT-5 Low',
             gpt5Medium: 'GPT-5 Medium',
             gpt5High: 'GPT-5 High',
-        },
-        geminiPermissionMode: {
-            title: 'РЕЖИМ РАЗРЕШЕНИЙ',
-            default: 'По умолчанию',
-            autoEdit: 'Авто-редактирование',
-            yolo: 'YOLO',
-            plan: 'Планирование',
-            badgeAutoEdit: 'Авто-редактирование',
-            badgeYolo: 'YOLO',
-            badgePlan: 'Планирование',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `Осталось ${percent}%`,
@@ -970,16 +958,6 @@ export const ru: TranslationStructure = {
         permissions: {
             yesForSession: 'Да, и не спрашивать для этой сессии',
             stopAndExplain: 'Остановить и объяснить, что делать',
-        }
-    },
-
-    agentPermissions: {
-        // Общие для провайдеров кнопки разрешений v3
-        permissions: {
-            yesAllowAllEdits: 'Да, разрешить все правки в этой сессии',
-            yesAllowEverything: 'Да, разрешить всё в этой сессии',
-            yesForTool: 'Да, больше не спрашивать для этого инструмента',
-            noProvideFeedback: 'Нет, дать обратную связь',
         }
     },
 

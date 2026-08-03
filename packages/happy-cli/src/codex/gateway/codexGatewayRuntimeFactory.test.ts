@@ -91,7 +91,6 @@ function createHarness(options: { relayAvailable?: boolean; existingSession?: bo
     const session = {
         sessionId: 'session-a',
         syncV4SessionKey: new Uint8Array(32).fill(9),
-        skipExistingMessages: vi.fn(),
         on: vi.fn(),
         updateMetadataAndWait: vi.fn(async (update: (metadata: Metadata) => Metadata) => {
             sessionMetadata = update(sessionMetadata);

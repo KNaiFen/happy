@@ -26,7 +26,7 @@ export function accountRoutes(app: Fastify) {
         const connectedVendors = new Set((await db.serviceAccountToken.findMany({
             where: {
                 accountId: userId,
-                vendor: { in: ['openai', 'gemini'] },
+                vendor: 'openai',
             },
         })).map(t => t.vendor));
         return reply.send({

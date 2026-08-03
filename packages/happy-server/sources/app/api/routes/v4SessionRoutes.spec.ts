@@ -335,7 +335,6 @@ vi.mock("@/app/monitoring/metrics2", () => ({
 
 import {
     getSyncV4ClientCompatibility,
-    isCodexSyncV4Enabled,
     syncV4ErrorStatus,
     v4CapabilitiesRoutes,
     v4SessionRoutes,
@@ -351,7 +350,7 @@ const mutation = {
     ciphertext: "encrypted-v1",
 };
 
-async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.11"): Promise<Fastify> {
+async function createApp(defaultHappyClient: string | null = "cli-coding-session/1.4.36"): Promise<Fastify> {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
@@ -384,26 +383,24 @@ async function createApp(defaultHappyClient: string | null = "cli-coding-session
 }
 
 describe("v4SessionRoutes", () => {
-    it("keeps Codex Sync v4 disabled unless explicitly enabled", () => {
-        expect(isCodexSyncV4Enabled(undefined)).toBe(false);
-        expect(isCodexSyncV4Enabled("false")).toBe(false);
-        expect(isCodexSyncV4Enabled("0")).toBe(false);
-        expect(isCodexSyncV4Enabled("true")).toBe(true);
-        expect(isCodexSyncV4Enabled("1")).toBe(true);
-    });
-
-    it("accepts only coordinated CLI and App versions on v4 data routes", async () => {
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.11")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("android/1.11.18")).toEqual({ compatible: true });
-        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.9")).toEqual({
+    it("accepts only coordinated CLI, App, and happy-agent versions on v4 data routes", async () => {
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.36")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("android/1.11.24")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("cli-control-plane/0.1.3")).toEqual({ compatible: true });
+        expect(getSyncV4ClientCompatibility("cli-coding-session/1.4.35")).toEqual({
             compatible: false,
             clientType: "happy-cli",
-            minimumVersion: "1.4.11",
+            minimumVersion: "1.4.36",
         });
         expect(getSyncV4ClientCompatibility("test/9.0.0")).toEqual({
             compatible: false,
             clientType: "unknown",
             minimumVersion: null,
+        });
+        expect(getSyncV4ClientCompatibility("cli-control-plane/0.1.2")).toEqual({
+            compatible: false,
+            clientType: "happy-agent",
+            minimumVersion: "0.1.3",
         });
 
         seedSession("session-1", "user-1", { orphan: true });
@@ -413,14 +410,14 @@ describe("v4SessionRoutes", () => {
             url: "/v4/sessions/session-1/changes?after_seq=0",
             headers: {
                 "x-user-id": "user-1",
-                "x-happy-client": "web/1.11.16",
+                "x-happy-client": "web/1.11.23",
             },
         });
         expect(response.statusCode).toBe(426);
         expect(response.json()).toEqual({
             error: "syncV4UpgradeRequired",
             clientType: "happy-app",
-            minimumVersion: "1.11.18",
+            minimumVersion: "1.11.24",
         });
         expect(operationMetricMock).toHaveBeenCalledWith({
             operation: "changes",
@@ -681,23 +678,22 @@ describe("v4SessionRoutes", () => {
         vi.unstubAllEnvs();
     });
 
-    it("advertises the coordinated compatibility set even while data routes are disabled", async () => {
-        vi.stubEnv("HAPPY_CODEX_SYNC_V4_ENABLED", "false");
+    it("always advertises the coordinated compatibility set", async () => {
         app = await createApp();
 
-        const disabled = await app.inject({ method: "GET", url: "/v4/capabilities" });
-        expect(disabled.statusCode).toBe(200);
-        expect(disabled.json()).toEqual({
+        const capabilities = await app.inject({ method: "GET", url: "/v4/capabilities" });
+        expect(capabilities.statusCode).toBe(200);
+        expect(capabilities.json()).toEqual({
             codex: {
-                enabled: false,
+                enabled: true,
                 protocolVersion: 4,
-                minimumHappyCliVersion: "1.4.11",
-                minimumHappyAppVersion: "1.11.18",
+                minimumHappyCliVersion: "1.4.36",
+                minimumHappyAppVersion: "1.11.24",
+                minimumHappyAgentVersion: "0.1.3",
                 minimumCodexCliVersion: "0.145.0",
             },
         });
 
-        vi.stubEnv("HAPPY_CODEX_SYNC_V4_ENABLED", "true");
         const traceId = "00000000000000000000000000000001";
         const enabled = await app.inject({
             method: "GET",

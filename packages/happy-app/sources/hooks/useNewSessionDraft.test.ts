@@ -4,7 +4,6 @@ type Draft = {
     input: string;
     selectedMachineId: string | null;
     selectedPath: string | null;
-    agentType: 'codex' | 'gemini' | 'openclaw' | 'agy';
     permissionMode: string | null;
     modelMode: string | null;
     effortLevel: string | null;
@@ -31,7 +30,6 @@ function persistedDraft(overrides: Partial<Draft> = {}): Draft {
         input: '',
         selectedMachineId: null,
         selectedPath: null,
-        agentType: 'codex',
         permissionMode: null,
         modelMode: null,
         effortLevel: null,
@@ -71,26 +69,22 @@ describe('useNewSessionDraft', () => {
         expect(useNewSessionDraft.getState().effortLevel).toBe('xhigh');
     });
 
-    it('defaults to Codex and clears mode overrides when the agent changes', async () => {
+    it('keeps Codex mode overrides without a provider selector', async () => {
         const { useNewSessionDraft } = await import('./useNewSessionDraft');
-        expect(useNewSessionDraft.getState().agentType).toBe('codex');
 
         useNewSessionDraft.getState().setPermissionMode('read-only');
         useNewSessionDraft.getState().setModelMode('gpt-5.6-sol');
         useNewSessionDraft.getState().setEffortLevel('max');
-        useNewSessionDraft.getState().setAgentType('gemini');
 
         expect(useNewSessionDraft.getState()).toMatchObject({
-            agentType: 'gemini',
-            permissionMode: null,
-            modelMode: null,
-            effortLevel: null,
+            permissionMode: 'read-only',
+            modelMode: 'gpt-5.6-sol',
+            effortLevel: 'max',
         });
     });
 
-    it('prepares a machine environment atomically without changing the selected agent', async () => {
+    it('prepares a machine environment atomically and clears mode overrides', async () => {
         const { useNewSessionDraft } = await import('./useNewSessionDraft');
-        useNewSessionDraft.getState().setAgentType('agy');
         useNewSessionDraft.getState().setEffortLevel('high');
 
         useNewSessionDraft.getState().prepareEnvironment({
@@ -103,14 +97,13 @@ describe('useNewSessionDraft', () => {
         expect(useNewSessionDraft.getState()).toMatchObject({
             selectedMachineId: 'machine-2',
             selectedPath: '~/project',
-            agentType: 'agy',
             sessionType: 'worktree',
             worktreeKey: '/worktree',
             permissionMode: null,
             modelMode: null,
             effortLevel: null,
         });
-        expect(mockPersistence.saved).toHaveLength(3);
+        expect(mockPersistence.saved).toHaveLength(2);
     });
 
     it('persists effort changes with the rest of the new-session draft', async () => {

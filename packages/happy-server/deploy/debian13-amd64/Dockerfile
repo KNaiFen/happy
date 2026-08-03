@@ -83,8 +83,7 @@ ENV NODE_ENV=production \
     PGLITE_DIR=/data/pglite \
     HOST=0.0.0.0 \
     PORT=3005 \
-    METRICS_ENABLED=false \
-    HAPPY_CODEX_SYNC_V4_ENABLED=false
+    METRICS_ENABLED=false
 
 WORKDIR /opt/happy-server
 

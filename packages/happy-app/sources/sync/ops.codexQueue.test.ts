@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CodexCommandEntityV4, CodexTurnEntityV4 } from '@slopus/happy-wire';
+import { createCodexV4Projection } from './codexV4Projection';
 
 const {
     sessionRPC,
@@ -32,6 +34,55 @@ vi.mock('./storage', () => ({
     storage: { getState },
 }));
 
+function queuedState(queueEntryId: string) {
+    const projection = createCodexV4Projection('thread-1');
+    projection.entities['codex.command']['queue-command'] = {
+        schemaVersion: 1,
+        entityType: 'codex.command',
+        providerId: 'queue-command',
+        createdAt: 10,
+        updatedAt: 10,
+        commandId: 'queue-command',
+        threadId: 'thread-1',
+        expectedTurnId: 'turn-active',
+        command: 'turn.queue',
+        payload: { text: 'original', displayText: 'original' },
+        clientUserMessageId: 'queue-command',
+        replacesCommandId: null,
+        queueEntryId,
+        queuedAt: 10,
+    } as CodexCommandEntityV4;
+    projection.entities['codex.turn']['turn-active'] = {
+        schemaVersion: 1,
+        entityType: 'codex.turn',
+        providerId: 'turn-active',
+        createdAt: 5,
+        updatedAt: 10,
+        threadId: 'thread-1',
+        turnId: 'turn-active',
+        status: 'inProgress',
+        startedAt: 5,
+        completedAt: null,
+        durationMs: null,
+        error: null,
+        usage: null,
+        planRevision: 0,
+        diffRevision: 0,
+    } as CodexTurnEntityV4;
+    return {
+        sessions: {
+            'session-1': {
+                metadata: {
+                    flavor: 'codex',
+                    codexSyncVersion: 4,
+                    codexCapabilities: { queueSteering: true },
+                },
+            },
+        },
+        codexV4Sessions: { 'session-1': projection },
+    };
+}
+
 describe('Codex queued message ops', () => {
     beforeEach(() => {
         sessionRPC.mockReset();
@@ -55,28 +106,40 @@ describe('Codex queued message ops', () => {
         publishCodexV4Command.mockResolvedValue({});
     });
 
-    it('updates a specific CLI-owned queue item', async () => {
+    it('updates a queued V4 command while preserving its FIFO identity', async () => {
+        getState.mockReturnValue(queuedState('queued-1'));
         const { sessionUpdateCodexQueuedMessage } = await import('./ops');
 
         await sessionUpdateCodexQueuedMessage('session-1', 'queued-1', 'edited text');
 
-        expect(sessionRPC).toHaveBeenCalledWith(
-            'session-1',
-            'codex-update-queued-message',
-            { id: 'queued-1', text: 'edited text' },
-        );
+        expect(publishCodexV4Command).toHaveBeenCalledWith('session-1', {
+            command: 'turn.queue',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-active',
+            payload: { text: 'edited text', displayText: 'edited text' },
+            replacesCommandId: 'queue-command',
+            queueEntryId: 'queued-1',
+            queuedAt: 10,
+        }, undefined, 'edited text');
+        expect(sessionRPC).not.toHaveBeenCalled();
     });
 
-    it('steers a specific CLI-owned queue item', async () => {
+    it('steers a queued V4 command into the active turn', async () => {
+        getState.mockReturnValue(queuedState('queued-2'));
         const { sessionSteerCodexQueuedMessage } = await import('./ops');
 
         await sessionSteerCodexQueuedMessage('session-1', 'queued-2');
 
-        expect(sessionRPC).toHaveBeenCalledWith(
-            'session-1',
-            'codex-steer-queued-message',
-            { id: 'queued-2' },
-        );
+        expect(publishCodexV4Command).toHaveBeenCalledWith('session-1', {
+            command: 'turn.steer',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-active',
+            payload: { text: 'original', displayText: 'original' },
+            replacesCommandId: 'queue-command',
+            queueEntryId: 'queued-2',
+            queuedAt: 10,
+        }, undefined, 'original');
+        expect(sessionRPC).not.toHaveBeenCalled();
     });
 
     it('rejects content writes but allows archive for a provider-created child', async () => {
@@ -135,32 +198,22 @@ describe('Codex queued message ops', () => {
         );
     });
 
-    it('keeps non-Codex-v4 archive traffic on the legacy v1 lifecycle route', async () => {
+    it('rejects unsupported sessions without sending legacy archive traffic', async () => {
         getState.mockReturnValue({
             sessions: {
-                'session-claude': {
-                    metadata: { flavor: 'claude' },
+                'session-unknown': {
+                    metadata: { flavor: 'unknown' },
                 },
-                'session-codex-v3': {
+                'session-codex-without-v4': {
                     metadata: { flavor: 'codex' },
                 },
             },
         });
         const { sessionArchive } = await import('./ops');
 
-        await expect(sessionArchive('session-claude')).resolves.toMatchObject({ success: true });
-        await expect(sessionArchive('session-codex-v3')).resolves.toMatchObject({ success: true });
-
-        expect(request).toHaveBeenNthCalledWith(
-            1,
-            '/v1/sessions/session-claude/archive',
-            { method: 'POST' },
-        );
-        expect(request).toHaveBeenNthCalledWith(
-            2,
-            '/v1/sessions/session-codex-v3/archive',
-            { method: 'POST' },
-        );
+        await expect(sessionArchive('session-unknown')).resolves.toMatchObject({ success: false });
+        await expect(sessionArchive('session-codex-without-v4')).resolves.toMatchObject({ success: false });
+        expect(request).not.toHaveBeenCalled();
     });
 
     it('stops a Codex Gateway through the authenticated machine RPC', async () => {

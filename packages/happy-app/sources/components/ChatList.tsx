@@ -13,8 +13,6 @@ import { Message } from '@/sync/typesMessage';
 import { DisplayItem, ToolGroupItem, useGroupedMessages } from '@/hooks/useGroupedMessages';
 import { Octicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { resolveControlMode } from '@/sync/controlHandoff';
-import { usesControlledSessionUi } from '@/sync/rig';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { resolveCodexV4Activity, shouldCollapseCurrentCodexV4Turn } from '@/sync/codexV4Activity';
 import { t } from '@/text';
@@ -75,10 +73,7 @@ const ListHeader = React.memo((props: { isLoadingOlder: boolean; topContentInset
 });
 
 const ListFooter = React.memo((props: { sessionId: string }) => {
-    const session = useSession(props.sessionId)!;
-    return (
-        <ChatFooter controlledByUser={usesControlledSessionUi(session.metadata) && (session.agentState?.controlledByUser || false)} />
-    )
+    return <ChatFooter controlledByUser={false} />;
 });
 
 const ChatListInternal = React.memo((props: {
@@ -94,7 +89,6 @@ const ChatListInternal = React.memo((props: {
     const { theme } = useUnistyles();
     const flatListRef = React.useRef<FlatList>(null);
     const [showScrollButton, setShowScrollButton] = React.useState(false);
-    const [handoffListRevision, setHandoffListRevision] = React.useState(0);
     // Tracks whether the scroll-button is currently shown, so we only call
     // setShowScrollButton when the threshold is actually crossed instead of
     // on every scroll frame (60Hz). Without this guard, the entire list
@@ -108,24 +102,6 @@ const ChatListInternal = React.memo((props: {
     });
     const session = useSession(props.sessionId);
     const codexV4Session = useCodexV4Session(props.sessionId);
-    const controlMode = resolveControlMode(usesControlledSessionUi(session?.metadata) ? session?.agentState?.controlledByUser : false);
-    const previousControlModeRef = React.useRef(controlMode);
-
-    React.useEffect(() => {
-        if (previousControlModeRef.current === controlMode) {
-            return;
-        }
-        previousControlModeRef.current = controlMode;
-        if (Platform.OS !== 'web') {
-            return;
-        }
-        if (showScrollButtonRef.current) {
-            showScrollButtonRef.current = false;
-            setShowScrollButton(false);
-        }
-        setHandoffListRevision((revision) => revision + 1);
-    }, [controlMode]);
-
     // Collapse agent work between a user prompt and the final answer.
     // Nested tool groups remain expandable inside the work block.
     const groupToolCalls = useSetting('groupToolCalls');
@@ -377,7 +353,7 @@ const ChatListInternal = React.memo((props: {
     return (
         <View style={{ flex: 1 }}>
             <FlatList
-                key={`${props.sessionId}:${handoffListRevision}`}
+                key={props.sessionId}
                 ref={flatListRef}
                 data={listItems}
                 inverted={true}

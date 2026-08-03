@@ -3,8 +3,6 @@ import type { Config } from './config';
 import type { DecryptedMachine } from './api';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from './encryption';
 
-export type SupportedAgent = 'codex' | 'gemini' | 'openclaw' | 'agy';
-
 export type SpawnMachineSessionResult =
     | { type: 'success'; sessionId: string }
     | { type: 'requestToApproveDirectoryCreation'; directory: string }
@@ -63,8 +61,7 @@ export async function spawnSessionOnMachine(
     options: {
         directory: string;
         approvedNewDirectoryCreation?: boolean;
-        agent: SupportedAgent;
-        providerToken?: string;
+        agent: 'codex';
     },
 ): Promise<SpawnMachineSessionResult> {
     const socket = io(config.serverUrl, {
@@ -87,8 +84,7 @@ export async function spawnSessionOnMachine(
                 type: 'spawn-in-directory',
                 directory: options.directory,
                 approvedNewDirectoryCreation: options.approvedNewDirectoryCreation ?? false,
-                token: options.providerToken,
-                agent: options.agent,
+                agent: 'codex',
             }),
         );
 

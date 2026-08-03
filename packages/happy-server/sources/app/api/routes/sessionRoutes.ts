@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { log } from "@/utils/log";
 import { diagnosticHash } from "@/utils/diagnosticHash";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
+import { isSupportedSessionTag } from "@/app/session/supportedSessionTags";
 import { allocateUserSeq } from "@/storage/seq";
 import { sessionDelete } from "@/app/session/sessionDelete";
 import { inTx } from "@/storage/inTx";
@@ -251,7 +252,9 @@ export function sessionRoutes(app: Fastify) {
     app.post('/v1/sessions', {
         schema: {
             body: z.object({
-                tag: z.string(),
+                tag: z.string().refine(isSupportedSessionTag, {
+                    message: 'Only Codex Sync v4 session tags are supported',
+                }),
                 metadata: z.string(),
                 agentState: z.string().nullish(),
                 dataEncryptionKey: z.string().nullish(),
@@ -365,108 +368,6 @@ export function sessionRoutes(app: Fastify) {
         });
 
         return reply.send({ session: sessionResponse(result.session) });
-    });
-
-    app.get('/v1/sessions/:sessionId/messages', {
-        schema: {
-            params: z.object({
-                sessionId: z.string()
-            })
-        },
-        preHandler: app.authenticate
-    }, async (request, reply) => {
-        const userId = request.userId;
-        const { sessionId } = request.params;
-
-        // Verify session belongs to user
-        const accessWhere = buildSessionAccessWhere(
-            sessionAccessIdentityFromRequest(request),
-            { id: sessionId },
-        );
-        const session = accessWhere
-            ? await db.session.findFirst({ where: accessWhere })
-            : null;
-
-        if (!session) {
-            return reply.code(404).send({ error: 'Session not found' });
-        }
-
-        const messages = await db.sessionMessage.findMany({
-            where: { sessionId },
-            orderBy: { createdAt: 'desc' },
-            take: 150,
-            select: {
-                id: true,
-                seq: true,
-                localId: true,
-                content: true,
-                createdAt: true,
-                updatedAt: true
-            }
-        });
-
-        return reply.send({
-            messages: messages.map((v) => ({
-                id: v.id,
-                seq: v.seq,
-                content: v.content,
-                localId: v.localId,
-                createdAt: v.createdAt.getTime(),
-                updatedAt: v.updatedAt.getTime()
-            }))
-        });
-    });
-
-    // Legacy v1 shutdown fallback. Retained v3 clients depend on this endpoint
-    // remaining a transient active=false update rather than a tombstone.
-    app.post('/v1/sessions/:sessionId/archive', {
-        schema: {
-            params: z.object({
-                sessionId: z.string()
-            })
-        },
-        preHandler: app.authenticate
-    }, async (request, reply) => {
-        const userId = request.userId;
-        const { sessionId } = request.params;
-        const accessWhere = buildSessionAccessWhere(
-            sessionAccessIdentityFromRequest(request),
-            { id: sessionId },
-        );
-        if (!accessWhere) {
-            return reply.code(403).send({ error: 'Machine is not authorized' });
-        }
-        const inactiveAt = new Date();
-        const result = await inTx(async (tx) => {
-            const session = await tx.session.findFirst({
-                where: accessWhere,
-                select: { archivedAt: true },
-            });
-            if (!session) return null;
-            if (session.archivedAt) return { changed: false };
-            const updated = await tx.session.updateMany({
-                where: { ...accessWhere, archivedAt: null },
-                data: { active: false, lastActiveAt: inactiveAt },
-            });
-            return { changed: updated.count > 0 };
-        });
-        if (!result) {
-            return reply.code(404).send({ error: 'Session not found' });
-        }
-        if (result.changed) {
-            activityCache.invalidateSessions([sessionId]);
-            eventRouter.emitEphemeral({
-                userId,
-                payload: buildSessionActivityEphemeral(
-                    sessionId,
-                    false,
-                    inactiveAt.getTime(),
-                    false,
-                ),
-                recipientFilter: { type: 'user-scoped-only' },
-            });
-        }
-        return reply.send({ success: true });
     });
 
     // Codex v4 archive is an authoritative, persistent lifecycle tombstone.

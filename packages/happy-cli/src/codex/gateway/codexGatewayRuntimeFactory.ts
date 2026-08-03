@@ -241,7 +241,6 @@ export class CodexGatewayRuntimeFactory {
         )) return null;
 
         const target = this.options.api.sessionSyncClient(session);
-        target.skipExistingMessages();
         target.on('archived', () => this.options.onSessionArchived?.(target.sessionId));
         let rootBinding: CodexV4SessionBinding | null = null;
         let router: CodexV4ThreadRouter | null = null;
@@ -352,7 +351,6 @@ export class CodexGatewayRuntimeFactory {
             throw new Error('Happy relay is unavailable while restoring a Codex child session');
         }
         const target = this.options.api.sessionSyncClient(response);
-        target.skipExistingMessages();
         try {
             return await this.createBinding({
                 target,

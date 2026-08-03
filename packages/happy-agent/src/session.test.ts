@@ -1,871 +1,346 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { EventEmitter } from 'node:events';
 import {
-    decodeBase64,
-    decrypt,
-    encodeBase64,
-    encrypt,
-    getRandomBytes,
-} from './encryption';
-import type { EncryptionVariant } from './api';
+    CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+    type CodexCommandResultEntityV4,
+    type CodexEntityV4,
+    type CodexRuntimeEntityV4,
+    type CodexThreadEntityV4,
+    type CodexTurnEntityV4,
+    type SyncEntitySnapshotV4,
+} from '@slopus/happy-wire';
+import axios from 'axios';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+    SessionClient,
+    SyncV4Crypto,
+    codexHistoryFromSnapshot,
+    isCodexSnapshotIdle,
+    type CodexV4Snapshot,
+} from './session';
 
-// --- Mock socket.io-client ---
-
-class MockSocket extends EventEmitter {
-    connected = true;
-    readonly auth: unknown;
-    readonly opts: unknown;
-
-    emittedEvents: Array<{ event: string; args: unknown[] }> = [];
-
-    constructor(url: string, opts: unknown) {
-        super();
-        this.opts = opts;
-        this.auth = (opts as Record<string, unknown>).auth;
-    }
-
-    connect() {
-        this.connected = true;
-        // Emit connect asynchronously to allow test setup
-        setTimeout(() => this.emit('connect'), 0);
-    }
-
-    close() {
-        this.connected = false;
-        this.emit('disconnect', 'client namespace disconnect');
-    }
-
-    // Override emit to track emitted events (but still call EventEmitter's emit for listeners)
-    override emit(event: string | symbol, ...args: unknown[]): boolean {
-        if (typeof event === 'string' && event !== 'connect' && event !== 'disconnect' && event !== 'connect_error' && event !== 'update') {
-            this.emittedEvents.push({ event: event as string, args });
-        }
-        return super.emit(event, ...args);
-    }
-
-    // Simulate receiving a server event
-    simulateServerEvent(event: string, data: unknown) {
-        // Use EventEmitter's emit directly
-        super.emit(event, data);
-    }
-}
-
-let mockSocketInstance: MockSocket | null = null;
-
-vi.mock('socket.io-client', () => ({
-    io: vi.fn((url: string, opts: unknown) => {
-        mockSocketInstance = new MockSocket(url, opts);
-        return mockSocketInstance;
-    }),
+vi.mock('axios', () => ({
+    default: {
+        get: vi.fn(),
+        post: vi.fn(),
+        isAxiosError: vi.fn(() => false),
+    },
 }));
 
-import { SessionClient, SessionClientOptions } from './session';
+const mockedGet = vi.mocked(axios.get);
+const mockedPost = vi.mocked(axios.post);
+const sessionKey = new Uint8Array(32).fill(7);
+const now = 1_700_000_000_000;
 
-// --- Test helpers ---
-
-function makeSessionKey(): Uint8Array {
-    return getRandomBytes(32);
-}
-
-function makeOptions(overrides: Partial<SessionClientOptions> = {}): SessionClientOptions {
+function thread(overrides: Partial<CodexThreadEntityV4> = {}): CodexThreadEntityV4 {
     return {
-        sessionId: 'test-session-id',
-        encryptionKey: makeSessionKey(),
-        encryptionVariant: 'dataKey' as EncryptionVariant,
-        token: 'test-jwt-token',
-        serverUrl: 'https://test-server.example.com',
+        schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+        entityType: 'codex.thread',
+        providerId: 'thread-1',
+        createdAt: now,
+        updatedAt: now,
+        threadId: 'thread-1',
+        sessionTreeId: null,
+        forkedFromThreadId: null,
+        parentThreadId: null,
+        name: null,
+        preview: '',
+        cwd: '/workspace',
+        cliVersion: '0.145.0',
+        model: null,
+        modelProvider: 'openai',
+        source: {},
+        status: { type: 'idle' },
+        canAcceptDirectInput: true,
+        settings: {
+            approvalPolicy: null,
+            approvalsReviewer: null,
+            sandboxPolicy: null,
+            permissionProfile: null,
+            serviceTier: null,
+            reasoningEffort: null,
+            reasoningSummary: null,
+            collaborationMode: null,
+            personality: null,
+        },
+        goal: null,
+        tokenUsage: null,
         ...overrides,
     };
 }
 
-function makeEncryptedUpdate(
-    key: Uint8Array,
-    variant: EncryptionVariant,
-    content: unknown,
-    sessionId: string,
-    overrides: Partial<{
-        id: string;
-        seq: number;
-        localId: string | null;
-        createdAt: number;
-        updatedAt: number;
-    }> = {},
-) {
-    const encrypted = encodeBase64(encrypt(key, variant, content));
+function runtime(overrides: Partial<CodexRuntimeEntityV4> = {}): CodexRuntimeEntityV4 {
     return {
-        id: overrides.id ?? 'update-1',
-        seq: overrides.seq ?? 1,
-        body: {
-            t: 'new-message' as const,
-            sid: sessionId,
-            message: {
-                id: overrides.id ?? 'msg-1',
-                seq: overrides.seq ?? 1,
-                content: { t: 'encrypted' as const, c: encrypted },
-                localId: overrides.localId ?? null,
-                createdAt: overrides.createdAt ?? 1000,
-                updatedAt: overrides.updatedAt ?? 1000,
+        schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+        entityType: 'codex.runtime',
+        providerId: 'runtime-1',
+        createdAt: now,
+        updatedAt: now,
+        threadId: 'thread-1',
+        connection: 'connected',
+        execution: { type: 'idle' },
+        statusUnknown: false,
+        protocolVersion: 'stable-v2',
+        codexCliVersion: '0.145.0',
+        syncState: 'ready',
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        activeSubagentCount: 0,
+        lastError: null,
+        lastKnownAt: now,
+        ...overrides,
+    };
+}
+
+function turn(overrides: Partial<CodexTurnEntityV4> = {}): CodexTurnEntityV4 {
+    return {
+        schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+        entityType: 'codex.turn',
+        providerId: 'turn-1',
+        createdAt: now,
+        updatedAt: now,
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        status: 'inProgress',
+        startedAt: now,
+        completedAt: null,
+        durationMs: null,
+        error: null,
+        usage: null,
+        planRevision: 0,
+        diffRevision: 0,
+        ...overrides,
+    };
+}
+
+async function encryptedRecords(entities: CodexEntityV4[]): Promise<SyncEntitySnapshotV4[]> {
+    const crypto = new SyncV4Crypto('session-1', sessionKey);
+    return entities.map((entity, index) => {
+        const entityId = crypto.opaqueEntityId(entity.entityType, entity.providerId);
+        const revision = 1;
+        const op = 'upsert' as const;
+        return {
+            producerId: 'gateway-1',
+            entityId,
+            entityType: entity.entityType,
+            revision,
+            op,
+            ciphertext: crypto.encryptEntity({
+                sessionId: 'session-1',
+                entityId,
+                entityType: entity.entityType,
+                revision,
+                op,
+            }, entity),
+            updatedSeq: index + 1,
+            createdAt: now,
+            updatedAt: now,
+        };
+    });
+}
+
+async function snapshotResponse(entities: CodexEntityV4[]) {
+    return {
+        data: {
+            entities: await encryptedRecords(entities),
+            highWatermark: entities.length,
+            nextCursor: null,
+        },
+    };
+}
+
+function client(): SessionClient {
+    return new SessionClient({
+        sessionId: 'session-1',
+        encryptionKey: sessionKey,
+        token: 'token-1',
+        serverUrl: 'https://happy.example',
+        threadId: 'thread-1',
+        pollIntervalMs: 1,
+    });
+}
+
+function mockCapabilities(): void {
+    mockedGet.mockResolvedValueOnce({
+        data: {
+            codex: {
+                enabled: true,
+                protocolVersion: 4,
+                minimumHappyAgentVersion: '0.1.3',
             },
         },
-        createdAt: Date.now(),
-    };
+    });
 }
 
-function makeSessionUpdate(
-    key: Uint8Array,
-    variant: EncryptionVariant,
-    sessionId: string,
-    opts: {
-        metadata?: { data: unknown; version: number };
-        agentState?: { data: unknown | null; version: number };
-    },
-) {
-    return {
-        id: 'update-session-1',
-        seq: 1,
-        body: {
-            t: 'update-session' as const,
-            id: sessionId,
-            metadata: opts.metadata
-                ? {
-                      value: encodeBase64(encrypt(key, variant, opts.metadata.data)),
-                      version: opts.metadata.version,
-                  }
-                : undefined,
-            agentState: opts.agentState
-                ? {
-                      value:
-                          opts.agentState.data !== null
-                              ? encodeBase64(encrypt(key, variant, opts.agentState.data))
-                              : null,
-                      version: opts.agentState.version,
-                  }
-                : undefined,
-        },
-        createdAt: Date.now(),
-    };
-}
-
-// --- Tests ---
-
-describe('SessionClient', () => {
+describe('SessionClient Codex Sync v4', () => {
     beforeEach(() => {
-        mockSocketInstance = null;
-        vi.clearAllMocks();
+        vi.resetAllMocks();
+        vi.mocked(axios.isAxiosError).mockReturnValue(false);
     });
 
-    afterEach(() => {
-        mockSocketInstance = null;
+    it('decrypts an authoritative snapshot without opening Socket.IO', async () => {
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+
+        const snapshot = await client().readSnapshot();
+
+        expect(snapshot.thread?.threadId).toBe('thread-1');
+        expect(snapshot.runtime?.execution).toEqual({ type: 'idle' });
+        expect(mockedGet).toHaveBeenCalledTimes(2);
+        expect(mockedGet.mock.calls[1][0]).toContain('/v4/sessions/session-1/snapshot');
     });
 
-    describe('constructor and connection', () => {
-        it('creates socket with correct auth parameters', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
+    it('publishes turn.queue while the runtime is active', async () => {
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([
+            thread({ status: { type: 'active', activeFlags: [] } }),
+            runtime({ execution: { type: 'active', activeFlags: [] } }),
+            turn(),
+        ]));
+        mockedPost.mockImplementationOnce(async (_url, body) => ({
+            data: {
+                acknowledgements: [{
+                    mutationId: (body as { mutations: Array<{ mutationId: string }> }).mutations[0].mutationId,
+                    seq: 4,
+                    revision: 1,
+                    status: 'accepted',
+                }],
+            },
+        }));
 
-            expect(mockSocketInstance).not.toBeNull();
-            const socketOpts = mockSocketInstance!.opts as Record<string, unknown>;
-            const auth = socketOpts.auth as Record<string, unknown>;
-            expect(auth.token).toBe('test-jwt-token');
-            expect(auth.clientType).toBe('session-scoped');
-            expect(auth.sessionId).toBe('test-session-id');
-            expect(socketOpts.path).toBe('/v1/updates');
+        const published = await client().sendMessage('follow up');
 
-            client.close();
-        });
-
-        it('connects to the correct server URL', async () => {
-            const { io: mockIo } = vi.mocked(await import('socket.io-client'));
-            const opts = makeOptions({ serverUrl: 'https://custom-server.example.com' });
-            const client = new SessionClient(opts);
-
-            expect(mockIo).toHaveBeenCalledWith(
-                'https://custom-server.example.com',
-                expect.objectContaining({
-                    path: '/v1/updates',
-                    transports: ['websocket'],
-                }),
-            );
-
-            client.close();
-        });
-
-        it('emits connected event when socket connects', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const connected = new Promise<void>((resolve) => {
-                client.on('connected', resolve);
-            });
-
-            // The mock socket emits connect asynchronously from connect()
-            await connected;
-
-            client.close();
-        });
-
-        it('emits disconnected event when socket disconnects', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const disconnected = new Promise<string>((resolve) => {
-                client.on('disconnected', resolve);
-            });
-
-            client.close();
-
-            const reason = await disconnected;
-            expect(reason).toBe('client namespace disconnect');
-        });
+        expect(published.command.command).toBe('turn.queue');
+        expect(published.command.expectedTurnId).toBe('turn-1');
+        expect((published.command as unknown as { queueEntryId?: string }).queueEntryId).toBeTruthy();
+        expect(mockedPost.mock.calls[0][0]).toContain('/v4/sessions/session-1/mutations');
     });
 
-    describe('sendMessage', () => {
-        it('encrypts and sends a user message', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
+    it('publishes turn.start when the reconciled snapshot is idle', async () => {
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+        mockedPost.mockImplementationOnce(async (_url, body) => ({
+            data: {
+                acknowledgements: [{
+                    mutationId: (body as { mutations: Array<{ mutationId: string }> }).mutations[0].mutationId,
+                    seq: 3,
+                    revision: 1,
+                    status: 'accepted',
+                }],
+            },
+        }));
 
-            client.sendMessage('Hello agent');
+        const published = await client().sendMessage('new turn');
 
-            // Find the 'message' event in emitted events
-            const messageEvents = mockSocketInstance!.emittedEvents.filter(
-                (e) => e.event === 'message',
-            );
-            expect(messageEvents).toHaveLength(1);
-
-            const data = messageEvents[0].args[0] as { sid: string; message: string };
-            expect(data.sid).toBe('test-session-id');
-            expect(typeof data.message).toBe('string'); // base64-encoded encrypted content
-
-            client.close();
-        });
-
-        it('message can be decrypted to original content', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            client.sendMessage('Test message text');
-
-            const messageEvents = mockSocketInstance!.emittedEvents.filter(
-                (e) => e.event === 'message',
-            );
-            const data = messageEvents[0].args[0] as { sid: string; message: string };
-
-            const decrypted = decrypt(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                decodeBase64(data.message),
-            ) as Record<string, unknown>;
-
-            expect(decrypted.role).toBe('user');
-            expect((decrypted.content as Record<string, unknown>).type).toBe('text');
-            expect((decrypted.content as Record<string, unknown>).text).toBe('Test message text');
-            expect((decrypted.meta as Record<string, unknown>).sentFrom).toBe('happy-agent');
-
-            client.close();
-        });
-
-        it('includes custom meta in the message', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            client.sendMessage('Hello', { customField: 'value' });
-
-            const messageEvents = mockSocketInstance!.emittedEvents.filter(
-                (e) => e.event === 'message',
-            );
-            const data = messageEvents[0].args[0] as { sid: string; message: string };
-            const decrypted = decrypt(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                decodeBase64(data.message),
-            ) as Record<string, unknown>;
-            const meta = decrypted.meta as Record<string, unknown>;
-            expect(meta.sentFrom).toBe('happy-agent');
-            expect(meta.customField).toBe('value');
-
-            client.close();
-        });
-
-        it('works with legacy encryption variant', () => {
-            const opts = makeOptions({ encryptionVariant: 'legacy' });
-            const client = new SessionClient(opts);
-
-            client.sendMessage('Legacy message');
-
-            const messageEvents = mockSocketInstance!.emittedEvents.filter(
-                (e) => e.event === 'message',
-            );
-            const data = messageEvents[0].args[0] as { sid: string; message: string };
-            const decrypted = decrypt(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                decodeBase64(data.message),
-            ) as Record<string, unknown>;
-
-            expect(decrypted.role).toBe('user');
-            expect((decrypted.content as Record<string, unknown>).text).toBe('Legacy message');
-
-            client.close();
-        });
+        expect(published.command.command).toBe('turn.start');
+        expect((published.command as unknown as { queueEntryId?: string | null }).queueEntryId).toBeNull();
     });
 
-    describe('update event handling and decryption', () => {
-        it('decrypts and emits new-message updates', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-            const messageContent = { role: 'assistant', text: 'Hello from agent' };
-
-            const messages: unknown[] = [];
-            client.on('message', (msg) => messages.push(msg));
-
-            const update = makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                messageContent,
-                opts.sessionId,
-            );
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            expect(messages).toHaveLength(1);
-            const msg = messages[0] as Record<string, unknown>;
-            expect(msg.id).toBe('msg-1');
-            expect(msg.content).toEqual(messageContent);
-            expect(msg.createdAt).toBe(1000);
-
-            client.close();
+    it('rejects a mismatched mutation acknowledgement', async () => {
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+        mockedPost.mockResolvedValueOnce({
+            data: {
+                acknowledgements: [{
+                    mutationId: 'different-mutation',
+                    seq: 3,
+                    revision: 1,
+                    status: 'accepted',
+                }],
+            },
         });
 
-        it('decrypts and caches metadata updates', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-            const metadata = { path: '/home/user/project', host: 'laptop' };
-
-            const stateChanges: unknown[] = [];
-            client.on('state-change', (data) => stateChanges.push(data));
-
-            const update = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                metadata: { data: metadata, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            expect(stateChanges).toHaveLength(1);
-            expect(client.getMetadata()).toEqual(metadata);
-
-            client.close();
-        });
-
-        it('decrypts and caches agentState updates', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-            const agentState = { controlledByUser: true, requests: { 'req-1': { tool: 'test', arguments: {}, createdAt: Date.now() } } };
-
-            const stateChanges: unknown[] = [];
-            client.on('state-change', (data) => stateChanges.push(data));
-
-            const update = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: agentState, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            expect(stateChanges).toHaveLength(1);
-            expect(client.getAgentState()).toEqual(agentState);
-
-            client.close();
-        });
-
-        it('ignores metadata updates with lower version', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            // Set initial metadata at version 5
-            const update1 = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                metadata: { data: { path: '/v5' }, version: 5 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update1);
-            expect(client.getMetadata()).toEqual({ path: '/v5' });
-
-            // Try to set metadata at version 3 (lower) — should be ignored
-            const update2 = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                metadata: { data: { path: '/v3' }, version: 3 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update2);
-            expect(client.getMetadata()).toEqual({ path: '/v5' });
-
-            client.close();
-        });
-
-        it('ignores agentState updates with lower version', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const update1 = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: true, requests: {} }, version: 3 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update1);
-
-            const update2 = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: false, requests: {} }, version: 2 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update2);
-
-            const state = client.getAgentState() as Record<string, unknown>;
-            expect(state.controlledByUser).toBe(true);
-
-            client.close();
-        });
-
-        it('handles null agentState value', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const update = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: null, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            expect(client.getAgentState()).toBeNull();
-
-            client.close();
-        });
-
-        it('handles update with both metadata and agentState', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-            const metadata = { path: '/project' };
-            const agentState = { controlledByUser: false, requests: {} };
-
-            const update = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                metadata: { data: metadata, version: 1 },
-                agentState: { data: agentState, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            expect(client.getMetadata()).toEqual(metadata);
-            expect(client.getAgentState()).toEqual(agentState);
-
-            client.close();
-        });
-
-        it('silently ignores updates with no body', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const messages: unknown[] = [];
-            client.on('message', (msg) => messages.push(msg));
-            client.on('state-change', (data) => messages.push(data));
-
-            mockSocketInstance!.simulateServerEvent('update', { id: '1', seq: 1, body: null, createdAt: Date.now() });
-
-            expect(messages).toHaveLength(0);
-
-            client.close();
-        });
-
-        it('handles decryption errors silently', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const messages: unknown[] = [];
-            client.on('message', (msg) => messages.push(msg));
-
-            // Send an update with garbage encrypted data
-            const update = {
-                id: 'bad-update',
-                seq: 1,
-                body: {
-                    t: 'new-message',
-                    sid: opts.sessionId,
-                    message: {
-                        id: 'msg-bad',
-                        seq: 1,
-                        content: { t: 'encrypted', c: 'not-valid-encrypted-data' },
-                        localId: null,
-                        createdAt: 1000,
-                        updatedAt: 1000,
-                    },
-                },
-                createdAt: Date.now(),
-            };
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            // Should not crash, and no message should be emitted (decryption fails)
-            expect(messages).toHaveLength(0);
-
-            client.close();
-        });
-
-        it('works with legacy encryption for updates', () => {
-            const opts = makeOptions({ encryptionVariant: 'legacy' });
-            const client = new SessionClient(opts);
-            const messageContent = { role: 'assistant', text: 'Legacy response' };
-
-            const messages: unknown[] = [];
-            client.on('message', (msg) => messages.push(msg));
-
-            const update = makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                messageContent,
-                opts.sessionId,
-            );
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            expect(messages).toHaveLength(1);
-            expect((messages[0] as Record<string, unknown>).content).toEqual(messageContent);
-
-            client.close();
-        });
+        await expect(client().sendMessage('new turn')).rejects.toThrow(
+            'mismatched mutation acknowledgement',
+        );
     });
 
-    describe('waitForIdle', () => {
-        it('does not resolve immediately when no agentState is set', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
+    it('rejects a superseded command mutation', async () => {
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+        mockedPost.mockImplementationOnce(async (_url, body) => ({
+            data: {
+                acknowledgements: [{
+                    mutationId: (body as { mutations: Array<{ mutationId: string }> }).mutations[0].mutationId,
+                    seq: 3,
+                    revision: 1,
+                    status: 'superseded',
+                }],
+            },
+        }));
 
-            // With null agentState, waitForIdle should not resolve (no state = not known to be idle)
-            await expect(client.waitForIdle(100)).rejects.toThrow(
-                'Timeout waiting for agent to become idle',
-            );
-
-            client.close();
-        });
-
-        it('resolves when controlledByUser becomes false and no requests', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            // Set initial state as busy
-            const busyUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: true, requests: { 'r1': { tool: 'test', arguments: {}, createdAt: Date.now() } } }, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', busyUpdate);
-
-            // Start waiting for idle
-            const idlePromise = client.waitForIdle(5000);
-
-            // Transition to idle
-            const idleUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: false, requests: {} }, version: 2 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', idleUpdate);
-
-            await idlePromise;
-            // Should resolve without error
-
-            client.close();
-        });
-
-        it('does not resolve when agentState becomes null', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            // Set initial state as busy
-            const busyUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: true, requests: {} }, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', busyUpdate);
-
-            // Set agentState to null -- null is not considered idle
-            const nullUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: null, version: 2 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', nullUpdate);
-
-            await expect(client.waitForIdle(200)).rejects.toThrow(
-                'Timeout waiting for agent to become idle',
-            );
-
-            client.close();
-        });
-
-        it('does not resolve when only controlledByUser is false but requests remain', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const busyUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: true, requests: { 'r1': { tool: 'test', arguments: {}, createdAt: Date.now() } } }, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', busyUpdate);
-
-            let resolved = false;
-            const idlePromise = client.waitForIdle(500).then(() => {
-                resolved = true;
-            });
-
-            // Only change controlledByUser, keep requests
-            const partialUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: false, requests: { 'r1': { tool: 'test', arguments: {}, createdAt: Date.now() } } }, version: 2 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', partialUpdate);
-
-            // Wait a bit to check it hasn't resolved
-            await new Promise((r) => setTimeout(r, 100));
-            expect(resolved).toBe(false);
-
-            // Now clear requests
-            const fullyIdleUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: false, requests: {} }, version: 3 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', fullyIdleUpdate);
-
-            await idlePromise;
-            expect(resolved).toBe(true);
-
-            client.close();
-        });
-
-        it('rejects on timeout', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            // Set busy state
-            const busyUpdate = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: true, requests: {} }, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', busyUpdate);
-
-            await expect(client.waitForIdle(100)).rejects.toThrow(
-                'Timeout waiting for agent to become idle',
-            );
-
-            client.close();
-        });
-
-        it('considers undefined requests as idle', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            // Set state with controlledByUser false and no requests field
-            const update = makeSessionUpdate(opts.encryptionKey, opts.encryptionVariant, opts.sessionId, {
-                agentState: { data: { controlledByUser: false }, version: 1 },
-            });
-            mockSocketInstance!.simulateServerEvent('update', update);
-
-            // Should resolve since controlledByUser is false and requests is undefined (idle)
-            await client.waitForIdle(1000);
-
-            client.close();
-        });
+        await expect(client().sendMessage('new turn')).rejects.toThrow(
+            'command mutation was superseded',
+        );
     });
 
-    describe('waitForTurnCompletion', () => {
-        it('resolves when a turn-end arrives after turn-start', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
+    it('waits for an authoritative command result', async () => {
+        const result: CodexCommandResultEntityV4 = {
+            schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+            entityType: 'codex.commandResult',
+            providerId: 'command-1',
+            createdAt: now,
+            updatedAt: now,
+            commandId: 'command-1',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            status: 'succeeded',
+            providerRequestId: null,
+            result: null,
+            error: null,
+        };
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime(), result]));
 
-            const completion = client.waitForTurnCompletion(1000);
-
-            mockSocketInstance!.simulateServerEvent('update', makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                {
-                    role: 'session',
-                    content: {
-                        turn: 'turn-1',
-                        ev: { t: 'turn-start' },
-                    },
-                },
-                opts.sessionId,
-                { seq: 1 },
-            ));
-
-            mockSocketInstance!.simulateServerEvent('update', makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                {
-                    role: 'session',
-                    content: {
-                        turn: 'turn-1',
-                        ev: { t: 'turn-end', status: 'completed' },
-                    },
-                },
-                opts.sessionId,
-                { seq: 2 },
-            ));
-
-            await completion;
-
-            client.close();
-        });
-
-        it('resolves on ready events emitted after post-send agent activity', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const completion = client.waitForTurnCompletion(1000);
-
-            mockSocketInstance!.simulateServerEvent('update', makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                {
-                    role: 'session',
-                    content: {
-                        ev: { t: 'text', text: 'Thinking...' },
-                    },
-                },
-                opts.sessionId,
-                { seq: 1 },
-            ));
-
-            mockSocketInstance!.simulateServerEvent('update', makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                {
-                    role: 'agent',
-                    content: {
-                        type: 'event',
-                        data: { type: 'ready' },
-                    },
-                },
-                opts.sessionId,
-                { seq: 2 },
-            ));
-
-            await completion;
-
-            client.close();
-        });
-
-        it('does not resolve on idle state changes before any post-send activity', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const completion = client.waitForTurnCompletion(100);
-
-            mockSocketInstance!.simulateServerEvent('update', makeSessionUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                opts.sessionId,
-                {
-                    agentState: { data: { controlledByUser: false, requests: {} }, version: 1 },
-                },
-            ));
-
-            await expect(completion).rejects.toThrow('Timeout waiting for agent turn completion');
-
-            client.close();
-        });
-
-        it('falls back to idle state after activity when no turn-end event is emitted', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const completion = client.waitForTurnCompletion(1000);
-
-            mockSocketInstance!.simulateServerEvent('update', makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                {
-                    role: 'assistant',
-                    content: {
-                        type: 'text',
-                        text: 'Working on it',
-                    },
-                },
-                opts.sessionId,
-                { seq: 1 },
-            ));
-
-            mockSocketInstance!.simulateServerEvent('update', makeSessionUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                opts.sessionId,
-                {
-                    agentState: { data: { controlledByUser: false, requests: {} }, version: 1 },
-                },
-            ));
-
-            await completion;
-
-            client.close();
-        });
-
-        it('does not resolve from idle state once a turn has started', async () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            let resolved = false;
-            const completion = client.waitForTurnCompletion(1000).then(() => {
-                resolved = true;
-            });
-
-            mockSocketInstance!.simulateServerEvent('update', makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                {
-                    role: 'session',
-                    content: {
-                        turn: 'turn-2',
-                        ev: { t: 'turn-start' },
-                    },
-                },
-                opts.sessionId,
-                { seq: 1 },
-            ));
-
-            mockSocketInstance!.simulateServerEvent('update', makeSessionUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                opts.sessionId,
-                {
-                    agentState: { data: { controlledByUser: false, requests: {} }, version: 1 },
-                },
-            ));
-
-            await new Promise((resolve) => setTimeout(resolve, 50));
-            expect(resolved).toBe(false);
-
-            mockSocketInstance!.simulateServerEvent('update', makeEncryptedUpdate(
-                opts.encryptionKey,
-                opts.encryptionVariant,
-                {
-                    role: 'session',
-                    content: {
-                        turn: 'turn-2',
-                        ev: { t: 'turn-end', status: 'completed' },
-                    },
-                },
-                opts.sessionId,
-                { seq: 2 },
-            ));
-
-            await completion;
-            expect(resolved).toBe(true);
-
-            client.close();
+        await expect(client().waitForCommand('command-1', 50)).resolves.toMatchObject({
+            status: 'succeeded',
         });
     });
+});
 
-    describe('sendStop', () => {
-        it('emits session-end event with session ID and time', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
-
-            const now = Date.now();
-            client.sendStop();
-
-            const endEvents = mockSocketInstance!.emittedEvents.filter(
-                (e) => e.event === 'session-end',
-            );
-            expect(endEvents).toHaveLength(1);
-
-            const data = endEvents[0].args[0] as { sid: string; time: number };
-            expect(data.sid).toBe('test-session-id');
-            expect(data.time).toBeGreaterThanOrEqual(now);
-            expect(data.time).toBeLessThanOrEqual(Date.now());
-
-            client.close();
-        });
+describe('Codex snapshot projections', () => {
+    it('never treats statusUnknown as idle', () => {
+        const snapshot = {
+            highWatermark: 1,
+            entities: [],
+            thread: thread(),
+            runtime: runtime({ statusUnknown: true }),
+            turns: [],
+            items: [],
+            parts: [],
+            commandResults: [],
+        } satisfies CodexV4Snapshot;
+        expect(isCodexSnapshotIdle(snapshot)).toBe(false);
     });
 
-    describe('close', () => {
-        it('disconnects the socket', () => {
-            const opts = makeOptions();
-            const client = new SessionClient(opts);
+    it('builds history only from official V4 parts', () => {
+        const snapshot = {
+            highWatermark: 2,
+            entities: [],
+            thread: thread(),
+            runtime: runtime(),
+            turns: [],
+            items: [],
+            parts: [{
+                schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+                entityType: 'codex.part' as const,
+                providerId: 'part-1',
+                createdAt: now,
+                updatedAt: now,
+                threadId: 'thread-1',
+                turnId: 'turn-1',
+                itemId: 'item-1',
+                partId: 'part-1',
+                kind: 'userInput' as const,
+                index: 0,
+                chunkIndex: 0,
+                content: 'hello',
+                contentType: 'text' as const,
+                final: true,
+            }],
+            commandResults: [],
+        } satisfies CodexV4Snapshot;
 
-            expect(mockSocketInstance!.connected).toBe(true);
-            client.close();
-            expect(mockSocketInstance!.connected).toBe(false);
-        });
+        expect(codexHistoryFromSnapshot(snapshot)).toEqual([
+            expect.objectContaining({ role: 'user', text: 'hello' }),
+        ]);
     });
 });

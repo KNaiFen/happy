@@ -1,6 +1,6 @@
 # Happy
 
-Code on the go — control AI coding agents from your phone, browser, or terminal.
+Use Codex from your phone, browser, or terminal.
 
 Free. Open source. Code anywhere.
 
@@ -27,18 +27,6 @@ This will:
 2. Display a QR code to connect from your mobile device or browser
 3. Allow real-time session control — all communication is end-to-end encrypted
 4. Start new sessions directly from your phone or web while your computer is online
-
-### More agents
-
-```
-happy agy        # Antigravity CLI (Gemini's successor)
-happy gemini     # deprecated — use `happy agy`
-happy openclaw
-
-# or any ACP-compatible CLI
-happy acp opencode
-happy acp -- custom-agent --flag
-```
 
 ## Daemon
 
@@ -84,10 +72,9 @@ happy auth logout
 
 Happy uses cryptographic key pairs for authentication — your private key stays on your machine. All session data is end-to-end encrypted before leaving your device.
 
-To connect third-party agent APIs:
+To inspect the Codex connection:
 
 ```bash
-happy connect gemini
 happy connect codex
 happy connect status
 ```
@@ -98,10 +85,6 @@ happy connect status
 |---------|-------------|
 | `happy` | Start Codex mode (default) |
 | `happy codex` | Start Codex mode explicitly |
-| `happy agy` | Start agy (Antigravity CLI) session |
-| `happy gemini` | Start Gemini CLI session (**deprecated** — use `happy agy`) |
-| `happy openclaw` | Start OpenClaw session |
-| `happy acp` | Start any ACP-compatible agent |
 | `happy resume <id>` | Resume a previous session |
 | `happy notify` | Send push notification to your devices |
 | `happy doctor` | Diagnostics & troubleshooting |
@@ -142,9 +125,7 @@ pnpm --filter happy cli --help
 ## Requirements
 
 - Node.js >= 20.0.0
-- For Codex: `codex` CLI 0.145.0 or newer installed and logged in
-- For agy: install the Antigravity CLI (`agy`) and log in
-- For Gemini (**deprecated** — use agy): `npm install -g @google/gemini-cli` + `happy connect gemini`
+- `codex` CLI 0.145.0 or newer installed and logged in
 
 ## License
 

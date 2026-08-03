@@ -1,39 +1,4 @@
 import * as z from 'zod';
-import { sessionEnvelopeSchema } from './sessionProtocol';
-import { MessageMetaSchema, type MessageMeta } from './messageMeta';
-import { AgentMessageSchema, UserMessageSchema } from './legacyProtocol';
-
-export const SessionMessageContentSchema = z.object({
-  c: z.string(),
-  t: z.literal('encrypted'),
-});
-export type SessionMessageContent = z.infer<typeof SessionMessageContentSchema>;
-
-export const SessionMessageSchema = z.object({
-  id: z.string(),
-  seq: z.number(),
-  localId: z.string().nullish(),
-  content: SessionMessageContentSchema,
-  createdAt: z.number(),
-  updatedAt: z.number(),
-});
-export type SessionMessage = z.infer<typeof SessionMessageSchema>;
-export { MessageMetaSchema };
-export type { MessageMeta };
-
-export const SessionProtocolMessageSchema = z.object({
-  role: z.literal('session'),
-  content: sessionEnvelopeSchema,
-  meta: MessageMetaSchema.optional(),
-});
-export type SessionProtocolMessage = z.infer<typeof SessionProtocolMessageSchema>;
-
-export const MessageContentSchema = z.discriminatedUnion('role', [
-  UserMessageSchema,
-  AgentMessageSchema,
-  SessionProtocolMessageSchema,
-]);
-export type MessageContent = z.infer<typeof MessageContentSchema>;
 
 export const VersionedEncryptedValueSchema = z.object({
   version: z.number(),
@@ -46,13 +11,6 @@ export const VersionedNullableEncryptedValueSchema = z.object({
   value: z.string().nullable(),
 });
 export type VersionedNullableEncryptedValue = z.infer<typeof VersionedNullableEncryptedValueSchema>;
-
-export const UpdateNewMessageBodySchema = z.object({
-  t: z.literal('new-message'),
-  sid: z.string(),
-  message: SessionMessageSchema,
-});
-export type UpdateNewMessageBody = z.infer<typeof UpdateNewMessageBodySchema>;
 
 export const UpdateSessionBodySchema = z.object({
   t: z.literal('update-session'),
@@ -79,7 +37,6 @@ export const UpdateMachineBodySchema = z.object({
 export type UpdateMachineBody = z.infer<typeof UpdateMachineBodySchema>;
 
 export const CoreUpdateBodySchema = z.discriminatedUnion('t', [
-  UpdateNewMessageBodySchema,
   UpdateSessionBodySchema,
   UpdateMachineBodySchema,
 ]);
@@ -93,21 +50,11 @@ export const CoreUpdateContainerSchema = z.object({
 });
 export type CoreUpdateContainer = z.infer<typeof CoreUpdateContainerSchema>;
 
-// Aliases used by existing consumers during migration.
-export const ApiMessageSchema = SessionMessageSchema;
-export type ApiMessage = SessionMessage;
-
-export const ApiUpdateNewMessageSchema = UpdateNewMessageBodySchema;
-export type ApiUpdateNewMessage = UpdateNewMessageBody;
-
 export const ApiUpdateSessionStateSchema = UpdateSessionBodySchema;
 export type ApiUpdateSessionState = UpdateSessionBody;
 
 export const ApiUpdateMachineStateSchema = UpdateMachineBodySchema;
 export type ApiUpdateMachineState = UpdateMachineBody;
-
-export const UpdateBodySchema = UpdateNewMessageBodySchema;
-export type UpdateBody = UpdateNewMessageBody;
 
 export const UpdateSchema = CoreUpdateContainerSchema;
 export type Update = CoreUpdateContainer;

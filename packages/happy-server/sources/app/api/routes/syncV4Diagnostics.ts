@@ -16,8 +16,9 @@ import packageJson from "../../../../package.json";
 export const SYNC_V4_TRACE_HEADER = "X-Happy-Sync-Trace";
 
 const syncV4TracePattern = /^[0-9a-f]{32}$/;
-const syncV4ClientTypes = new Set<SyncV4DiagnosticClientType>([
+const syncV4ClientTypes = new Set<string>([
     "cli-coding-session",
+    "cli-control-plane",
     "ios",
     "android",
     "web",
@@ -176,7 +177,7 @@ function emitServerSyncV4Diagnostic(
 
 function serverLifecycleState(
     server: object,
-    featureEnabled: boolean = isSyncV4FeatureEnabled(),
+    featureEnabled: boolean = true,
 ): ServerSyncV4LifecycleState {
     const existing = serverLifecycleStates.get(server);
     if (existing) return existing;
@@ -237,11 +238,6 @@ function serverSoftwareVersion(): string {
         : packageJson.version;
 }
 
-function isSyncV4FeatureEnabled(): boolean {
-    return process.env.HAPPY_CODEX_SYNC_V4_ENABLED === "true"
-        || process.env.HAPPY_CODEX_SYNC_V4_ENABLED === "1";
-}
-
 function transportSecurityFromRequest(
     request: FastifyRequest,
 ): "https" | "insecureHttp" {
@@ -265,7 +261,9 @@ function transportSecurityFromRequest(
 function clientTypeFromRequest(request: FastifyRequest): SyncV4DiagnosticClientType {
     const raw = request.headers["x-happy-client"];
     const clientType = typeof raw === "string"
-        ? raw.split("/", 1)[0].toLowerCase() as SyncV4DiagnosticClientType
+        ? raw.split("/", 1)[0].toLowerCase()
         : "unknown";
-    return syncV4ClientTypes.has(clientType) ? clientType : "unknown";
+    return syncV4ClientTypes.has(clientType)
+        ? clientType as SyncV4DiagnosticClientType
+        : "unknown";
 }

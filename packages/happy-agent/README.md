@@ -1,8 +1,8 @@
 # Happy Agent
 
-CLI client for controlling Happy Coder agents remotely.
+CLI client for controlling Happy Codex sessions remotely.
 
-Unlike `happy-cli` which both runs and controls agents, `happy-agent` only controls them — listing machines, spawning sessions on a machine, creating sessions, sending messages, reading history, monitoring state, and stopping sessions.
+Unlike `happy-cli` which both runs and controls Codex, `happy-agent` only controls it — listing machines, spawning sessions on a machine, creating sessions, sending messages, reading history, monitoring state, and stopping sessions.
 
 ## Installation
 
@@ -71,9 +71,6 @@ happy-agent spawn --machine <machine-id> --path ~/project
 
 # Let the daemon create the directory if needed
 happy-agent spawn --machine <machine-id> --path ~/new-project --create-dir
-
-# Choose a specific agent
-happy-agent spawn --machine <machine-id> --path ~/project --agent codex
 
 # Output as JSON
 happy-agent spawn --machine <machine-id> --path ~/project --json

@@ -13,9 +13,9 @@ describe('isSupportedAgentSession', () => {
         [{ flavor: 'claude' }, false],
         [{}, false],
         [{ flavor: 'unknown' }, false],
-        [{ flavor: 'gemini' }, true],
-        [{ flavor: 'openclaw' }, true],
-        [{ flavor: 'agy' }, true],
+        [{ flavor: 'gemini' }, false],
+        [{ flavor: 'openclaw' }, false],
+        [{ flavor: 'agy' }, false],
     ])('classifies metadata %j as %s', (metadata, expected) => {
         expect(isSupportedAgentSession(session(metadata))).toBe(expected);
     });

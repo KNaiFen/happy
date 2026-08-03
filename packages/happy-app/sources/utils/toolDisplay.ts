@@ -4,7 +4,6 @@ import { stringifyToolCommand } from './toolCommand';
 const TERMINAL_TOOL_NAMES = new Set([
     'Bash',
     'CodexBash',
-    'GeminiBash',
     'shell',
     'execute',
 ]);
@@ -14,7 +13,6 @@ const EDIT_TOOL_NAMES = new Set([
     'MultiEdit',
     'Write',
     'CodexPatch',
-    'GeminiPatch',
     'edit',
     'NotebookEdit',
 ]);

@@ -508,8 +508,6 @@ export const pl: TranslationStructure = {
         },
         agent: {
             codex: 'Codex',
-            gemini: 'Gemini',
-            openclaw: 'OpenClaw',
         },
         model: {
             title: 'MODEL',
@@ -541,16 +539,6 @@ export const pl: TranslationStructure = {
             gpt5Low: 'GPT-5 Low',
             gpt5Medium: 'GPT-5 Medium',
             gpt5High: 'GPT-5 High',
-        },
-        geminiPermissionMode: {
-            title: 'TRYB UPRAWNIEŃ GEMINI',
-            default: 'Domyślny',
-            autoEdit: 'Auto edycja',
-            yolo: 'YOLO',
-            plan: 'Planowanie',
-            badgeAutoEdit: 'Auto edycja',
-            badgeYolo: 'YOLO',
-            badgePlan: 'Planowanie',
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `Pozostało ${percent}%`,
@@ -982,16 +970,6 @@ export const pl: TranslationStructure = {
         permissions: {
             yesForSession: 'Tak, i nie pytaj dla tej sesji',
             stopAndExplain: 'Zatrzymaj i wyjaśnij, co zrobić',
-        }
-    },
-
-    agentPermissions: {
-        // Wspólne dla dostawców przyciski uprawnień v3
-        permissions: {
-            yesAllowAllEdits: 'Tak, zezwól na wszystkie edycje podczas tej sesji',
-            yesAllowEverything: 'Tak, zezwól na wszystko podczas tej sesji',
-            yesForTool: 'Tak, nie pytaj ponownie dla tego narzędzia',
-            noProvideFeedback: 'Nie, przekaż opinię',
         }
     },
 
