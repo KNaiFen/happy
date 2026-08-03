@@ -159,7 +159,7 @@ tags:
     id: codex-timeline-context-compaction
 - scrollUntilVisible:
     element: Official Codex MCP E2E response
-    direction: UP
+    direction: DOWN
     timeout: 60000
 - assertVisible: Official Codex MCP E2E response
 - assertNotVisible: Used 2 tools

@@ -11,10 +11,11 @@ tags:
     visible: New chat
     timeout: 45000
 - tapOn: New chat
-- extendedWaitUntil:
-    visible:
+- scrollUntilVisible:
+    element:
       id: codex-mcp-tool-message
-    timeout: 45000
+    direction: DOWN
+    timeout: 60000
 - tapOn:
     id: codex-mcp-tool-message
 - extendedWaitUntil:
@@ -25,7 +26,7 @@ tags:
 - back
 - scrollUntilVisible:
     element: resume-history-from-android-e2e
-    direction: UP
+    direction: DOWN
     timeout: 45000
 - assertVisible: resume-history-from-android-e2e
 - scrollUntilVisible:
