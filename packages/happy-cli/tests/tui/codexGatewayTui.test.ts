@@ -7,6 +7,7 @@ const terminalPrompt = requiredEnvironment('HAPPY_GATEWAY_TUI_TERMINAL_PROMPT');
 const appPrompt = requiredEnvironment('HAPPY_GATEWAY_TUI_APP_PROMPT');
 const attachPrompt = requiredEnvironment('HAPPY_GATEWAY_TUI_ATTACH_PROMPT');
 const officialResponse = requiredEnvironment('HAPPY_GATEWAY_TUI_RESPONSE_SENTINEL');
+const PRESENCE_IDLE_VALIDATION_MS = 11 * 60 * 1_000;
 
 const programEnvironment = {
     ...process.env,
@@ -272,6 +273,20 @@ test.describe('terminal-origin Gateway', () => {
         assert.equal(detached.gateway?.gatewayId, initialGateway.gatewayId);
         assert.equal(detached.gateway?.providerPid, initialGateway.providerPid);
         assert.equal(detached.gateway?.threadId, initialGateway.threadId);
+
+        await delay(PRESENCE_IDLE_VALIDATION_MS);
+        const longIdle = await readStatus({});
+        throwOnGatewayTransportFailure(longIdle);
+        assert.equal(longIdle.sessionActive, true, 'Relay Presence expired while the Gateway was alive');
+        assert.equal(longIdle.gateway?.gatewayId, initialGateway.gatewayId);
+        assert.equal(longIdle.gateway?.providerPid, initialGateway.providerPid);
+        assert.equal(longIdle.gateway?.threadId, initialGateway.threadId);
+        assert.equal(longIdle.gateway?.sessionId, initialGateway.sessionId);
+        assert.equal(longIdle.gateway?.generation, initialGateway.generation);
+        assert.equal(longIdle.gateway?.state, 'running');
+        assert.equal(longIdle.gateway?.terminalState, 'detached');
+        assert.equal(longIdle.gateway?.workerAlive, true);
+        assert.equal(longIdle.gateway?.providerAlive, true);
     });
 });
 

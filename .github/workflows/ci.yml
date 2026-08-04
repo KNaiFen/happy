@@ -130,7 +130,7 @@ jobs:
   codium_codex_runtime:
     name: Codium bundled Codex runtime lifecycle
     runs-on: macos-14
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -577,7 +577,7 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
-      - name: Exercise terminal, App, detach, attach, and normal stop through a real PTY
+      - name: Exercise terminal, App, 11-minute idle, attach, and normal stop through a real PTY
         run: pnpm --filter happy test:codex-gateway-tui
         env:
           HAPPY_GATEWAY_TUI_ARTIFACT_DIR: ${{ runner.temp }}/happy-gateway-tui-artifacts

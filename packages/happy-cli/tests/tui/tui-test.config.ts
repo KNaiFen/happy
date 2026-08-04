@@ -3,8 +3,8 @@ import { defineConfig } from '@microsoft/tui-test';
 export default defineConfig({
     workers: 1,
     retries: 0,
-    timeout: 3 * 60 * 1_000,
-    globalTimeout: 8 * 60 * 1_000,
+    timeout: 20 * 60 * 1_000,
+    globalTimeout: 30 * 60 * 1_000,
     expect: {
         timeout: 120_000,
     },
