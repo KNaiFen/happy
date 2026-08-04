@@ -25,6 +25,7 @@ function sessionResponse(session: {
     agentStateVersion: number;
     dataEncryptionKey: Uint8Array | null;
     active: boolean;
+    archivedAt: Date | null;
     lastActiveAt: Date;
     createdAt: Date;
     updatedAt: Date;
@@ -38,6 +39,7 @@ function sessionResponse(session: {
         updatedAt: session.updatedAt.getTime(),
         active: session.active,
         activeAt: session.lastActiveAt.getTime(),
+        archivedAt: session.archivedAt?.getTime() ?? null,
         metadata: session.metadata,
         metadataVersion: session.metadataVersion,
         agentState: session.agentState,
@@ -49,6 +51,34 @@ function sessionResponse(session: {
         machineDeletedAt: session.originMachine?.deletedAt?.getTime() ?? null,
         lastMessage: null,
     };
+}
+
+function nextPresenceTimestamp(lastActiveAt: Date, archivedAt?: Date | null): Date {
+    return new Date(Math.max(
+        Date.now(),
+        lastActiveAt.getTime() + 1,
+        (archivedAt?.getTime() ?? 0) + 1,
+    ));
+}
+
+function emitSessionActivity(
+    userId: string,
+    sessionId: string,
+    active: boolean,
+    activeAt: Date,
+    archivedAt: Date | null,
+): void {
+    eventRouter.emitEphemeral({
+        userId,
+        payload: buildSessionActivityEphemeral(
+            sessionId,
+            active,
+            activeAt.getTime(),
+            false,
+            archivedAt?.getTime() ?? null,
+        ),
+        recipientFilter: { type: 'user-scoped-only' },
+    });
 }
 
 export function sessionRoutes(app: Fastify) {
@@ -80,6 +110,7 @@ export function sessionRoutes(app: Fastify) {
                 agentStateVersion: true,
                 dataEncryptionKey: true,
                 active: true,
+                archivedAt: true,
                 lastActiveAt: true,
                 originMachineId: true,
                 originMachine: { select: { deletedAt: true } },
@@ -139,6 +170,7 @@ export function sessionRoutes(app: Fastify) {
                 agentStateVersion: true,
                 dataEncryptionKey: true,
                 active: true,
+                archivedAt: true,
                 lastActiveAt: true,
                 originMachineId: true,
                 originMachine: { select: { deletedAt: true } },
@@ -224,6 +256,7 @@ export function sessionRoutes(app: Fastify) {
                 agentStateVersion: true,
                 dataEncryptionKey: true,
                 active: true,
+                archivedAt: true,
                 lastActiveAt: true,
                 originMachineId: true,
                 originMachine: { select: { deletedAt: true } },
@@ -370,6 +403,170 @@ export function sessionRoutes(app: Fastify) {
         return reply.send({ session: sessionResponse(result.session) });
     });
 
+    app.post('/v4/sessions/:sessionId/presence/claim', {
+        schema: {
+            params: z.object({ sessionId: z.string() }),
+            body: z.object({ leaseId: z.string().uuid() }),
+        },
+        preHandler: app.authenticate,
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        const { leaseId } = request.body;
+        if (!request.authCredentialId || !request.authMachineId) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+
+        const result = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: accessWhere,
+                select: { archivedAt: true, active: true, lastActiveAt: true },
+            });
+            if (!session) return { kind: 'missing' as const };
+            if (session.archivedAt) return { kind: 'archived' as const };
+
+            const wasActive = session.active;
+            const activeAt = nextPresenceTimestamp(session.lastActiveAt);
+            const updated = await tx.session.updateMany({
+                where: { ...accessWhere, archivedAt: null },
+                data: { presenceLeaseId: leaseId, active: true, lastActiveAt: activeAt },
+            });
+            if (updated.count === 0) return { kind: 'archived' as const };
+            return { kind: 'claimed' as const, activeAt, activated: !wasActive };
+        });
+        if (result.kind === 'missing') return reply.code(404).send({ error: 'Session not found' });
+        if (result.kind === 'archived') return reply.code(409).send({ error: 'sessionArchived' });
+
+        activityCache.invalidateSessions([sessionId]);
+        if (result.activated) {
+            emitSessionActivity(userId, sessionId, true, result.activeAt, null);
+        }
+        return reply.send({ success: true, leaseId, activeAt: result.activeAt.getTime() });
+    });
+
+    app.post('/v4/sessions/:sessionId/presence/touch', {
+        schema: {
+            params: z.object({ sessionId: z.string() }),
+            body: z.object({ leaseId: z.string().uuid() }),
+        },
+        preHandler: app.authenticate,
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        const { leaseId } = request.body;
+        if (!request.authCredentialId || !request.authMachineId) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+
+        const result = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: accessWhere,
+                select: { archivedAt: true, presenceLeaseId: true, active: true, lastActiveAt: true },
+            });
+            if (!session) return { kind: 'missing' as const };
+            if (session.archivedAt) return { kind: 'archived' as const };
+            if (session.presenceLeaseId !== leaseId) return { kind: 'superseded' as const };
+
+            const wasActive = session.active;
+            const activeAt = nextPresenceTimestamp(session.lastActiveAt);
+            const updated = await tx.session.updateMany({
+                where: { ...accessWhere, archivedAt: null, presenceLeaseId: leaseId },
+                data: { active: true, lastActiveAt: activeAt },
+            });
+            if (updated.count === 0) {
+                const current = await tx.session.findFirst({
+                    where: accessWhere,
+                    select: { archivedAt: true },
+                });
+                return current?.archivedAt
+                    ? { kind: 'archived' as const }
+                    : { kind: 'superseded' as const };
+            }
+            return { kind: 'touched' as const, activeAt, activated: !wasActive };
+        });
+        if (result.kind === 'missing') return reply.code(404).send({ error: 'Session not found' });
+        if (result.kind === 'archived') return reply.code(409).send({ error: 'sessionArchived' });
+        if (result.kind === 'superseded') return reply.code(409).send({ error: 'presenceLeaseSuperseded' });
+
+        activityCache.invalidateSessions([sessionId]);
+        if (result.activated) {
+            emitSessionActivity(userId, sessionId, true, result.activeAt, null);
+        }
+        return reply.send({ success: true, leaseId, activeAt: result.activeAt.getTime() });
+    });
+
+    app.post('/v4/sessions/:sessionId/presence/release', {
+        schema: {
+            params: z.object({ sessionId: z.string() }),
+            body: z.object({ leaseId: z.string().uuid() }),
+        },
+        preHandler: app.authenticate,
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        const { leaseId } = request.body;
+        if (!request.authCredentialId || !request.authMachineId) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+        const accessWhere = buildSessionAccessWhere(
+            sessionAccessIdentityFromRequest(request),
+            { id: sessionId },
+        );
+        if (!accessWhere) {
+            return reply.code(403).send({ error: 'Machine is not authorized' });
+        }
+
+        const result = await inTx(async (tx) => {
+            const session = await tx.session.findFirst({
+                where: accessWhere,
+                select: { archivedAt: true, presenceLeaseId: true, active: true, lastActiveAt: true },
+            });
+            if (!session) return { kind: 'missing' as const };
+            if (session.archivedAt) return { kind: 'archived' as const };
+            if (session.presenceLeaseId !== leaseId) return { kind: 'superseded' as const };
+
+            const wasActive = session.active;
+            const inactiveAt = nextPresenceTimestamp(session.lastActiveAt);
+            const updated = await tx.session.updateMany({
+                where: { ...accessWhere, archivedAt: null, presenceLeaseId: leaseId },
+                data: { active: false, lastActiveAt: inactiveAt, presenceLeaseId: null },
+            });
+            if (updated.count === 0) {
+                const current = await tx.session.findFirst({
+                    where: accessWhere,
+                    select: { archivedAt: true },
+                });
+                return current?.archivedAt
+                    ? { kind: 'archived' as const }
+                    : { kind: 'superseded' as const };
+            }
+            return { kind: 'released' as const, inactiveAt, deactivated: wasActive };
+        });
+        if (result.kind === 'missing') return reply.code(404).send({ error: 'Session not found' });
+        if (result.kind === 'archived') return reply.code(409).send({ error: 'sessionArchived' });
+        if (result.kind === 'superseded') return reply.code(409).send({ error: 'presenceLeaseSuperseded' });
+
+        activityCache.invalidateSessions([sessionId]);
+        if (result.deactivated) {
+            emitSessionActivity(userId, sessionId, false, result.inactiveAt, null);
+        }
+        return reply.send({ success: true, leaseId, activeAt: result.inactiveAt.getTime() });
+    });
+
     // Codex v4 archive is an authoritative, persistent lifecycle tombstone.
     app.post('/v4/sessions/:sessionId/archive', {
         schema: {
@@ -401,7 +598,12 @@ export function sessionRoutes(app: Fastify) {
             const archivedAt = new Date();
             const updated = await tx.session.updateMany({
                 where: { ...accessWhere, archivedAt: null },
-                data: { archivedAt, active: false, lastActiveAt: archivedAt },
+                data: {
+                    archivedAt,
+                    active: false,
+                    lastActiveAt: archivedAt,
+                    presenceLeaseId: null,
+                },
             });
             if (updated.count === 0) {
                 throw new Error('Session archive transaction lost ownership');
@@ -415,18 +617,7 @@ export function sessionRoutes(app: Fastify) {
 
         activityCache.invalidateSessions([sessionId]);
 
-        // Notify all clients about the session deactivation
-        const sessionActivity = buildSessionActivityEphemeral(
-            sessionId,
-            false,
-            result.archivedAt.getTime(),
-            false,
-        );
-        eventRouter.emitEphemeral({
-            userId,
-            payload: sessionActivity,
-            recipientFilter: { type: 'user-scoped-only' }
-        });
+        emitSessionActivity(userId, sessionId, false, result.archivedAt, result.archivedAt);
 
         return reply.send({
             success: true,
@@ -460,39 +651,41 @@ export function sessionRoutes(app: Fastify) {
         const result = await inTx(async (tx) => {
             const session = await tx.session.findFirst({
                 where: accessWhere,
-                select: { archivedAt: true, lastActiveAt: true },
+                select: { archivedAt: true, active: true, lastActiveAt: true },
             });
             if (!session) return null;
             const alreadyUnarchived = session.archivedAt === null;
-            const activeAt = new Date(Math.max(
-                Date.now(),
-                session.lastActiveAt.getTime() + 1,
-                (session.archivedAt?.getTime() ?? 0) + 1,
-            ));
+            if (alreadyUnarchived) {
+                return { alreadyUnarchived, activeAt: session.lastActiveAt, active: session.active };
+            }
+            const activeAt = nextPresenceTimestamp(session.lastActiveAt, session.archivedAt);
             const updated = await tx.session.updateMany({
-                where: accessWhere,
-                data: { archivedAt: null, active: true, lastActiveAt: activeAt },
+                where: { ...accessWhere, archivedAt: session.archivedAt },
+                data: {
+                    archivedAt: null,
+                    active: false,
+                    lastActiveAt: activeAt,
+                    presenceLeaseId: null,
+                },
             });
             if (updated.count === 0) {
                 throw new Error('Session unarchive transaction lost ownership');
             }
-            return { alreadyUnarchived, activeAt };
+            return { alreadyUnarchived, activeAt, active: false };
         });
         if (!result) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
         activityCache.invalidateSessions([sessionId]);
-        const sessionActivity = buildSessionActivityEphemeral(sessionId, true, result.activeAt.getTime(), false);
-        eventRouter.emitEphemeral({
-            userId,
-            payload: sessionActivity,
-            recipientFilter: { type: 'user-scoped-only' }
-        });
+        if (!result.alreadyUnarchived) {
+            emitSessionActivity(userId, sessionId, false, result.activeAt, null);
+        }
 
         return reply.send({
             success: true,
             activeAt: result.activeAt.getTime(),
+            active: result.active,
             alreadyUnarchived: result.alreadyUnarchived,
         });
     });

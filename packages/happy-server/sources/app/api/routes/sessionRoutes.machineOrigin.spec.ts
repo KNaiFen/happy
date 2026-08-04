@@ -35,8 +35,9 @@ const {
         agentState: data.agentState ?? null,
         agentStateVersion: data.agentStateVersion ?? 0,
         dataEncryptionKey: data.dataEncryptionKey ?? null,
-        active: true,
+        active: data.active ?? true,
         archivedAt: data.archivedAt ?? null,
+        presenceLeaseId: data.presenceLeaseId ?? null,
         lastActiveAt: data.lastActiveAt ?? now,
         createdAt: now,
         updatedAt: now,
@@ -71,6 +72,15 @@ const {
                 const session = state.existingSession;
                 if (!session || (args.where?.id && args.where.id !== session.id)) return { count: 0 };
                 if (args.where?.archivedAt === null && session.archivedAt !== null) return { count: 0 };
+                if (args.where?.active !== undefined && args.where.active !== session.active) return { count: 0 };
+                if (
+                    args.where?.presenceLeaseId !== undefined
+                    && args.where.presenceLeaseId !== session.presenceLeaseId
+                ) return { count: 0 };
+                if (
+                    args.where?.lastActiveAt
+                    && args.where.lastActiveAt.getTime() !== session.lastActiveAt.getTime()
+                ) return { count: 0 };
                 Object.assign(session, args.data);
                 return { count: 1 };
             }),
@@ -321,7 +331,27 @@ describe("sessionRoutes terminal machine origin", () => {
             id: "session-1",
             originMachineId: "machine-1",
             machineDeletedAt: new Date("2026-01-02T00:00:00.000Z").getTime(),
+            archivedAt: null,
         });
+    });
+
+    it("serializes archivedAt in every session list response", async () => {
+        app = await createApp();
+        const archivedAt = new Date("2026-01-03T00:00:00.000Z");
+        state.listSessions = [row({ id: "session-archived", active: false, archivedAt })];
+
+        for (const url of ["/v1/sessions", "/v2/sessions/active", "/v2/sessions"]) {
+            const response = await app.inject({
+                method: "GET",
+                url,
+                headers: { "x-user-id": "user-1" },
+            });
+            expect(response.statusCode).toBe(200);
+            expect(response.json().sessions[0]).toMatchObject({
+                id: "session-archived",
+                archivedAt: archivedAt.getTime(),
+            });
+        }
     });
 
     it("filters paginated account history by machine without changing the cursor contract", async () => {
@@ -389,7 +419,11 @@ describe("sessionRoutes terminal machine origin", () => {
 
     it("archives idempotently and invalidates queued activity", async () => {
         app = await createApp();
-        state.existingSession = row({ id: "session-1", originMachineId: "machine-1" });
+        state.existingSession = row({
+            id: "session-1",
+            originMachineId: "machine-1",
+            presenceLeaseId: "11111111-1111-4111-8111-111111111111",
+        });
 
         const first = await app.inject({
             method: "POST",
@@ -415,12 +449,117 @@ describe("sessionRoutes terminal machine origin", () => {
             alreadyArchived: true,
         });
         expect(state.existingSession.active).toBe(false);
+        expect(state.existingSession.presenceLeaseId).toBeNull();
         expect(invalidateSessionsMock).toHaveBeenCalledTimes(2);
         expect(emitEphemeralMock).toHaveBeenCalledTimes(2);
         expect(emitEphemeralMock.mock.calls.map(([event]) => event.payload)).toEqual([
-            expect.objectContaining({ active: false, activeAt: archivedAt.getTime() }),
-            expect.objectContaining({ active: false, activeAt: archivedAt.getTime() }),
+            expect.objectContaining({ active: false, activeAt: archivedAt.getTime(), archivedAt: archivedAt.getTime() }),
+            expect.objectContaining({ active: false, activeAt: archivedAt.getTime(), archivedAt: archivedAt.getTime() }),
         ]);
+    });
+
+    it("lets a new Gateway claim an inactive session and rejects the superseded lease", async () => {
+        app = await createApp();
+        state.existingSession = row({
+            id: "session-1",
+            originMachineId: "machine-1",
+            active: false,
+            lastActiveAt: new Date("2026-01-01T00:00:00.000Z"),
+        });
+        const firstLease = "11111111-1111-4111-8111-111111111111";
+        const secondLease = "22222222-2222-4222-8222-222222222222";
+
+        const claimed = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/presence/claim",
+            headers: terminalHeaders,
+            payload: { leaseId: firstLease },
+        });
+        const takenOver = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/presence/claim",
+            headers: terminalHeaders,
+            payload: { leaseId: secondLease },
+        });
+        const oldTouch = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/presence/touch",
+            headers: terminalHeaders,
+            payload: { leaseId: firstLease },
+        });
+        const oldRelease = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/presence/release",
+            headers: terminalHeaders,
+            payload: { leaseId: firstLease },
+        });
+
+        expect(claimed.statusCode).toBe(200);
+        expect(takenOver.statusCode).toBe(200);
+        expect(state.existingSession).toMatchObject({ active: true, presenceLeaseId: secondLease });
+        expect(oldTouch.statusCode).toBe(409);
+        expect(oldTouch.json()).toEqual({ error: "presenceLeaseSuperseded" });
+        expect(oldRelease.statusCode).toBe(409);
+        expect(oldRelease.json()).toEqual({ error: "presenceLeaseSuperseded" });
+        expect(emitEphemeralMock).toHaveBeenCalledOnce();
+        expect(emitEphemeralMock).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ active: true, archivedAt: null }),
+        }));
+    });
+
+    it("releases only its current lease without archiving the session", async () => {
+        app = await createApp();
+        const leaseId = "11111111-1111-4111-8111-111111111111";
+        state.existingSession = row({
+            id: "session-1",
+            originMachineId: "machine-1",
+            presenceLeaseId: leaseId,
+        });
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/presence/release",
+            headers: terminalHeaders,
+            payload: { leaseId },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(state.existingSession).toMatchObject({
+            active: false,
+            archivedAt: null,
+            presenceLeaseId: null,
+        });
+        expect(emitEphemeralMock).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ active: false, archivedAt: null }),
+        }));
+    });
+
+    it("rejects machine-less presence requests and cannot claim an archive tombstone", async () => {
+        app = await createApp();
+        const leaseId = "11111111-1111-4111-8111-111111111111";
+        state.existingSession = row({
+            id: "session-1",
+            originMachineId: "machine-1",
+            archivedAt: new Date("2026-01-02T00:00:00.000Z"),
+        });
+
+        const accountAttempt = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/presence/claim",
+            headers: { "x-user-id": "user-1" },
+            payload: { leaseId },
+        });
+        const tombstoneAttempt = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/presence/claim",
+            headers: terminalHeaders,
+            payload: { leaseId },
+        });
+
+        expect(accountAttempt.statusCode).toBe(403);
+        expect(tombstoneAttempt.statusCode).toBe(409);
+        expect(tombstoneAttempt.json()).toEqual({ error: "sessionArchived" });
+        expect(state.existingSession).toMatchObject({ active: true, archivedAt: expect.any(Date) });
     });
 
     it("allows only the original terminal machine to unarchive", async () => {
@@ -452,11 +591,12 @@ describe("sessionRoutes terminal machine origin", () => {
         });
         expect(terminalAttempt.json().activeAt).toBe(archivedAt.getTime() + 1);
         expect(state.existingSession.archivedAt).toBeNull();
-        expect(state.existingSession.active).toBe(true);
+        expect(state.existingSession.active).toBe(false);
+        expect(state.existingSession.presenceLeaseId).toBeNull();
         expect(state.existingSession.lastActiveAt.getTime()).toBe(archivedAt.getTime() + 1);
         expect(invalidateSessionsMock).toHaveBeenCalledWith(["session-1"]);
         expect(emitEphemeralMock).toHaveBeenLastCalledWith(expect.objectContaining({
-            payload: expect.objectContaining({ active: true, activeAt: archivedAt.getTime() + 1 }),
+            payload: expect.objectContaining({ active: false, activeAt: archivedAt.getTime() + 1, archivedAt: null }),
         }));
     });
 

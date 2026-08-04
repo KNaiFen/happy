@@ -56,6 +56,7 @@ export type UpdateEvent = {
     dataEncryptionKey: string | null;
     active: boolean;
     activeAt: number;
+    archivedAt: number | null;
     createdAt: number;
     updatedAt: number;
 } | {
@@ -161,6 +162,7 @@ export type EphemeralEvent = {
     active: boolean;
     activeAt: number;
     thinking?: boolean;
+    archivedAt?: number | null;
 } | {
     type: 'machine-activity';
     id: string;
@@ -355,6 +357,7 @@ export function buildNewSessionUpdate(session: {
     agentStateVersion: number;
     dataEncryptionKey: Uint8Array | null;
     active: boolean;
+    archivedAt: Date | null;
     lastActiveAt: Date;
     createdAt: Date;
     updatedAt: Date;
@@ -373,6 +376,7 @@ export function buildNewSessionUpdate(session: {
             dataEncryptionKey: session.dataEncryptionKey ? Buffer.from(session.dataEncryptionKey).toString('base64') : null,
             active: session.active,
             activeAt: session.lastActiveAt.getTime(),
+            archivedAt: session.archivedAt?.getTime() ?? null,
             createdAt: session.createdAt.getTime(),
             updatedAt: session.updatedAt.getTime()
         },
@@ -480,13 +484,20 @@ export function buildDeleteMachineUpdate(machineId: string, updateSeq: number, u
     };
 }
 
-export function buildSessionActivityEphemeral(sessionId: string, active: boolean, activeAt: number, thinking?: boolean): EphemeralPayload {
+export function buildSessionActivityEphemeral(
+    sessionId: string,
+    active: boolean,
+    activeAt: number,
+    thinking?: boolean,
+    archivedAt?: number | null,
+): EphemeralPayload {
     return {
         type: 'activity',
         id: sessionId,
         active,
         activeAt,
-        thinking: thinking || false
+        thinking: thinking || false,
+        ...(archivedAt !== undefined ? { archivedAt } : {}),
     };
 }
 

@@ -122,7 +122,9 @@ describe("ActivityCache machine heartbeats", () => {
         expect(dbMock.session.updateMany).toHaveBeenCalledWith({
             where: {
                 id: "session-1",
+                active: true,
                 archivedAt: null,
+                presenceLeaseId: null,
                 OR: [
                     { originMachineId: null },
                     { originMachine: { deletedAt: null } },

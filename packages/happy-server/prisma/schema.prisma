@@ -108,6 +108,7 @@ model Session {
     syncV4Seq         Int              @default(0)
     active            Boolean          @default(true)
     archivedAt        DateTime?
+    presenceLeaseId   String?
     lastActiveAt      DateTime         @default(now())
     createdAt         DateTime         @default(now())
     updatedAt         DateTime         @updatedAt

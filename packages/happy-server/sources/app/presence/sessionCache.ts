@@ -213,7 +213,9 @@ class ActivityCache {
                     db.session.updateMany({
                         where: {
                             id: update.id,
+                            active: true,
                             archivedAt: null,
+                            presenceLeaseId: null,
                             OR: [
                                 { originMachineId: null },
                                 { originMachine: { deletedAt: null } },
