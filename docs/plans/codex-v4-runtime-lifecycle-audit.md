@@ -4,7 +4,7 @@
 
 - 调查完成并已实施（2026-08-04）：保留 `4ce11a45` 的现场结论作为历史基线；修复由后续 Relay、CLI 和 App 提交实现。
 - 实施版本：Relay `1.1.39`、CLI `1.4.39`、App `1.11.25`；Wire 与 happy-agent 未改动。
-- 本地验证边界：只运行 TypeScript/Vitest 源码检查；云端 11 分钟空闲、App 退出、强制崩溃和官方 Codex 集成验收仍须以发布工作流产物为准。
+- 验证边界：本地只运行 TypeScript/Vitest 源码检查；发布工作流、官方 Codex 集成、真实 PTY 11 分钟空闲和 Android App 现场路径均由云端运行验证，不把本地检查冒充发布证据。
 - 范围：Codex V4 的创建、恢复、运行、断线、重连、停止、归档、列表投影，以及 App、CLI、daemon、Gateway、Relay Server 之间的状态交接。
 - 目标：保留现场调查结果，记录 F1-F10 的代码与测试证据，并明确尚待现场确认的外部退出诊断边界。
 
@@ -235,7 +235,7 @@ archivedAt!=null                -> 显式归档
 
 ## 实施约束与云端验收
 
-下面的约束已由本轮代码实现；表中的云端场景仍须在发布工作流中完成验收。
+下面的约束已由本轮代码实现；验收矩阵由云端源码测试、官方 Codex 真实 PTY 和 Android 现场运行共同覆盖，证据列在矩阵之后。
 
 ```text
 Gateway 存活（本地 descriptor）
@@ -282,6 +282,13 @@ Gateway 异常死亡/force stop
 | worker 非正常消失，metadata 仍 current | App 可以在确认 worker 不存在后显式 archive；存活 worker 仍受 stop-before-archive 保护 |
 | 显式 archive 与旧 presence touch 竞争 | archive tombstone 获胜，旧 touch 不能复活会话 |
 | PID 被复用 | 不阻断正确恢复，也不把无关进程视为 Happy Gateway |
+
+### 云端验收证据（2026-08-04）
+
+- 产品实现提交 `12018c34` 的 monorepo CI `30909024720`、CLI `1.4.39` 发布 `30909024377`、Relay `1.1.39` 发布 `30909023469`、Android App `1.11.25` 发布 `30909023316` 和官方 Codex Android 现场验收 `30909025246` 均成功。
+- 验收补强提交 `be685ae1` 的 monorepo CI `30912025575` 成功。其真实 PTY 场景在 terminal 异常断开后等待 11 分钟，确认 Relay session 仍 active，Gateway/provider/worker 仍存活，且 gateway、provider、thread、session 与 generation 均未发生交接；随后继续覆盖 attach 与正常停止。
+- 同一提交的 API 36 官方 Codex Android 现场验收 `30912026216` 成功，覆盖 App 往返与恢复路径。租约接管、旧 touch/归档竞争、超时/touch 竞争、root/child release、missing worker、强制停止和 PID 复用由上述云端源码测试作业覆盖。
+- 这些成功运行没有证明 F3 的外部 daemon/Gateway 消失原因；F3 继续保持“仍待诊断”，只能由后续不含载荷的 descriptor 生命周期记录补充证据。
 
 ## 验证策略
 
