@@ -79,6 +79,8 @@ export const pt: TranslationStructure = {
         error: 'erro',
         online: 'online',
         offline: 'offline',
+        recoverable: 'recuperável',
+        archived: 'arquivada',
         lastSeen: ({ time }: { time: string }) => `visto por último ${time}`,
         permissionRequired: 'permissão necessária',
         activeNow: 'Ativo agora',
@@ -238,8 +240,8 @@ export const pt: TranslationStructure = {
         commandPaletteDisabled: 'Acesso rápido a comandos desativado',
         markdownCopyV2: 'Markdown Copy v2',
         markdownCopyV2Subtitle: 'Pressione e segure para abrir modal de cópia',
-        hideInactiveSessions: 'Ocultar sessões inativas',
-        hideInactiveSessionsSubtitle: 'Mostre apenas os chats ativos na sua lista',
+        hideArchivedSessions: 'Ocultar sessões arquivadas',
+        hideArchivedSessionsSubtitle: 'Oculte da lista os chats arquivados explicitamente',
         groupToolCalls: 'Agrupar chamadas de ferramentas',
         groupToolCallsSubtitle: 'Recolher chamadas consecutivas de ferramentas em um único contêiner',
         privacy: 'Privacidade',
@@ -319,7 +321,8 @@ export const pt: TranslationStructure = {
 
     session: {
         inputPlaceholder: 'Digite uma mensagem ...',
-        inactiveArchived: 'Esta sessão está inativa.',
+        inactiveRecoverable: 'Esta sessão está inativa, mas pode ser retomada.',
+        archived: 'Esta sessão está arquivada. Retome-a para recuperar o acesso.',
         resumeFromTerminal: 'Para retomá-la pelo terminal:',
         machineDeleted: 'Máquina de origem removida',
         machineDeletedDescription: 'O histórico continua disponível, mas esta sessão é somente leitura e não pode mais controlar o Codex.',
@@ -688,6 +691,7 @@ export const pt: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `Chat lateral ${index}`,
         newChat: 'Novo chat lateral',
         close: 'Fechar chat lateral',
+        historyTitle: 'Histórico',
     },
 
     settingsVoice: {

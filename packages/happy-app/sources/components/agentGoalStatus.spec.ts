@@ -3,6 +3,7 @@ import type { Session } from '@/sync/storageTypes';
 import { resolveVisibleAgentGoalStatus } from './agentGoalStatus';
 
 function sessionWith(overrides: Partial<Session>): Session {
+    const { archivedAt = null, ...rest } = overrides;
     return {
         id: 'happy-session-1',
         seq: 1,
@@ -10,6 +11,7 @@ function sessionWith(overrides: Partial<Session>): Session {
         updatedAt: 2000,
         active: true,
         activeAt: 10_000,
+        archivedAt,
         metadata: {
             path: '/tmp/project',
             host: 'local',
@@ -23,7 +25,7 @@ function sessionWith(overrides: Partial<Session>): Session {
         thinking: false,
         thinkingAt: 0,
         presence: 'online',
-        ...overrides,
+        ...rest,
     };
 }
 

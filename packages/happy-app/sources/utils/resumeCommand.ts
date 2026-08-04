@@ -1,8 +1,9 @@
 export type ResumeCommandMetadata = {
-    path?: string | null;
-    os?: string | null;
     flavor?: string | null;
     codexThreadId?: string | null;
+    codexSyncVersion?: number | null;
+    codexReadOnly?: boolean | null;
+    happySessionId?: string | null;
 };
 
 export type ResumeCommandBlock = {
@@ -10,34 +11,17 @@ export type ResumeCommandBlock = {
     copyText: string;
 };
 
-function quotePosixPath(path: string): string {
-    return `'${path.replace(/'/g, `'\\''`)}'`;
-}
-
-function quotePowerShellPath(path: string): string {
-    return `'${path.replace(/'/g, `''`)}'`;
-}
-
-function isWindows(metadata: ResumeCommandMetadata): boolean {
-    return metadata.os?.toLowerCase() === 'win32';
-}
-
 function buildResumeInvocation(metadata: ResumeCommandMetadata): string | null {
-    if (metadata.flavor === 'codex' && metadata.codexThreadId) {
-        return `happy codex --resume ${metadata.codexThreadId}`;
+    if (
+        metadata.flavor === 'codex'
+        && metadata.codexSyncVersion === 4
+        && metadata.codexReadOnly !== true
+        && metadata.codexThreadId
+        && metadata.happySessionId
+    ) {
+        return `happy resume ${metadata.happySessionId}`;
     }
     return null;
-}
-
-function buildChangeDirectoryCommand(metadata: ResumeCommandMetadata): string | null {
-    const path = metadata.path?.trim();
-    if (!path) {
-        return null;
-    }
-
-    return isWindows(metadata)
-        ? `Set-Location -LiteralPath ${quotePowerShellPath(path)}`
-        : `cd ${quotePosixPath(path)}`;
 }
 
 export function buildResumeCommandBlock(metadata: ResumeCommandMetadata): ResumeCommandBlock | null {
@@ -46,10 +30,7 @@ export function buildResumeCommandBlock(metadata: ResumeCommandMetadata): Resume
         return null;
     }
 
-    const changeDirectoryCommand = buildChangeDirectoryCommand(metadata);
-    const lines = changeDirectoryCommand
-        ? [changeDirectoryCommand, invocation]
-        : [invocation];
+    const lines = [invocation];
 
     return {
         lines,
@@ -62,5 +43,5 @@ export function buildResumeCommand(metadata: ResumeCommandMetadata): string | nu
     if (!commandBlock) {
         return null;
     }
-    return commandBlock.lines.join(isWindows(metadata) ? '; ' : ' && ');
+    return commandBlock.copyText;
 }

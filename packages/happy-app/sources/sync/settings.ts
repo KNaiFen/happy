@@ -35,9 +35,9 @@ export const SettingsSchema = z.object({
     sessionStatusBarDisplay: z.enum(SESSION_STATUS_BAR_DISPLAY_MODES).describe('Whether/where to show the branch, model, effort, and context status bar'),
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
 
-    hideInactiveSessions: z.boolean().describe('Hide inactive sessions in the main list'),
+    hideArchivedSessions: z.boolean().describe('Hide archived sessions in the main list'),
     sortSessionsByActivity: z.boolean().describe('Sort the session list by last activity instead of creation date'),
-    expResumeSession: z.boolean().describe('Enable experimental session resume feature'),
+    expResumeSession: z.boolean().describe('Legacy toggle for experimental thread actions'),
     fileDiffsSidebar: z.boolean().describe('Show the file diffs sidebar next to the chat on desktop'),
     groupToolCalls: z.boolean().describe('Collapse consecutive tool calls into grouped containers in chat'),
     expImageUpload: z.boolean().describe('Enable experimental image upload in chat'),
@@ -106,7 +106,7 @@ export const settingsDefaults: Settings = {
     sessionStatusBarDisplay: 'hidden',
     usageLimitShowRemaining: false,
 
-    hideInactiveSessions: false,
+    hideArchivedSessions: true,
     sortSessionsByActivity: false,
     expResumeSession: false,
     fileDiffsSidebar: false,
@@ -144,7 +144,11 @@ export function settingsParse(settings: unknown): Settings {
         // Remove all known schema fields from unknownFields
         const knownFields = Object.keys(SettingsSchema.shape);
         knownFields.forEach(key => delete unknownFields[key]);
-        return { ...settingsDefaults, ...unknownFields };
+        return {
+            ...settingsDefaults,
+            ...unknownFields,
+            hideArchivedSessions: resolveHideArchivedSessions(settings),
+        };
     }
 
     // Migration: Convert old 'zh' language code to 'zh-Hans'
@@ -158,9 +162,28 @@ export function settingsParse(settings: unknown): Settings {
     // Remove known fields from unknownFields to preserve only the unknown ones
     Object.keys(parsed.data).forEach(key => delete unknownFields[key]);
 
-    const result = { ...settingsDefaults, ...parsed.data, ...unknownFields };
+    const result = {
+        ...settingsDefaults,
+        ...parsed.data,
+        ...unknownFields,
+        hideArchivedSessions: resolveHideArchivedSessions(settings),
+    };
     result.agentDefaultOverrides = sanitizeAgentDefaultOverrides(result.agentDefaultOverrides);
     return result;
+}
+
+function resolveHideArchivedSessions(settings: unknown): boolean {
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+        return settingsDefaults.hideArchivedSessions;
+    }
+    const value = settings as Record<string, unknown>;
+    if (typeof value.hideArchivedSessions === 'boolean') {
+        return value.hideArchivedSessions;
+    }
+    if (typeof value.hideInactiveSessions === 'boolean') {
+        return value.hideInactiveSessions;
+    }
+    return settingsDefaults.hideArchivedSessions;
 }
 
 //

@@ -4,7 +4,7 @@ import { notifyUnreadMessage } from '@/sync/webTabTitle';
 import { AuthCredentials } from '@/auth/tokenStorage';
 import { Encryption } from '@/sync/encryption/encryption';
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
-import { storage } from './storage';
+import { storage, type SessionUpdate } from './storage';
 import { getImageAttachmentSendPlan } from './attachmentSupport';
 import {
     errorMessageFromUnknown,
@@ -84,6 +84,7 @@ import {
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
+import { normalizeFetchedSessionLifecycle } from './sessionLifecycle';
 
 type SendMessageOptions = {
     displayText?: string;
@@ -788,6 +789,7 @@ class Sync {
             dataEncryptionKey: string | null;
             active: boolean;
             activeAt: number;
+            archivedAt?: number | null;
             createdAt: number;
             updatedAt: number;
             originMachineId: string | null;
@@ -811,7 +813,7 @@ class Sync {
         await this.encryption.initializeSessions(sessionKeys);
 
         // Decrypt sessions
-        let decryptedSessions: (Omit<Session, 'presence'> & { presence?: "online" | number })[] = [];
+        let decryptedSessions: SessionUpdate[] = [];
         for (const session of sessions) {
             // Get session encryption (should always exist after initialization)
             const sessionEncryption = this.encryption.getSessionEncryption(session.id);
@@ -827,8 +829,9 @@ class Sync {
             let agentState = await sessionEncryption.decryptAgentState(session.agentStateVersion, session.agentState);
 
             // Put it all together
-            const processedSession = {
+            const processedSession: SessionUpdate = {
                 ...session,
+                ...normalizeFetchedSessionLifecycle(session),
                 thinking: false,
                 thinkingAt: 0,
                 metadata,
@@ -852,9 +855,7 @@ class Sync {
         return this.sessionsSync.invalidateAndAwait();
     }
 
-    public hydrateSessionFromHistory = (session: Omit<Session, 'presence'> & {
-        presence?: 'online' | number;
-    }): void => {
+    public hydrateSessionFromHistory = (session: SessionUpdate): void => {
         this.applySessions([session]);
         this.reconcileCodexV4Clients(Object.values(storage.getState().sessions));
     }
@@ -2109,10 +2110,14 @@ class Sync {
             const session = storage.getState().sessions[sessionId];
             const archiveBlocksHeartbeat = update.active && isSessionArchivePending(sessionId);
             if (session && !archiveBlocksHeartbeat && shouldApplySessionActivity(session, update)) {
+                const archivedAt = update.archivedAt === undefined
+                    ? session.archivedAt
+                    : update.archivedAt;
                 sessions.push({
                     ...session,
-                    active: update.active,
+                    active: archivedAt === null && update.active,
                     activeAt: update.activeAt,
+                    archivedAt,
                     thinking: update.thinking ?? false,
                     thinkingAt: update.activeAt // Always use activeAt for consistency
                 });
@@ -2174,9 +2179,7 @@ class Sync {
     // Apply store
     //
 
-    private applySessions = (sessions: (Omit<Session, "presence"> & {
-        presence?: "online" | number;
-    })[]) => {
+    private applySessions = (sessions: SessionUpdate[]) => {
         const previousState = storage.getState();
         const active = previousState.getActiveSessions();
         storage.getState().applySessions(sessions);

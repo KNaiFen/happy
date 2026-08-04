@@ -29,6 +29,7 @@ import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, s
 import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat } from '@/sync/ops';
 import { archiveSession } from '@/sync/sessionArchiveCoordinator';
+import { shouldArchiveSideChatOnClose } from '@/sync/sideChatSessions';
 import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { findActiveCodexV4Turn, type CodexV4FollowUpMode } from '@/sync/codexV4Commands';
@@ -238,6 +239,14 @@ export const SessionView = React.memo((props: { id: string }) => {
         () => rawSideChats.filter((s) => !closedSideChatIds.has(s.id)),
         [rawSideChats, closedSideChatIds],
     );
+    const activeSideChats = React.useMemo(
+        () => sideChats.filter((sideChat) => sideChat.active),
+        [sideChats],
+    );
+    const historySideChats = React.useMemo(
+        () => sideChats.filter((sideChat) => !sideChat.active),
+        [sideChats],
+    );
     // Prune closed ids once the underlying sessions actually leave the store, so
     // the set can't grow without bound.
     React.useEffect(() => {
@@ -279,18 +288,25 @@ export const SessionView = React.memo((props: { id: string }) => {
 
     const closeSideChat = React.useCallback((id: string) => {
         const idx = sideChats.findIndex((s) => s.id === id);
+        const sideChat = idx === -1 ? null : sideChats[idx];
         const neighbour = idx !== -1 ? (sideChats[idx - 1] ?? sideChats[idx + 1] ?? null) : null;
         setActiveSideChatId(neighbour?.id ?? null);
         setClosedSideChatIds((prev) => new Set(prev).add(id));
         if (!neighbour) {
             removeSidebarPanel('sideChat');
         }
-        archiveSideChatSession(id);
+        if (sideChat && shouldArchiveSideChatOnClose(sideChat)) {
+            archiveSideChatSession(id);
+        }
     }, [sideChats, removeSidebarPanel, archiveSideChatSession]);
 
-    // Closing the "Side chat" panel chip tears down every side chat at once.
+    // Provider-created children only close locally; writable side chats are
+    // archived once their panel tab is closed.
     const closeAllSideChats = React.useCallback(() => {
         const ids = sideChats.map((s) => s.id);
+        const writableIds = sideChats
+            .filter(shouldArchiveSideChatOnClose)
+            .map((s) => s.id);
         setActiveSideChatId(null);
         setClosedSideChatIds((prev) => {
             const next = new Set(prev);
@@ -298,7 +314,7 @@ export const SessionView = React.memo((props: { id: string }) => {
             return next;
         });
         removeSidebarPanel('sideChat');
-        ids.forEach(archiveSideChatSession);
+        writableIds.forEach(archiveSideChatSession);
     }, [sideChats, removeSidebarPanel, archiveSideChatSession]);
 
     const closeSidebarPanel = React.useCallback((panel: SidebarMode) => {
@@ -576,7 +592,8 @@ export const SessionView = React.memo((props: { id: string }) => {
                         onSelectPanel={selectSidebarPanel}
                         onClosePanel={closeSidebarPanel}
                         onAllFilesFilePress={handleAllFilesFilePress}
-                        sideChats={sideChats}
+                        sideChats={activeSideChats}
+                        historySideChats={historySideChats}
                         activeSideChatId={activeSideChatId}
                         onSelectSideChat={setActiveSideChatId}
                         onCloseSideChat={closeSideChat}
@@ -778,7 +795,6 @@ export function SessionViewLoaded({
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const sessionStatusBarDisplay = useSetting('sessionStatusBarDisplay');
     const experiments = useSetting('experiments');
-    const expResumeSession = useSetting('expResumeSession');
     const { canResume, resumeSession, resumingSession } = useSessionQuickActions(session);
     const isDisconnected = !sessionStatus.isConnected;
     const resumeCommandBlock = getResumeCommandBlock(session);
@@ -1183,9 +1199,8 @@ export function SessionViewLoaded({
         />
     );
 
-    // Disconnected sessions get the full Resume affordance regardless of
-    // whether they were explicitly archived or just lost their CLI (for
-    // example, Ctrl-C in terminal also flips active=false). InactiveArchivedHint handles both cases: shows the
+    // Disconnected sessions get the full Resume affordance. InactiveSessionHint
+    // distinguishes recoverable history from an explicit archive tombstone and shows the
     // Resume button when canResume is true, falls back to the
     // copy-this-command hint when the experiments toggle is off or the
     // machine isn't reachable.
@@ -1195,8 +1210,9 @@ export function SessionViewLoaded({
         </CenteredInputWidth>
     ) : isDisconnected ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
-            <InactiveArchivedHint
-                resumeCommandBlock={expResumeSession ? resumeCommandBlock : null}
+            <InactiveSessionHint
+                archived={session.archivedAt !== null}
+                resumeCommandBlock={resumeCommandBlock}
                 canResume={canResume}
                 resuming={resumingSession}
                 onResume={resumeSession}
@@ -1382,7 +1398,8 @@ function MachineDeletedHint() {
     );
 }
 
-function InactiveArchivedHint(props: {
+function InactiveSessionHint(props: {
+    archived: boolean;
     resumeCommandBlock: NonNullable<ReturnType<typeof getResumeCommandBlock>> | null;
     canResume: boolean;
     resuming: boolean;
@@ -1405,7 +1422,7 @@ function InactiveArchivedHint(props: {
         }}>
             <View style={{ paddingHorizontal: 8, gap: 4 }}>
                 <Text style={hintTextStyle}>
-                    {t('session.inactiveArchived')}
+                    {props.archived ? t('session.archived') : t('session.inactiveRecoverable')}
                 </Text>
                 {props.canResume ? null : props.resumeCommandBlock && (
                     <Text style={hintTextStyle}>

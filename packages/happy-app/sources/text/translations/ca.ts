@@ -79,6 +79,8 @@ export const ca: TranslationStructure = {
         error: 'error',
         online: 'en línia',
         offline: 'fora de línia',
+        recoverable: 'recuperable',
+        archived: 'arxivada',
         lastSeen: ({ time }: { time: string }) => `vist per última vegada ${time}`,
         permissionRequired: 'permís requerit',
         activeNow: 'Actiu ara',
@@ -239,8 +241,8 @@ export const ca: TranslationStructure = {
         commandPaletteDisabled: 'Accés ràpid a comandes desactivat',
         markdownCopyV2: 'Markdown Copy v2',
         markdownCopyV2Subtitle: 'Pulsació llarga obre modal de còpia',
-        hideInactiveSessions: 'Amaga les sessions inactives',
-        hideInactiveSessionsSubtitle: 'Mostra només els xats actius a la llista',
+        hideArchivedSessions: 'Amaga les sessions arxivades',
+        hideArchivedSessionsSubtitle: 'Amaga de la llista els xats arxivats explícitament',
         groupToolCalls: 'Agrupa les crides a eines',
         groupToolCallsSubtitle: 'Replega les crides consecutives a eines en un sol contenidor',
         privacy: 'Privadesa',
@@ -320,7 +322,8 @@ export const ca: TranslationStructure = {
 
     session: {
         inputPlaceholder: 'Escriu un missatge...',
-        inactiveArchived: 'Aquesta sessió està inactiva.',
+        inactiveRecoverable: 'Aquesta sessió està inactiva, però es pot reprendre.',
+        archived: 'Aquesta sessió està arxivada. Reprèn-la per recuperar-hi l’accés.',
         resumeFromTerminal: 'Per reprendre-la des del terminal:',
         machineDeleted: 'La màquina d’origen s’ha suprimit',
         machineDeletedDescription: 'L’historial continua disponible, però aquesta sessió és de només lectura i ja no pot controlar Codex.',
@@ -689,6 +692,7 @@ export const ca: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `Xat lateral ${index}`,
         newChat: 'Nou xat lateral',
         close: 'Tanca el xat lateral',
+        historyTitle: 'Historial',
     },
 
     settingsVoice: {

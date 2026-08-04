@@ -29,6 +29,7 @@ import { SessionViewLoaded } from '@/-session/SessionView';
  */
 export const SideChatPanel = React.memo(function SideChatPanel({
     sideChats,
+    historySideChats,
     activeSideChatId,
     onSelectSideChat,
     onCloseSideChat,
@@ -38,6 +39,7 @@ export const SideChatPanel = React.memo(function SideChatPanel({
 }: {
     parentSessionId: string;
     sideChats: Session[];
+    historySideChats: Session[];
     activeSideChatId: string | null;
     onSelectSideChat: (id: string) => void;
     onCloseSideChat: (id: string) => void;
@@ -45,13 +47,17 @@ export const SideChatPanel = React.memo(function SideChatPanel({
     canCreateSideChat: boolean;
     creatingSideChat: boolean;
 }) {
+    const visibleSideChats = React.useMemo(
+        () => [...sideChats, ...historySideChats],
+        [sideChats, historySideChats],
+    );
     const activeSession = React.useMemo(() => {
         if (activeSideChatId) {
-            const match = sideChats.find((s) => s.id === activeSideChatId);
+            const match = visibleSideChats.find((s) => s.id === activeSideChatId);
             if (match) return match;
         }
-        return sideChats.length > 0 ? sideChats[sideChats.length - 1] : null;
-    }, [activeSideChatId, sideChats]);
+        return visibleSideChats.length > 0 ? visibleSideChats[visibleSideChats.length - 1] : null;
+    }, [activeSideChatId, visibleSideChats]);
 
     // Pull the focused side chat's messages into the store while mounted.
     const activeId = activeSession?.id ?? null;
@@ -61,7 +67,7 @@ export const SideChatPanel = React.memo(function SideChatPanel({
         }
     }, [activeId]);
 
-    if (sideChats.length === 0) {
+    if (visibleSideChats.length === 0) {
         return (
             <SideChatEmptyState
                 creating={creatingSideChat}
@@ -73,12 +79,25 @@ export const SideChatPanel = React.memo(function SideChatPanel({
 
     return (
         <View style={styles.panel}>
-            <SideChatTabs
-                sessions={sideChats}
-                activeId={activeId}
-                onSelect={onSelectSideChat}
-                onClose={onCloseSideChat}
-            />
+            {sideChats.length > 0 && (
+                <SideChatTabs
+                    sessions={sideChats}
+                    activeId={activeId}
+                    onSelect={onSelectSideChat}
+                    onClose={onCloseSideChat}
+                />
+            )}
+            {historySideChats.length > 0 && (
+                <View style={styles.historySection}>
+                    <Text style={styles.historyTitle}>{t('sideChat.historyTitle')}</Text>
+                    <SideChatTabs
+                        sessions={historySideChats}
+                        activeId={activeId}
+                        onSelect={onSelectSideChat}
+                        onClose={onCloseSideChat}
+                    />
+                </View>
+            )}
             {activeSession && (
                 <SideChatConversation key={activeSession.id} session={activeSession} />
             )}
@@ -299,6 +318,16 @@ const styles = StyleSheet.create((theme) => ({
         paddingRight: 6,
         paddingBottom: 6,
         gap: 4,
+    },
+    historySection: {
+        paddingTop: 4,
+    },
+    historyTitle: {
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+        paddingHorizontal: 10,
+        paddingBottom: 2,
+        ...Typography.default('semiBold'),
     },
     tabsScroll: {
         alignItems: 'center',

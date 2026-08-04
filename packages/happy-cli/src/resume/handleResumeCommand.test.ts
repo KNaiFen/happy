@@ -129,6 +129,17 @@ describe('buildResumeBootstrap', () => {
             'Happy session session-2 uses unsupported flavor "codex".',
         );
     });
+
+    it('rejects a read-only provider child before creating a Gateway bootstrap', () => {
+        expect(() => buildResumeBootstrap({
+            ...createReconnectableSession(),
+            id: 'provider-child',
+            metadata: {
+                ...createReconnectableSession().metadata,
+                codexReadOnly: true,
+            },
+        })).toThrow('Happy session provider-child is read-only and cannot be resumed.');
+    });
 });
 
 describe('formatResumeHelp', () => {

@@ -78,6 +78,8 @@ export const en = {
         error: 'error',
         online: 'online',
         offline: 'offline',
+        recoverable: 'recoverable',
+        archived: 'archived',
         lastSeen: ({ time }: { time: string }) => `last seen ${time}`,
         permissionRequired: 'permission required',
         activeNow: 'Active now',
@@ -237,8 +239,8 @@ export const en = {
         commandPaletteDisabled: 'Quick command access disabled',
         markdownCopyV2: 'Markdown Copy v2',
         markdownCopyV2Subtitle: 'Long press opens copy modal',
-        hideInactiveSessions: 'Hide inactive sessions',
-        hideInactiveSessionsSubtitle: 'Show only active chats in your list',
+        hideArchivedSessions: 'Hide archived sessions',
+        hideArchivedSessionsSubtitle: 'Hide explicitly archived chats from your list',
         groupToolCalls: 'Group Tool Calls',
         groupToolCallsSubtitle: 'Collapse consecutive tool calls into one container',
         privacy: 'Privacy',
@@ -333,7 +335,8 @@ export const en = {
 
     session: {
         inputPlaceholder: 'Type a message ...',
-        inactiveArchived: 'This session is inactive.',
+        inactiveRecoverable: 'This session is inactive and can be resumed.',
+        archived: 'This session is archived. Resume it to restore access.',
         resumeFromTerminal: 'To resume it from the terminal:',
         machineDeleted: 'Source machine deleted',
         machineDeletedDescription: 'History remains available, but this session is read-only and can no longer control Codex.',
@@ -703,6 +706,7 @@ export const en = {
         tabLabel: ({ index }: { index: number }) => `Side chat ${index}`,
         newChat: 'New side chat',
         close: 'Close side chat',
+        historyTitle: 'History',
     },
 
     settingsVoice: {

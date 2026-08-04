@@ -16,6 +16,7 @@ const RawSessionSchema = z.object({
     updatedAt: z.number(),
     active: z.boolean(),
     activeAt: z.number(),
+    archivedAt: z.number().nullable().optional().default(null),
     metadata: z.string(),
     metadataVersion: z.number().int().nonnegative(),
     agentState: z.string().nullable(),
@@ -201,6 +202,7 @@ export async function scanCodexThreadBindings(machineId: string): Promise<CodexT
                 updatedAt: raw.updatedAt,
                 active: raw.active,
                 activeAt: raw.activeAt,
+                archivedAt: raw.archivedAt,
                 metadata: metadata.data,
                 metadataVersion: raw.metadataVersion,
                 originMachineId: raw.originMachineId,
@@ -316,6 +318,7 @@ export async function openCodexThread(options: {
             ...options.binding.session,
             active: true,
             activeAt: Math.max(options.binding.session.activeAt, Date.now()),
+            archivedAt: null,
         });
     }
     return result;

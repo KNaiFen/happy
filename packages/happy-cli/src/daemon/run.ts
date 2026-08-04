@@ -15,6 +15,7 @@ import { getEnvironmentInfo } from '@/ui/doctor';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock, releaseDaemonLock, readPersistedSessions, persistSession } from '@/persistence';
 import type { PersistedSession } from '@/persistence';
+import type { StopSessionResult } from '@/api/apiMachine';
 
 import { cleanupDaemonState, isDaemonRunningForCurrentProfile, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
@@ -648,7 +649,7 @@ export async function startDaemon(): Promise<void> {
     const stopSession = async (
       sessionId: string,
       expectation?: CodexGatewayStopExpectation,
-    ): Promise<boolean> => {
+    ): Promise<StopSessionResult> => {
       logger.debug(`[DAEMON RUN] Attempting to stop session ${sessionId}`);
 
       const gateways = await discoverLiveCodexGateways({
@@ -662,7 +663,10 @@ export async function startDaemon(): Promise<void> {
         const binding = findCodexGatewayStopBinding(gateway.descriptor, sessionId)!;
         if (!matchesCodexGatewayStopExpectation(gateway.descriptor, binding, expectation)) {
           logger.debug('[DAEMON RUN] Rejected stale Codex Gateway stop request');
-          return false;
+          return {
+            outcome: 'unverified',
+            message: 'Codex Gateway identity could not be verified',
+          };
         }
         try {
           await callCodexGatewayControl({
@@ -671,17 +675,17 @@ export async function startDaemon(): Promise<void> {
             path: '/stop',
             body: { force: false },
           });
-          return true;
+          return { outcome: 'stopped', message: 'Session stopped' };
         } catch (error) {
           logger.debug('[DAEMON RUN] Gateway stop request failed', {
             errorKind: classifySyncV4DiagnosticError(error),
           });
-          return false;
+          return { outcome: 'failed', message: 'Codex Gateway control request failed' };
         }
       }
 
       logger.debug(`[DAEMON RUN] Session ${sessionId} not found`);
-      return false;
+      return { outcome: 'missing', message: 'Codex Gateway worker is missing' };
     };
 
     // Handle child process exit — preserve session data for resume
@@ -699,7 +703,7 @@ export async function startDaemon(): Promise<void> {
     // Start control server
     const { port: controlPort, stop: stopControlServer } = await startDaemonControlServer({
       getChildren: getCurrentChildren,
-      stopSession,
+      stopSession: async (sessionId) => (await stopSession(sessionId)).outcome === 'stopped',
       spawnSession,
       requestShutdown: () => requestShutdown('happy-cli'),
       onHappySessionWebhook

@@ -118,30 +118,45 @@ describe('ActivityUpdateAccumulator Smart Debounce', () => {
     });
 
     describe('out-of-order lifecycle updates', () => {
-        it('drops a stale heartbeat after an archive event', () => {
+        it('drops legacy heartbeats after an archive tombstone', () => {
             const archived: ApiEphemeralActivityUpdate = {
-                type: 'activity', id: 'session1', active: false, activeAt: 2_000, thinking: false,
+                type: 'activity', id: 'session1', active: false, activeAt: 2_000, archivedAt: 2_000, thinking: false,
             };
             const staleHeartbeat: ApiEphemeralActivityUpdate = {
                 type: 'activity', id: 'session1', active: true, activeAt: 1_999, thinking: true,
             };
+            const newerLegacyHeartbeat: ApiEphemeralActivityUpdate = {
+                type: 'activity', id: 'session1', active: true, activeAt: 3_000, thinking: true,
+            };
 
             accumulator.addUpdate(archived);
             accumulator.addUpdate(staleHeartbeat);
+            accumulator.addUpdate(newerLegacyHeartbeat);
 
             expect(mockFlushHandler).toHaveBeenCalledOnce();
             expect(mockFlushHandler).toHaveBeenCalledWith(new Map([['session1', archived]]));
         });
 
-        it('keeps inactive state on a timestamp tie but accepts a newer unarchive', () => {
+        it('keeps an archive tombstone on a timestamp tie but accepts an explicit newer unarchive', () => {
             expect(shouldApplySessionActivity(
-                { active: false, activeAt: 2_000 },
-                { active: true, activeAt: 2_000 },
+                { active: false, activeAt: 2_000, archivedAt: 2_000 },
+                { active: true, activeAt: 2_000, archivedAt: null },
             )).toBe(false);
             expect(shouldApplySessionActivity(
-                { active: false, activeAt: 2_000 },
-                { active: true, activeAt: 2_001 },
+                { active: false, activeAt: 2_000, archivedAt: 2_000 },
+                { active: false, activeAt: 2_001, archivedAt: null },
             )).toBe(true);
+        });
+
+        it('prefers an archive event over an active event on a timestamp tie', () => {
+            expect(shouldApplySessionActivity(
+                { active: true, activeAt: 2_000, archivedAt: null },
+                { active: false, activeAt: 2_000, archivedAt: 2_000 },
+            )).toBe(true);
+            expect(shouldApplySessionActivity(
+                { active: false, activeAt: 2_000, archivedAt: 2_000 },
+                { active: true, activeAt: 2_000, archivedAt: null },
+            )).toBe(false);
         });
 
     });

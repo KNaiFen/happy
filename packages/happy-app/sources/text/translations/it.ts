@@ -78,6 +78,8 @@ export const it: TranslationStructure = {
         error: 'errore',
         online: 'online',
         offline: 'offline',
+        recoverable: 'ripristinabile',
+        archived: 'archiviata',
         lastSeen: ({ time }: { time: string }) => `visto l'ultima volta ${time}`,
         permissionRequired: 'permesso richiesto',
         activeNow: 'Attivo ora',
@@ -237,8 +239,8 @@ export const it: TranslationStructure = {
         commandPaletteDisabled: 'Accesso rapido ai comandi disabilitato',
         markdownCopyV2: 'Markdown Copy v2',
         markdownCopyV2Subtitle: 'Pressione lunga apre la finestra di copia',
-        hideInactiveSessions: 'Nascondi sessioni inattive',
-        hideInactiveSessionsSubtitle: 'Mostra solo le chat attive nella tua lista',
+        hideArchivedSessions: 'Nascondi sessioni archiviate',
+        hideArchivedSessionsSubtitle: 'Nascondi dall’elenco le chat archiviate esplicitamente',
         groupToolCalls: 'Raggruppa chiamate agli strumenti',
         groupToolCallsSubtitle: 'Comprimi le chiamate consecutive agli strumenti in un unico contenitore',
         privacy: 'Privacy',
@@ -318,7 +320,8 @@ export const it: TranslationStructure = {
 
     session: {
         inputPlaceholder: 'Scrivi un messaggio ...',
-        inactiveArchived: 'Questa sessione è inattiva.',
+        inactiveRecoverable: 'Questa sessione è inattiva, ma può essere ripresa.',
+        archived: 'Questa sessione è archiviata. Riprendila per ripristinare l’accesso.',
         resumeFromTerminal: 'Per riprenderla dal terminale:',
         machineDeleted: 'Macchina di origine eliminata',
         machineDeletedDescription: 'La cronologia resta disponibile, ma questa sessione è di sola lettura e non può più controllare Codex.',
@@ -687,6 +690,7 @@ export const it: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `Chat laterale ${index}`,
         newChat: 'Nuova chat laterale',
         close: 'Chiudi chat laterale',
+        historyTitle: 'Cronologia',
     },
 
     settingsVoice: {

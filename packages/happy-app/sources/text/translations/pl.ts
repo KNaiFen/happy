@@ -90,6 +90,8 @@ export const pl: TranslationStructure = {
         error: 'błąd',
         online: 'online',
         offline: 'offline',
+        recoverable: 'można wznowić',
+        archived: 'zarchiwizowana',
         lastSeen: ({ time }: { time: string }) => `ostatnio widziano ${time}`,
         permissionRequired: 'wymagane uprawnienie',
         activeNow: 'Aktywny teraz',
@@ -256,8 +258,8 @@ export const pl: TranslationStructure = {
         commandPaletteDisabled: 'Szybki dostęp do poleceń wyłączony',
         markdownCopyV2: 'Markdown Copy v2',
         markdownCopyV2Subtitle: 'Długie naciśnięcie otwiera modal kopiowania',
-        hideInactiveSessions: 'Ukryj nieaktywne sesje',
-        hideInactiveSessionsSubtitle: 'Wyświetlaj tylko aktywne czaty na liście',
+        hideArchivedSessions: 'Ukryj zarchiwizowane sesje',
+        hideArchivedSessionsSubtitle: 'Ukryj jawnie zarchiwizowane czaty na liście',
         groupToolCalls: 'Grupuj wywołania narzędzi',
         groupToolCallsSubtitle: 'Zwijaj kolejne wywołania narzędzi w jeden kontener',
         privacy: 'Prywatność',
@@ -337,7 +339,8 @@ export const pl: TranslationStructure = {
 
     session: {
         inputPlaceholder: 'Wpisz wiadomość...',
-        inactiveArchived: 'Ta sesja jest nieaktywna.',
+        inactiveRecoverable: 'Ta sesja jest nieaktywna, ale można ją wznowić.',
+        archived: 'Ta sesja jest zarchiwizowana. Wznów ją, aby odzyskać dostęp.',
         resumeFromTerminal: 'Aby wznowić ją z terminala:',
         machineDeleted: 'Maszyna źródłowa została usunięta',
         machineDeletedDescription: 'Historia pozostaje dostępna, ale ta sesja jest tylko do odczytu i nie może już sterować Codex.',
@@ -705,6 +708,7 @@ export const pl: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `Czat boczny ${index}`,
         newChat: 'Nowy czat boczny',
         close: 'Zamknij czat boczny',
+        historyTitle: 'Historia',
     },
 
     settingsVoice: {

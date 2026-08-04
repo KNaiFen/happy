@@ -110,6 +110,42 @@ describe('Codex thread history App coordination', () => {
         });
     });
 
+    it('defaults legacy bindings to unarchived and preserves archive tombstones', async () => {
+        const legacy = rawSession(1);
+        const archived = rawSession(2, { archivedAt: 2_000 });
+        metadataByCiphertext.set(legacy.metadata, {
+            path: '/tmp/project',
+            host: 'test-host',
+            machineId: 'machine-1',
+            flavor: 'codex',
+            codexThreadId: 'thread-legacy',
+        });
+        metadataByCiphertext.set(archived.metadata, {
+            path: '/tmp/project',
+            host: 'test-host',
+            machineId: 'machine-1',
+            flavor: 'codex',
+            codexThreadId: 'thread-archived',
+        });
+        request.mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({ sessions: [legacy, archived], nextCursor: null, hasNext: false }),
+        });
+
+        const { scanCodexThreadBindings } = await import('./codexThreadHistory');
+        const result = await scanCodexThreadBindings('machine-1');
+
+        expect(result.byThreadId.get('thread-legacy')).toMatchObject({
+            type: 'bound',
+            session: { archivedAt: null },
+        });
+        expect(result.byThreadId.get('thread-archived')).toMatchObject({
+            type: 'bound',
+            session: { archivedAt: 2_000 },
+        });
+    });
+
     it('sends an existing session key only after the daemon requests resume material', async () => {
         machineRPC
             .mockResolvedValueOnce({ type: 'resumeMaterialRequired', sessionId: 'session-1' })
@@ -126,6 +162,7 @@ describe('Codex thread history App coordination', () => {
                 updatedAt: 1,
                 active: false,
                 activeAt: 1,
+                archivedAt: null,
                 metadata: {
                     path: '/tmp/project',
                     host: 'test-host',
@@ -271,6 +308,7 @@ describe('Codex thread history App coordination', () => {
                 updatedAt: 1,
                 active: false,
                 activeAt: 1,
+                archivedAt: null,
                 metadata: {
                     path: '/tmp/project',
                     host: 'test-host',

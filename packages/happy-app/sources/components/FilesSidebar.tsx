@@ -75,6 +75,7 @@ interface FilesSidebarProps {
     // Side chats (rendered inside the 'sideChat' panel). Creation is unified
     // into this sidebar's panel picker, so there is no separate add button.
     sideChats: Session[];
+    historySideChats: Session[];
     activeSideChatId: string | null;
     onSelectSideChat: (id: string) => void;
     onCloseSideChat: (id: string) => void;
@@ -212,6 +213,7 @@ export const FilesSidebar = React.memo<FilesSidebarProps>(({
     onClosePanel,
     onAllFilesFilePress,
     sideChats,
+    historySideChats,
     activeSideChatId,
     onSelectSideChat,
     onCloseSideChat,
@@ -453,6 +455,7 @@ export const FilesSidebar = React.memo<FilesSidebarProps>(({
                 <SideChatPanel
                     parentSessionId={sessionId}
                     sideChats={sideChats}
+                    historySideChats={historySideChats}
                     activeSideChatId={activeSideChatId}
                     onSelectSideChat={onSelectSideChat}
                     onCloseSideChat={onCloseSideChat}

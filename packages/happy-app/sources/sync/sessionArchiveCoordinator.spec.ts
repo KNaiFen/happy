@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     sessionArchive: vi.fn(),
@@ -23,6 +23,7 @@ function session(overrides: Record<string, unknown> = {}) {
         id: 'session-1',
         active: true,
         activeAt: 10,
+        archivedAt: null,
         presence: 'online',
         metadata: { flavor: 'codex', machineId: 'machine-1' },
         ...overrides,
@@ -54,6 +55,7 @@ describe('session archive coordinator', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.spyOn(Date, 'now').mockReturnValue(200);
         current = session();
         applySessions = vi.fn((updates: any[]) => {
             current = updates[0];
@@ -63,8 +65,10 @@ describe('session archive coordinator', () => {
             applySessions,
         }));
         mocks.sessionArchive.mockResolvedValue({ success: true, archivedAt: 100 });
-        mocks.sessionKill.mockResolvedValue({ success: true });
+        mocks.sessionKill.mockResolvedValue({ success: true, outcome: 'stopped' });
     });
+
+    afterEach(() => vi.restoreAllMocks());
 
     it('deduplicates clicks, hides immediately, and cleans up before background kill', async () => {
         let release!: () => void;
@@ -88,7 +92,7 @@ describe('session archive coordinator', () => {
         await first;
         await Promise.resolve();
         expect(mocks.sessionArchive).toHaveBeenCalledOnce();
-        expect(current).toMatchObject({ active: false, activeAt: 100 });
+        expect(current).toMatchObject({ active: false, activeAt: 200, archivedAt: 100 });
         expect(isSessionArchivePending('session-1')).toBe(false);
         expect(beforeStop).toHaveBeenCalledOnce();
         expect(mocks.sessionKill).toHaveBeenCalledWith('session-1', { timeoutMs: 5_000 });
@@ -106,20 +110,20 @@ describe('session archive coordinator', () => {
         expect(mocks.sessionKill).not.toHaveBeenCalled();
     });
 
-    it('does not send a kill RPC for read-only child sessions', async () => {
+    it('rejects archive for read-only child sessions at the coordinator boundary', async () => {
         current = session({ metadata: { flavor: 'codex', codexReadOnly: true } });
         mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
 
-        await archiveSession('session-1');
-        await Promise.resolve();
-        expect(mocks.sessionArchive).toHaveBeenCalledOnce();
+        await expect(archiveSession('session-1')).rejects.toThrow('read-only');
+        expect(applySessions).not.toHaveBeenCalled();
+        expect(mocks.sessionArchive).not.toHaveBeenCalled();
         expect(mocks.sessionKill).not.toHaveBeenCalled();
     });
 
     it('keeps a Gateway visible until graceful stop is accepted, then archives it', async () => {
         current = gatewaySession();
         mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
-        let acceptStop!: (result: { success: boolean; message: string }) => void;
+        let acceptStop!: (result: { success: boolean; message: string; outcome: 'stopped' }) => void;
         mocks.sessionKill.mockImplementationOnce(() => new Promise((resolve) => {
             acceptStop = resolve;
         }));
@@ -129,20 +133,20 @@ describe('session archive coordinator', () => {
         expect(current.active).toBe(true);
         expect(mocks.sessionArchive).not.toHaveBeenCalled();
 
-        acceptStop({ success: true, message: 'stopping' });
+        acceptStop({ success: true, message: 'stopping', outcome: 'stopped' });
         await pending;
 
         expect(mocks.sessionKill).toHaveBeenCalledWith('session-1', { timeoutMs: 5_000 });
         expect(mocks.sessionKill.mock.invocationCallOrder[0]).toBeLessThan(
             mocks.sessionArchive.mock.invocationCallOrder[0],
         );
-        expect(current).toMatchObject({ active: false, activeAt: 100 });
+        expect(current).toMatchObject({ active: false, activeAt: 200, archivedAt: 100 });
     });
 
     it('does not hide or archive a Gateway when graceful stop is rejected', async () => {
         current = gatewaySession();
         mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
-        mocks.sessionKill.mockResolvedValueOnce({ success: false, message: 'gateway unavailable' });
+        mocks.sessionKill.mockResolvedValueOnce({ success: false, message: 'gateway unavailable', outcome: 'failed' });
 
         await expect(archiveSession('session-1')).rejects.toThrow('gateway unavailable');
 
@@ -164,6 +168,20 @@ describe('session archive coordinator', () => {
         expect(current.active).toBe(true);
     });
 
+    it.each(['missing', 'unverified'] as const)(
+        'archives a zombie Gateway after the daemon reports %s',
+        async (outcome) => {
+            current = gatewaySession();
+            mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
+            mocks.sessionKill.mockResolvedValueOnce({ success: false, message: outcome, outcome });
+
+            await archiveSession('session-1');
+
+            expect(mocks.sessionArchive).toHaveBeenCalledOnce();
+            expect(current).toMatchObject({ active: false, archivedAt: 100 });
+        },
+    );
+
     it('archives inactive Gateway history without trying to stop a missing worker', async () => {
         const inactive = gatewaySession();
         inactive.metadata.codexGatewayBinding.role = 'inactive';
@@ -174,6 +192,6 @@ describe('session archive coordinator', () => {
 
         expect(mocks.sessionKill).not.toHaveBeenCalled();
         expect(mocks.sessionArchive).toHaveBeenCalledOnce();
-        expect(current).toMatchObject({ active: false, activeAt: 100 });
+        expect(current).toMatchObject({ active: false, activeAt: 200, archivedAt: 100 });
     });
 });

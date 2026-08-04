@@ -142,7 +142,7 @@ describe('Codex queued message ops', () => {
         expect(sessionRPC).not.toHaveBeenCalled();
     });
 
-    it('rejects content writes but allows archive for a provider-created child', async () => {
+    it('rejects every mutating operation for a provider-created child', async () => {
         getState.mockReturnValue({
             sessions: {
                 'session-child': {
@@ -178,7 +178,10 @@ describe('Codex queued message ops', () => {
             success: false,
             message: expect.stringContaining('read-only'),
         });
-        await expect(sessionArchive('session-child')).resolves.toMatchObject({ success: true });
+        await expect(sessionArchive('session-child')).resolves.toMatchObject({
+            success: false,
+            message: expect.stringContaining('read-only'),
+        });
         await expect(sessionDelete('session-child')).resolves.toMatchObject({
             success: false,
             message: expect.stringContaining('read-only'),
@@ -192,10 +195,7 @@ describe('Codex queued message ops', () => {
         });
         expect(sessionRPC).not.toHaveBeenCalled();
         expect(machineRPC).not.toHaveBeenCalled();
-        expect(request).toHaveBeenCalledWith(
-            '/v4/sessions/session-child/archive',
-            { method: 'POST' },
-        );
+        expect(request).not.toHaveBeenCalled();
     });
 
     it('rejects unsupported sessions without sending legacy archive traffic', async () => {
@@ -244,6 +244,7 @@ describe('Codex queued message ops', () => {
         await expect(sessionKill('session-gateway', { timeoutMs: 5_000 })).resolves.toEqual({
             success: true,
             message: 'Session stopped',
+            outcome: 'stopped',
         });
 
         expect(machineRPC).toHaveBeenCalledWith(
@@ -258,6 +259,41 @@ describe('Codex queued message ops', () => {
         );
         expect(sessionRPC).not.toHaveBeenCalled();
     });
+
+    it.each(['missing', 'unverified'] as const)(
+        'preserves the structured %s Gateway stop outcome',
+        async (outcome) => {
+            getState.mockReturnValue({
+                sessions: {
+                    'session-gateway': {
+                        metadata: {
+                            path: '/workspace',
+                            host: 'host',
+                            flavor: 'codex',
+                            codexSyncVersion: 4,
+                            machineId: 'machine-1',
+                            codexGatewayBinding: {
+                                gatewayId: 'gateway-1',
+                                generation: 2,
+                                origin: 'app',
+                                role: 'current',
+                                terminal: 'unattached',
+                                changedAt: 10,
+                            },
+                        },
+                    },
+                },
+            });
+            machineRPC.mockResolvedValueOnce({ message: outcome, outcome });
+            const { sessionKill } = await import('./ops');
+
+            await expect(sessionKill('session-gateway')).resolves.toEqual({
+                success: false,
+                message: outcome,
+                outcome,
+            });
+        },
+    );
 
     it('resolves a repeated provider request id only on the metadata-owned thread', async () => {
         isCodexV4Eligible.mockReturnValue(true);

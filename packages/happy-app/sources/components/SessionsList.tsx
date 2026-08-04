@@ -4,7 +4,7 @@ import { Text } from '@/components/StyledText';
 import { usePathname } from 'expo-router';
 import { SessionListViewItem, SessionRowData } from '@/sync/storage';
 import { Ionicons } from '@expo/vector-icons';
-import { type SessionState, formatLastSeen, vibingMessages } from '@/utils/sessionUtils';
+import { type SessionState, vibingMessages } from '@/utils/sessionUtils';
 import { Avatar } from './Avatar';
 import { ActiveSessionsGroupCompact } from './ActiveSessionsGroupCompact';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -221,10 +221,10 @@ export function SessionsList({
     const sourceData = useVisibleSessionListViewData();
     const pathname = usePathname();
     const isTablet = useIsTablet();
-    const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
+    const [hideArchivedSessions, setHideArchivedSessions] = useSettingMutable('hideArchivedSessions');
     const toggleArchived = React.useCallback(() => {
-        setHideInactiveSessions(!hideInactiveSessions);
-    }, [hideInactiveSessions, setHideInactiveSessions]);
+        setHideArchivedSessions(!hideArchivedSessions);
+    }, [hideArchivedSessions, setHideArchivedSessions]);
     // Selection is derived once from pathname so the data array stays stable
     // across navigations. This keeps FlatList virtualization intact: only
     // the previously- and newly-selected rows re-render, instead of the
@@ -451,6 +451,10 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
                 : null;
     const statusText = session.hasUnread
         ? t('status.unread')
+        : !session.active
+            ? session.archivedAt !== null
+                ? t('status.archived')
+                : t('status.recoverable')
         : session.statusUnknown
             ? knownStatusText
                 ? `${knownStatusText} · ${t('status.unknown')}`
@@ -458,7 +462,7 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
             : session.state === 'thinking'
                 ? vibingMessage
             : session.state === 'disconnected'
-                ? t('status.lastSeen', { time: formatLastSeen(session.activeAt!, false) })
+                ? t('status.recoverable')
                 : session.state === 'permission_required'
                     ? t('status.permissionRequired')
                     : session.state === 'error'

@@ -2,7 +2,7 @@ import type { ApiEphemeralActivityUpdate } from '../apiTypes';
 
 export class ActivityUpdateAccumulator {
     private pendingUpdates = new Map<string, ApiEphemeralActivityUpdate>();
-    private lastEmittedStates = new Map<string, { active: boolean; thinking: boolean; activeAt: number }>();
+    private lastEmittedStates = new Map<string, SessionActivityOrderingState & { thinking: boolean }>();
     private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     constructor(
@@ -14,7 +14,7 @@ export class ActivityUpdateAccumulator {
         const sessionId = update.id;
         const lastState = this.lastEmittedStates.get(sessionId);
         const pendingState = this.pendingUpdates.get(sessionId);
-        const newestState = pendingState && (!lastState || pendingState.activeAt >= lastState.activeAt)
+        const newestState = pendingState && (!lastState || shouldApplySessionActivity(lastState, pendingState))
             ? pendingState
             : lastState;
 
@@ -30,6 +30,7 @@ export class ActivityUpdateAccumulator {
         const isSignificantChange = !lastState || 
             lastState.active !== update.active || 
             lastState.thinking !== update.thinking ||
+            lastState.archivedAt !== update.archivedAt ||
             isCriticalTimestamp;
 
         if (isSignificantChange) {
@@ -72,7 +73,8 @@ export class ActivityUpdateAccumulator {
                 this.lastEmittedStates.set(sessionId, {
                     active: update.active,
                     thinking: update.thinking,
-                    activeAt: update.activeAt
+                    activeAt: update.activeAt,
+                    archivedAt: update.archivedAt,
                 });
             }
             
@@ -103,11 +105,25 @@ export class ActivityUpdateAccumulator {
     }
 }
 
+type SessionActivityOrderingState = Pick<ApiEphemeralActivityUpdate, 'active' | 'activeAt'> & {
+    archivedAt?: number | null;
+};
+
 export function shouldApplySessionActivity(
-    current: Pick<ApiEphemeralActivityUpdate, 'active' | 'activeAt'>,
-    update: Pick<ApiEphemeralActivityUpdate, 'active' | 'activeAt'>,
+    current: SessionActivityOrderingState,
+    update: SessionActivityOrderingState,
 ): boolean {
+    const currentArchived = current.archivedAt != null;
+    const updateDeclaresArchiveState = update.archivedAt !== undefined;
+    const updateArchived = update.archivedAt != null;
+
+    // Legacy events cannot clear a durable tombstone. Unarchive is authoritative
+    // only when the server explicitly sends archivedAt: null.
+    if (currentArchived && !updateDeclaresArchiveState) return false;
     if (update.activeAt < current.activeAt) return false;
-    if (update.activeAt === current.activeAt && !current.active && update.active) return false;
+    if (update.activeAt === current.activeAt) {
+        if (currentArchived !== updateArchived) return updateArchived;
+        if (!current.active && update.active) return false;
+    }
     return true;
 }

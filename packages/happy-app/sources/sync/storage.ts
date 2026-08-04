@@ -50,6 +50,8 @@ import {
 } from './codexV4ClientRegistry';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
 import { isSupportedExistingSession } from './sessionFlavor';
+import { resolveSessionLifecycle } from './sessionLifecycle';
+import { selectVisibleSideChats } from './sideChatSessions';
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -59,18 +61,23 @@ const REALTIME_MODE_DEBOUNCE_MS = 150;
  * Centralized session online state resolver
  * Returns either "online" (string) or a timestamp (number) for last seen
  */
-function resolveSessionOnlineState(session: { active: boolean; activeAt: number }): "online" | number {
+function resolveSessionOnlineState(session: { active: boolean; activeAt: number; archivedAt?: number | null }): "online" | number {
     // Session is online if the active flag is true
-    return session.active ? "online" : session.activeAt;
+    return session.active && session.archivedAt == null ? "online" : session.activeAt;
 }
 
 /**
  * Checks if a session should be shown in the active sessions group
  */
-function isSessionActive(session: { active: boolean; activeAt: number }): boolean {
+function isSessionActive(session: { active: boolean; archivedAt?: number | null }): boolean {
     // Use the active flag directly, no timeout checks
-    return session.active;
+    return session.active && session.archivedAt == null;
 }
+
+export type SessionUpdate = Omit<Session, 'presence' | 'archivedAt'> & {
+    archivedAt?: number | null;
+    presence?: 'online' | number;
+};
 
 function codexThreadIdFromMetadata(metadata: Session['metadata']): string | null {
     const threadId = metadata?.codexThreadId;
@@ -120,6 +127,7 @@ export interface SessionRowData {
     createdAt?: number;
     hasDraft: boolean;
     active: boolean;
+    archivedAt: number | null;
     machineId: string | null;
     path: string | null;
     homeDir: string | null;
@@ -174,6 +182,7 @@ function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): 
         ...(!session.active && { activeAt: session.activeAt, createdAt: session.createdAt }),
         hasDraft: !!session.draft,
         active: session.active,
+        archivedAt: session.archivedAt,
         machineId: session.metadata?.machineId ?? null,
         path: session.metadata?.path ?? null,
         homeDir: session.metadata?.homeDir ?? null,
@@ -228,7 +237,7 @@ interface StorageState {
     socketLastDisconnectedAt: number | null;
     isDataReady: boolean;
     nativeUpdateStatus: { available: boolean; updateUrl?: string } | null;
-    applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: "online" | number })[]) => void;
+    applySessions: (sessions: SessionUpdate[]) => void;
     applyMachines: (machines: Machine[], replace?: boolean) => void;
     deleteMachine: (machineId: string) => void;
     applyLoaded: () => void;
@@ -466,9 +475,9 @@ export const storage = create<StorageState>()((set, get) => {
         },
         getActiveSessions: () => {
             const state = get();
-            return Object.values(state.sessions).filter(s => s.active);
+            return Object.values(state.sessions).filter(isSessionActive);
         },
-        applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: "online" | number })[]) => set((state) => {
+        applySessions: (sessions: SessionUpdate[]) => set((state) => {
             // Load drafts if sessions are empty (initial load)
             const isInitialLoad = Object.keys(state.sessions).length === 0;
             const savedDrafts = isInitialLoad ? sessionDrafts : {};
@@ -481,8 +490,12 @@ export const storage = create<StorageState>()((set, get) => {
 
             // Update sessions with calculated presence using centralized resolver
             sessions.forEach(session => {
+                const lifecycle = resolveSessionLifecycle(
+                    state.sessions[session.id],
+                    session,
+                );
                 // Use centralized resolver for consistent state management
-                const presence = resolveSessionOnlineState(session);
+                const presence = resolveSessionOnlineState(lifecycle);
 
                 // Drafts stay device-local; missing/null means "no draft".
                 const existingDraft = state.sessions[session.id]?.draft;
@@ -538,6 +551,7 @@ export const storage = create<StorageState>()((set, get) => {
 
                 mergedSessions[session.id] = {
                     ...session,
+                    ...lifecycle,
                     thinking: codexThinking,
                     codexState,
                     presence,
@@ -1661,28 +1675,18 @@ function toCodexSessionState(projection: CodexV4Projection): CodexSessionStateV4
  * `metadata.parentSessionId` points at the parent. A parent can have several;
  * closing one applies the authoritative v4 archive tombstone (`active=false`),
  * which drops it from this list so the sidebar panel only shows open side chats. Sorted
- * oldest-first so tab order stays stable as new ones are created. Empty when
- * none are open (the panel then offers to start one).
+ * oldest-first. Besides active side chats, retain inactive, unarchived,
+ * provider-created children so their completed transcript remains readable.
  */
 export function useSideChatSessions(parentSessionId: string | null): Session[] {
     return storage(useShallow((state) => {
         if (!parentSessionId) {
             return emptyArray as Session[];
         }
-        const result: Session[] = [];
-        for (const session of Object.values(state.sessions)) {
-            if (
-                session.metadata?.isSideChat
-                && session.metadata?.parentSessionId === parentSessionId
-                && session.active
-            ) {
-                result.push(session);
-            }
-        }
+        const result = selectVisibleSideChats(Object.values(state.sessions), parentSessionId);
         if (result.length === 0) {
             return emptyArray as Session[];
         }
-        result.sort((a, b) => a.createdAt - b.createdAt);
         return result;
     }));
 }

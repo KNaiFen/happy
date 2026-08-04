@@ -81,6 +81,8 @@ export const ja: TranslationStructure = {
         error: 'エラー',
         online: 'オンライン',
         offline: 'オフライン',
+        recoverable: '再開可能',
+        archived: 'アーカイブ済み',
         lastSeen: ({ time }: { time: string }) => `最終アクセス: ${time}`,
         permissionRequired: '権限が必要です',
         activeNow: 'アクティブ',
@@ -240,8 +242,8 @@ export const ja: TranslationStructure = {
         commandPaletteDisabled: 'クイックコマンドアクセスは無効',
         markdownCopyV2: 'Markdownコピー v2',
         markdownCopyV2Subtitle: '長押しでコピーモーダルを開く',
-        hideInactiveSessions: '非アクティブセッションを非表示',
-        hideInactiveSessionsSubtitle: 'アクティブなチャットのみをリストに表示',
+        hideArchivedSessions: 'アーカイブ済みセッションを非表示',
+        hideArchivedSessionsSubtitle: '明示的にアーカイブしたチャットをリストから非表示にします',
         groupToolCalls: 'ツール呼び出しをグループ化',
         groupToolCallsSubtitle: '連続するツール呼び出しを1つのコンテナにまとめる',
         privacy: 'プライバシー',
@@ -321,7 +323,8 @@ export const ja: TranslationStructure = {
 
     session: {
         inputPlaceholder: 'メッセージを入力...',
-        inactiveArchived: 'このセッションは非アクティブです。',
+        inactiveRecoverable: 'このセッションは非アクティブですが、再開できます。',
+        archived: 'このセッションはアーカイブされています。再開すると再びアクセスできます。',
         resumeFromTerminal: 'ターミナルから再開するには:',
         machineDeleted: '接続元のマシンは削除されました',
         machineDeletedDescription: '履歴は引き続き表示できますが、このセッションは読み取り専用となり、Codex を操作できません。',
@@ -690,6 +693,7 @@ export const ja: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `サイドチャット ${index}`,
         newChat: '新しいサイドチャット',
         close: 'サイドチャットを閉じる',
+        historyTitle: '履歴',
     },
 
     settingsVoice: {

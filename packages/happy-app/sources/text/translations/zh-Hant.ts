@@ -80,6 +80,8 @@ export const zhHant: TranslationStructure = {
         error: '錯誤',
         online: '線上',
         offline: '離線',
+        recoverable: '可恢復',
+        archived: '已封存',
         lastSeen: ({ time }: { time: string }) => `最後活躍時間 ${time}`,
         permissionRequired: '需要權限',
         activeNow: '目前活躍',
@@ -239,8 +241,8 @@ export const zhHant: TranslationStructure = {
         commandPaletteDisabled: '快速命令存取已停用',
         markdownCopyV2: 'Markdown 複製 v2',
         markdownCopyV2Subtitle: '長按開啟複製強制回應視窗',
-        hideInactiveSessions: '隱藏非活躍工作階段',
-        hideInactiveSessionsSubtitle: '僅在清單中顯示活躍的聊天',
+        hideArchivedSessions: '隱藏已封存工作階段',
+        hideArchivedSessionsSubtitle: '在清單中隱藏明確封存的工作階段',
         groupToolCalls: '分組工具呼叫',
         groupToolCallsSubtitle: '將連續的工具呼叫摺疊到單一容器中',
         privacy: '隱私',
@@ -320,7 +322,8 @@ export const zhHant: TranslationStructure = {
 
     session: {
         inputPlaceholder: '輸入訊息...',
-        inactiveArchived: '此會話處於非活動狀態。',
+        inactiveRecoverable: '此工作階段目前非活躍，可以恢復。',
+        archived: '此工作階段已封存。恢復後可重新存取。',
         resumeFromTerminal: '若要從終端恢復它：',
         machineDeleted: '來源裝置已刪除',
         machineDeletedDescription: '歷史記錄仍會保留，但此會話已變為唯讀，無法再控制 Codex。',
@@ -689,6 +692,7 @@ export const zhHant: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `側邊聊天 ${index}`,
         newChat: '新增側邊聊天',
         close: '關閉側邊聊天',
+        historyTitle: '歷史',
     },
 
     settingsVoice: {

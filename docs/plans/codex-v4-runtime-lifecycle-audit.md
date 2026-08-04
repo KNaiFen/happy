@@ -2,10 +2,11 @@
 
 ## 状态
 
-- 调查完成（2026-08-04）：本轮只记录和验证，未修改运行代码；运行修复待实施。
-- 基线：`4ce11a45`（`main`）。
+- 调查完成并已实施（2026-08-04）：保留 `4ce11a45` 的现场结论作为历史基线；修复由后续 Relay、CLI 和 App 提交实现。
+- 实施版本：Relay `1.1.39`、CLI `1.4.39`、App `1.11.25`；Wire 与 happy-agent 未改动。
+- 本地验证边界：只运行 TypeScript/Vitest 源码检查；云端 11 分钟空闲、App 退出、强制崩溃和官方 Codex 集成验收仍须以发布工作流产物为准。
 - 范围：Codex V4 的创建、恢复、运行、断线、重连、停止、归档、列表投影，以及 App、CLI、daemon、Gateway、Relay Server 之间的状态交接。
-- 目标：保留现场调查结果，并在修复前找出同一类“状态写入方消失、旧超时仍生效、不同投影混用状态”的问题。
+- 目标：保留现场调查结果，记录 F1-F10 的代码与测试证据，并明确尚待现场确认的外部退出诊断边界。
 
 ## 必须成立的不变量
 
@@ -17,7 +18,28 @@
 6. 任意恢复入口都必须得到同样的 V4 绑定、活跃状态和展示结果。
 7. daemon、Gateway 或网络异常后，恢复流程不能创建双写 writer，也不能丢失正在执行的 turn。
 
-## 已确认调查结果
+## 实施关联（2026-08-04）
+
+下表将每个调查发现连接到当前代码和回归测试。除 F3 外，状态均表示源码级实现和测试已覆盖；不把本地测试等同于云端现场验收。
+
+| 发现 | 当前状态 | 代码关联 | 测试关联 |
+| --- | --- | --- | --- |
+| F1 presence 超时 | 已修复 | `happy-server/.../sessionRoutes.ts`、`presence/timeout.ts`、`eventRouter.ts`；`happy-cli/.../codexGatewayPresence.ts`、`codexGatewayRuntimeFactory.ts`、`codexGatewayWorker.ts` | `timeout.spec.ts`、`sessionRoutes.machineOrigin.spec.ts`、`codexGatewayPresence.test.ts`、`codexGatewayWorker.test.ts` |
+| F2 三态投影混淆 | 已修复 | `storageTypes.ts`、`apiTypes.ts`、`sync.ts`、`sessionLifecycle.ts`、`SessionsList.tsx`、`recent.tsx` | `apiTypes.spec.ts`、`sessionLifecycle.test.ts`、`activityUpdateAccumulator.test.ts`、`useVisibleSessionListViewData.spec.ts`、`settings.spec.ts` |
+| F3 daemon/Gateway 外部消失 | 仍待诊断 | `codexGatewayWorker.ts`、`codexGatewayState.ts` 仅增加不含载荷的受控启动、正常退出、provider 退出、控制通道错误与最后心跳记录 | `codexGatewayWorker.test.ts` 覆盖 descriptor 生命周期写入；没有证明外部进程消失的原因 |
+| F4 顶层 Resume 失效 | 已修复 | `resume/handleResumeCommand.ts`、`codexGatewayResume.ts`、`codexGatewayWorker.ts`；App `resumeCommand.ts` | `handleResumeCommand.test.ts`、`codexGatewayResume.test.ts`、`codexCommand.test.ts`、App `resumeCommand.test.ts` |
+| F5 live Gateway 恢复假成功 | 已修复 | `codexGatewayResume.ts`、`codexGatewayLauncher.ts`、`daemon/run.ts` | `codexGatewayResume.test.ts`、`codexGatewayLauncher.headless.test.ts`、`codexGatewayLauncher.liveness.test.ts` |
+| F6 两秒 heartbeat 写放大 | 已修复 | `codexGatewayWorker.ts`、`codexGatewayCoordinator.ts`、`codexGatewayState.ts` | `codexGatewayWorker.test.ts` 断言 descriptor heartbeat 不重写 runtime binding |
+| F7 PID 复用误判 | 已修复 | `codexGatewayLauncher.ts`、`codexGatewayProcessIdentity.ts`、`daemon/run.ts` | `codexGatewayLauncher.liveness.test.ts`、`codexGatewayProcessIdentity.test.ts` |
+| F8 僵尸 binding 无法归档 | 已修复 | App `sessionArchiveCoordinator.ts`、`ops.ts`；CLI `apiMachine.ts`、`daemon/run.ts` | `sessionArchiveCoordinator.spec.ts`、`ops.codexQueue.test.ts`、`apiMachine.codexFork.test.ts` |
+| F9 child 停止后仍 active | 已修复 | `codexGatewayRuntimeFactory.ts`、`codexV4ThreadRouter.ts`、`codexGatewayCoordinator.ts` | `codexGatewayRuntimeFactory.test.ts`、`codexV4ThreadRouter.test.ts`、`codexGatewayCoordinator.test.ts` |
+| F10 provider child 关闭破坏同步 | 已修复 | App `sideChatSessions.ts`、`SessionView.tsx`、`sessionArchiveCoordinator.ts`、`ops.ts` | `sideChatSessions.test.ts`、`sessionArchiveCoordinator.spec.ts`、`ops.codexQueue.test.ts` |
+
+### F3 诊断边界
+
+F3 仍是现场异常，而不是已确认的代码缺陷根因。当前证据只能证明当时 daemon 与 detached Gateway 缺少正常退出记录，不能归因于 daemon、自身清理、系统终止、升级替换或其他外部事件。新增 descriptor 生命周期记录用于下次现场关联，但不得据此反推或宣称已经确认 daemon 消失原因。
+
+## 实施前已确认调查结果（历史基线）
 
 ### F1：V4 活会话约十分钟后会被旧 presence 超时置为非活跃
 
@@ -132,7 +154,7 @@
 - 证据链：worker 的 `SIGTERM`/`SIGINT` 走 `requestShutdown(true)`；force stop 直接 `finalizeStop()`，跳过 graceful `role=inactive` 与 Relay archive。
 - 结论：当前 timeout 同时承担“异常或 force 停止后的最终失活”职责。正确修复必须补上 V4 活动来源，同时保留或替换异常死亡的失活机制；不能只取消十分钟 timeout。
 
-## 当前端到端线路
+## 实施前端到端线路（历史基线）
 
 ```text
 设备页输入目录并选择历史线程
@@ -150,7 +172,7 @@
   -> “显示已归档”中的会话
 ```
 
-## 审计矩阵
+## 实施前审计矩阵（历史基线）
 
 | 线路 | 入口 | 运行所有者 | 断线/退出 | 恢复入口 | 停止/归档 | App 投影 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -163,7 +185,7 @@
 | daemon/Gateway/provider 异常 | 已确认 | recovery / provider adoption | F3 待定 | 60 秒 daemon discovery | C1 依赖 timeout | F8 | 有缺陷/待定 |
 | 显式停止/归档/设备删除 | 已确认 | App + daemon + Relay | 无 worker 时 F8 | 设备删除保持不可写；恢复受 F5/F7 | archive tombstone | F2/F8 | 有缺陷 |
 
-## 全线路审计结论
+## 实施前全线路审计结论（历史基线）
 
 - 旧 heartbeat 遗留只在 session presence 形成已确认断裂；machine presence 与 Gateway descriptor 仍有独立生产者，但 descriptor heartbeat 被 F6 错接到业务 metadata/V4 写入。
 - App quick resume、设备历史 openExisting、daemon discovery 和顶层 `happy resume` 没有统一的 V4 恢复后置条件；F4/F5/F7 是同一入口分叉问题的不同表现。
@@ -173,13 +195,13 @@
 - TUI attachment、root handoff、draining source 与权威 provider completion 的现有路径未发现新的“用超时推断 turn 完成”行为。
 - F3 的 daemon/Gateway 无日志消失仍没有代码内权威原因；它继续作为现场异常保留，不能拿 F1 的确定修复代替调查。
 
-## 已验证的非回归线路
+## 实施前已验证的非回归线路（历史基线）
 
 - 官方 Codex TUI `/resume` picker：Gateway TUI relay 有初始化和 `thread/list` 覆盖，定向测试通过。
 - App Queue/Steer：执行中的发送带入显式 `followUpMode`；命令构造只会产生 `turn.queue` 或具备活动 turn 的 `turn.steer`，定向测试通过。
 - 正常 terminal attachment 退出：terminal-origin worker 经 `normalExit -> requestShutdown(false) -> deactivateRootsForGracefulStop -> archive`；App-origin attachment 正常退出回到 headless，不会停止 worker。
 
-## 本轮验证
+## 实施前本轮验证（历史基线）
 
 - CLI/Gateway：8 个测试文件、132 项通过。
   - 覆盖 `codexCommand`、`handleResumeCommand`、Gateway coordinator、worker、runtime factory、sync runtime、thread router、TUI relay。
@@ -198,9 +220,22 @@
   - root graceful stop 显式收敛所有 provider child presence，且不依赖 timeout。
   - provider child 关闭侧栏不得调用 archive/kill，writable user side chat 仍执行 stop-before-archive。
 
-## 后续修复门槛
+## 已实施状态模型
 
-下面是一次完整修复必须同时满足的约束，不是本轮运行代码改动。
+```text
+active=true  + archivedAt=null  -> 活跃
+active=false + archivedAt=null  -> 非活跃、可恢复
+archivedAt!=null                -> 显式归档
+```
+
+- Gateway binding 以独立 Presence lease claim/touch/release 维护第一种状态；正常退出、超时和崩溃只进入第二种状态。
+- Archive 原子写 tombstone 并清除租约；Unarchive 只清 tombstone，保持 inactive，必须由 Gateway claim 后才变 active。
+- Socket.IO 只作为刷新提示；Relay 状态由租约、快照和持久队列决定。旧 activity/snapshot 不能覆盖 tombstone，显式较新的 unarchive 才能清除它。
+- provider-created child 只读、不可 Resume/Fork/Kill/Archive/Delete；关闭侧栏只变更本地可见状态，inactive 且未归档的 child 可从父会话侧栏历史回看。
+
+## 实施约束与云端验收
+
+下面的约束已由本轮代码实现；表中的云端场景仍须在发布工作流中完成验收。
 
 ```text
 Gateway 存活（本地 descriptor）
@@ -209,8 +244,8 @@ Gateway 存活（本地 descriptor）
   -> App: active 表示在线，archivedAt 表示显式归档
 
 Gateway 正常停止
-  -> flush + role=inactive + archive tombstone
-  -> App archive 分组
+  -> flush + release presence lease + role=inactive
+  -> App inactive/可恢复历史
 
 Gateway 异常死亡/force stop
   -> 不再有 presence touch

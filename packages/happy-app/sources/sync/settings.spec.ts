@@ -57,6 +57,26 @@ describe('settings', () => {
             });
         });
 
+        it('migrates the legacy inactive-session toggle to archived sessions', () => {
+            const parsed = settingsParse({ hideInactiveSessions: false });
+
+            expect(parsed.hideArchivedSessions).toBe(false);
+            expect((parsed as unknown as Record<string, unknown>).hideInactiveSessions).toBe(false);
+        });
+
+        it('prefers the new archived-session toggle when both values exist', () => {
+            const parsed = settingsParse({
+                hideInactiveSessions: false,
+                hideArchivedSessions: true,
+            });
+
+            expect(parsed.hideArchivedSessions).toBe(true);
+        });
+
+        it('uses the new-install default when the legacy toggle is invalid', () => {
+            expect(settingsParse({ hideInactiveSessions: 'no' }).hideArchivedSessions).toBe(true);
+        });
+
         it('should handle settings with null/undefined values', () => {
             const settingsWithNull = {
                 viewInline: null,
@@ -191,7 +211,7 @@ describe('settings', () => {
                 userMessageBubbleColor: 'gray',
                 sessionStatusBarDisplay: 'hidden',
                 usageLimitShowRemaining: false,
-                hideInactiveSessions: false,
+                hideArchivedSessions: true,
                 sortSessionsByActivity: false,
                 expResumeSession: false,
                 fileDiffsSidebar: false,

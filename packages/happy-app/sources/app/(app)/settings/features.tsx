@@ -13,8 +13,7 @@ export default function FeaturesSettingsScreen() {
     const [agentInputEnterToSend, setAgentInputEnterToSend] = useSettingMutable('agentInputEnterToSend');
     const [commandPaletteEnabled, setCommandPaletteEnabled] = useLocalSettingMutable('commandPaletteEnabled');
     const [markdownCopyV2, setMarkdownCopyV2] = useLocalSettingMutable('markdownCopyV2');
-    const [hideInactiveSessions, setHideInactiveSessions] = useSettingMutable('hideInactiveSessions');
-    const [expResumeSession, setExpResumeSession] = useSettingMutable('expResumeSession');
+    const [hideArchivedSessions, setHideArchivedSessions] = useSettingMutable('hideArchivedSessions');
     const [fileDiffsSidebar, setFileDiffsSidebar] = useSettingMutable('fileDiffsSidebar');
     const [groupToolCalls, setGroupToolCalls] = useSettingMutable('groupToolCalls');
     const [expImageUpload, setExpImageUpload] = useSettingMutable('expImageUpload');
@@ -95,25 +94,13 @@ export default function FeaturesSettingsScreen() {
                     showChevron={false}
                 />
                 <Item
-                    title={t('settingsFeatures.hideInactiveSessions')}
-                    subtitle={t('settingsFeatures.hideInactiveSessionsSubtitle')}
+                    title={t('settingsFeatures.hideArchivedSessions')}
+                    subtitle={t('settingsFeatures.hideArchivedSessionsSubtitle')}
                     icon={<Ionicons name="eye-off-outline" size={29} color="#FF9500" />}
                     rightElement={
                         <Switch
-                            value={hideInactiveSessions}
-                            onValueChange={setHideInactiveSessions}
-                        />
-                    }
-                    showChevron={false}
-                />
-                <Item
-                    title="Resume Session"
-                    subtitle="Resume disconnected Codex sessions via the machine daemon"
-                    icon={<Ionicons name="play-circle-outline" size={29} color="#30D158" />}
-                    rightElement={
-                        <Switch
-                            value={expResumeSession}
-                            onValueChange={setExpResumeSession}
+                            value={hideArchivedSessions}
+                            onValueChange={setHideArchivedSessions}
                         />
                     }
                     showChevron={false}

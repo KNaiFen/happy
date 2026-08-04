@@ -38,6 +38,9 @@ export function buildResumeBootstrap(
     if (metadata.flavor !== 'codex' || metadata.codexSyncVersion !== 4) {
         throw new Error(`Happy session ${session.id} uses unsupported flavor "${metadata.flavor ?? 'unknown'}".`);
     }
+    if (metadata.codexReadOnly === true) {
+        throw new Error(`Happy session ${session.id} is read-only and cannot be resumed.`);
+    }
     if (!metadata.codexThreadId) {
         throw new Error(`Happy session ${session.id} is missing its Codex thread ID.`);
     }

@@ -215,8 +215,8 @@ export const ru: TranslationStructure = {
         commandPaletteDisabled: 'Быстрый доступ к командам отключён',
         markdownCopyV2: 'Markdown Copy v2',
         markdownCopyV2Subtitle: 'Долгое нажатие открывает модальное окно копирования',
-        hideInactiveSessions: 'Скрывать неактивные сессии',
-        hideInactiveSessionsSubtitle: 'Показывать в списке только активные чаты',
+        hideArchivedSessions: 'Скрывать архивные сессии',
+        hideArchivedSessionsSubtitle: 'Не показывать явно архивированные чаты в списке',
         groupToolCalls: 'Группировать вызовы инструментов',
         groupToolCallsSubtitle: 'Сворачивать подряд идущие вызовы инструментов в один блок',
         privacy: 'Конфиденциальность',
@@ -443,6 +443,8 @@ export const ru: TranslationStructure = {
         error: 'ошибка',
         online: 'online',
         offline: 'offline',
+        recoverable: 'можно возобновить',
+        archived: 'в архиве',
         lastSeen: ({ time }: { time: string }) => `в сети ${time}`,
         permissionRequired: 'требуется разрешение',
         activeNow: 'Активен сейчас',
@@ -459,7 +461,8 @@ export const ru: TranslationStructure = {
 
     session: {
         inputPlaceholder: 'Введите сообщение...',
-        inactiveArchived: 'Эта сессия неактивна.',
+        inactiveRecoverable: 'Эта сессия неактивна, но её можно возобновить.',
+        archived: 'Эта сессия архивирована. Возобновите её, чтобы восстановить доступ.',
         resumeFromTerminal: 'Чтобы возобновить её из терминала:',
         machineDeleted: 'Исходное устройство удалено',
         machineDeletedDescription: 'История остаётся доступной, но сеанс переведён в режим только для чтения и больше не может управлять Codex.',
@@ -705,6 +708,7 @@ export const ru: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `Боковой чат ${index}`,
         newChat: 'Новый боковой чат',
         close: 'Закрыть боковой чат',
+        historyTitle: 'История',
     },
 
     settingsVoice: {

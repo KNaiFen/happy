@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ApiUpdateSchema, ApiUpdateContainerSchema } from './apiTypes';
+import {
+    ApiEphemeralActivityUpdateSchema,
+    ApiUpdateSchema,
+    ApiUpdateContainerSchema,
+} from './apiTypes';
 
 describe('ApiUpdateSchema', () => {
     it('accepts shared wire update-session payload', () => {
@@ -70,3 +74,36 @@ describe('ApiUpdateSchema', () => {
     });
 });
 
+describe('ApiEphemeralActivityUpdateSchema', () => {
+    it('preserves an archive tombstone and explicit unarchive state', () => {
+        expect(ApiEphemeralActivityUpdateSchema.parse({
+            type: 'activity',
+            id: 'session-1',
+            active: false,
+            activeAt: 2_000,
+            archivedAt: 2_000,
+            thinking: false,
+        })).toMatchObject({ archivedAt: 2_000 });
+
+        expect(ApiEphemeralActivityUpdateSchema.parse({
+            type: 'activity',
+            id: 'session-1',
+            active: false,
+            activeAt: 2_001,
+            archivedAt: null,
+            thinking: false,
+        })).toMatchObject({ archivedAt: null });
+    });
+
+    it('keeps archivedAt absent on legacy activity events', () => {
+        const parsed = ApiEphemeralActivityUpdateSchema.parse({
+            type: 'activity',
+            id: 'session-1',
+            active: true,
+            activeAt: 1_000,
+            thinking: false,
+        });
+
+        expect(parsed).not.toHaveProperty('archivedAt');
+    });
+});

@@ -1,4 +1,4 @@
-import { isCodexSessionReadOnly, resolveCodexGatewayBinding } from './codexV4Capabilities';
+import { assertCodexSessionWritable, resolveCodexGatewayBinding } from './codexV4Capabilities';
 import { sessionArchive, sessionKill } from './ops';
 import { beginSessionArchive, endSessionArchive } from './sessionArchiveState';
 import { storage } from './storage';
@@ -15,12 +15,16 @@ export function archiveSession(
     if (existing) return existing;
 
     const previous = storage.getState().sessions[sessionId] ?? null;
+    try {
+        assertCodexSessionWritable(previous?.metadata);
+    } catch (error) {
+        return Promise.reject(error);
+    }
     const gatewayBinding = resolveCodexGatewayBinding(previous?.metadata);
     const stopBeforeArchive = (
         gatewayBinding?.role === 'current'
         || gatewayBinding?.role === 'recovering'
-    )
-        && !isCodexSessionReadOnly(previous?.metadata);
+    );
     let rollbackSnapshot = previous;
     let optimisticActiveAt: number | null = null;
     beginSessionArchive(sessionId);
@@ -47,14 +51,15 @@ export function archiveSession(
         }
 
         const current = storage.getState().sessions[sessionId];
-        if (current && !current.active) {
-            applySessionActivity(current, false, result.archivedAt ?? optimisticActiveAt ?? Date.now());
+        if (current) {
+            const archivedAt = result.archivedAt ?? optimisticActiveAt ?? Date.now();
+            // The Relay clock can be behind this device. Keep the lifecycle
+            // ordering timestamp monotonic while retaining the authoritative
+            // tombstone timestamp for display and persistence.
+            applySessionActivity(current, false, Math.max(current.activeAt, archivedAt), archivedAt);
         }
 
-        if (
-            !isCodexSessionReadOnly(previous?.metadata)
-            && gatewayBinding === null
-        ) {
+        if (gatewayBinding === null) {
             void stopSessionInBackground(sessionId, options.beforeStop);
         }
     })().finally(() => {
@@ -77,7 +82,7 @@ async function stopGatewayBeforeArchive(
         // Worktree cleanup is optional; it must not prevent a requested stop.
     }
     const result = await sessionKill(sessionId, { timeoutMs: ARCHIVE_KILL_TIMEOUT_MS });
-    if (!result.success) {
+    if (!result.success && result.outcome !== 'missing' && result.outcome !== 'unverified') {
         throw new Error(result.message || 'Failed to stop Codex Gateway');
     }
 }
@@ -105,11 +110,13 @@ function applySessionActivity(
     session: Session,
     active: boolean,
     activeAt: number,
+    archivedAt: number | null = session.archivedAt,
 ): void {
     storage.getState().applySessions([{
         ...session,
-        active,
+        active: archivedAt === null && active,
         activeAt,
-        presence: active ? session.presence : activeAt,
+        archivedAt,
+        presence: archivedAt === null && active ? session.presence : activeAt,
     }]);
 }

@@ -79,6 +79,8 @@ export const es: TranslationStructure = {
         error: 'error',
         online: 'en línea',
         offline: 'desconectado',
+        recoverable: 'recuperable',
+        archived: 'archivada',
         lastSeen: ({ time }: { time: string }) => `visto por última vez ${time}`,
         permissionRequired: 'permiso requerido',
         activeNow: 'Activo ahora',
@@ -239,8 +241,8 @@ export const es: TranslationStructure = {
         commandPaletteDisabled: 'Acceso rápido a comandos deshabilitado',
         markdownCopyV2: 'Markdown Copy v2',
         markdownCopyV2Subtitle: 'Pulsación larga abre modal de copiado',
-        hideInactiveSessions: 'Ocultar sesiones inactivas',
-        hideInactiveSessionsSubtitle: 'Muestra solo los chats activos en tu lista',
+        hideArchivedSessions: 'Ocultar sesiones archivadas',
+        hideArchivedSessionsSubtitle: 'Oculta de la lista los chats archivados explícitamente',
         groupToolCalls: 'Agrupar llamadas a herramientas',
         groupToolCallsSubtitle: 'Contrae las llamadas consecutivas a herramientas en un solo contenedor',
         privacy: 'Privacidad',
@@ -320,7 +322,8 @@ export const es: TranslationStructure = {
 
     session: {
         inputPlaceholder: 'Escriba un mensaje ...',
-        inactiveArchived: 'Esta sesión está inactiva.',
+        inactiveRecoverable: 'Esta sesión está inactiva, pero se puede reanudar.',
+        archived: 'Esta sesión está archivada. Reanúdala para recuperar el acceso.',
         resumeFromTerminal: 'Para reanudarla desde la terminal:',
         machineDeleted: 'Se eliminó la máquina de origen',
         machineDeletedDescription: 'El historial sigue disponible, pero esta sesión es de solo lectura y ya no puede controlar Codex.',
@@ -689,6 +692,7 @@ export const es: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `Chat lateral ${index}`,
         newChat: 'Nuevo chat lateral',
         close: 'Cerrar chat lateral',
+        historyTitle: 'Historial',
     },
 
     settingsVoice: {

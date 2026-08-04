@@ -134,18 +134,17 @@ export function useSessionQuickActions(
         fingerprint: string;
     } | null>(null);
     const devModeEnabled = useLocalSetting('devModeEnabled');
-    const expResumeSession = useSetting('expResumeSession');
+    const expThreadActions = useSetting('expResumeSession');
     const resumeAvailability = React.useMemo(
-        () => expResumeSession && !machineDeleted
+        () => !machineDeleted
             ? getResumeAvailability(session, machine, sessionStatus.isConnected)
             : { canResume: false, canShowResume: false, subtitle: '', message: '' },
-        [machine, machineDeleted, session, sessionStatus.isConnected, expResumeSession],
+        [machine, machineDeleted, session, sessionStatus.isConnected],
     );
 
     // Fork eligibility — separate from resume because fork works on both
-    // active AND inactive provider sessions. The user-facing toggle is the same
-    // expResumeSession experiment so all three flows (resume / fork /
-    // duplicate) ride a single switch on settings/features.
+    // active AND inactive provider sessions. The legacy experimental setting
+    // continues to gate fork and duplicate, but never Resume.
     const forkSource = React.useMemo(() => getSessionForkSource(session), [
         session.id,
         session.metadata?.flavor,
@@ -155,7 +154,7 @@ export function useSessionQuickActions(
         session.metadata?.codexReadOnly,
     ]);
     const canFork = Boolean(
-        expResumeSession
+        expThreadActions
         && !machineDeleted
         && forkSource
         && machine

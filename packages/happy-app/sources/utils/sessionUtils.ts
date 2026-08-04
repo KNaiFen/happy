@@ -162,14 +162,14 @@ export function getSessionAvatarId(session: Session): string {
 
 /**
  * Returns the CLI command to resume a disconnected session, or null if not resumable.
- * Uses flavor-specific commands which work without happy-agent auth.
+ * The Happy Session ID lets the CLI recover the original encrypted bootstrap.
  */
 export function getResumeCommand(session: Session): string | null {
-    return buildResumeCommand(session.metadata ?? {});
+    return buildResumeCommand({ ...session.metadata, happySessionId: session.id });
 }
 
 export function getResumeCommandBlock(session: Session): ResumeCommandBlock | null {
-    return buildResumeCommandBlock(session.metadata ?? {});
+    return buildResumeCommandBlock({ ...session.metadata, happySessionId: session.id });
 }
 
 /**

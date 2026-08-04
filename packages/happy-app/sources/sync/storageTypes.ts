@@ -209,6 +209,7 @@ export interface Session {
     updatedAt: number,
     active: boolean,
     activeAt: number,
+    archivedAt: number | null,
     metadata: Metadata | null,
     metadataVersion: number,
     originMachineId: string | null,

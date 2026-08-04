@@ -148,6 +148,7 @@ interface SessionKillRequest {
 interface SessionKillResponse {
     success: boolean;
     message: string;
+    outcome: 'stopped' | 'missing' | 'unverified' | 'failed';
 }
 
 // Response types for spawn session
@@ -963,6 +964,7 @@ export async function sessionKill(
         }
         const response = await apiSocket.machineRPC<{
             message: string;
+            outcome?: 'stopped' | 'missing' | 'unverified';
         }, {
             sessionId: string;
             expectedGatewayId: string;
@@ -977,14 +979,13 @@ export async function sessionKill(
             },
             options,
         );
-        return {
-            success: true,
-            message: response.message,
-        };
+        const outcome = response.outcome ?? 'stopped';
+        return { success: outcome === 'stopped', message: response.message, outcome };
     } catch (error) {
         return {
             success: false,
-            message: error instanceof Error ? error.message : 'Unknown error'
+            message: error instanceof Error ? error.message : 'Unknown error',
+            outcome: 'failed',
         };
     }
 }
@@ -995,6 +996,7 @@ export async function sessionKill(
 export async function sessionArchive(sessionId: string): Promise<{ success: boolean; archivedAt?: number; message?: string }> {
     try {
         const metadata = storage.getState().sessions[sessionId]?.metadata;
+        assertCodexSessionWritable(metadata);
         if (!isCodexV4SyncEligible(metadata)) {
             return { success: false, message: 'Only Codex Sync v4 sessions can be archived' };
         }

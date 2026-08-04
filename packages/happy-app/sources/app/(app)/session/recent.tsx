@@ -1,7 +1,7 @@
 import React from 'react';
 import { Platform, View, FlatList } from 'react-native';
 import { Text } from '@/components/StyledText';
-import { useAllSessions } from '@/sync/storage';
+import { useAllSessions, useSetting } from '@/sync/storage';
 import { Session } from '@/sync/storageTypes';
 import { Avatar } from '@/components/Avatar';
 import { getSessionName, getSessionSubtitle, getSessionAvatarId } from '@/utils/sessionUtils';
@@ -170,11 +170,14 @@ function groupSessionsByDate(sessions: Session[]): SessionHistoryItem[] {
 export default function SessionHistory() {
     const safeArea = useSafeAreaInsets();
     const allSessions = useAllSessions();
+    const hideArchivedSessions = useSetting('hideArchivedSessions');
     const navigateToSession = useNavigateToSession();
     
     const groupedItems = React.useMemo(() => {
-        return groupSessionsByDate(allSessions);
-    }, [allSessions]);
+        return groupSessionsByDate(allSessions.filter((session) => (
+            !hideArchivedSessions || session.archivedAt === null
+        )));
+    }, [allSessions, hideArchivedSessions]);
     
     const renderItem = React.useCallback(({ item, index }: { item: SessionHistoryItem, index: number }) => {
         if (item.type === 'date-header') {

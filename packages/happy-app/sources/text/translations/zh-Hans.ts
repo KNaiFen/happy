@@ -81,6 +81,8 @@ export const zhHans: TranslationStructure = {
         error: '错误',
         online: '在线',
         offline: '离线',
+        recoverable: '可恢复',
+        archived: '已归档',
         lastSeen: ({ time }: { time: string }) => `最后活跃时间 ${time}`,
         permissionRequired: '需要权限',
         activeNow: '当前活跃',
@@ -240,8 +242,8 @@ export const zhHans: TranslationStructure = {
         commandPaletteDisabled: '快速命令访问已禁用',
         markdownCopyV2: 'Markdown 复制 v2',
         markdownCopyV2Subtitle: '长按打开复制模态框',
-        hideInactiveSessions: '隐藏非活跃会话',
-        hideInactiveSessionsSubtitle: '仅在列表中显示活跃的聊天',
+        hideArchivedSessions: '隐藏已归档会话',
+        hideArchivedSessionsSubtitle: '在列表中隐藏明确归档的会话',
         groupToolCalls: '分组工具调用',
         groupToolCallsSubtitle: '将连续的工具调用折叠到一个容器中',
         privacy: '隐私',
@@ -321,7 +323,8 @@ export const zhHans: TranslationStructure = {
 
     session: {
         inputPlaceholder: '输入消息...',
-        inactiveArchived: '此会话处于非活动状态。',
+        inactiveRecoverable: '此会话当前非活跃，可以恢复。',
+        archived: '此会话已归档。恢复后可重新访问。',
         resumeFromTerminal: '要从终端恢复它：',
         machineDeleted: '来源设备已删除',
         machineDeletedDescription: '历史记录仍会保留，但此会话已变为只读，无法再控制 Codex。',
@@ -690,6 +693,7 @@ export const zhHans: TranslationStructure = {
         tabLabel: ({ index }: { index: number }) => `侧边聊天 ${index}`,
         newChat: '新建侧边聊天',
         close: '关闭侧边聊天',
+        historyTitle: '历史',
     },
 
     settingsVoice: {

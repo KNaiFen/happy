@@ -27,6 +27,7 @@ function session(
         createdAt,
         hasDraft: false,
         active: true,
+        archivedAt: null,
         machineId,
         path,
         homeDir: null,

@@ -85,6 +85,11 @@ interface DaemonToServerEvents {
     }) => void) => void;
 }
 
+export type StopSessionResult = {
+    outcome: 'stopped' | 'missing' | 'unverified' | 'failed';
+    message: string;
+};
+
 type MachineRpcHandlers = {
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
     resumeSession?: (sessionId: string, options?: {
@@ -98,7 +103,7 @@ type MachineRpcHandlers = {
     stopSession: (sessionId: string, expectation?: {
         gatewayId: string;
         generation: number;
-    }) => Promise<boolean> | boolean;
+    }) => Promise<StopSessionResult | boolean> | StopSessionResult | boolean;
     requestShutdown: () => void;
 }
 
@@ -322,16 +327,22 @@ export class ApiMachineClient {
                 throw new Error('bindingGeneration must be a non-negative integer');
             }
 
-            const success = await stopSession(sessionId, {
+            const result = await stopSession(sessionId, {
                 gatewayId: expectedGatewayId,
                 generation: bindingGeneration,
             });
-            if (!success) {
-                throw new Error('Session not found or failed to stop');
+            const normalized: StopSessionResult = typeof result === 'boolean'
+                ? {
+                    outcome: result ? 'stopped' : 'failed',
+                    message: result ? 'Session stopped' : 'Session not found or failed to stop',
+                }
+                : result;
+            if (normalized.outcome === 'failed') {
+                throw new Error(normalized.message);
             }
 
-            logger.debug(`[API MACHINE] Stopped session ${sessionId}`);
-            return { message: 'Session stopped' };
+            logger.debug(`[API MACHINE] Stop session outcome: ${normalized.outcome}`);
+            return normalized;
         });
 
         this.rpcHandlerManager.registerHandler('codex-fork-thread', async (params: any) => {

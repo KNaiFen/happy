@@ -346,7 +346,7 @@ describe('ApiMachineClient Codex fork RPCs', () => {
     });
 
     it('forwards the expected Gateway generation through stop-session', async () => {
-        const stopSession = vi.fn().mockResolvedValue(true);
+        const stopSession = vi.fn().mockResolvedValue({ outcome: 'stopped', message: 'Session stopped' });
         const { ApiMachineClient } = await import('./apiMachine');
         const client = new ApiMachineClient('token', machineClient());
         client.setRPCHandlers({
@@ -361,11 +361,55 @@ describe('ApiMachineClient Codex fork RPCs', () => {
             sessionId: 'session-current',
             expectedGatewayId: 'gateway-1',
             bindingGeneration: 4,
-        })).resolves.toEqual({ message: 'Session stopped' });
+        })).resolves.toEqual({ outcome: 'stopped', message: 'Session stopped' });
         expect(stopSession).toHaveBeenCalledWith('session-current', {
             gatewayId: 'gateway-1',
             generation: 4,
         });
+    });
+
+    it.each(['missing', 'unverified'] as const)(
+        'returns the %s Gateway outcome without turning it into an RPC failure',
+        async (outcome) => {
+            const stopSession = vi.fn().mockResolvedValue({ outcome, message: `Gateway ${outcome}` });
+            const { ApiMachineClient } = await import('./apiMachine');
+            const client = new ApiMachineClient('token', machineClient());
+            client.setRPCHandlers({
+                spawnSession: vi.fn(),
+                listCodexThreads: vi.fn(),
+                openCodexThread: vi.fn(),
+                stopSession,
+                requestShutdown: vi.fn(),
+            });
+
+            await expect(handlersFrom(client).get('machine-1:stop-session')?.({
+                sessionId: 'session-current',
+                expectedGatewayId: 'gateway-1',
+                bindingGeneration: 4,
+            })).resolves.toEqual({ outcome, message: `Gateway ${outcome}` });
+        },
+    );
+
+    it('keeps a failed Gateway stop as an RPC failure', async () => {
+        const stopSession = vi.fn().mockResolvedValue({
+            outcome: 'failed',
+            message: 'Gateway control channel unavailable',
+        });
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession,
+            requestShutdown: vi.fn(),
+        });
+
+        await expect(handlersFrom(client).get('machine-1:stop-session')?.({
+            sessionId: 'session-current',
+            expectedGatewayId: 'gateway-1',
+            bindingGeneration: 4,
+        })).rejects.toThrow('Gateway control channel unavailable');
     });
 
     it('rejects stop-session without a complete Gateway expectation', async () => {

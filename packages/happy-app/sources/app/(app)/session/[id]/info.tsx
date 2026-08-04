@@ -312,8 +312,7 @@ function SessionInfoContent({ session }: { session: Session }) {
                             }}
                         />
                     )}
-                    {/* Resume command — shown for disconnected sessions with a backend session ID */}
-                    {/* TODO: migrate to `happy resume <happy-session-id>` once it works without happy-agent auth */}
+                    {/* Resume command — shown for disconnected Codex Sync V4 sessions. */}
                     {!sessionStatus.isConnected && getResumeCommand(session) && (
                         <CopyableItem
                             title="Resume Command"
