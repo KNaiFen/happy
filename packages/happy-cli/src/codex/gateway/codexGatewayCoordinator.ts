@@ -584,16 +584,30 @@ export class CodexGatewayCoordinator {
                 (candidate) => candidate.runtime.sessionId === sessionId,
             );
             if (!root) return false;
-            this.removeRoot(root);
-            root.role = 'inactive';
-            await root.runtime.close().catch((error) => this.options.onError?.(error));
-            await this.options.leases.release(root.threadId, this.options.gatewayId)
-                .catch((error) => {
-                    this.options.onError?.(error);
-                    return false;
-                });
+            await this.relinquishRootLocked(root);
             return true;
         });
+    }
+
+    async relinquishThread(threadId: string): Promise<boolean> {
+        if (this.stopped) return false;
+        return await this.bindingLock.inLock(async () => {
+            const root = this.roots.get(threadId);
+            if (!root) return false;
+            await this.relinquishRootLocked(root);
+            return true;
+        });
+    }
+
+    private async relinquishRootLocked(root: ManagedRoot): Promise<void> {
+        this.removeRoot(root);
+        root.role = 'inactive';
+        await root.runtime.close().catch((error) => this.options.onError?.(error));
+        await this.options.leases.release(root.threadId, this.options.gatewayId)
+            .catch((error) => {
+                this.options.onError?.(error);
+                return false;
+            });
     }
 
     private async deactivateRootsForGracefulStop(): Promise<void> {

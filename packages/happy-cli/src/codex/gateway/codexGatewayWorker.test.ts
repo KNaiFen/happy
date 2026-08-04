@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
     controlHandlers: null as import('./codexGatewayControl').CodexGatewayControlHandlers | null,
     proxyHooks: null as CodexGatewayProxyHooks | null,
     startThread: vi.fn(async () => ({ threadId: 'thread-app', model: 'gpt-test' })),
+    resumeThread: vi.fn(async (input: { threadId: string }) => ({
+        threadId: input.threadId,
+        model: 'gpt-test',
+    })),
     relayAvailable: false,
     credentialsAvailable: true,
     connectAttempts: 0,
@@ -91,14 +95,19 @@ vi.mock('./codexGatewayRuntimeFactory', () => ({
             presence: {
                 claim(sessionId: string): Promise<{ release(): Promise<void> } | null>;
             };
+            resolveRootSessionConfig?(threadId: string): {
+                existingSession?: { sessionId: string };
+            } | null;
         }) {}
         async tryCreate(options: { threadId: string }) {
             if (!mocks.relayAvailable) return null;
-            const presenceLease = await this.options.presence.claim(`session-${options.threadId}`);
+            const sessionId = this.options.resolveRootSessionConfig?.(options.threadId)
+                ?.existingSession?.sessionId ?? `session-${options.threadId}`;
+            const presenceLease = await this.options.presence.claim(sessionId);
             if (!presenceLease) return null;
             let closed = false;
             return {
-                sessionId: `session-${options.threadId}`,
+                sessionId,
                 handleNotification: async () => undefined,
                 handleRequest: async () => null,
                 setConnection: () => undefined,
@@ -172,6 +181,7 @@ vi.mock('./codexGatewayControl', () => ({
     }),
 }));
 vi.mock('../codexAppServerClient', () => ({
+    CodexRpcOutcomeUnknownError: class CodexRpcOutcomeUnknownError extends Error {},
     CodexAppServerClient: class {
         private connectionHandler: ((event: unknown) => void) | null = null;
         private connected = false;
@@ -248,6 +258,7 @@ vi.mock('../codexAppServerClient', () => ({
         }
         adoptThreadSnapshot() {}
         async startThread() { return await mocks.startThread(); }
+        async resumeThread(input: { threadId: string }) { return await mocks.resumeThread(input); }
     },
 }));
 
@@ -259,6 +270,7 @@ import {
 } from './codexGatewayState';
 import { createCodexGatewayAttachmentCredentials } from './codexGatewayAttachment';
 import { CodexGatewayJournal } from './codexGatewayJournal';
+import { CodexGatewayThreadLeaseRegistry } from './codexGatewayLease';
 import { runCodexGatewayWorker } from './codexGatewayWorker';
 
 const roots: string[] = [];
@@ -267,6 +279,7 @@ afterEach(async () => {
     mocks.controlHandlers = null;
     mocks.proxyHooks = null;
     mocks.startThread.mockClear();
+    mocks.resumeThread.mockClear();
     mocks.relayAvailable = false;
     mocks.credentialsAvailable = true;
     mocks.connectAttempts = 0;
@@ -397,6 +410,9 @@ describe('Codex Gateway worker composition', () => {
             presenceTouchMs: 60_000,
         });
         await vi.waitFor(() => expect(mocks.controlHandlers).not.toBeNull());
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
         await mocks.controlHandlers!.openRoot(openRootInput());
         const before = await readCodexGatewayDescriptor(created.paths.descriptorPath);
         const bindingUpdates = mocks.runtimeBindingUpdates;
@@ -908,6 +924,232 @@ describe('Codex Gateway worker composition', () => {
         await worker;
     });
 
+    it('reads existing-session resume material from the private secret without journaling it', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const operationId = '706be38c-ece9-42eb-a562-abf685a26d8c';
+        const dataEncryptionKey = Buffer.alloc(32, 7).toString('base64');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+            bootstrapOperationId: operationId,
+            resumeBootstrap: {
+                happySessionId: 'session-private',
+                dataEncryptionKey,
+                threadId: 'thread-private',
+                cwd: '/workspace/project',
+                model: 'gpt-test',
+                permissionMode: 'read-only',
+                effortLevel: 'max',
+            },
+        });
+        mocks.relayAvailable = true;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(() => expect(mocks.controlHandlers).not.toBeNull());
+        const opened = await mocks.controlHandlers!.openRoot({
+            operationId,
+            action: 'resume',
+            threadId: null,
+            cwd: null,
+            model: null,
+            permissionMode: 'default',
+            effortLevel: null,
+            parentSessionId: null,
+            forkedFromMessageId: null,
+            isSideChat: false,
+        });
+
+        expect(opened).toMatchObject({
+            threadId: 'thread-private',
+            sessionId: 'session-private',
+        });
+        expect(mocks.resumeThread).toHaveBeenCalledWith(expect.objectContaining({
+            threadId: 'thread-private',
+            cwd: '/workspace/project',
+            model: 'gpt-test',
+        }));
+        const journalText = await readFile(created.paths.journalPath, 'utf8');
+        const descriptorText = await readFile(created.paths.descriptorPath, 'utf8');
+        expect(journalText).not.toContain('session-private');
+        expect(journalText).not.toContain(dataEncryptionKey);
+        expect(descriptorText).not.toContain(dataEncryptionKey);
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
+    it('cancels an in-flight root open before it can claim Presence', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const operationId = '706be38c-ece9-42eb-a562-abf685a26d8c';
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+            bootstrapOperationId: operationId,
+        });
+        mocks.relayAvailable = true;
+        let resolveStart!: (result: { threadId: string; model: string }) => void;
+        mocks.startThread.mockImplementationOnce(async () => await new Promise((resolve) => {
+            resolveStart = resolve;
+        }));
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
+        const opening = mocks.controlHandlers!.openRoot({
+            ...openRootInput(),
+            operationId,
+        });
+        const openingExpectation = expect(opening).rejects.toThrow('root open was cancelled');
+        await vi.waitFor(() => expect(mocks.startThread).toHaveBeenCalledOnce());
+
+        await expect(mocks.controlHandlers!.cancelRoot({ operationId })).resolves.toEqual({
+            cancelled: true,
+            relinquished: false,
+        });
+        resolveStart({ threadId: 'thread-app', model: 'gpt-test' });
+        await openingExpectation;
+        expect(mocks.presenceClaims).toEqual([]);
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
+    it('releases a resume thread lease when cancellation races the provider response', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const operationId = '31c240df-8829-494c-9316-7f42e88eb263';
+        const threadId = 'thread-private';
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+            bootstrapOperationId: operationId,
+            resumeBootstrap: {
+                happySessionId: 'session-private',
+                dataEncryptionKey: Buffer.alloc(32, 7).toString('base64'),
+                threadId,
+                cwd: '/workspace/project',
+                model: 'gpt-test',
+                permissionMode: 'read-only',
+                effortLevel: 'max',
+            },
+        });
+        let resolveResume!: (result: { threadId: string; model: string }) => void;
+        mocks.resumeThread.mockImplementationOnce(async () => await new Promise((resolve) => {
+            resolveResume = resolve;
+        }));
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
+        const opening = mocks.controlHandlers!.openRoot({
+            operationId,
+            action: 'resume',
+            threadId: null,
+            cwd: null,
+            model: null,
+            permissionMode: 'default',
+            effortLevel: null,
+            parentSessionId: null,
+            forkedFromMessageId: null,
+            isSideChat: false,
+        });
+        const openingExpectation = expect(opening).rejects.toThrow('root open was cancelled');
+        await vi.waitFor(() => expect(mocks.resumeThread).toHaveBeenCalledOnce());
+        const leases = new CodexGatewayThreadLeaseRegistry({
+            happyHomeDir,
+            isProcessAlive: () => true,
+        });
+        await expect(leases.owner(threadId)).resolves.toBe(created.descriptor.gatewayId);
+
+        await expect(mocks.controlHandlers!.cancelRoot({ operationId })).resolves.toEqual({
+            cancelled: true,
+            relinquished: false,
+        });
+        await expect(leases.owner(threadId)).resolves.toBeNull();
+        resolveResume({ threadId, model: 'gpt-test' });
+        await openingExpectation;
+        expect(mocks.presenceClaims).toEqual([]);
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
+    it('releases a bound root when cancellation arrives after its response was lost', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const operationId = 'f5f2824d-9e74-4470-b39c-39e65936b777';
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+            bootstrapOperationId: operationId,
+        });
+        mocks.relayAvailable = true;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
+        const opened = await mocks.controlHandlers!.openRoot({
+            ...openRootInput(),
+            operationId,
+        });
+
+        await expect(mocks.controlHandlers!.cancelRoot({ operationId })).resolves.toEqual({
+            cancelled: true,
+            relinquished: true,
+        });
+        expect(mocks.presenceClaims).toHaveLength(1);
+        expect(mocks.presenceReleases).toEqual([
+            expect.objectContaining({ sessionId: opened.sessionId }),
+        ]);
+        await expect(readCodexGatewayDescriptor(created.paths.descriptorPath)).resolves.toMatchObject({
+            current: null,
+        });
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
     it('does not repeat an App thread/start after provider acceptance while relay materialization is pending', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);
@@ -941,8 +1183,6 @@ describe('Codex Gateway worker composition', () => {
             parentSessionId: null,
             forkedFromMessageId: null,
             isSideChat: false,
-            happySessionId: null,
-            dataEncryptionKey: null,
         };
 
         await expect(mocks.controlHandlers!.openRoot(input))
@@ -997,8 +1237,6 @@ describe('Codex Gateway worker composition', () => {
             parentSessionId: null,
             forkedFromMessageId: null,
             isSideChat: false,
-            happySessionId: null,
-            dataEncryptionKey: null,
         };
         await expect(mocks.controlHandlers!.openRoot(input)).rejects.toThrow('relay is unavailable');
 
@@ -1054,8 +1292,6 @@ function openRootInput() {
         parentSessionId: null,
         forkedFromMessageId: null,
         isSideChat: false,
-        happySessionId: null,
-        dataEncryptionKey: null,
     };
 }
 

@@ -47,12 +47,10 @@ export type CodexBoundThreadLaunchDecision =
 
 export function resolveCodexBoundThreadLaunchDecision(options: {
     providerStatus: CodexThreadHistorySummary['status'];
-    happySessionActive: boolean;
-    happyProcessAlive: boolean;
+    gatewayState: 'live' | 'recovering' | 'missing';
 }): CodexBoundThreadLaunchDecision {
-    if (options.happyProcessAlive) {
-        return options.happySessionActive ? 'existing-active' : 'process-transition';
-    }
+    if (options.gatewayState === 'live') return 'existing-active';
+    if (options.gatewayState === 'recovering') return 'process-transition';
     return options.providerStatus === 'active' ? 'external-active' : 'resume';
 }
 

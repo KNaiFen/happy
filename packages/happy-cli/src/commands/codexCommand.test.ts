@@ -79,7 +79,16 @@ describe('Codex command routing', () => {
     expect(mocks.delegate).not.toHaveBeenCalled()
   })
 
-  it.each(['--resume', '-r', '--effort', '--permission-mode', '--yolo', '--no-sandbox']) (
+  it.each([
+    '--resume',
+    '--resume=thread-a',
+    '-r',
+    '--effort',
+    '--permission-mode',
+    '--started-by=daemon',
+    '--yolo',
+    '--no-sandbox',
+  ]) (
     'rejects obsolete adapter option %s', async (flag) => {
       await expect(handleCodexCommand([flag])).rejects.toThrow('obsolete Happy adapter option')
       expect(mocks.launch).not.toHaveBeenCalled()

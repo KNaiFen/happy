@@ -61,8 +61,11 @@ export function planCodexCommand(args: string[]): CodexCommandPlan {
     if (arg === '--remote-auth-token-env' || arg.startsWith('--remote-auth-token-env=')) {
       throw new Error('--remote-auth-token-env is controlled by Happy Gateway and cannot be supplied manually.')
     }
-    if (REMOVED_HAPPY_OPTIONS.has(arg)) {
-      throw new Error(`${arg} is an obsolete Happy adapter option; use the equivalent official Codex option or subcommand.`)
+    const removedOption = [...REMOVED_HAPPY_OPTIONS].find((option) => (
+      arg === option || arg.startsWith(`${option}=`)
+    ))
+    if (removedOption) {
+      throw new Error(`${removedOption} is an obsolete Happy adapter option; use the equivalent official Codex option or subcommand.`)
     }
   }
 

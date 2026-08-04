@@ -80,6 +80,18 @@ describe('Codex Gateway deferred runtime', () => {
         await harness.runtime.close();
         await harness.journal.close();
     });
+
+    it('closes a materialized runtime that arrives after the deferred root was cancelled', async () => {
+        const harness = await createHarness();
+        const materialized = new FakeRuntime('session-a');
+        await harness.runtime.close();
+
+        await expect(harness.runtime.materialize(materialized))
+            .rejects.toThrow('deferred runtime is closed');
+
+        expect(materialized.closed).toBe(true);
+        await harness.journal.close();
+    });
 });
 
 async function createHarness() {
@@ -104,6 +116,7 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     readonly reconciled: Thread[] = [];
     readonly notifications: ServerNotification[] = [];
     readonly requests: CodexServerRequest[] = [];
+    closed = false;
 
     constructor(readonly sessionId: string) {}
 
@@ -128,7 +141,7 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     ownsThread(threadId: string): boolean { return threadId === 'thread-a'; }
     async isDrained(): Promise<boolean> { return true; }
     async flush(): Promise<void> {}
-    async close(): Promise<void> {}
+    async close(): Promise<void> { this.closed = true; }
 }
 
 function binding(): CodexGatewayRuntimeBinding {

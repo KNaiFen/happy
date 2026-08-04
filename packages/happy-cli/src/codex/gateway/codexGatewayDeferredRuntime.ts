@@ -60,7 +60,10 @@ export class CodexGatewayDeferredRuntime implements CodexGatewayRootRuntime {
 
     async materialize(runtime: CodexGatewayRootRuntime): Promise<void> {
         await this.operationLock.inLock(async () => {
-            this.assertOpen();
+            if (this.closed) {
+                await runtime.close().catch(() => undefined);
+                throw new Error('Codex Gateway deferred runtime is closed');
+            }
             if (this.inner) {
                 await runtime.close();
                 return;
@@ -232,7 +235,4 @@ export class CodexGatewayDeferredRuntime implements CodexGatewayRootRuntime {
         for (const request of pending) request.resolve(null);
     }
 
-    private assertOpen(): void {
-        if (this.closed) throw new Error('Codex Gateway deferred runtime is closed');
-    }
 }

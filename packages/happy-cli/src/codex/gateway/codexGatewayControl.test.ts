@@ -30,6 +30,7 @@ describe('Codex Gateway control endpoint', () => {
         const normalExit = vi.fn(() => ({ accepted: true }));
         const terminalAttached = vi.fn(() => ({ attached: true }));
         const presenceReconcile = vi.fn(() => ({ reconciled: true }));
+        const cancelRoot = vi.fn(() => ({ cancelled: true }));
         const openRoot = vi.fn(async () => ({
             gatewayId: 'gateway-1',
             threadId: 'thread-1',
@@ -45,6 +46,7 @@ describe('Codex Gateway control endpoint', () => {
                 stop: () => ({ stopping: true }),
                 terminalAttached,
                 presenceReconcile,
+                cancelRoot,
                 openRoot,
             },
         });
@@ -98,11 +100,54 @@ describe('Codex Gateway control endpoint', () => {
                 parentSessionId: null,
                 forkedFromMessageId: null,
                 isSideChat: false,
-                happySessionId: null,
-                dataEncryptionKey: null,
             },
         })).resolves.toMatchObject({ sessionId: 'session-1', generation: 1 });
-        expect(openRoot).toHaveBeenCalledOnce();
+        await expect(callCodexGatewayControl({
+            descriptor,
+            token: 'control-token-that-is-at-least-thirty-two-bytes',
+            path: '/root/open',
+            body: {
+                operationId: 'f5f2824d-9e74-4470-b39c-39e65936b777',
+                action: 'resume',
+                threadId: null,
+                cwd: null,
+                model: null,
+                permissionMode: 'default',
+                effortLevel: null,
+                parentSessionId: null,
+                forkedFromMessageId: null,
+                isSideChat: false,
+            },
+        })).resolves.toMatchObject({ sessionId: 'session-1', generation: 1 });
+        await expect(callCodexGatewayControl({
+            descriptor,
+            token: 'control-token-that-is-at-least-thirty-two-bytes',
+            path: '/root/cancel',
+            body: { operationId: 'f5f2824d-9e74-4470-b39c-39e65936b777' },
+        })).resolves.toEqual({ cancelled: true });
+        expect(cancelRoot).toHaveBeenCalledWith({
+            operationId: 'f5f2824d-9e74-4470-b39c-39e65936b777',
+        });
+        await expect(callCodexGatewayControl({
+            descriptor,
+            token: 'control-token-that-is-at-least-thirty-two-bytes',
+            path: '/root/open',
+            body: {
+                operationId: 'f5f2824d-9e74-4470-b39c-39e65936b777',
+                action: 'resume',
+                threadId: null,
+                cwd: null,
+                model: null,
+                permissionMode: 'default',
+                effortLevel: null,
+                parentSessionId: null,
+                forkedFromMessageId: null,
+                isSideChat: false,
+                happySessionId: 'must-not-cross-control',
+                dataEncryptionKey: 'must-not-cross-control',
+            },
+        })).rejects.toThrow('(400)');
+        expect(openRoot).toHaveBeenCalledTimes(2);
         await server.close();
     });
 });

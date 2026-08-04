@@ -2,11 +2,35 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { projectPath } from '@/projectPath';
 
-export type CodexGatewayProviderProcessIdentity =
+export type CodexGatewayProcessIdentity =
     | 'expected'
     | 'absent'
     | 'unexpected'
     | 'unverified';
+
+export type CodexGatewayProviderProcessIdentity = CodexGatewayProcessIdentity;
+
+export function inspectCodexGatewayWorkerProcess(options: {
+    pid: number;
+    gatewayId: string;
+    entrypoint?: string;
+    isAlive?: (pid: number) => boolean;
+    readCommandLine?: (pid: number) => string | null;
+}): CodexGatewayProcessIdentity {
+    if (!Number.isInteger(options.pid) || options.pid <= 0) return 'absent';
+    if (options.pid === process.pid) return 'expected';
+    const isAlive = options.isAlive ?? processIsAlive;
+    if (!isAlive(options.pid)) return 'absent';
+    const commandLine = (options.readCommandLine ?? readProcessCommandLine)(options.pid);
+    if (!commandLine) return 'unverified';
+    const entrypoint = options.entrypoint ?? join(projectPath(), 'dist', 'index.mjs');
+    return isHappyNodeRuntimeCommand(commandLine)
+        && commandLine.includes(entrypoint)
+        && commandLine.includes('__codex-gateway-worker')
+        && commandLine.includes(options.gatewayId)
+        ? 'expected'
+        : 'unexpected';
+}
 
 export function isExpectedCodexGatewayWorkerProcess(options: {
     pid: number;
@@ -15,19 +39,9 @@ export function isExpectedCodexGatewayWorkerProcess(options: {
     isAlive?: (pid: number) => boolean;
     readCommandLine?: (pid: number) => string | null;
 }): boolean {
-    if (!Number.isInteger(options.pid) || options.pid <= 0) return false;
-    if (options.pid === process.pid) return true;
-    const isAlive = options.isAlive ?? processIsAlive;
-    if (!isAlive(options.pid)) return false;
-    const commandLine = (options.readCommandLine ?? readProcessCommandLine)(options.pid);
-    if (commandLine === null) {
-        // A transient inspection failure must not create a second journal owner.
-        return true;
-    }
-    const entrypoint = options.entrypoint ?? join(projectPath(), 'dist', 'index.mjs');
-    return commandLine.includes(entrypoint)
-        && commandLine.includes('__codex-gateway-worker')
-        && commandLine.includes(options.gatewayId);
+    const identity = inspectCodexGatewayWorkerProcess(options);
+    // Journal ownership stays conservative when the OS cannot expose argv.
+    return identity === 'expected' || identity === 'unverified';
 }
 
 export function isExpectedCodexGatewayProviderProcess(options: {

@@ -49,8 +49,13 @@ import {
 import { initialMachineMetadata } from './initialMachineMetadata';
 import {
   discoverLiveCodexGateways,
+  inspectVerifiedGatewayForSession,
   launchCodexGatewayHeadless,
 } from '@/codex/gateway/codexGatewayLauncher';
+import {
+  createCodexGatewayResumeBootstrap,
+  resumeCodexGatewayHeadless,
+} from '@/codex/gateway/codexGatewayResume';
 import { callCodexGatewayControl } from '@/codex/gateway/codexGatewayControl';
 import { deriveCodexGatewayResumeSessionTag } from '@/codex/gateway/codexGatewayIdentity';
 import { retireVerifiedLegacyCodexAdapters } from './legacyCodexAdapterRetirement';
@@ -77,16 +82,6 @@ function resolveGatewayPermissionMode(
   if (value === undefined || value === 'default') return 'default';
   if (value === 'read-only' || value === 'safe-yolo' || value === 'yolo') return value;
   throw new Error(`Unsupported Codex permission mode: '${value}'`);
-}
-
-function isProcessAlive(pid: number | undefined): boolean {
-  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function startDaemon(): Promise<void> {
@@ -344,7 +339,7 @@ export async function startDaemon(): Promise<void> {
       }
     };
 
-    // Spawn a new session (sessionId reserved for future --resume functionality)
+    // Spawn a new session. Existing Codex sessions resume through resumeSession below.
     const spawnSession = async (options: SpawnSessionOptions): Promise<SpawnSessionResult> => {
       logger.debug('[DAEMON RUN] Spawning session', {
         agent: options.agent ?? 'codex',
@@ -600,32 +595,26 @@ export async function startDaemon(): Promise<void> {
               errorMessage: 'This Codex session does not have an independent Sync v4 data key.',
             };
           }
-          const liveGateway = (await discoverLiveCodexGateways({
-            recover: true,
-            env: ambientEnvironment,
-          })).find(({ descriptor }) => (
-            descriptor.current?.sessionId === happySessionId
-          ));
-          if (liveGateway) return { type: 'success', sessionId: happySessionId };
           const permissionMode = resolveGatewayPermissionMode(
             options?.permissionMode ?? metadata.permissionMode ?? undefined,
           );
           const requestedModel = options?.model ?? metadata.modelMode ?? undefined;
-          const launched = await launchCodexGatewayHeadless({
-            operationId: options?.operationId,
-            cwd: metadata.path,
-            env: buildSessionChildEnvironment(ambientEnvironment, {}),
-            action: 'resume',
+          const bootstrap = createCodexGatewayResumeBootstrap({
+            happySessionId,
+            dataEncryptionKey: encodeBase64(encryption.encryptionKey),
             threadId: metadata.codexThreadId,
+            cwd: metadata.path,
             model: requestedModel && requestedModel !== 'default'
               ? requestedModel
-              : undefined,
+              : null,
             permissionMode,
-            effortLevel: options?.effort ?? metadata.effortLevel ?? undefined,
-            existingSession: {
-              sessionId: happySessionId,
-              dataEncryptionKey: encodeBase64(encryption.encryptionKey),
-            },
+            effortLevel: options?.effort ?? metadata.effortLevel ?? null,
+          });
+          const launched = await resumeCodexGatewayHeadless({
+            api,
+            operationId: options?.operationId,
+            env: buildSessionChildEnvironment(ambientEnvironment, {}),
+            bootstrap,
           });
           if (launched.sessionId !== happySessionId) {
             return {
@@ -822,17 +811,6 @@ export async function startDaemon(): Promise<void> {
       }
     };
 
-    const liveSessionForId = (sessionId: string, metadata?: Metadata): boolean => {
-      const tracked = findTrackedSessionById(sessionId);
-      if (isProcessAlive(tracked?.pid)) return true;
-      for (const tracked of pidToTrackedSession.values()) {
-        if (tracked.happySessionId === sessionId && isProcessAlive(tracked.pid)) {
-          return true;
-        }
-      }
-      return isProcessAlive(metadata?.hostPid);
-    };
-
     const codexThreadOpen = new CodexThreadOpenCoordinator({
       inspect: (directory, threadId) => codexThreadHistory.inspect(directory, threadId),
       openExisting: async (request, thread): Promise<CodexOpenThreadResult> => {
@@ -897,16 +875,28 @@ export async function startDaemon(): Promise<void> {
         }
 
         installSessionSnapshot(snapshot);
+        const gatewayInspection = await inspectVerifiedGatewayForSession({
+          sessionId: snapshot.id,
+          threadId: thread.threadId,
+        });
         const launchDecision = resolveCodexBoundThreadLaunchDecision({
           providerStatus: thread.status,
-          happySessionActive: snapshot.active,
-          happyProcessAlive: liveSessionForId(snapshot.id, snapshot.metadata),
+          gatewayState: gatewayInspection.state,
         });
         if (launchDecision === 'existing-active') {
+          const reconciled = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+          if (reconciled.type !== 'success') {
+            return {
+              type: 'error',
+              errorMessage: reconciled.type === 'error'
+                ? reconciled.errorMessage
+                : 'Unexpected directory approval request while reconciling a Codex session',
+            };
+          }
           return {
             type: 'success',
             disposition: 'existing-active',
-            sessionId: snapshot.id,
+            sessionId: reconciled.sessionId,
           };
         }
         if (launchDecision === 'process-transition') {
@@ -986,16 +976,28 @@ export async function startDaemon(): Promise<void> {
           };
         }
         installSessionSnapshot(snapshot);
+        const gatewayInspection = await inspectVerifiedGatewayForSession({
+          sessionId: snapshot.id,
+          threadId: thread.threadId,
+        });
         const launchDecision = resolveCodexBoundThreadLaunchDecision({
           providerStatus: thread.status,
-          happySessionActive: snapshot.active,
-          happyProcessAlive: liveSessionForId(snapshot.id, snapshot.metadata),
+          gatewayState: gatewayInspection.state,
         });
         if (launchDecision === 'existing-active') {
+          const reconciled = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+          if (reconciled.type !== 'success') {
+            return {
+              type: 'error',
+              errorMessage: reconciled.type === 'error'
+                ? reconciled.errorMessage
+                : 'Unexpected directory approval request while reconciling a Codex thread',
+            };
+          }
           return {
             type: 'success',
             disposition: 'existing-active',
-            sessionId: snapshot.id,
+            sessionId: reconciled.sessionId,
           };
         }
         if (launchDecision === 'external-active') {

@@ -89,12 +89,29 @@ export const CodexGatewayDescriptorSchema = z.object({
 }).strict();
 export type CodexGatewayDescriptor = z.infer<typeof CodexGatewayDescriptorSchema>;
 
+export const CodexGatewayResumeBootstrapSchema = z.object({
+    happySessionId: idSchema,
+    dataEncryptionKey: z.string().min(1).max(128),
+    threadId: idSchema,
+    cwd: pathSchema,
+    model: z.string().min(1).max(512).nullable().default(null),
+    permissionMode: z.enum([
+        'default',
+        'read-only',
+        'safe-yolo',
+        'yolo',
+    ]).default('default'),
+    effortLevel: z.string().min(1).max(128).nullable().default(null),
+}).strict();
+export type CodexGatewayResumeBootstrap = z.infer<typeof CodexGatewayResumeBootstrapSchema>;
+
 export const CodexGatewaySecretSchema = z.object({
     version: z.literal(CODEX_GATEWAY_STATE_VERSION),
     gatewayId: idSchema,
     controlToken: z.string().min(32).max(512),
     sessionKeySeed: z.string().min(32).max(512),
     providerToken: z.string().min(32).max(512).nullable().default(null),
+    resumeBootstrap: CodexGatewayResumeBootstrapSchema.nullable().default(null),
 }).strict();
 export type CodexGatewaySecret = z.infer<typeof CodexGatewaySecretSchema>;
 
@@ -179,6 +196,7 @@ export async function createCodexGatewayFiles(options: {
     runtimeRoot?: string;
     now?: number;
     bootstrapOperationId?: string;
+    resumeBootstrap?: CodexGatewayResumeBootstrap;
 }): Promise<{
     descriptor: CodexGatewayDescriptor;
     secret: CodexGatewaySecret;
@@ -200,6 +218,9 @@ export async function createCodexGatewayFiles(options: {
         controlToken: randomBytes(32).toString('base64url'),
         sessionKeySeed: randomBytes(32).toString('base64url'),
         providerToken: randomBytes(32).toString('base64url'),
+        resumeBootstrap: options.resumeBootstrap
+            ? CodexGatewayResumeBootstrapSchema.parse(options.resumeBootstrap)
+            : null,
     };
     const descriptor: CodexGatewayDescriptor = {
         version: CODEX_GATEWAY_STATE_VERSION,
@@ -235,7 +256,7 @@ export async function createCodexGatewayFiles(options: {
             lastHeartbeatAt: now,
         },
     };
-    await writePrivateJson(paths.secretPath, CodexGatewaySecretSchema.parse(secret));
+    await writeCodexGatewaySecret(paths, secret);
     if (process.platform === 'win32') {
         await writePrivateText(paths.providerTokenPath, `${secret.providerToken}\n`);
     }
@@ -266,6 +287,14 @@ export async function writeCodexGatewayDescriptor(
     descriptor: CodexGatewayDescriptor,
 ): Promise<void> {
     await writePrivateJson(paths.descriptorPath, CodexGatewayDescriptorSchema.parse(descriptor));
+}
+
+/** Resume material is always persisted through this 0600 atomic secret writer. */
+export async function writeCodexGatewaySecret(
+    paths: CodexGatewayPaths,
+    secret: CodexGatewaySecret,
+): Promise<void> {
+    await writePrivateJson(paths.secretPath, CodexGatewaySecretSchema.parse(secret));
 }
 
 export async function listCodexGatewayDescriptors(options: {

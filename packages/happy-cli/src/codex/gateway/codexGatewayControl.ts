@@ -14,6 +14,9 @@ const StopSchema = z.object({ force: z.boolean().default(false) }).strict();
 const PresenceReconcileSchema = z.object({
     sessionId: z.string().min(1).max(512),
 }).strict();
+const CancelRootSchema = z.object({
+    operationId: z.string().uuid(),
+}).strict();
 const TerminalAttachedSchema = z.object({
     attachmentId: z.string().uuid(),
     connectionToken: z.string().min(32).max(512),
@@ -23,7 +26,7 @@ const OpenRootSchema = z.object({
     operationId: z.string().uuid(),
     action: z.enum(['start', 'resume']),
     threadId: z.string().min(1).max(512).nullable().default(null),
-    cwd: z.string().min(1).max(8_192),
+    cwd: z.string().min(1).max(8_192).nullable().default(null),
     model: z.string().min(1).max(512).nullable().default(null),
     permissionMode: z.enum([
         'default',
@@ -35,14 +38,12 @@ const OpenRootSchema = z.object({
     parentSessionId: z.string().min(1).max(512).nullable().default(null),
     forkedFromMessageId: z.string().min(1).max(512).nullable().default(null),
     isSideChat: z.boolean().default(false),
-    happySessionId: z.string().min(1).max(512).nullable().default(null),
-    dataEncryptionKey: z.string().min(1).max(128).nullable().default(null),
 }).strict().superRefine((input, context) => {
-    if (input.action === 'resume' && !input.threadId) {
+    if (input.action === 'start' && !input.cwd) {
         context.addIssue({
             code: z.ZodIssueCode.custom,
-            path: ['threadId'],
-            message: 'threadId is required for resume',
+            path: ['cwd'],
+            message: 'cwd is required for start',
         });
     }
     if (input.action === 'start' && input.threadId) {
@@ -50,13 +51,6 @@ const OpenRootSchema = z.object({
             code: z.ZodIssueCode.custom,
             path: ['threadId'],
             message: 'threadId is not allowed for start',
-        });
-    }
-    if (Boolean(input.happySessionId) !== Boolean(input.dataEncryptionKey)) {
-        context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['happySessionId'],
-            message: 'happySessionId and dataEncryptionKey must be supplied together',
         });
     }
 });
@@ -75,6 +69,7 @@ export interface CodexGatewayControlHandlers {
     stop(input: z.infer<typeof StopSchema>): Promise<unknown> | unknown;
     terminalAttached(input: z.infer<typeof TerminalAttachedSchema>): Promise<unknown> | unknown;
     presenceReconcile(input: z.infer<typeof PresenceReconcileSchema>): Promise<unknown> | unknown;
+    cancelRoot(input: z.infer<typeof CancelRootSchema>): Promise<unknown> | unknown;
     openRoot(input: CodexGatewayOpenRootInput): Promise<CodexGatewayOpenRootResult>;
 }
 
@@ -122,6 +117,9 @@ export async function startCodexGatewayControlServer(options: {
                 case '/root/open':
                     result = await options.handlers.openRoot(OpenRootSchema.parse(body));
                     break;
+                case '/root/cancel':
+                    result = await options.handlers.cancelRoot(CancelRootSchema.parse(body));
+                    break;
                 default:
                     sendJson(response, 404, { error: 'notFound' });
                     return;
@@ -152,7 +150,7 @@ export async function startCodexGatewayControlServer(options: {
 export async function callCodexGatewayControl<T>(options: {
     descriptor: CodexGatewayDescriptor;
     token: string;
-    path: '/status' | '/normal-exit' | '/stop' | '/terminal-attached' | '/presence/reconcile' | '/root/open';
+    path: '/status' | '/normal-exit' | '/stop' | '/terminal-attached' | '/presence/reconcile' | '/root/open' | '/root/cancel';
     body?: unknown;
     timeoutMs?: number;
 }): Promise<T> {

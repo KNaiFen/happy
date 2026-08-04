@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     inspectCodexGatewayProviderProcess,
+    inspectCodexGatewayWorkerProcess,
     isExpectedCodexGatewayProviderProcess,
     isExpectedCodexGatewayWorkerProcess,
     isExpectedLegacyHappyCodexAdapterProcess,
@@ -35,6 +36,13 @@ describe('Codex Gateway worker process identity', () => {
             isAlive: () => true,
             readCommandLine: () => null,
         })).toBe(true);
+        expect(inspectCodexGatewayWorkerProcess({
+            pid: 42,
+            gatewayId: 'gateway-a',
+            entrypoint: '/opt/happy/dist/index.mjs',
+            isAlive: () => true,
+            readCommandLine: () => null,
+        })).toBe('unverified');
     });
 
     it('rejects a reused PID owned by an unrelated process', () => {

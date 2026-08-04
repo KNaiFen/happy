@@ -103,6 +103,42 @@ describe('Codex Gateway state', () => {
         expect(CodexGatewayDescriptorSchema.parse(legacy).lifecycle).not.toHaveProperty('prompt');
     });
 
+    it('stores resume material only in the private Gateway secret', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-state-'));
+        roots.push(root);
+        const dataEncryptionKey = Buffer.alloc(32, 7).toString('base64');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir: join(root, 'happy'),
+            runtimeRoot: join(root, 'runtime'),
+            bootstrapOperationId: '6e997fc4-bf4c-4ca0-a36d-c59e2f79ba37',
+            resumeBootstrap: {
+                happySessionId: 'session-private',
+                dataEncryptionKey,
+                threadId: 'thread-private',
+                cwd: '/workspace/project',
+                model: 'gpt-5.6-sol',
+                permissionMode: 'read-only',
+                effortLevel: 'max',
+            },
+        });
+
+        const secretText = await readFile(created.paths.secretPath, 'utf8');
+        const descriptorText = await readFile(created.paths.descriptorPath, 'utf8');
+        expect(secretText).toContain('session-private');
+        expect(secretText).toContain('thread-private');
+        expect(secretText).toContain(dataEncryptionKey);
+        expect(descriptorText).not.toContain('session-private');
+        expect(descriptorText).not.toContain('thread-private');
+        expect(descriptorText).not.toContain(dataEncryptionKey);
+        expect((await readCodexGatewaySecret(created.paths.secretPath))?.resumeBootstrap)
+            .toEqual(created.secret.resumeBootstrap);
+        if (process.platform !== 'win32') {
+            await assertPrivateFile(created.paths.secretPath);
+        }
+    });
+
     it('uses short runtime paths independent of a long Happy home path', () => {
         const paths = codexGatewayPaths('a55de6bf-ec6b-4f37-940d-792b86365abc', {
             happyHomeDir: `/very/${'long/'.repeat(30)}profile`,

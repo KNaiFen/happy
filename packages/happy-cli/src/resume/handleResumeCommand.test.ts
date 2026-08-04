@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SESSION_SCOPED_ENV_KEYS } from '@/daemon/sessionEnvironment';
 
 const mocks = vi.hoisted(() => ({
     mockExistsSync: vi.fn(),
-    mockSpawnHappyCLI: vi.fn(),
+    mockResumeCodexGatewayTui: vi.fn(),
     mockResolveLocalReconnectableSession: vi.fn(),
 }));
 
@@ -12,7 +11,13 @@ vi.mock('node:fs', async (importOriginal) => {
     return { ...actual, existsSync: mocks.mockExistsSync };
 });
 
-vi.mock('@/utils/spawnHappyCLI', () => ({ spawnHappyCLI: mocks.mockSpawnHappyCLI }));
+vi.mock('@/codex/gateway/codexGatewayResume', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/codex/gateway/codexGatewayResume')>();
+    return {
+        ...actual,
+        resumeCodexGatewayTui: mocks.mockResumeCodexGatewayTui,
+    };
+});
 
 vi.mock('./localResumeStore', () => {
     class MockLocalResumeSessionError extends Error {
@@ -27,19 +32,9 @@ vi.mock('./localResumeStore', () => {
     };
 });
 
-import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
-import { buildResumeLaunch, formatResumeHelp, handleResumeCommand, parseResumeCommandArgs } from './handleResumeCommand';
+import { resumeCodexGatewayTui } from '@/codex/gateway/codexGatewayResume';
+import { buildResumeBootstrap, formatResumeHelp, handleResumeCommand, parseResumeCommandArgs } from './handleResumeCommand';
 import { LocalResumeSessionError } from './localResumeStore';
-
-function createChildProcess(exitCode: number | null = 0) {
-    const handlers = new Map<string, (...args: any[]) => void>();
-    return {
-        once: vi.fn((event: string, handler: (...args: any[]) => void) => {
-            handlers.set(event, handler);
-            if (event === 'exit') queueMicrotask(() => handler(exitCode, null));
-        }),
-    };
-}
 
 function createReconnectableSession() {
     return {
@@ -59,7 +54,7 @@ function createReconnectableSession() {
         seq: 42,
         metadataVersion: 7,
         agentStateVersion: 9,
-        encryptionKey: new Uint8Array([1, 2, 3, 4]),
+        encryptionKey: new Uint8Array(32).fill(7),
         encryptionVariant: 'dataKey' as const,
     };
 }
@@ -67,7 +62,7 @@ function createReconnectableSession() {
 beforeEach(() => {
     vi.clearAllMocks();
     mocks.mockExistsSync.mockReturnValue(true);
-    mocks.mockSpawnHappyCLI.mockReturnValue(createChildProcess());
+    mocks.mockResumeCodexGatewayTui.mockResolvedValue(0);
     mocks.mockResolveLocalReconnectableSession.mockRejectedValue(
         new LocalResumeSessionError('no local session', 'not_found'),
     );
@@ -92,15 +87,16 @@ describe('parseResumeCommandArgs', () => {
     });
 });
 
-describe('buildResumeLaunch', () => {
-    it('builds a Codex Sync V4 resume command', () => {
-        expect(buildResumeLaunch({
-            id: 'session-1',
-            active: false,
-            metadata: createReconnectableSession().metadata,
-        })).toEqual({
+describe('buildResumeBootstrap', () => {
+    it('builds a private Codex Sync V4 resume bootstrap', () => {
+        expect(buildResumeBootstrap(createReconnectableSession())).toEqual({
+            happySessionId: 'session-1',
+            dataEncryptionKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+            threadId: '019ccca5-726b-7c61-b914-16de27dfab6e',
             cwd: '/tmp/repo',
-            args: ['codex', '--resume', '019ccca5-726b-7c61-b914-16de27dfab6e'],
+            model: null,
+            permissionMode: 'default',
+            effortLevel: null,
         });
     });
 
@@ -111,19 +107,25 @@ describe('buildResumeLaunch', () => {
             modelMode: 'gpt-5.5',
             effortLevel: 'max',
         };
-        expect(buildResumeLaunch({ id: 'session-modes', active: false, metadata })).toEqual({
-            cwd: '/tmp/repo',
-            args: [
-                'codex', '--resume', '019ccca5-726b-7c61-b914-16de27dfab6e',
-                '--permission-mode', 'read-only', '--model', 'gpt-5.5', '--effort', 'max',
-            ],
+        expect(buildResumeBootstrap({
+            ...createReconnectableSession(),
+            id: 'session-modes',
+            metadata,
+        })).toMatchObject({
+            permissionMode: 'read-only',
+            model: 'gpt-5.5',
+            effortLevel: 'max',
         });
     });
 
     it('rejects a session without the explicit V4 marker', () => {
         const metadata = { ...createReconnectableSession().metadata };
         delete (metadata as { codexSyncVersion?: 4 }).codexSyncVersion;
-        expect(() => buildResumeLaunch({ id: 'session-2', active: false, metadata })).toThrow(
+        expect(() => buildResumeBootstrap({
+            ...createReconnectableSession(),
+            id: 'session-2',
+            metadata,
+        })).toThrow(
             'Happy session session-2 uses unsupported flavor "codex".',
         );
     });
@@ -139,22 +141,14 @@ describe('handleResumeCommand', () => {
     it('resumes from local persisted V4 encryption data', async () => {
         const session = createReconnectableSession();
         mocks.mockResolveLocalReconnectableSession.mockResolvedValue(session);
-        for (const key of SESSION_SCOPED_ENV_KEYS) vi.stubEnv(key, `stale-${key}`);
 
         await handleResumeCommand(['session-1']);
 
-        expect(spawnHappyCLI).toHaveBeenCalledWith(['codex', '--resume', session.metadata.codexThreadId], {
+        expect(resumeCodexGatewayTui).toHaveBeenCalledWith(expect.objectContaining({
+            happySessionId: 'session-1',
+            threadId: session.metadata.codexThreadId,
             cwd: '/tmp/repo',
-            stdio: 'inherit',
-            env: expect.objectContaining({
-                HAPPY_RECONNECT_SESSION_ID: 'session-1',
-                HAPPY_RECONNECT_ENCRYPTION_KEY: 'AQIDBA==',
-                HAPPY_RECONNECT_ENCRYPTION_VARIANT: 'dataKey',
-                HAPPY_RECONNECT_SEQ: '42',
-                HAPPY_RECONNECT_METADATA_VERSION: '7',
-                HAPPY_RECONNECT_AGENT_STATE_VERSION: '9',
-            }),
-        });
+        }));
     });
 
     it('does not fall back to legacy account credentials', async () => {
@@ -163,6 +157,15 @@ describe('handleResumeCommand', () => {
         );
 
         await expect(handleResumeCommand(['missing'])).rejects.toThrow('no local session material');
-        expect(spawnHappyCLI).not.toHaveBeenCalled();
+        expect(resumeCodexGatewayTui).not.toHaveBeenCalled();
+    });
+
+    it('rejects legacy account encryption before touching the Gateway', async () => {
+        mocks.mockResolveLocalReconnectableSession.mockResolvedValue({
+            ...createReconnectableSession(),
+            encryptionVariant: 'legacy',
+        });
+        await expect(handleResumeCommand(['session-1'])).rejects.toThrow('independent Sync v4 data key');
+        expect(resumeCodexGatewayTui).not.toHaveBeenCalled();
     });
 });

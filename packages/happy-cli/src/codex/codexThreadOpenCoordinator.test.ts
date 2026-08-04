@@ -123,23 +123,19 @@ describe('resolveCodexBoundThreadLaunchDecision', () => {
     it('never starts a second writer while Happy or an external provider turn is active', () => {
         expect(resolveCodexBoundThreadLaunchDecision({
             providerStatus: 'idle',
-            happySessionActive: true,
-            happyProcessAlive: true,
+            gatewayState: 'live',
         })).toBe('existing-active');
         expect(resolveCodexBoundThreadLaunchDecision({
             providerStatus: 'idle',
-            happySessionActive: false,
-            happyProcessAlive: true,
+            gatewayState: 'recovering',
         })).toBe('process-transition');
         expect(resolveCodexBoundThreadLaunchDecision({
             providerStatus: 'active',
-            happySessionActive: true,
-            happyProcessAlive: false,
+            gatewayState: 'missing',
         })).toBe('external-active');
         expect(resolveCodexBoundThreadLaunchDecision({
             providerStatus: 'idle',
-            happySessionActive: false,
-            happyProcessAlive: false,
+            gatewayState: 'missing',
         })).toBe('resume');
     });
 });

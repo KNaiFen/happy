@@ -128,8 +128,8 @@ export interface SpawnSessionOptions {
     environmentVariables?: Record<string, string>;
     token?: string;
     /**
-     * If set, the daemon spawns Codex with `--resume <id>` so a fresh Happy
-     * session attaches to a forked Codex app-server thread.
+     * If set, the daemon asks the Gateway app-server to resume this provider
+     * thread while creating a fresh Happy session for the fork.
      */
     resumeCodexThreadId?: string;
     /** Happy session id this fork was branched from (lineage). */
