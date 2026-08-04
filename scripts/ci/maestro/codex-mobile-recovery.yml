@@ -36,6 +36,7 @@ tags:
     element:
       id: codex-mcp-tool-message
     direction: UP
+    centerElement: true
     timeout: 60000
 - tapOn:
     id: codex-mcp-tool-message
