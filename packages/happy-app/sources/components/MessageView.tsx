@@ -356,8 +356,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   timelineEventLine: {
     flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: theme.colors.divider,
+    height: 1,
+    backgroundColor: theme.colors.agentEventText,
+    opacity: 0.65,
   },
   timelineEventText: {
     color: theme.colors.agentEventText,

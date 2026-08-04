@@ -43,17 +43,22 @@ describe('buildVisibleSessionListViewData', () => {
     it('keeps recoverable history visible while hiding archived sessions', () => {
         expect(buildVisibleSessionListViewData(data, true)).toEqual([
             data[0],
-            { type: 'archive-toggle', hidden: true },
             data[1],
             data[2],
+            { type: 'archive-toggle', hidden: true },
         ]);
     });
 
     it('shows archived sessions with their non-empty date groups', () => {
         expect(buildVisibleSessionListViewData(data, false)).toEqual([
             data[0],
+            data[1],
+            data[2],
             { type: 'archive-toggle', hidden: false },
-            ...data.slice(1),
+            data[1],
+            data[3],
+            data[4],
+            data[5],
         ]);
     });
 
