@@ -145,6 +145,7 @@ describe('ApiMachineClient Codex fork RPCs', () => {
             model: 'gpt-5.6-sol',
             permissionMode: undefined,
             effort: undefined,
+            dataEncryptionKey: undefined,
         });
 
         await expect(handler?.({
@@ -152,6 +153,49 @@ describe('ApiMachineClient Codex fork RPCs', () => {
             sessionId: 'happy-existing',
         })).rejects.toThrow('operationId must be a UUID');
         expect(resumeSession).toHaveBeenCalledOnce();
+    });
+
+    it('returns a resume-material challenge and validates the encrypted retry material', async () => {
+        const resumeSession = vi.fn()
+            .mockResolvedValueOnce({
+                type: 'resumeMaterialRequired',
+                sessionId: 'happy-existing',
+            })
+            .mockResolvedValueOnce({
+                type: 'success',
+                sessionId: 'happy-existing',
+            });
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            resumeSession,
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession: vi.fn(),
+            requestShutdown: vi.fn(),
+        });
+        const handler = handlersFrom(client).get('machine-1:resume-happy-session');
+
+        await expect(handler?.({
+            sessionId: 'happy-existing',
+        })).resolves.toEqual({
+            type: 'resumeMaterialRequired',
+            sessionId: 'happy-existing',
+        });
+        await expect(handler?.({
+            sessionId: 'happy-existing',
+            dataEncryptionKey: 'resume-key',
+        })).resolves.toEqual({ type: 'success', sessionId: 'happy-existing' });
+        expect(resumeSession).toHaveBeenLastCalledWith('happy-existing', expect.objectContaining({
+            dataEncryptionKey: 'resume-key',
+        }));
+
+        await expect(handler?.({
+            sessionId: 'happy-existing',
+            dataEncryptionKey: 'x'.repeat(129),
+        })).rejects.toThrow('dataEncryptionKey');
+        expect(resumeSession).toHaveBeenCalledTimes(2);
     });
 
     it('forwards encrypted Codex history list and open requests to daemon handlers', async () => {

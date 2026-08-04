@@ -133,6 +133,7 @@ export function useSessionQuickActions(
         id: string;
         fingerprint: string;
     } | null>(null);
+    const [resumeError, setResumeError] = React.useState<string | null>(null);
     const devModeEnabled = useLocalSetting('devModeEnabled');
     const expThreadActions = useSetting('expResumeSession');
     const resumeAvailability = React.useMemo(
@@ -184,6 +185,7 @@ export function useSessionQuickActions(
     }, [onAfterCopySessionMetadata, session]);
 
     const [resumingSession, performResume] = useHappyAction(async () => {
+        setResumeError(null);
         if (!resumeAvailability.canResume) {
             throw new HappyError(resumeAvailability.message, false);
         }
@@ -218,6 +220,7 @@ export function useSessionQuickActions(
         switch (result.type) {
             case 'success': {
                 pendingResumeOperationRef.current = null;
+                setResumeError(null);
                 // Session reconnects to the same ID, so messages are preserved.
                 // Refresh to pick up the updated session state.
                 await sync.refreshSessions();
@@ -234,6 +237,7 @@ export function useSessionQuickActions(
             case 'requestToApproveDirectoryCreation':
                 throw new HappyError(t('sessionInfo.resumeSessionUnexpectedDirectoryPrompt'), false);
             case 'error':
+                setResumeError(result.errorMessage);
                 throw new HappyError(result.errorMessage, false);
         }
     });
@@ -393,6 +397,7 @@ export function useSessionQuickActions(
         openDetails,
         openDuplicateSheet,
         resumeSession,
+        resumeError,
         resumeSessionSubtitle: resumeAvailability.subtitle,
         resumingSession,
         stopGateway,

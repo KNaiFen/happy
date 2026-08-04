@@ -795,7 +795,7 @@ export function SessionViewLoaded({
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const sessionStatusBarDisplay = useSetting('sessionStatusBarDisplay');
     const experiments = useSetting('experiments');
-    const { canResume, resumeSession, resumingSession } = useSessionQuickActions(session);
+    const { canResume, resumeError, resumeSession, resumingSession } = useSessionQuickActions(session);
     const isDisconnected = !sessionStatus.isConnected;
     const resumeCommandBlock = getResumeCommandBlock(session);
     const gatewayUiState = React.useMemo(() => resolveCodexGatewayUiState({
@@ -1215,6 +1215,7 @@ export function SessionViewLoaded({
                 resumeCommandBlock={resumeCommandBlock}
                 canResume={canResume}
                 resuming={resumingSession}
+                resumeError={resumeError}
                 onResume={resumeSession}
             />
         </CenteredInputWidth>
@@ -1403,6 +1404,7 @@ function InactiveSessionHint(props: {
     resumeCommandBlock: NonNullable<ReturnType<typeof getResumeCommandBlock>> | null;
     canResume: boolean;
     resuming: boolean;
+    resumeError: string | null;
     onResume: () => void;
 }) {
     const { theme } = useUnistyles();
@@ -1460,6 +1462,19 @@ function InactiveSessionHint(props: {
             ) : props.resumeCommandBlock && (
                 <ResumeCommandCopyBlock resumeCommandBlock={props.resumeCommandBlock} />
             )}
+            {props.resumeError ? (
+                <Text
+                    accessibilityRole="alert"
+                    style={{
+                        color: theme.colors.status.error,
+                        fontSize: 13,
+                        lineHeight: 18,
+                        marginHorizontal: 8,
+                    }}
+                >
+                    {props.resumeError}
+                </Text>
+            ) : null}
         </View>
     );
 }

@@ -150,6 +150,10 @@ export type SpawnSessionResult =
     | { type: 'requestToApproveDirectoryCreation'; directory: string }
     | { type: 'error'; errorMessage: string };
 
+export type ResumeSessionResult =
+    | SpawnSessionResult
+    | { type: 'resumeMaterialRequired'; sessionId: string };
+
 /**
  * Register all RPC handlers with the session
  *

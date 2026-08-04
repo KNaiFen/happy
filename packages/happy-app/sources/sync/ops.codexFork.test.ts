@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { machineRPC, refreshSessions, getState, generateOperationId } = vi.hoisted(() => ({
+const {
+    machineRPC,
+    refreshSessions,
+    getState,
+    generateOperationId,
+    getIndependentSessionDataKey,
+} = vi.hoisted(() => ({
     machineRPC: vi.fn(),
     refreshSessions: vi.fn(),
     getState: vi.fn(() => ({ sessions: {} })),
     generateOperationId: vi.fn(() => '9e32e76b-b5b1-47f0-b261-3744f13a41ca'),
+    getIndependentSessionDataKey: vi.fn(() => new Uint8Array(32).fill(7)),
 }));
 
 vi.mock('./apiSocket', () => ({
@@ -12,7 +19,11 @@ vi.mock('./apiSocket', () => ({
 }));
 
 vi.mock('./sync', () => ({
-    sync: { refreshSessions, generateOperationId },
+    sync: {
+        refreshSessions,
+        generateOperationId,
+        encryption: { getIndependentSessionDataKey },
+    },
 }));
 
 // ops.ts imports storage (for sessionSetAgentModes), which transitively pulls
@@ -25,6 +36,8 @@ describe('codex fork ops', () => {
     beforeEach(() => {
         machineRPC.mockReset();
         refreshSessions.mockReset();
+        getIndependentSessionDataKey.mockReset();
+        getIndependentSessionDataKey.mockReturnValue(new Uint8Array(32).fill(7));
         getState.mockReturnValue({ sessions: {} });
     });
 
@@ -84,7 +97,59 @@ describe('codex fork ops', () => {
                 model: 'gpt-5.6-sol',
                 permissionMode: undefined,
             },
+            { timeoutMs: 120_000 },
         );
+    });
+
+    it('sends the independent session key only after the daemon requests it', async () => {
+        machineRPC
+            .mockResolvedValueOnce({ type: 'resumeMaterialRequired', sessionId: 'happy-existing' })
+            .mockResolvedValueOnce({ type: 'success', sessionId: 'happy-existing' });
+        getState.mockReturnValue({
+            sessions: {
+                'happy-existing': {
+                    metadata: { flavor: 'codex', codexSyncVersion: 4 },
+                },
+            },
+        });
+
+        const { machineResumeSession } = await import('./ops');
+        await expect(machineResumeSession({
+            machineId: 'machine-1',
+            sessionId: 'happy-existing',
+        })).resolves.toEqual({ type: 'success', sessionId: 'happy-existing' });
+
+        expect(machineRPC).toHaveBeenCalledTimes(2);
+        expect(machineRPC.mock.calls[0][2]).not.toHaveProperty('dataEncryptionKey');
+        expect(machineRPC.mock.calls[1][2]).toEqual(expect.objectContaining({
+            sessionId: 'happy-existing',
+            dataEncryptionKey: expect.any(String),
+        }));
+        expect(machineRPC.mock.calls[1][2].operationId).toBe(machineRPC.mock.calls[0][2].operationId);
+        expect(getIndependentSessionDataKey).toHaveBeenCalledWith('happy-existing');
+    });
+
+    it('rejects an unexpected resume-material challenge without disclosing a key', async () => {
+        machineRPC.mockResolvedValue({
+            type: 'resumeMaterialRequired',
+            sessionId: 'happy-other',
+        });
+        getState.mockReturnValue({
+            sessions: {
+                'happy-existing': {
+                    metadata: { flavor: 'codex', codexSyncVersion: 4 },
+                },
+            },
+        });
+
+        const { machineResumeSession } = await import('./ops');
+        await expect(machineResumeSession({
+            machineId: 'machine-1',
+            sessionId: 'happy-existing',
+        })).resolves.toMatchObject({ type: 'error' });
+
+        expect(machineRPC).toHaveBeenCalledOnce();
+        expect(getIndependentSessionDataKey).not.toHaveBeenCalled();
     });
 
     it('forks a full Codex thread and spawns a Codex session resumed to the new thread', async () => {

@@ -20,6 +20,7 @@ import {
 } from './codexV4Capabilities';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
 import { assertSupportedExistingSession } from './sessionFlavor';
+import { encodeBase64 } from '@/encryption/base64';
 
 export type { SessionAgentModesPatch };
 
@@ -156,6 +157,20 @@ export type SpawnSessionResult =
     | { type: 'success'; sessionId: string }
     | { type: 'requestToApproveDirectoryCreation'; directory: string }
     | { type: 'error'; errorMessage: string };
+
+type ResumeSessionRpcResult =
+    | SpawnSessionResult
+    | { type: 'resumeMaterialRequired'; sessionId: string };
+
+type ResumeSessionRpcRequest = {
+    operationId: string;
+    sessionId: string;
+    model?: string;
+    permissionMode?: string;
+    dataEncryptionKey?: string;
+};
+
+const RESUME_SESSION_RPC_TIMEOUT_MS = 120_000;
 
 // Options for spawning a session
 export interface SpawnSessionOptions {
@@ -320,16 +335,55 @@ export async function machineResumeSession(options: ResumeSessionOptions & { mod
     try {
         assertSessionInteractionAllowed(sessionId);
         const operationId = options.operationId ?? sync.generateOperationId();
-        const result = await apiSocket.machineRPC<SpawnSessionResult, {
-            operationId: string;
-            sessionId: string;
-            model?: string;
-            permissionMode?: string;
-        }>(
+        const request: ResumeSessionRpcRequest = {
+            operationId,
+            sessionId,
+            model,
+            permissionMode,
+        };
+        let result = await apiSocket.machineRPC<ResumeSessionRpcResult, ResumeSessionRpcRequest>(
             machineId,
             'resume-happy-session',
-            { operationId, sessionId, model, permissionMode },
+            request,
+            { timeoutMs: RESUME_SESSION_RPC_TIMEOUT_MS },
         );
+
+        if (result.type === 'resumeMaterialRequired') {
+            if (result.sessionId !== sessionId) {
+                return {
+                    type: 'error',
+                    errorMessage: 'The daemon requested resume material for an unexpected Happy session.',
+                };
+            }
+            const key = sync.encryption.getIndependentSessionDataKey(sessionId);
+            if (!key) {
+                return {
+                    type: 'error',
+                    errorMessage: 'This session has no independent resume key.',
+                };
+            }
+            result = await apiSocket.machineRPC<ResumeSessionRpcResult, ResumeSessionRpcRequest>(
+                machineId,
+                'resume-happy-session',
+                {
+                    ...request,
+                    dataEncryptionKey: encodeBase64(key, 'base64'),
+                },
+                { timeoutMs: RESUME_SESSION_RPC_TIMEOUT_MS },
+            );
+            if (result.type === 'resumeMaterialRequired') {
+                return {
+                    type: 'error',
+                    errorMessage: 'The daemon did not accept the session resume material.',
+                };
+            }
+        }
+        if (result.type === 'success' && result.sessionId !== sessionId) {
+            return {
+                type: 'error',
+                errorMessage: 'The daemon resumed a different Happy session.',
+            };
+        }
         return result;
     } catch (error) {
         return {

@@ -7,7 +7,12 @@ import { io, Socket } from 'socket.io-client';
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
 import { MachineMetadata, DaemonState, Machine, Update, UpdateMachineBody } from './types';
-import { registerCommonHandlers, SpawnSessionOptions, SpawnSessionResult } from '../modules/common/registerCommonHandlers';
+import {
+    registerCommonHandlers,
+    type ResumeSessionResult,
+    SpawnSessionOptions,
+    SpawnSessionResult,
+} from '../modules/common/registerCommonHandlers';
 import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
@@ -97,7 +102,8 @@ type MachineRpcHandlers = {
         model?: string;
         permissionMode?: string;
         effort?: string;
-    }) => Promise<SpawnSessionResult>;
+        dataEncryptionKey?: string;
+    }) => Promise<ResumeSessionResult>;
     listCodexThreads: (request: CodexListThreadsRequest) => Promise<CodexListThreadsResult>;
     openCodexThread: (request: CodexOpenThreadRequest) => Promise<CodexOpenThreadResult>;
     stopSession: (sessionId: string, expectation?: {
@@ -160,7 +166,8 @@ export class ApiMachineClient {
         model?: string;
         permissionMode?: string;
         effort?: string;
-    }) => Promise<SpawnSessionResult>) | null = null;
+        dataEncryptionKey?: string;
+    }) => Promise<ResumeSessionResult>) | null = null;
     private reconnectInterval: NodeJS.Timeout | null = null;
 
     constructor(
@@ -412,12 +419,12 @@ export class ApiMachineClient {
         if (this.resumeSessionHandler) {
             if (!this.rpcHandlerManager.hasHandler(method)) {
                 this.rpcHandlerManager.registerHandler(method, async (params: any) => {
-                    const { sessionId, model, permissionMode, effort } = params || {};
+                    const { model, permissionMode, effort } = params || {};
+                    const sessionId = requireBoundedNonEmptyString(params?.sessionId, 'sessionId', 256);
                     const operationId = optionalUuidString(params?.operationId, 'operationId');
-
-                    if (!sessionId || typeof sessionId !== 'string') {
-                        throw new Error('Session ID is required');
-                    }
+                    const dataEncryptionKey = params?.dataEncryptionKey === undefined
+                        ? undefined
+                        : requireBoundedNonEmptyString(params.dataEncryptionKey, 'dataEncryptionKey', 128);
 
                     const handler = this.resumeSessionHandler;
                     if (!handler) {
@@ -429,10 +436,13 @@ export class ApiMachineClient {
                         model,
                         permissionMode,
                         effort,
+                        dataEncryptionKey,
                     });
                     switch (result.type) {
                         case 'success':
                             return { type: 'success', sessionId: result.sessionId };
+                        case 'resumeMaterialRequired':
+                            return result;
                         case 'requestToApproveDirectoryCreation':
                             return result;
                         case 'error':

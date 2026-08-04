@@ -5,7 +5,11 @@ import { classifySyncV4DiagnosticError } from '@slopus/happy-wire';
 import { ApiClient } from '@/api/api';
 import { TrackedSession, SessionEncryptionData } from './types';
 import { DaemonState, Metadata, type MachineSessionSnapshot } from '@/api/types';
-import { SpawnSessionOptions, SpawnSessionResult } from '@/modules/common/registerCommonHandlers';
+import {
+  SpawnSessionOptions,
+  SpawnSessionResult,
+  type ResumeSessionResult,
+} from '@/modules/common/registerCommonHandlers';
 import { logger } from '@/ui/logger';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
 import { configuration } from '@/configuration';
@@ -65,17 +69,10 @@ import {
   matchesCodexGatewayStopExpectation,
   type CodexGatewayStopExpectation,
 } from './codexGatewayStopGuard';
-
-function decodeIndependentSessionKey(encoded: string): Uint8Array {
-  if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length > 128) {
-    throw new Error('Invalid per-session encryption key');
-  }
-  const key = decodeBase64(encoded);
-  if (key.length !== 32) {
-    throw new Error('Invalid per-session encryption key');
-  }
-  return key;
-}
+import {
+  decodeIndependentSessionKey,
+  resolveResumeSessionMaterial,
+} from './resumeSessionMaterial';
 
 function resolveGatewayPermissionMode(
   value: string | undefined,
@@ -556,31 +553,47 @@ export async function startDaemon(): Promise<void> {
       model?: string;
       permissionMode?: string;
       effort?: string;
+      dataEncryptionKey?: string;
       skipSnapshotRefresh?: boolean;
-    }): Promise<SpawnSessionResult> => {
+    }): Promise<ResumeSessionResult> => {
       try {
         let tracked = findTrackedSessionById(happySessionId);
-        if (!tracked) {
-          return { type: 'error', errorMessage: `Session ${happySessionId} is not tracked by this daemon. It may have been started before the daemon or on another machine.` };
-        }
-        if (!tracked.happySessionMetadataFromLocalWebhook) {
-          return { type: 'error', errorMessage: `Session ${happySessionId} has no metadata. Cannot resume.` };
-        }
-        if (!tracked.encryption) {
-          return { type: 'error', errorMessage: `Session ${happySessionId} has no stored encryption data. It was likely started before this feature was available. Restart the daemon and start a new session to enable resume.` };
-        }
-
-        if (!options?.skipSnapshotRefresh) {
-          const snapshot = await api.getMachineSessionSnapshot({
+        let snapshotRefreshed = false;
+        if (options?.dataEncryptionKey || !tracked?.encryption) {
+          const material = await resolveResumeSessionMaterial({
             sessionId: happySessionId,
             machineId,
-            encryptionKey: tracked.encryption.encryptionKey,
-            encryptionVariant: tracked.encryption.encryptionVariant,
+            dataEncryptionKey: options?.dataEncryptionKey,
+            loadSnapshot: (input) => api.getMachineSessionSnapshot(input),
           });
+          if (material.type !== 'snapshot') return material;
+          tracked = installSessionSnapshot(material.snapshot);
+          snapshotRefreshed = true;
+        }
+
+        const storedEncryption = tracked.encryption;
+        if (!storedEncryption) {
+          return { type: 'error', errorMessage: `Session ${happySessionId} has no stored encryption data. Cannot resume.` };
+        }
+        if (!options?.skipSnapshotRefresh && !snapshotRefreshed) {
+          let snapshot: MachineSessionSnapshot | null;
+          try {
+            snapshot = await api.getMachineSessionSnapshot({
+              sessionId: happySessionId,
+              machineId,
+              encryptionKey: storedEncryption.encryptionKey,
+              encryptionVariant: storedEncryption.encryptionVariant,
+            });
+          } catch {
+            return { type: 'resumeMaterialRequired', sessionId: happySessionId };
+          }
           if (!snapshot) {
             return { type: 'error', errorMessage: `Session ${happySessionId} is no longer available on this machine.` };
           }
           tracked = installSessionSnapshot(snapshot);
+        }
+        if (!tracked.happySessionMetadataFromLocalWebhook) {
+          return { type: 'error', errorMessage: `Session ${happySessionId} has no metadata. Cannot resume.` };
         }
         const metadata = tracked.happySessionMetadataFromLocalWebhook!;
         const encryption = tracked.encryption!;
