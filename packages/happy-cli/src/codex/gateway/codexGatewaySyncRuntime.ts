@@ -24,8 +24,7 @@ export type CodexGatewayRuntimeBindingUpdatePhase =
     | 'metadata'
     | 'runtimeProjection'
     | 'mapperFlush'
-    | 'transportFlush'
-    | 'archive';
+    | 'transportFlush';
 
 export class CodexGatewayRuntimeBindingUpdateError extends Error {
     readonly name = 'CodexGatewayRuntimeBindingUpdateError';
@@ -49,7 +48,6 @@ export interface CodexGatewaySyncRuntimeOptions {
     session: ApiSessionClientContract;
     rootBinding: CodexV4SessionBinding;
     router: CodexV4ThreadRouter;
-    archiveSession(sessionId: string): Promise<boolean>;
     now?: () => number;
 }
 
@@ -108,6 +106,7 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
     async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
         this.assertOpen();
         const next = { ...binding };
+        if (sameBindingTopology(this.binding, next)) return;
         await runtimeBindingUpdateStep(
             'metadata',
             () => this.options.session.updateMetadataAndWait((metadata) => (
@@ -129,13 +128,6 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
             'transportFlush',
             () => this.options.rootBinding.syncClient.flushOutboundOnce(),
         );
-        if (next.role === 'inactive') {
-            const archived = await runtimeBindingUpdateStep(
-                'archive',
-                () => this.options.archiveSession(this.sessionId),
-            );
-            if (!archived) throw new Error('Codex Gateway session archive is pending relay recovery');
-        }
         this.binding = next;
     }
 
@@ -272,6 +264,16 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
     private assertOpen(): void {
         if (this.closed) throw new Error('Codex Gateway Sync runtime is closed');
     }
+}
+
+function sameBindingTopology(
+    left: CodexGatewayRuntimeBinding,
+    right: CodexGatewayRuntimeBinding,
+): boolean {
+    return left.role === right.role
+        && left.generation === right.generation
+        && left.previousSessionId === right.previousSessionId
+        && left.nextSessionId === right.nextSessionId;
 }
 
 async function runtimeBindingUpdateStep<T>(

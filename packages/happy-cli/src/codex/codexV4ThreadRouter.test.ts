@@ -534,6 +534,48 @@ describe('CodexV4ThreadRouter', () => {
         expect(child.close).toHaveBeenCalledOnce();
     });
 
+    it('relinquishes only the superseded child binding and ignores later provider traffic for it', async () => {
+        const root = binding('happy-root');
+        const child = binding('happy-child');
+        const snapshot = thread('thread-child', 'thread-root', { type: 'active', activeFlags: [] });
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => snapshot,
+            createChildBinding: async () => child.value,
+        });
+        await router.registerRootThread('thread-root');
+        const started = {
+            method: 'turn/started',
+            params: {
+                threadId: 'thread-child',
+                turn: {
+                    id: 'turn-child',
+                    items: [],
+                    itemsView: 'full',
+                    status: 'inProgress',
+                    error: null,
+                    startedAt: 3,
+                    completedAt: null,
+                    durationMs: null,
+                },
+            },
+        } as ServerNotification;
+        await router.handleNotificationAsync(started);
+
+        await router.relinquishChildSession('happy-child', 'thread-child');
+        await router.handleNotificationAsync(started);
+
+        expect(child.close).toHaveBeenCalledOnce();
+        expect(router.hasActiveChildWork()).toBe(false);
+        expect(child.mapper.notifications).toEqual([started]);
+        expect(root.value.close).not.toHaveBeenCalled();
+        await expect(router.handleRequest({
+            id: 1,
+            method: 'item/commandExecution/requestApproval',
+            params: { threadId: 'thread-child' },
+        } as never)).rejects.toThrow('owned by another Gateway');
+    });
+
     it('does not let an older completed turn finish a child relation with a newer active turn', async () => {
         const root = binding('happy-root');
         const child = binding('happy-child');

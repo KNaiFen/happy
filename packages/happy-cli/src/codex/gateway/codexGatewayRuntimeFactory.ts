@@ -3,7 +3,11 @@ import type {
     SyncV4DiagnosticSink,
     SyncV4DiagnosticTransportSecurity,
 } from '@slopus/happy-wire';
-import type { ApiClient } from '@/api/api';
+import {
+    SessionPresenceConflictError,
+    type ApiClient,
+    type SessionPresenceConflictReason,
+} from '@/api/api';
 import type { ApiSessionClientContract } from '@/api/apiSession';
 import type {
     CodexModelCapability,
@@ -55,6 +59,11 @@ import type {
     CodexGatewayRootRuntimeFactoryOptions,
 } from './codexGatewayCoordinator';
 import { deriveCodexGatewayRootSessionIdentity } from './codexGatewayIdentity';
+import {
+    CodexGatewayArchivedSessionError,
+    type CodexGatewayPresenceLease,
+    type CodexGatewayPresenceRegistryContract,
+} from './codexGatewayPresence';
 
 const ROOT_HANDOFF_COMMANDS = new Set([
     'thread.start',
@@ -70,9 +79,7 @@ const GATEWAY_PERMISSION_MODES = new Set<PermissionMode>([
 
 export interface CodexGatewayRuntimeFactoryApi {
     getOrCreateSession(options: Parameters<ApiClient['getOrCreateSession']>[0]): Promise<ApiSession | null>;
-    unarchiveSession(sessionId: string, timeoutMs?: number): Promise<boolean>;
     sessionSyncClient(session: ApiSession): ApiSessionClientContract;
-    archiveSessionV4(sessionId: string): Promise<boolean>;
     getMachineSessionSnapshot?(options: Parameters<ApiClient['getMachineSessionSnapshot']>[0]): Promise<MachineSessionSnapshot | null>;
 }
 
@@ -114,6 +121,7 @@ export interface CodexGatewayRuntimeFactoryOptions {
     machineId: string;
     cwd: string;
     api: CodexGatewayRuntimeFactoryApi;
+    presence: CodexGatewayPresenceRegistryContract;
     client: CodexAppServerClient;
     codexCliVersion: CodexCliVersion;
     defaultPermissionMode: PermissionMode;
@@ -133,7 +141,11 @@ export interface CodexGatewayRuntimeFactoryOptions {
         threadId: string;
         session: ApiSession;
     }) => Promise<void> | void;
-    onSessionArchived?: (sessionId: string) => void;
+    onRootPresenceTerminated?: (input: {
+        threadId: string;
+        sessionId: string;
+        reason: SessionPresenceConflictReason;
+    }) => Promise<void> | void;
     reportSessionStarted?: typeof notifyDaemonSessionStarted;
     relayRequestTimeoutMs?: number;
     existingSessionLookupTimeoutMs?: number;
@@ -213,6 +225,9 @@ export class CodexGatewayRuntimeFactory {
             )) {
                 throw new Error('Existing Happy session does not match the Codex Gateway thread');
             }
+            if (snapshot?.archivedAt !== null && snapshot?.archivedAt !== undefined) {
+                throw new CodexGatewayArchivedSessionError(snapshot.id);
+            }
             session = snapshot ? {
                 ...snapshot,
                 metadata: {
@@ -235,13 +250,32 @@ export class CodexGatewayRuntimeFactory {
             });
         }
         if (!session) return null;
-        if (!await this.options.api.unarchiveSession(
-            session.id,
-            this.options.relayRequestTimeoutMs,
-        )) return null;
-
         const target = this.options.api.sessionSyncClient(session);
-        target.on('archived', () => this.options.onSessionArchived?.(target.sessionId));
+        let presenceLease: CodexGatewayPresenceLease | null;
+        try {
+            presenceLease = await this.options.presence.claim(session.id);
+        } catch (error) {
+            await target.close().catch(() => undefined);
+            if (
+                error instanceof SessionPresenceConflictError
+                && error.reason === 'sessionArchived'
+            ) {
+                throw new CodexGatewayArchivedSessionError(session.id);
+            }
+            throw error;
+        }
+        if (!presenceLease) {
+            await target.close().catch(() => undefined);
+            return null;
+        }
+        presenceLease.onTerminated((reason) => this.options.onRootPresenceTerminated?.({
+            threadId: factoryOptions.threadId,
+            sessionId: session.id,
+            reason,
+        }));
+        target.on('archived', () => {
+            void this.options.presence.terminateSession(target.sessionId, 'sessionArchived');
+        });
         let rootBinding: CodexV4SessionBinding | null = null;
         let router: CodexV4ThreadRouter | null = null;
         try {
@@ -251,6 +285,7 @@ export class CodexGatewayRuntimeFactory {
                 generation: factoryOptions.generation,
                 readOnly: false,
                 closeSession: true,
+                presenceLease,
                 router: () => router,
                 assertCurrentGeneration: factoryOptions.assertCurrentGeneration,
                 defaultCwd: rootConfig.cwd,
@@ -267,7 +302,7 @@ export class CodexGatewayRuntimeFactory {
                     await this.options.client.getGoal({ threadId })
                 ).goal,
                 createChildBinding: async (route, parentBinding) => (
-                    await this.createChildBinding(route.thread, parentBinding)
+                    await this.createChildBinding(route.thread, parentBinding, () => router)
                 ),
                 onError: (error) => this.reportError(error),
                 diagnostics: this.options.diagnostics,
@@ -294,7 +329,6 @@ export class CodexGatewayRuntimeFactory {
                 session: target,
                 rootBinding,
                 router,
-                archiveSession: (sessionId) => this.options.api.archiveSessionV4(sessionId),
                 now: this.options.now,
             });
             await this.reportSession(session, created.metadata);
@@ -306,7 +340,10 @@ export class CodexGatewayRuntimeFactory {
         } catch (error) {
             await router?.close().catch(() => undefined);
             await rootBinding?.close().catch(() => undefined);
-            if (!rootBinding) await target.close().catch(() => undefined);
+            if (!rootBinding) {
+                await target.close().catch(() => undefined);
+                await presenceLease.release().catch(() => undefined);
+            }
             throw error;
         }
     }
@@ -314,6 +351,7 @@ export class CodexGatewayRuntimeFactory {
     private async createChildBinding(
         thread: import('../protocol').Thread,
         parentBinding: CodexV4SessionBinding,
+        router: () => CodexV4ThreadRouter | null,
     ): Promise<CodexV4SessionBinding> {
         const identity = await deriveCodexV4ChildSessionIdentity({
             parentSessionId: parentBinding.sessionId,
@@ -344,13 +382,28 @@ export class CodexGatewayRuntimeFactory {
             timeoutMs: this.options.relayRequestTimeoutMs,
         });
         if (!response) throw new Error('Happy relay is unavailable while creating a Codex child session');
-        if (!await this.options.api.unarchiveSession(
-            response.id,
-            this.options.relayRequestTimeoutMs,
-        )) {
-            throw new Error('Happy relay is unavailable while restoring a Codex child session');
-        }
         const target = this.options.api.sessionSyncClient(response);
+        let presenceLease: CodexGatewayPresenceLease | null;
+        try {
+            presenceLease = await this.options.presence.claim(response.id);
+        } catch (error) {
+            await target.close().catch(() => undefined);
+            if (
+                error instanceof SessionPresenceConflictError
+                && error.reason === 'sessionArchived'
+            ) {
+                throw new CodexGatewayArchivedSessionError(response.id);
+            }
+            throw error;
+        }
+        if (!presenceLease) {
+            await target.close().catch(() => undefined);
+            throw new Error('Happy relay is unavailable while claiming a Codex child session');
+        }
+        presenceLease.onTerminated(() => router()?.relinquishChildSession(response.id, thread.id));
+        target.on('archived', () => {
+            void this.options.presence.terminateSession(target.sessionId, 'sessionArchived');
+        });
         try {
             return await this.createBinding({
                 target,
@@ -358,12 +411,14 @@ export class CodexGatewayRuntimeFactory {
                 generation: null,
                 readOnly: true,
                 closeSession: true,
+                presenceLease,
                 router: () => null,
                 assertCurrentGeneration: () => undefined,
                 defaultCwd: thread.cwd || this.options.cwd,
             });
         } catch (error) {
             await target.close().catch(() => undefined);
+            await presenceLease.release().catch(() => undefined);
             throw error;
         }
     }
@@ -374,6 +429,7 @@ export class CodexGatewayRuntimeFactory {
         generation: number | null;
         readOnly: boolean;
         closeSession: boolean;
+        presenceLease: CodexGatewayPresenceLease;
         router(): CodexV4ThreadRouter | null;
         assertCurrentGeneration(bindingGeneration: number | undefined): void;
         defaultCwd: string;
@@ -549,13 +605,24 @@ export class CodexGatewayRuntimeFactory {
             close: async () => {
                 if (closed) return;
                 closed = true;
-                await closeCodexV4BindingResources({
-                    commandProcessor: commandProcessor!,
-                    requestBroker: requestBroker!,
-                    mapper: mapper!,
-                    syncClient,
-                    ...(options.closeSession ? { session: options.target } : {}),
-                });
+                let firstError: unknown = null;
+                try {
+                    await closeCodexV4BindingResources({
+                        commandProcessor: commandProcessor!,
+                        requestBroker: requestBroker!,
+                        mapper: mapper!,
+                        syncClient,
+                        ...(options.closeSession ? { session: options.target } : {}),
+                    });
+                } catch (error) {
+                    firstError = error;
+                }
+                try {
+                    await options.presenceLease.release();
+                } catch (error) {
+                    if (firstError === null) firstError = error;
+                }
+                if (firstError !== null) throw firstError;
             },
         };
         return binding;

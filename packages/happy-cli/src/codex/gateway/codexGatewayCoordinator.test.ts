@@ -13,6 +13,7 @@ import {
     type CodexGatewayRootRuntimeFactoryOptions,
     type CodexGatewayRuntimeBinding,
 } from './codexGatewayCoordinator';
+import { CodexGatewayArchivedSessionError } from './codexGatewayPresence';
 
 describe('Codex Gateway coordinator', () => {
     it('restores exact current and draining generations before accepting new work', async () => {
@@ -51,6 +52,23 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.acquire).not.toHaveBeenCalled();
     });
 
+    it('drops archived recovered bindings without reviving them or stopping the provider bridge', async () => {
+        const harness = createHarness(
+            { 'thread-a': thread('thread-a', 'idle') },
+            { archivedThread: 'thread-a' },
+        );
+        await harness.coordinator.connect();
+
+        await harness.coordinator.restoreBindings([
+            { threadId: 'thread-a', sessionId: 'session-a', generation: 1, role: 'current' },
+        ]);
+
+        expect(harness.coordinator.bindingSnapshot()).toEqual([]);
+        expect(harness.leases.acquire).toHaveBeenCalledWith('thread-a', 'gateway-1');
+        expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
+        expect(harness.client.disconnect).not.toHaveBeenCalled();
+    });
+
     it('keeps the prior root draining until its authoritative turn completes', async () => {
         const harness = createHarness({
             'thread-a': thread('thread-a', 'active', 'turn-a'),
@@ -79,7 +97,7 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.coordinator.currentThreadId).toBe('thread-b');
     });
 
-    it('retries retirement when the first authoritative archive attempt is offline', async () => {
+    it('retries retirement when the first inactive binding update is offline', async () => {
         const errors: unknown[] = [];
         const harness = createHarness(
             {
@@ -134,6 +152,57 @@ describe('Codex Gateway coordinator', () => {
 
         expect(source.bindings.at(-1)?.nextSessionId).toBe('session-thread-b');
         expect(target.bindings.at(-1)?.previousSessionId).toBe('session-thread-a');
+        const sourceUpdates = source.bindings.length;
+        const targetUpdates = target.bindings.length;
+
+        await harness.coordinator.refreshBindingLinks();
+
+        expect(source.bindings).toHaveLength(sourceUpdates);
+        expect(target.bindings).toHaveLength(targetUpdates);
+    });
+
+    it('retries a failed binding-link write without treating in-memory intent as committed', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'active', 'turn-a'),
+            'thread-b': thread('thread-b', 'idle'),
+        }, {
+            sessionIdForThread: (threadId) => threadId === 'thread-b' ? null : `session-${threadId}`,
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        await harness.coordinator.bindRoot('thread-b');
+        const source = harness.runtimes.get('thread-a')!;
+        const target = harness.runtimes.get('thread-b')!;
+        target.sessionId = 'session-thread-b';
+        const update = source.updateBinding.bind(source);
+        let failOnce = true;
+        source.updateBinding = async (binding) => {
+            if (failOnce && binding.nextSessionId === 'session-thread-b') {
+                failOnce = false;
+                throw new Error('relay offline');
+            }
+            await update(binding);
+        };
+
+        await expect(harness.coordinator.refreshBindingLinks()).rejects.toThrow('relay offline');
+        expect(source.bindings.at(-1)?.nextSessionId).toBeNull();
+
+        await harness.coordinator.refreshBindingLinks();
+        expect(source.bindings.at(-1)?.nextSessionId).toBe('session-thread-b');
+    });
+
+    it('relinquishes one archived root binding without stopping the provider coordinator', async () => {
+        const harness = createHarness({ 'thread-a': thread('thread-a', 'idle') });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+
+        await expect(harness.coordinator.relinquishSession('session-thread-a')).resolves.toBe(true);
+
+        expect(harness.coordinator.bindingSnapshot()).toEqual([]);
+        expect(harness.coordinator.currentThreadId).toBeNull();
+        expect(harness.runtimes.get('thread-a')!.close).toHaveBeenCalledOnce();
+        expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
+        expect(harness.client.disconnect).not.toHaveBeenCalled();
     });
 
     it('does not create a new generation when attach resumes the current root', async () => {
@@ -651,6 +720,7 @@ function createHarness(
         onError?: (error: unknown) => void;
         registerDuringCreation?: string;
         sessionIdForThread?: (threadId: string) => string | null;
+        archivedThread?: string;
     } = {},
 ) {
     const client = new FakeClient(new Map(Object.entries(threads)));
@@ -666,6 +736,9 @@ function createHarness(
         leases,
         onError: options.onError,
         createRuntime: async (factoryOptions: CodexGatewayRootRuntimeFactoryOptions) => {
+            if (options.archivedThread === factoryOptions.threadId) {
+                throw new CodexGatewayArchivedSessionError(`session-${factoryOptions.threadId}`);
+            }
             const runtime = new FakeRuntime(
                 options.sessionIdForThread
                     ? options.sessionIdForThread(factoryOptions.threadId)

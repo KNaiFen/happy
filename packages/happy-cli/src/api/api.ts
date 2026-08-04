@@ -53,6 +53,7 @@ const MachineSessionPageSchema = z.object({
     agentStateVersion: z.number().int().nonnegative(),
     dataEncryptionKey: z.string().max(4_096).nullable(),
     active: z.boolean(),
+    archivedAt: z.number().int().nonnegative().nullable().default(null),
     originMachineId: z.string().max(200).nullable(),
     machineDeletedAt: z.number().nullable(),
   }).passthrough()).max(200),
@@ -74,6 +75,16 @@ export class HappyRelayAuthenticationError extends Error {
       + 'Run `happy auth login --force` for the configured relay.',
     );
     this.name = 'HappyRelayAuthenticationError';
+  }
+}
+
+export type SessionPresenceConflictReason = 'sessionArchived' | 'presenceLeaseSuperseded';
+
+export class SessionPresenceConflictError extends Error {
+  readonly name = 'SessionPresenceConflictError';
+
+  constructor(readonly reason: SessionPresenceConflictReason) {
+    super(`Session presence was rejected: ${reason}`);
   }
 }
 
@@ -435,6 +446,7 @@ export class ApiClient {
             : null,
           agentStateVersion: matched.agentStateVersion,
           active: matched.active,
+          archivedAt: matched.archivedAt,
           originMachineId: matched.originMachineId,
           machineDeletedAt: matched.machineDeletedAt,
           hasIndependentDataKey: matched.dataEncryptionKey !== null,
@@ -498,6 +510,87 @@ export class ApiClient {
         `Failed to unarchive session (${status ?? 'unknown'}): `
         + `${error instanceof Error ? error.message : 'relay rejected the request'}`,
       );
+    }
+  }
+
+  async claimSessionPresence(
+    sessionId: string,
+    leaseId: string,
+    timeoutMs: number = 60_000,
+  ): Promise<boolean> {
+    return await this.updateSessionPresence('claim', sessionId, leaseId, timeoutMs);
+  }
+
+  async touchSessionPresence(
+    sessionId: string,
+    leaseId: string,
+    timeoutMs: number = 60_000,
+  ): Promise<boolean> {
+    return await this.updateSessionPresence('touch', sessionId, leaseId, timeoutMs);
+  }
+
+  async releaseSessionPresence(
+    sessionId: string,
+    leaseId: string,
+    timeoutMs: number = 60_000,
+  ): Promise<boolean> {
+    return await this.updateSessionPresence('release', sessionId, leaseId, timeoutMs);
+  }
+
+  private async updateSessionPresence(
+    operation: 'claim' | 'touch' | 'release',
+    sessionId: string,
+    leaseId: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const url = `${configuration.serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/presence/${operation}`;
+    try {
+      const response = await axios.post(
+        url,
+        { leaseId },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json',
+            'X-Happy-Client': `cli-coding-session/${configuration.currentCliVersion}`,
+          },
+          timeout: timeoutMs,
+        },
+      );
+      return response.status === undefined || (response.status >= 200 && response.status < 300);
+    } catch (error) {
+      const status = safeAxiosStatus(error);
+      const responseCode = safeAxiosErrorCode(error);
+      logger.debug('[API] Session presence update failed', {
+        sessionHash: syncV4DiagnosticHash(sessionId),
+        operation,
+        errorKind: classifySyncV4DiagnosticError(error),
+        httpStatus: status,
+      });
+      if (status === 401) throw new HappyRelayAuthenticationError(`Session presence ${operation}`);
+      if (
+        status === 409
+        && (responseCode === 'sessionArchived' || responseCode === 'presenceLeaseSuperseded')
+      ) {
+        throw new SessionPresenceConflictError(responseCode);
+      }
+      if (
+        status === undefined
+        || status === 408
+        || status === 429
+        || (status !== undefined && status >= 500)
+      ) {
+        connectionState.fail({
+          operation: `Session presence ${operation}`,
+          caller: 'api.updateSessionPresence',
+          errorCode: status === undefined
+            ? String((error as { code?: unknown }).code ?? 'NETWORK_ERROR')
+            : String(status),
+          url,
+        });
+        return false;
+      }
+      throw new Error(`Failed to ${operation} Session presence (${status ?? 'unknown'})`);
     }
   }
 
@@ -822,6 +915,18 @@ function safeAxiosTraceHeader(response: unknown): string | undefined {
     }
     const record = headers as Record<string, unknown>;
     const value = record['x-happy-sync-trace'] ?? record['X-Happy-Sync-Trace'];
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeAxiosErrorCode(error: unknown): string | undefined {
+  try {
+    if (!axios.isAxiosError(error)) return undefined;
+    const data = error.response?.data;
+    if (!data || typeof data !== 'object') return undefined;
+    const value = (data as { error?: unknown }).error;
     return typeof value === 'string' ? value : undefined;
   } catch {
     return undefined;

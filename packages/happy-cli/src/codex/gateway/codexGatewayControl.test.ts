@@ -29,6 +29,7 @@ describe('Codex Gateway control endpoint', () => {
         const socketPath = join(root, 'control.sock');
         const normalExit = vi.fn(() => ({ accepted: true }));
         const terminalAttached = vi.fn(() => ({ attached: true }));
+        const presenceReconcile = vi.fn(() => ({ reconciled: true }));
         const openRoot = vi.fn(async () => ({
             gatewayId: 'gateway-1',
             threadId: 'thread-1',
@@ -43,6 +44,7 @@ describe('Codex Gateway control endpoint', () => {
                 normalExit,
                 stop: () => ({ stopping: true }),
                 terminalAttached,
+                presenceReconcile,
                 openRoot,
             },
         });
@@ -74,6 +76,13 @@ describe('Codex Gateway control endpoint', () => {
             },
         })).resolves.toEqual({ attached: true });
         expect(terminalAttached).toHaveBeenCalledOnce();
+        await expect(callCodexGatewayControl<{ reconciled: boolean }>({
+            descriptor,
+            token: 'control-token-that-is-at-least-thirty-two-bytes',
+            path: '/presence/reconcile',
+            body: { sessionId: 'session-1' },
+        })).resolves.toEqual({ reconciled: true });
+        expect(presenceReconcile).toHaveBeenCalledWith({ sessionId: 'session-1' });
         await expect(callCodexGatewayControl({
             descriptor,
             token: 'control-token-that-is-at-least-thirty-two-bytes',

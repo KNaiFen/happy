@@ -68,13 +68,13 @@ describe('Codex Gateway deferred runtime', () => {
         await harness.journal.close();
     });
 
-    it('does not become inactive before a Happy session exists to archive', async () => {
+    it('can become inactive without inventing an archive for a missing Happy session', async () => {
         const harness = await createHarness();
 
         await expect(harness.runtime.updateBinding({
             ...binding(),
             role: 'inactive',
-        })).rejects.toThrow('pending relay recovery');
+        })).resolves.toBeUndefined();
 
         expect(harness.runtime.sessionId).toBeNull();
         await harness.runtime.close();

@@ -971,6 +971,7 @@ export async function startDaemon(): Promise<void> {
         const snapshot: MachineSessionSnapshot = {
           ...created,
           active: true,
+          archivedAt: null,
           originMachineId: machineId,
           machineDeletedAt: null,
           hasIndependentDataKey: true,

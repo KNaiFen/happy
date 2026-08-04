@@ -8,6 +8,7 @@ import type {
 } from '../codexAppServerClient';
 import { CodexV4CommandCancelledError } from '../codexV4CommandProcessor';
 import type { ServerNotification, Thread } from '../protocol';
+import { CodexGatewayArchivedSessionError } from './codexGatewayPresence';
 
 const MAX_PENDING_NOTIFICATIONS_PER_THREAD = 1_000;
 const MAX_PENDING_NOTIFICATIONS_TOTAL = 10_000;
@@ -470,32 +471,37 @@ export class CodexGatewayCoordinator {
                     acquiredThreadIds.push(binding.threadId);
                     let managed: ManagedRoot | null = null;
                     const earlyOwnedThreads = new Set<string>();
-                    const previousSessionId = [...ordered]
-                        .filter((candidate) => candidate.generation < binding.generation)
-                        .sort((left, right) => right.generation - left.generation)[0]
-                        ?.sessionId ?? null;
-                    const runtime = await this.options.createRuntime({
-                        threadId: binding.threadId,
-                        generation: binding.generation,
-                        previousSessionId,
-                        registerThreadOwnership: (ownedThreadId) => {
-                            if (!managed) earlyOwnedThreads.add(ownedThreadId);
-                            else this.registerOwnership(ownedThreadId, managed);
-                        },
-                        assertCurrentGeneration: (bindingGeneration) => {
-                            if (
-                                !managed
-                                || this.current !== managed
-                                || managed.role !== 'current'
-                                || bindingGeneration !== managed.generation
-                            ) {
-                                throw new CodexV4CommandCancelledError(
-                                    'bindingSuperseded',
-                                    'The Codex Gateway binding changed before this command reached the provider',
-                                );
-                            }
-                        },
-                    });
+                    const previousSessionId = restored.at(-1)?.runtime.sessionId ?? null;
+                    let runtime: CodexGatewayRootRuntime;
+                    try {
+                        runtime = await this.options.createRuntime({
+                            threadId: binding.threadId,
+                            generation: binding.generation,
+                            previousSessionId,
+                            registerThreadOwnership: (ownedThreadId) => {
+                                if (!managed) earlyOwnedThreads.add(ownedThreadId);
+                                else this.registerOwnership(ownedThreadId, managed);
+                            },
+                            assertCurrentGeneration: (bindingGeneration) => {
+                                if (
+                                    !managed
+                                    || this.current !== managed
+                                    || managed.role !== 'current'
+                                    || bindingGeneration !== managed.generation
+                                ) {
+                                    throw new CodexV4CommandCancelledError(
+                                        'bindingSuperseded',
+                                        'The Codex Gateway binding changed before this command reached the provider',
+                                    );
+                                }
+                            },
+                        });
+                    } catch (error) {
+                        if (!(error instanceof CodexGatewayArchivedSessionError)) throw error;
+                        await this.options.leases.release(binding.threadId, this.options.gatewayId);
+                        acquiredThreadIds.pop();
+                        continue;
+                    }
                     managed = {
                         threadId: binding.threadId,
                         generation: binding.generation,
@@ -528,7 +534,17 @@ export class CodexGatewayCoordinator {
                     );
                     await this.drainPending(binding.threadId, managed);
                 }
-                const current = this.current!;
+                const current = this.current;
+                if (!current) {
+                    for (const root of restored) this.removeRoot(root);
+                    await Promise.allSettled([
+                        ...restored.map((root) => root.runtime.close()),
+                        ...restored.map((root) => (
+                            this.options.leases.release(root.threadId, this.options.gatewayId)
+                        )),
+                    ]);
+                    return;
+                }
                 const changedAt = this.now();
                 for (const root of restored) {
                     root.previousSessionId ??= nearestPriorSessionId(this.roots, root);
@@ -559,6 +575,25 @@ export class CodexGatewayCoordinator {
         if (this.stopped) return;
         if (!options.force) await this.deactivateRootsForGracefulStop();
         await this.finalizeStop();
+    }
+
+    async relinquishSession(sessionId: string): Promise<boolean> {
+        if (this.stopped) return false;
+        return await this.bindingLock.inLock(async () => {
+            const root = [...this.roots.values()].find(
+                (candidate) => candidate.runtime.sessionId === sessionId,
+            );
+            if (!root) return false;
+            this.removeRoot(root);
+            root.role = 'inactive';
+            await root.runtime.close().catch((error) => this.options.onError?.(error));
+            await this.options.leases.release(root.threadId, this.options.gatewayId)
+                .catch((error) => {
+                    this.options.onError?.(error);
+                    return false;
+                });
+            return true;
+        });
     }
 
     private async deactivateRootsForGracefulStop(): Promise<void> {
@@ -641,27 +676,41 @@ export class CodexGatewayCoordinator {
         await this.bindingLock.inLock(async () => {
             const current = this.current;
             if (!current) return;
-            const changedAt = this.now();
-            current.previousSessionId ??= nearestPriorSessionId(this.roots, current);
-            await current.runtime.updateBinding({
-                role: 'current',
-                generation: current.generation,
-                previousSessionId: current.previousSessionId,
-                nextSessionId: null,
-                changedAt,
-            });
-            await Promise.all([...this.roots.values()]
+            const currentPreviousSessionId = current.previousSessionId
+                ?? nearestPriorSessionId(this.roots, current);
+            const drainingUpdates = [...this.roots.values()]
                 .filter((root) => root.role === 'draining')
-                .map((root) => {
-                    root.nextSessionId ??= current.runtime.sessionId;
-                    return root.runtime.updateBinding({
-                        role: 'draining',
-                        generation: root.generation,
-                        previousSessionId: root.previousSessionId,
-                        nextSessionId: root.nextSessionId,
-                        changedAt,
-                    });
-            }));
+                .map((root) => ({
+                    root,
+                    nextSessionId: root.nextSessionId ?? current.runtime.sessionId,
+                }))
+                .filter(({ root, nextSessionId }) => root.nextSessionId !== nextSessionId);
+            const currentChanged = current.previousSessionId !== currentPreviousSessionId
+                || current.nextSessionId !== null;
+            if (!currentChanged && drainingUpdates.length === 0) return;
+
+            const changedAt = this.now();
+            if (currentChanged) {
+                await current.runtime.updateBinding({
+                    role: 'current',
+                    generation: current.generation,
+                    previousSessionId: currentPreviousSessionId,
+                    nextSessionId: null,
+                    changedAt,
+                });
+                current.previousSessionId = currentPreviousSessionId;
+                current.nextSessionId = null;
+            }
+            for (const { root, nextSessionId } of drainingUpdates) {
+                await root.runtime.updateBinding({
+                    role: 'draining',
+                    generation: root.generation,
+                    previousSessionId: root.previousSessionId,
+                    nextSessionId,
+                    changedAt,
+                });
+                root.nextSessionId = nextSessionId;
+            }
         });
     }
 
@@ -943,8 +992,14 @@ export class CodexGatewayCoordinator {
         });
         root.role = 'inactive';
         this.removeRoot(root);
-        await root.runtime.close();
+        let closeError: unknown = null;
+        try {
+            await root.runtime.close();
+        } catch (error) {
+            closeError = error;
+        }
         await this.options.leases.release(root.threadId, this.options.gatewayId);
+        if (closeError !== null) throw closeError;
     }
 
     private removeRoot(root: ManagedRoot): void {

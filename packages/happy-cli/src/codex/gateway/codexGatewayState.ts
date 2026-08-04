@@ -46,6 +46,15 @@ export const CodexGatewayBindingSchema = z.object({
 }).strict();
 export type CodexGatewayBinding = z.infer<typeof CodexGatewayBindingSchema>;
 
+export const CodexGatewayLifecycleRecordSchema = z.object({
+    controlledStartedAt: timestampSchema.nullable().default(null),
+    normalExitedAt: timestampSchema.nullable().default(null),
+    signalStoppedAt: timestampSchema.nullable().default(null),
+    providerExitedAt: timestampSchema.nullable().default(null),
+    controlChannelErrorAt: timestampSchema.nullable().default(null),
+    lastHeartbeatAt: timestampSchema.nullable().default(null),
+}).strict();
+
 export const CodexGatewayDescriptorSchema = z.object({
     version: z.literal(CODEX_GATEWAY_STATE_VERSION),
     gatewayId: idSchema,
@@ -69,6 +78,14 @@ export const CodexGatewayDescriptorSchema = z.object({
     current: CodexGatewayBindingSchema.nullable(),
     draining: z.array(CodexGatewayBindingSchema).max(1_024),
     lastError: z.string().max(2_048).nullable(),
+    lifecycle: CodexGatewayLifecycleRecordSchema.default({
+        controlledStartedAt: null,
+        normalExitedAt: null,
+        signalStoppedAt: null,
+        providerExitedAt: null,
+        controlChannelErrorAt: null,
+        lastHeartbeatAt: null,
+    }),
 }).strict();
 export type CodexGatewayDescriptor = z.infer<typeof CodexGatewayDescriptorSchema>;
 
@@ -209,6 +226,14 @@ export async function createCodexGatewayFiles(options: {
         current: null,
         draining: [],
         lastError: null,
+        lifecycle: {
+            controlledStartedAt: now,
+            normalExitedAt: null,
+            signalStoppedAt: null,
+            providerExitedAt: null,
+            controlChannelErrorAt: null,
+            lastHeartbeatAt: now,
+        },
     };
     await writePrivateJson(paths.secretPath, CodexGatewaySecretSchema.parse(secret));
     if (process.platform === 'win32') {

@@ -26,7 +26,7 @@ export interface ServerToClientEvents {
   'rpc-unregistered': (data: { method: string }) => void
   'rpc-error': (data: { type: string, error: string }) => void
   ephemeral: (data:
-    | { type: 'activity', id: string, active: boolean, activeAt: number, thinking: boolean }
+    | { type: 'activity', id: string, active: boolean, activeAt: number, thinking: boolean, archivedAt?: number | null }
     | ({ type: 'sync-v4-invalidate' } & SyncInvalidationV4)
   ) => void
   auth: (data: { success: boolean, user: string }) => void
@@ -75,6 +75,7 @@ export type Session = {
 
 export type MachineSessionSnapshot = Session & {
   active: boolean;
+  archivedAt: number | null;
   originMachineId: string | null;
   machineDeletedAt: number | null;
   hasIndependentDataKey: boolean;

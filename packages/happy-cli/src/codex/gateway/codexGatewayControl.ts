@@ -11,6 +11,9 @@ const NormalExitSchema = z.object({
     nonce: z.string().min(32).max(512),
 }).strict();
 const StopSchema = z.object({ force: z.boolean().default(false) }).strict();
+const PresenceReconcileSchema = z.object({
+    sessionId: z.string().min(1).max(512),
+}).strict();
 const TerminalAttachedSchema = z.object({
     attachmentId: z.string().uuid(),
     connectionToken: z.string().min(32).max(512),
@@ -71,6 +74,7 @@ export interface CodexGatewayControlHandlers {
     normalExit(input: z.infer<typeof NormalExitSchema>): Promise<unknown> | unknown;
     stop(input: z.infer<typeof StopSchema>): Promise<unknown> | unknown;
     terminalAttached(input: z.infer<typeof TerminalAttachedSchema>): Promise<unknown> | unknown;
+    presenceReconcile(input: z.infer<typeof PresenceReconcileSchema>): Promise<unknown> | unknown;
     openRoot(input: CodexGatewayOpenRootInput): Promise<CodexGatewayOpenRootResult>;
 }
 
@@ -79,6 +83,7 @@ export async function startCodexGatewayControlServer(options: {
     port?: number;
     token: string;
     handlers: CodexGatewayControlHandlers;
+    onError?: () => void;
 }): Promise<{ socketPath: string | null; port: number | null; close(): Promise<void> }> {
     if ((options.socketPath ? 1 : 0) + (options.port !== undefined ? 1 : 0) !== 1) {
         throw new Error('Exactly one Gateway control endpoint is required');
@@ -111,6 +116,9 @@ export async function startCodexGatewayControlServer(options: {
                 case '/terminal-attached':
                     result = await options.handlers.terminalAttached(TerminalAttachedSchema.parse(body));
                     break;
+                case '/presence/reconcile':
+                    result = await options.handlers.presenceReconcile(PresenceReconcileSchema.parse(body));
+                    break;
                 case '/root/open':
                     result = await options.handlers.openRoot(OpenRootSchema.parse(body));
                     break;
@@ -120,6 +128,7 @@ export async function startCodexGatewayControlServer(options: {
             }
             sendJson(response, 200, { ok: true, result: result ?? null });
         } catch (error) {
+            options.onError?.();
             const status = error instanceof ControlBodyTooLargeError ? 413 : 400;
             sendJson(response, status, {
                 error: error instanceof ControlBodyTooLargeError ? 'bodyTooLarge' : 'invalidRequest',
@@ -143,7 +152,7 @@ export async function startCodexGatewayControlServer(options: {
 export async function callCodexGatewayControl<T>(options: {
     descriptor: CodexGatewayDescriptor;
     token: string;
-    path: '/status' | '/normal-exit' | '/stop' | '/terminal-attached' | '/root/open';
+    path: '/status' | '/normal-exit' | '/stop' | '/terminal-attached' | '/presence/reconcile' | '/root/open';
     body?: unknown;
     timeoutMs?: number;
 }): Promise<T> {

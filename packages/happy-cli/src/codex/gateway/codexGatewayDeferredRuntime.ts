@@ -146,9 +146,6 @@ export class CodexGatewayDeferredRuntime implements CodexGatewayRootRuntime {
 
     async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
         await this.operationLock.inLock(async () => {
-            if (binding.role === 'inactive' && !this.inner) {
-                throw new Error('Codex Gateway session archive is pending relay recovery');
-            }
             this.binding = binding;
             await this.inner?.updateBinding(binding);
         });

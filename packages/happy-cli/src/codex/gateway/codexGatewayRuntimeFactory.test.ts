@@ -17,6 +17,7 @@ import {
     CodexGatewayRuntimeFactory,
     type CodexGatewayRuntimeFactoryApi,
 } from './codexGatewayRuntimeFactory';
+import { CodexGatewayArchivedSessionError } from './codexGatewayPresence';
 
 function command(
     name: string,
@@ -53,7 +54,11 @@ function thread(id = 'thread-a'): Thread {
     } as unknown as Thread;
 }
 
-function createHarness(options: { relayAvailable?: boolean; existingSession?: boolean } = {}) {
+function createHarness(options: {
+    relayAvailable?: boolean;
+    existingSession?: boolean;
+    archivedSession?: boolean;
+} = {}) {
     const routes = new Map<string, SyncV4CodexThreadRoute>();
     const commandStatuses = new Map<string, SyncV4CommandJournalStatus>();
     let entityHandler: ((event: SyncV4AppliedEntity) => Promise<void>) | null = null;
@@ -120,12 +125,10 @@ function createHarness(options: { relayAvailable?: boolean; existingSession?: bo
             sessionMetadata = createOptions.metadata;
             return options.relayAvailable === false ? null : apiSession(createOptions.metadata);
         }),
-        unarchiveSession: vi.fn(async () => true),
         sessionSyncClient: vi.fn((apiSession) => {
             sessionMetadata = apiSession.metadata;
             return session;
         }),
-        archiveSessionV4: vi.fn(async () => true),
         getMachineSessionSnapshot: vi.fn(async () => options.relayAvailable === false ? null : ({
             ...apiSession({
                 path: '/workspace',
@@ -134,10 +137,21 @@ function createHarness(options: { relayAvailable?: boolean; existingSession?: bo
                 codexThreadId: 'thread-a',
             } as Metadata),
             active: false,
+            archivedAt: options.archivedSession ? 1_000 : null,
             originMachineId: 'machine-a',
             machineDeletedAt: null,
             hasIndependentDataKey: true,
         })),
+    };
+    const releasePresence = vi.fn(async () => undefined);
+    const presence = {
+        claim: vi.fn(async (sessionId: string) => ({
+            sessionId,
+            leaseId: `lease-${sessionId}`,
+            onTerminated: vi.fn(),
+            release: releasePresence,
+        })),
+        terminateSession: vi.fn(async () => undefined),
     };
     const providerThread = thread();
     const client = {
@@ -184,6 +198,7 @@ function createHarness(options: { relayAvailable?: boolean; existingSession?: bo
         machineId: 'machine-a',
         cwd: '/workspace',
         api,
+        presence,
         client,
         codexCliVersion: { major: 0, minor: 145, patch: 0 },
         defaultPermissionMode: 'default',
@@ -208,6 +223,8 @@ function createHarness(options: { relayAvailable?: boolean; existingSession?: bo
     return {
         factory,
         api,
+        presence,
+        releasePresence,
         session,
         sync,
         client,
@@ -253,7 +270,7 @@ describe('CodexGatewayRuntimeFactory', () => {
         });
     });
 
-    it('loads and unarchives a verified existing Sync v4 session without creating a duplicate tag', async () => {
+    it('loads a verified existing Sync v4 session without implicitly unarchiving it', async () => {
         const harness = createHarness({ existingSession: true });
         const runtime = await harness.factory.tryCreate({
             threadId: 'thread-a',
@@ -271,13 +288,29 @@ describe('CodexGatewayRuntimeFactory', () => {
             timeoutMs: undefined,
         }));
         expect(harness.api.getOrCreateSession).not.toHaveBeenCalled();
-        expect(harness.api.unarchiveSession).toHaveBeenCalledWith('session-a', undefined);
+        expect(harness.presence.claim).toHaveBeenCalledWith('session-a');
         expect(harness.sessionMetadata()).toMatchObject({
             permissionMode: 'safe-yolo',
             modelMode: 'gpt-resumed',
             effortLevel: 'max',
         });
         await runtime?.close();
+        expect(harness.releasePresence).toHaveBeenCalledOnce();
+    });
+
+    it('rejects an archived existing session instead of implicitly reviving its tombstone', async () => {
+        const harness = createHarness({ existingSession: true, archivedSession: true });
+
+        await expect(harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 4,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        })).rejects.toBeInstanceOf(CodexGatewayArchivedSessionError);
+
+        expect(harness.api.sessionSyncClient).not.toHaveBeenCalled();
+        expect(harness.presence.claim).not.toHaveBeenCalled();
     });
 
     it('runs raw App text through the current root and coordinates root switches outside the source router', async () => {

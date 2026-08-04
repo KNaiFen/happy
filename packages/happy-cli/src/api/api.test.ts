@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ApiClient } from './api';
+import { ApiClient, SessionPresenceConflictError } from './api';
 import axios from 'axios';
 import { connectionState } from '@/utils/serverConnectionErrors';
 import type { SyncV4DiagnosticInput } from '@slopus/happy-wire';
@@ -762,6 +762,58 @@ describe('Api server error handling', () => {
 
             await expect(api.archiveSessionV4('session-1'))
                 .rejects.toThrow('Failed to archive Codex session (403)');
+        });
+    });
+
+    describe('session presence leases', () => {
+        it('claims, touches, and releases the encoded Session with machine credentials', async () => {
+            mockPost.mockResolvedValue({ status: 200, data: { success: true } });
+
+            await expect(api.claimSessionPresence('session/original', 'lease-1', 1_500))
+                .resolves.toBe(true);
+            await expect(api.touchSessionPresence('session/original', 'lease-1', 1_500))
+                .resolves.toBe(true);
+            await expect(api.releaseSessionPresence('session/original', 'lease-1', 1_500))
+                .resolves.toBe(true);
+
+            expect(mockPost).toHaveBeenNthCalledWith(
+                1,
+                'https://api.example.com/v4/sessions/session%2Foriginal/presence/claim',
+                { leaseId: 'lease-1' },
+                expect.objectContaining({ timeout: 1_500 }),
+            );
+            expect(mockPost).toHaveBeenNthCalledWith(
+                2,
+                'https://api.example.com/v4/sessions/session%2Foriginal/presence/touch',
+                { leaseId: 'lease-1' },
+                expect.any(Object),
+            );
+            expect(mockPost).toHaveBeenNthCalledWith(
+                3,
+                'https://api.example.com/v4/sessions/session%2Foriginal/presence/release',
+                { leaseId: 'lease-1' },
+                expect.any(Object),
+            );
+        });
+
+        it('surfaces tombstones and superseded leases as typed conflicts', async () => {
+            mockPost.mockRejectedValueOnce({
+                response: { status: 409, data: { error: 'sessionArchived' } },
+            });
+            await expect(api.touchSessionPresence('session-1', 'lease-1'))
+                .rejects.toEqual(new SessionPresenceConflictError('sessionArchived'));
+
+            mockPost.mockRejectedValueOnce({
+                response: { status: 409, data: { error: 'presenceLeaseSuperseded' } },
+            });
+            await expect(api.releaseSessionPresence('session-1', 'lease-1'))
+                .rejects.toMatchObject({ reason: 'presenceLeaseSuperseded' });
+        });
+
+        it('keeps a lease retryable when the relay is temporarily unavailable', async () => {
+            mockPost.mockRejectedValueOnce({ code: 'ECONNRESET' });
+
+            await expect(api.touchSessionPresence('session-1', 'lease-1')).resolves.toBe(false);
         });
     });
 

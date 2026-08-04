@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
     codexGatewayPaths,
     codexGatewayRuntimeRoot,
     CodexGatewaySocketPathTooLongError,
+    CodexGatewayDescriptorSchema,
     createCodexGatewayFiles,
     listCodexGatewayDescriptors,
     MAX_CODEX_GATEWAY_UNIX_SOCKET_PATH_BYTES,
@@ -54,6 +55,17 @@ describe('Codex Gateway state', () => {
         expect(created.secret.sessionKeySeed).toHaveLength(43);
         expect(created.descriptor.bootstrapOperationId).toBe('6e997fc4-bf4c-4ca0-a36d-c59e2f79ba37');
         expect(created.descriptor.providerPid).toBeNull();
+        expect(created.descriptor.lifecycle).toEqual({
+            controlledStartedAt: 100,
+            normalExitedAt: null,
+            signalStoppedAt: null,
+            providerExitedAt: null,
+            controlChannelErrorAt: null,
+            lastHeartbeatAt: 100,
+        });
+        expect(Object.values(created.descriptor.lifecycle).every((value) => (
+            value === null || typeof value === 'number'
+        ))).toBe(true);
         expect(created.paths.journalPath).toBe(join(created.paths.gatewayDir, 'gateway.jsonl'));
         if (process.platform !== 'win32') {
             await assertPrivateFile(created.paths.descriptorPath);
@@ -63,6 +75,32 @@ describe('Codex Gateway state', () => {
 
         await removeCodexGatewayFiles(created.paths);
         expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toBeNull();
+    });
+
+    it('reads a pre-lifecycle descriptor with null lifecycle timestamps', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-state-'));
+        roots.push(root);
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir: join(root, 'happy'),
+            runtimeRoot: join(root, 'runtime'),
+        });
+        const legacy = { ...created.descriptor } as Record<string, unknown>;
+        delete legacy.lifecycle;
+        await writeFile(created.paths.descriptorPath, JSON.stringify(legacy), { mode: 0o600 });
+
+        expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+            lifecycle: {
+                controlledStartedAt: null,
+                normalExitedAt: null,
+                signalStoppedAt: null,
+                providerExitedAt: null,
+                controlChannelErrorAt: null,
+                lastHeartbeatAt: null,
+            },
+        });
+        expect(CodexGatewayDescriptorSchema.parse(legacy).lifecycle).not.toHaveProperty('prompt');
     });
 
     it('uses short runtime paths independent of a long Happy home path', () => {

@@ -116,6 +116,7 @@ export class CodexV4ThreadRouter {
     private readonly orphanRetryTimers = new Map<string, NodeJS.Timeout>();
     private readonly routeRegistrationWaiters = new Map<string, Set<RouteRegistrationWaiter>>();
     private readonly provisionalRoutesByThread = new Set<string>();
+    private readonly relinquishedChildThreads = new Set<string>();
     private readonly routeLock = new AsyncLock();
     private closed = false;
     private closePromise: Promise<void> | null = null;
@@ -253,6 +254,7 @@ export class CodexV4ThreadRouter {
         if (this.closed) return;
         const threadId = notificationThreadId(notification);
         if (!threadId) return;
+        if (this.relinquishedChildThreads.has(threadId)) return;
         const task = async () => {
             const canonical = canonicalCodexNotificationForJournal(notification);
             if (this.provisionalRoutesByThread.has(threadId)) {
@@ -307,6 +309,9 @@ export class CodexV4ThreadRouter {
     async handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse> {
         if (this.closed) throw new Error('Codex v4 thread router is closed');
         const threadId = requestThreadId(request);
+        if (this.relinquishedChildThreads.has(threadId)) {
+            throw new Error('Codex child session binding is owned by another Gateway');
+        }
         let binding: CodexV4SessionBinding;
         try {
             binding = await this.bindingForThread(threadId);
@@ -316,6 +321,49 @@ export class CodexV4ThreadRouter {
             binding = await this.bindingForThread(threadId);
         }
         return await binding.requestBroker.handle(request);
+    }
+
+    async relinquishChildSession(sessionId: string, expectedThreadId?: string): Promise<void> {
+        const bindings = await this.routeLock.inLock(() => {
+            const affectedThreadIds = new Set<string>();
+            if (expectedThreadId) affectedThreadIds.add(expectedThreadId);
+            for (const [threadId, binding] of this.bindingsByThread) {
+                if (binding !== this.options.rootBinding && binding.sessionId === sessionId) {
+                    affectedThreadIds.add(threadId);
+                }
+            }
+
+            const closing = new Set<CodexV4SessionBinding>();
+            for (const threadId of affectedThreadIds) {
+                this.relinquishedChildThreads.add(threadId);
+                const binding = this.bindingsByThread.get(threadId);
+                if (binding && binding !== this.options.rootBinding) {
+                    this.bindingsByThread.delete(threadId);
+                    closing.add(binding);
+                }
+                this.hydratedThreads.delete(threadId);
+                this.activeTurnByThread.delete(threadId);
+                this.threadsWithPendingOrphans.delete(threadId);
+                this.orphanRetryAttempts.delete(threadId);
+                const retryTimer = this.orphanRetryTimers.get(threadId);
+                if (retryTimer) clearTimeout(retryTimer);
+                this.orphanRetryTimers.delete(threadId);
+                const route = this.routesByThread.get(threadId);
+                if (route && (route.kind === 'providerChild' || route.kind === 'detachedReview')) {
+                    this.restoreRoute({
+                        ...route,
+                        status: 'completed',
+                        activeTurnId: null,
+                    });
+                }
+            }
+            return closing;
+        });
+        const results = await Promise.allSettled([...bindings].map((binding) => binding.close()));
+        const failed = results.find(
+            (result): result is PromiseRejectedResult => result.status === 'rejected',
+        );
+        if (failed) throw failed.reason;
     }
 
     setConnection(event: CodexConnectionEvent): void {
@@ -521,6 +569,9 @@ export class CodexV4ThreadRouter {
         lineage: RelationLineage,
         activate = true,
     ): Promise<CodexV4SessionBinding> {
+        if (this.relinquishedChildThreads.has(thread.id)) {
+            throw new Error('Codex child session binding is owned by another Gateway');
+        }
         const existing = this.bindingsByThread.get(thread.id);
         if (existing) return existing;
         const pending = this.bindingPromisesByThread.get(thread.id);
@@ -561,6 +612,9 @@ export class CodexV4ThreadRouter {
         if (!parentBinding) throw new Error('Codex child relation has no parent session binding');
         const binding = await this.options.createChildBinding(route, parentBinding);
         try {
+            if (this.relinquishedChildThreads.has(thread.id)) {
+                throw new Error('Codex child session binding is owned by another Gateway');
+            }
             if (!activate) await binding.mapper.prepareMigration(thread.id);
             const finalLineage = this.lineagesByChild.get(thread.id) ?? resolvedLineage;
             await this.publishRelation(thread, binding, finalLineage);

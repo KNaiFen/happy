@@ -59,7 +59,6 @@ function createHarness(overrides: Partial<CodexGatewaySyncRuntimeOptions> = {}) 
         flush: vi.fn(async () => { calls.push('router.flush'); }),
         close: vi.fn(async () => { calls.push('router.close'); }),
     } as unknown as CodexV4ThreadRouter;
-    const archiveSession = vi.fn(async () => true);
     const options: CodexGatewaySyncRuntimeOptions = {
         gatewayId: 'gateway-1',
         origin: 'terminal',
@@ -76,7 +75,6 @@ function createHarness(overrides: Partial<CodexGatewaySyncRuntimeOptions> = {}) 
         session,
         rootBinding,
         router,
-        archiveSession,
         now: () => 200,
         ...overrides,
     };
@@ -89,7 +87,6 @@ function createHarness(overrides: Partial<CodexGatewaySyncRuntimeOptions> = {}) 
         requestBroker,
         rootBinding,
         router,
-        archiveSession,
         calls,
         metadata: () => metadata,
     };
@@ -129,7 +126,7 @@ describe('CodexGatewaySyncRuntime', () => {
         expect(harness.router.migrateRootSnapshot).toHaveBeenCalledWith('thread-1', snapshot);
     });
 
-    it('persists the binding, publishes it, flushes it, and only then archives inactive history', async () => {
+    it('persists and publishes inactive history without archiving the session', async () => {
         const harness = createHarness();
 
         await harness.runtime.updateBinding({
@@ -146,7 +143,6 @@ describe('CodexGatewaySyncRuntime', () => {
             'mapper.flush',
             'sync.flush',
         ]);
-        expect(harness.archiveSession).toHaveBeenCalledWith('session-1');
         expect(harness.metadata().codexGatewayBinding).toEqual({
             gatewayId: 'gateway-1',
             generation: 5,
@@ -168,22 +164,18 @@ describe('CodexGatewaySyncRuntime', () => {
         });
     });
 
-    it('keeps the prior binding when relay archive is pending so retirement can retry', async () => {
-        const archiveSession = vi.fn(async () => false);
-        const harness = createHarness({ archiveSession });
+    it('does not write metadata or Sync state when only changedAt differs', async () => {
+        const harness = createHarness();
 
-        await expect(harness.runtime.updateBinding({
-            role: 'inactive',
-            generation: 5,
+        await harness.runtime.updateBinding({
+            role: 'recovering',
+            generation: 4,
             previousSessionId: null,
             nextSessionId: null,
             changedAt: 300,
-        })).rejects.toThrow('archive is pending relay recovery');
-
-        await harness.runtime.setGatewayLifecycle('running');
-        expect(harness.mapper.setGatewayState).toHaveBeenLastCalledWith({
-            gateway: expect.objectContaining({ role: 'recovering', generation: 4 }),
         });
+
+        expect(harness.calls).toEqual([]);
     });
 
     it('reports the payload-free binding phase while retaining the cause in memory', async () => {

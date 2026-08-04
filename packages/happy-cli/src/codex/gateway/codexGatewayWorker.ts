@@ -34,6 +34,7 @@ import {
 import { CodexGatewayDeferredRuntime } from './codexGatewayDeferredRuntime';
 import { CodexGatewayJournal, type CodexGatewayBootstrap } from './codexGatewayJournal';
 import { CodexGatewayThreadLeaseRegistry } from './codexGatewayLease';
+import { CodexGatewayPresenceRegistry } from './codexGatewayPresence';
 import { CodexGatewayProvider } from './codexGatewayProvider';
 import {
     inspectCodexGatewayProviderProcess,
@@ -62,6 +63,7 @@ import {
 } from './codexGatewayState';
 
 const HEARTBEAT_MS = 2_000;
+const PRESENCE_TOUCH_MS = 60_000;
 const RELAY_REQUEST_TIMEOUT_MS = 1_500;
 const EXISTING_SESSION_LOOKUP_TIMEOUT_MS = 15_000;
 const GRACEFUL_STOP_WAIT_MS = 10_000;
@@ -69,6 +71,7 @@ const GRACEFUL_STOP_POLL_MS = 250;
 const GRACEFUL_STOP_RETRY_MS = 2_000;
 const PROVIDER_BRIDGE_RETRY_DELAYS_MS = [50, 100, 250, 500, 1_000, 2_000] as const;
 const FRESH_SUBSCRIPTION_RETRY_DELAYS_MS = [0, 50, 100, 250, 500, 1_000, 2_000] as const;
+const DEFERRED_ROOT_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000, 10_000, 30_000] as const;
 
 interface DeferredRoot {
     runtime: CodexGatewayDeferredRuntime;
@@ -105,6 +108,7 @@ export async function runCodexGatewayWorker(options: {
     happyHomeDir?: string;
     runtimeRoot?: string;
     heartbeatMs?: number;
+    presenceTouchMs?: number;
 }): Promise<void> {
     const startup: {
         stage: CodexGatewayStartupStage;
@@ -141,6 +145,7 @@ async function runCodexGatewayWorkerInternal(
         happyHomeDir?: string;
         runtimeRoot?: string;
         heartbeatMs?: number;
+        presenceTouchMs?: number;
     },
     markStartupStage: (stage: CodexGatewayStartupStage) => void,
     currentStartupStage: () => CodexGatewayStartupStage,
@@ -181,15 +186,21 @@ async function runCodexGatewayWorkerInternal(
     });
     setEarlyCleanup(() => journal.close());
 
+    const workerStartedAt = Date.now();
     const descriptorStore = new CodexGatewayDescriptorStore(paths, {
         ...initialDescriptor,
         pid: process.pid,
-        processStartedAt: Date.now(),
-        heartbeatAt: Date.now(),
+        processStartedAt: workerStartedAt,
+        heartbeatAt: workerStartedAt,
         state: 'starting',
         terminalState: initialDescriptor.origin === 'app' ? 'headless' : 'detached',
         terminalDetachedAt: initialDescriptor.origin === 'app' ? null : Date.now(),
         lastError: null,
+        lifecycle: {
+            ...initialDescriptor.lifecycle,
+            controlledStartedAt: workerStartedAt,
+            lastHeartbeatAt: workerStartedAt,
+        },
     });
     await descriptorStore.persist();
 
@@ -209,6 +220,11 @@ async function runCodexGatewayWorkerInternal(
     const codexCliVersion = assertMinimumCodexCliVersion(readCodexCliVersion());
     markStartupStage('relay');
     const api = await ApiClient.create(scopedCredentials);
+    const presence = new CodexGatewayPresenceRegistry({
+        api,
+        requestTimeoutMs: RELAY_REQUEST_TIMEOUT_MS,
+        onError: recordWorkerError,
+    });
     await api.getOrCreateMachine({
         machineId: settings.machineId,
         metadata: initialMachineMetadata,
@@ -242,6 +258,9 @@ async function runCodexGatewayWorkerInternal(
         pid: process.pid,
     });
     const deferredRoots = new Map<string, DeferredRoot>();
+    const deferredRootTasks = new Map<string, Promise<void>>();
+    const deferredRootAttempts = new Map<string, Promise<boolean>>();
+    const deferredRootRetryWaiters = new Map<string, () => void>();
     const rootReservations = new Map<string, { threadId: string; release: boolean }>();
     const pendingFreshSubscriptions = new Set<string>();
     const freshSubscriptionTasks = new Map<string, Promise<void>>();
@@ -250,11 +269,16 @@ async function runCodexGatewayWorkerInternal(
     let coordinator: CodexGatewayCoordinator | null = null;
     let stopping = false;
     let freshSubscriptionRetriesClosed = false;
+    let deferredRootRetriesClosed = false;
     let forceShutdownRequested = false;
     let shutdownPromise: Promise<void> | null = null;
     let wakeShutdownRetry: (() => void) | null = null;
     let controlServer: Awaited<ReturnType<typeof startCodexGatewayControlServer>> | null = null;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let presenceHeartbeat: ReturnType<typeof setInterval> | null = null;
+    let heartbeatPromise: Promise<void> | null = null;
+    let presenceTouchPromise: Promise<void> | null = null;
+    let periodicTicksClosed = false;
     let providerStarted = false;
     let preserveProviderEndpoint = false;
     const rootOpenLock = new AsyncLock();
@@ -266,6 +290,7 @@ async function runCodexGatewayWorkerInternal(
             void updateTerminalState(state, detachedAt);
         },
         onNormalExit: (action) => {
+            void recordLifecycleTimestamp('normalExitedAt');
             if (action === 'stop') void requestShutdown(false);
         },
     });
@@ -404,6 +429,7 @@ async function runCodexGatewayWorkerInternal(
                         machineId: settings.machineId!,
                         cwd: initialDescriptor.cwd,
                         api,
+                        presence,
                         client,
                         codexCliVersion,
                         defaultPermissionMode: 'default',
@@ -448,6 +474,11 @@ async function runCodexGatewayWorkerInternal(
                             } satisfies CodexGatewayRootSessionConfig;
                         },
                         onError: recordWorkerError,
+                        onRootPresenceTerminated: async ({ threadId, sessionId }) => {
+                            deferredRoots.delete(threadId);
+                            const removed = await coordinator?.relinquishSession(sessionId) ?? false;
+                            if (removed) await syncDescriptorBindings();
+                        },
                     });
                     coordinator = new CodexGatewayCoordinator({
                         gatewayId: options.gatewayId,
@@ -479,9 +510,11 @@ async function runCodexGatewayWorkerInternal(
                 syncPendingFreshSubscriptions();
                 await coordinator.setGatewayLifecycle('running');
                 await coordinator.setTerminalState(terminal.state, terminal.detachedAt);
+                wakeDeferredRootRetries();
                 await materializeDeferredRoots();
             },
             exited: ({ unexpected }) => {
+                void recordLifecycleTimestamp('providerExitedAt');
                 if (unexpected) void updateGatewayLifecycle('recovering');
             },
         },
@@ -564,15 +597,24 @@ async function runCodexGatewayWorkerInternal(
     const controlHandlers: CodexGatewayControlHandlers = {
         status: () => descriptorStore.snapshot(),
         terminalAttached: (input) => terminal.register(input),
+        presenceReconcile: async ({ sessionId }) => {
+            const reconciled = await presence.reconcile(sessionId);
+            if (!reconciled) throw new Error('Codex Gateway session presence could not be reconciled');
+            return { reconciled: true };
+        },
         normalExit: (input) => terminal.normalExit(input),
         stop: (input) => {
+            void recordLifecycleTimestamp('normalExitedAt');
             void requestShutdown(input.force);
             return { stopping: true, force: input.force };
         },
         openRoot: (input) => rootOpenLock.inLock(() => openHeadlessRoot(input)),
     };
 
-    const stopSignal = () => { void requestShutdown(true); };
+    const stopSignal = () => {
+        void recordLifecycleTimestamp('signalStoppedAt');
+        void requestShutdown(true);
+    };
     process.once('SIGTERM', stopSignal);
     process.once('SIGINT', stopSignal);
 
@@ -584,6 +626,7 @@ async function runCodexGatewayWorkerInternal(
             port: initialDescriptor.controlSocketPath ? undefined : 0,
             token: secret.controlToken,
             handlers: controlHandlers,
+            onError: () => { void recordLifecycleTimestamp('controlChannelErrorAt'); },
         });
         await descriptorStore.update((descriptor) => ({
             ...descriptor,
@@ -597,7 +640,8 @@ async function runCodexGatewayWorkerInternal(
         await proxy.start();
         await updateGatewayLifecycle('running');
         markStartupStage('ready');
-        heartbeat = setInterval(() => { void heartbeatOnce(); }, options.heartbeatMs ?? HEARTBEAT_MS);
+        heartbeat = setInterval(runHeartbeatTick, options.heartbeatMs ?? HEARTBEAT_MS);
+        presenceHeartbeat = setInterval(runPresenceTouchTick, options.presenceTouchMs ?? PRESENCE_TOUCH_MS);
         if (resumeGracefulStop) void requestShutdown(false);
         await new Promise<void>((resolve, reject) => {
             const poll = setInterval(() => {
@@ -623,8 +667,10 @@ async function runCodexGatewayWorkerInternal(
     } finally {
         process.off('SIGTERM', stopSignal);
         process.off('SIGINT', stopSignal);
-        if (heartbeat) clearInterval(heartbeat);
+        closePeriodicTicks();
+        await settlePeriodicTicks();
         closeFreshSubscriptionRetries();
+        closeDeferredRootRetries();
         terminal.dispose();
         const coordinatorAtShutdown = coordinator as CodexGatewayCoordinator | null;
         preserveProviderEndpoint ||= provider.requiresConservativeRecovery;
@@ -636,7 +682,9 @@ async function runCodexGatewayWorkerInternal(
             coordinatorAtShutdown?.stop({ force: true }) ?? Promise.resolve(),
             providerShutdown,
         ]);
+        await presence.releaseAll().catch(recordWorkerError);
         await Promise.allSettled([...freshSubscriptionTasks.values()]);
+        await Promise.allSettled([...deferredRootTasks.values()]);
         await syncDescriptorBindings().catch(() => undefined);
         await controlServer?.close().catch(() => undefined);
         await journal.close().catch(() => undefined);
@@ -683,6 +731,7 @@ async function runCodexGatewayWorkerInternal(
             ).thread,
         });
         deferredRoots.set(factoryOptions.threadId, { runtime: deferred, factoryOptions });
+        scheduleDeferredRootMaterialization(factoryOptions.threadId);
         return deferred;
     }
 
@@ -790,19 +839,103 @@ async function runCodexGatewayWorkerInternal(
 
     async function materializeDeferredRoots(): Promise<void> {
         if (!runtimeFactory || !coordinator) return;
-        for (const [threadId, deferred] of deferredRoots) {
+        await Promise.all([...deferredRoots.keys()].map((threadId) => (
+            materializeDeferredRootOnce(threadId)
+        )));
+    }
+
+    async function materializeDeferredRootOnce(threadId: string): Promise<boolean> {
+        const pending = deferredRootAttempts.get(threadId);
+        if (pending) return await pending;
+        const attempt = (async () => {
+            if (!runtimeFactory || !coordinator) return false;
+            const deferred = deferredRoots.get(threadId);
+            if (!deferred) return true;
             if (deferred.runtime.isMaterialized) {
                 await deferred.runtime.replayDeferred();
+                await coordinator.refreshBindingLinks();
+                await syncDescriptorBindings();
                 deferredRoots.delete(threadId);
-                continue;
+                return true;
             }
             const materialized = await runtimeFactory.tryCreate(deferred.factoryOptions);
-            if (!materialized) continue;
+            if (!materialized) return false;
             await deferred.runtime.materialize(materialized);
+            await coordinator.refreshBindingLinks();
+            await syncDescriptorBindings();
             deferredRoots.delete(threadId);
+            return true;
+        })();
+        deferredRootAttempts.set(threadId, attempt);
+        try {
+            return await attempt;
+        } finally {
+            if (deferredRootAttempts.get(threadId) === attempt) {
+                deferredRootAttempts.delete(threadId);
+            }
         }
-        await coordinator.refreshBindingLinks();
-        await syncDescriptorBindings();
+    }
+
+    function scheduleDeferredRootMaterialization(threadId: string): void {
+        if (stopping || deferredRootRetriesClosed || deferredRootTasks.has(threadId)) return;
+        const task = reconcileDeferredRoot(threadId);
+        deferredRootTasks.set(threadId, task);
+        const finish = () => {
+            if (deferredRootTasks.get(threadId) === task) deferredRootTasks.delete(threadId);
+        };
+        void task.then(finish, (error) => {
+            finish();
+            if (!deferredRootRetriesClosed) recordWorkerError(error);
+        });
+    }
+
+    async function reconcileDeferredRoot(threadId: string): Promise<void> {
+        for (let attempt = 0; ; attempt += 1) {
+            await waitForDeferredRootRetry(threadId, deferredRootRetryDelay(attempt));
+            if (stopping || deferredRootRetriesClosed || !deferredRoots.has(threadId)) return;
+            try {
+                if (await materializeDeferredRootOnce(threadId)) return;
+            } catch (error) {
+                await persistObserverRetryError(error).catch(() => undefined);
+            }
+        }
+    }
+
+    function deferredRootRetryDelay(attempt: number): number {
+        return DEFERRED_ROOT_RETRY_DELAYS_MS[
+            Math.min(attempt, DEFERRED_ROOT_RETRY_DELAYS_MS.length - 1)
+        ] ?? 30_000;
+    }
+
+    async function waitForDeferredRootRetry(threadId: string, delayMs: number): Promise<void> {
+        if (deferredRootRetriesClosed) return;
+        await new Promise<void>((resolveRetry) => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (deferredRootRetryWaiters.get(threadId) === finish) {
+                    deferredRootRetryWaiters.delete(threadId);
+                }
+                resolveRetry();
+            };
+            const timer = setTimeout(finish, delayMs);
+            deferredRootRetryWaiters.set(threadId, finish);
+        });
+    }
+
+    function wakeDeferredRootRetries(): void {
+        for (const threadId of deferredRoots.keys()) {
+            scheduleDeferredRootMaterialization(threadId);
+            deferredRootRetryWaiters.get(threadId)?.();
+        }
+    }
+
+    function closeDeferredRootRetries(): void {
+        if (deferredRootRetriesClosed) return;
+        deferredRootRetriesClosed = true;
+        for (const finish of [...deferredRootRetryWaiters.values()]) finish();
     }
 
     function syncPendingFreshSubscriptions(): void {
@@ -987,45 +1120,95 @@ async function runCodexGatewayWorkerInternal(
         if (!coordinator) return;
         const bindings = coordinator.bindingSnapshot();
         const current = bindings.find((binding) => binding.role === 'current') ?? null;
-        const draining = bindings.filter((binding) => binding.role === 'draining');
-        await descriptorStore.update((descriptor) => ({
-            ...descriptor,
-            current: current ? descriptorBinding(current) : null,
-            draining: draining.map(descriptorBinding),
-            heartbeatAt: Date.now(),
-            lastError: (
-                (options.clearRootBindingError && descriptor.lastError?.startsWith('rootBinding:'))
-                || (options.clearObserverRetryError && descriptor.lastError?.startsWith('observerRetry:'))
-                || (options.clearProxyError && descriptor.lastError?.startsWith('proxy:'))
-            ) ? null : descriptor.lastError,
-        }));
+        const draining = bindings
+            .filter((binding) => binding.role === 'draining')
+            .sort((left, right) => left.generation - right.generation);
+        await descriptorStore.update((descriptor) => {
+            const previousBindings = new Map(
+                [descriptor.current, ...descriptor.draining]
+                    .filter((binding): binding is CodexGatewayBinding => binding !== null)
+                    .map((binding) => [binding.threadId, binding]),
+            );
+            return {
+                ...descriptor,
+                current: current
+                    ? descriptorBinding(current, previousBindings.get(current.threadId))
+                    : null,
+                draining: draining.map((binding) => (
+                    descriptorBinding(binding, previousBindings.get(binding.threadId))
+                )),
+                heartbeatAt: Date.now(),
+                lastError: (
+                    (options.clearRootBindingError && descriptor.lastError?.startsWith('rootBinding:'))
+                    || (options.clearObserverRetryError && descriptor.lastError?.startsWith('observerRetry:'))
+                    || (options.clearProxyError && descriptor.lastError?.startsWith('proxy:'))
+                ) ? null : descriptor.lastError,
+            };
+        });
     }
 
     async function heartbeatOnce(): Promise<void> {
         if (stopping) return;
         try {
-            await materializeDeferredRoots();
-            await coordinator?.retireDrainingRoots();
-            syncPendingFreshSubscriptions();
-            const activeThreads = new Set(
-                coordinator?.bindingSnapshot().map((binding) => binding.threadId) ?? [],
-            );
-            for (const handoff of journal.pendingHandoffs()) {
-                if (handoff.state === 'bound' && !activeThreads.has(handoff.sourceThreadId)) {
-                    await journal.completeHandoff(handoff.commandId);
-                }
-            }
-            await syncDescriptorBindings();
+            const heartbeatAt = Date.now();
             await descriptorStore.update((descriptor) => ({
                 ...descriptor,
-                heartbeatAt: Date.now(),
+                heartbeatAt,
                 lastError: isPersistentGatewayDiagnostic(descriptor.lastError)
                     ? descriptor.lastError
                     : null,
+                lifecycle: {
+                    ...descriptor.lifecycle,
+                    lastHeartbeatAt: heartbeatAt,
+                },
             }));
         } catch (error) {
-            recordWorkerError(error);
+            await persistWorkerError(error).catch(() => undefined);
         }
+    }
+
+    function runHeartbeatTick(): void {
+        if (stopping || periodicTicksClosed || heartbeatPromise) return;
+        const task = heartbeatOnce();
+        heartbeatPromise = task;
+        void task.then(
+            () => {
+                if (heartbeatPromise === task) heartbeatPromise = null;
+            },
+            () => {
+                if (heartbeatPromise === task) heartbeatPromise = null;
+            },
+        );
+    }
+
+    function runPresenceTouchTick(): void {
+        if (stopping || periodicTicksClosed || presenceTouchPromise) return;
+        const task = presence.touchAll().catch(async (error) => {
+            await persistWorkerError(error).catch(() => undefined);
+        });
+        presenceTouchPromise = task;
+        void task.then(
+            () => {
+                if (presenceTouchPromise === task) presenceTouchPromise = null;
+            },
+            () => {
+                if (presenceTouchPromise === task) presenceTouchPromise = null;
+            },
+        );
+    }
+
+    function closePeriodicTicks(): void {
+        if (periodicTicksClosed) return;
+        periodicTicksClosed = true;
+        if (heartbeat) clearInterval(heartbeat);
+        if (presenceHeartbeat) clearInterval(presenceHeartbeat);
+    }
+
+    async function settlePeriodicTicks(): Promise<void> {
+        await Promise.allSettled([
+            heartbeatPromise ?? Promise.resolve(),
+            presenceTouchPromise ?? Promise.resolve(),
+        ]);
     }
 
     async function requestShutdown(force: boolean): Promise<void> {
@@ -1038,8 +1221,10 @@ async function runCodexGatewayWorkerInternal(
             return await shutdownPromise;
         }
         stopping = true;
+        closePeriodicTicks();
         closeFreshSubscriptionRetries();
         shutdownPromise = (async () => {
+            await settlePeriodicTicks();
             // Persist the externally visible lifecycle before taking any root lock.
             // A hanging observer read/resume can hold that lock until its transport
             // is closed below.
@@ -1058,7 +1243,6 @@ async function runCodexGatewayWorkerInternal(
             await coordinator?.setGatewayLifecycle('stopping').catch(recordWorkerError);
             while (coordinator) {
                 try {
-                    if (!forceShutdownRequested) await materializeDeferredRoots();
                     await coordinator.stop({ force: forceShutdownRequested });
                     return;
                 } catch (error) {
@@ -1149,6 +1333,19 @@ async function runCodexGatewayWorkerInternal(
         void persistWorkerError(error);
     }
 
+    async function recordLifecycleTimestamp(
+        field: 'normalExitedAt' | 'signalStoppedAt' | 'providerExitedAt' | 'controlChannelErrorAt',
+    ): Promise<void> {
+        const occurredAt = Date.now();
+        await descriptorStore.update((descriptor) => ({
+            ...descriptor,
+            lifecycle: {
+                ...descriptor.lifecycle,
+                [field]: occurredAt,
+            },
+        })).catch(() => undefined);
+    }
+
     async function terminateVerifiedProvider(pid: number): Promise<void> {
         const isExpected = () => isExpectedCodexGatewayProviderProcess({
             pid,
@@ -1209,7 +1406,17 @@ function descriptorBinding(input: {
     generation: number;
     role: 'current' | 'draining' | 'inactive' | 'recovering';
     title: string | null;
-}): CodexGatewayBinding {
+}, previous?: CodexGatewayBinding): CodexGatewayBinding {
+    if (
+        previous
+        && previous.threadId === input.threadId
+        && previous.sessionId === input.sessionId
+        && previous.generation === input.generation
+        && previous.role === input.role
+        && previous.title === input.title
+    ) {
+        return previous;
+    }
     return {
         threadId: input.threadId,
         sessionId: input.sessionId,

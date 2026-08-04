@@ -26,9 +26,14 @@ const mocks = vi.hoisted(() => ({
     disconnectCalls: 0,
     providerStopDelayMs: 0,
     providerStartError: null as Error | null,
+    runtimeBindingUpdates: 0,
+    presenceClaims: [] as Array<{ sessionId: string; leaseId: string }>,
+    presenceTouches: [] as Array<{ sessionId: string; leaseId: string }>,
+    presenceReleases: [] as Array<{ sessionId: string; leaseId: string }>,
 }));
 
 vi.mock('@/api/api', () => ({
+    SessionPresenceConflictError: class SessionPresenceConflictError extends Error {},
     ApiClient: {
         create: vi.fn(async () => ({
             getOrCreateMachine: vi.fn(async () => null),
@@ -36,6 +41,18 @@ vi.mock('@/api/api', () => ({
             unarchiveSession: vi.fn(async () => false),
             sessionSyncClient: vi.fn(),
             archiveSessionV4: vi.fn(async () => true),
+            claimSessionPresence: vi.fn(async (sessionId: string, leaseId: string) => {
+                mocks.presenceClaims.push({ sessionId, leaseId });
+                return mocks.relayAvailable;
+            }),
+            touchSessionPresence: vi.fn(async (sessionId: string, leaseId: string) => {
+                mocks.presenceTouches.push({ sessionId, leaseId });
+                return true;
+            }),
+            releaseSessionPresence: vi.fn(async (sessionId: string, leaseId: string) => {
+                mocks.presenceReleases.push({ sessionId, leaseId });
+                return true;
+            }),
         })),
     },
 }));
@@ -70,8 +87,16 @@ vi.mock('../codexModelCapabilities', () => ({
 vi.mock('../codexSkills', () => ({ discoverCodexSkillCommands: vi.fn(async () => []) }));
 vi.mock('./codexGatewayRuntimeFactory', () => ({
     CodexGatewayRuntimeFactory: class {
+        constructor(private readonly options: {
+            presence: {
+                claim(sessionId: string): Promise<{ release(): Promise<void> } | null>;
+            };
+        }) {}
         async tryCreate(options: { threadId: string }) {
             if (!mocks.relayAvailable) return null;
+            const presenceLease = await this.options.presence.claim(`session-${options.threadId}`);
+            if (!presenceLease) return null;
+            let closed = false;
             return {
                 sessionId: `session-${options.threadId}`,
                 handleNotification: async () => undefined,
@@ -79,13 +104,17 @@ vi.mock('./codexGatewayRuntimeFactory', () => ({
                 setConnection: () => undefined,
                 activate: async () => undefined,
                 reconcile: async () => undefined,
-                updateBinding: async () => undefined,
+                updateBinding: async () => { mocks.runtimeBindingUpdates += 1; },
                 setGatewayLifecycle: async () => undefined,
                 setTerminalState: async () => undefined,
                 ownsThread: (threadId: string) => threadId === options.threadId,
                 isDrained: async () => true,
                 flush: async () => undefined,
-                close: async () => undefined,
+                close: async () => {
+                    if (closed) return;
+                    closed = true;
+                    await presenceLease.release();
+                },
             };
         }
     },
@@ -255,6 +284,10 @@ afterEach(async () => {
     mocks.disconnectCalls = 0;
     mocks.providerStopDelayMs = 0;
     mocks.providerStartError = null;
+    mocks.runtimeBindingUpdates = 0;
+    mocks.presenceClaims.length = 0;
+    mocks.presenceTouches.length = 0;
+    mocks.presenceReleases.length = 0;
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -341,6 +374,83 @@ describe('Codex Gateway worker composition', () => {
         expect(mocks.connectAttempts).toBe(2);
         await mocks.controlHandlers!.stop({ force: true });
         await worker;
+    });
+
+    it('keeps the descriptor heartbeat local without rewriting runtime bindings', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.relayAvailable = true;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 20,
+            presenceTouchMs: 60_000,
+        });
+        await vi.waitFor(() => expect(mocks.controlHandlers).not.toBeNull());
+        await mocks.controlHandlers!.openRoot(openRootInput());
+        const before = await readCodexGatewayDescriptor(created.paths.descriptorPath);
+        const bindingUpdates = mocks.runtimeBindingUpdates;
+        const bindingChangedAt = before?.current?.changedAt;
+        const heartbeatAt = before?.lifecycle.lastHeartbeatAt ?? 0;
+
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.lifecycle.lastHeartbeatAt,
+        ).toBeGreaterThan(heartbeatAt));
+        await new Promise((resolve) => setTimeout(resolve, 60));
+
+        expect(mocks.runtimeBindingUpdates).toBe(bindingUpdates);
+        expect((await readCodexGatewayDescriptor(created.paths.descriptorPath))?.current?.changedAt)
+            .toBe(bindingChangedAt);
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
+    it('touches Presence on one lease and reconciles that same live binding', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        mocks.relayAvailable = true;
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+            presenceTouchMs: 20,
+        });
+        await vi.waitFor(() => expect(mocks.controlHandlers).not.toBeNull());
+        const opened = await mocks.controlHandlers!.openRoot(openRootInput());
+        await vi.waitFor(() => expect(mocks.presenceTouches.length).toBeGreaterThanOrEqual(2));
+        const claimed = mocks.presenceClaims[0];
+
+        expect(claimed.sessionId).toBe(opened.sessionId);
+        expect(mocks.presenceTouches.every((touch) => (
+            touch.sessionId === claimed.sessionId && touch.leaseId === claimed.leaseId
+        ))).toBe(true);
+        await expect(mocks.controlHandlers!.presenceReconcile({ sessionId: opened.sessionId }))
+            .resolves.toEqual({ reconciled: true });
+        expect(mocks.presenceClaims.at(-1)).toEqual(claimed);
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+        expect(mocks.presenceReleases).toEqual([claimed]);
     });
 
     it('atomically persists the startup stage before exposing a stopped descriptor', async () => {
@@ -852,7 +962,7 @@ describe('Codex Gateway worker composition', () => {
         await worker;
     }, 5_000);
 
-    it('keeps a normal stop recoverable until the relay session can be archived', async () => {
+    it('keeps an offline normal stop recoverable without waiting for an archive', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);
         const happyHomeDir = join(root, 'happy');
@@ -893,14 +1003,9 @@ describe('Codex Gateway worker composition', () => {
         await expect(mocks.controlHandlers!.openRoot(input)).rejects.toThrow('relay is unavailable');
 
         await mocks.controlHandlers!.stop({ force: false });
-        await vi.waitFor(async () => expect(
-            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
-        ).toBe('stopping'));
-        expect(settled).toBe(false);
-
-        mocks.relayAvailable = true;
-        await mocks.controlHandlers!.stop({ force: false });
         await worker;
+        expect(settled).toBe(true);
+        expect(mocks.relayAvailable).toBe(false);
         expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
             state: 'stopped',
             current: null,
@@ -936,6 +1041,23 @@ describe('Codex Gateway worker composition', () => {
         });
     }, 5_000);
 });
+
+function openRootInput() {
+    return {
+        operationId: '923c9e95-b234-46e8-ac42-acde41f1401f',
+        action: 'start' as const,
+        threadId: null,
+        cwd: '/workspace/project',
+        model: null,
+        permissionMode: 'default' as const,
+        effortLevel: 'max',
+        parentSessionId: null,
+        forkedFromMessageId: null,
+        isSideChat: false,
+        happySessionId: null,
+        dataEncryptionKey: null,
+    };
+}
 
 function thread(id: string): Thread {
     return {
