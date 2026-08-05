@@ -132,6 +132,7 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     setConnection(_event: CodexConnectionEvent): void {}
     async activate(snapshot: Thread): Promise<void> { this.activated.push(snapshot); }
     async reconcile(snapshot: Thread): Promise<void> { this.reconciled.push(snapshot); }
+    async resumeCommandRecovery(): Promise<void> {}
     async updateBinding(_binding: CodexGatewayRuntimeBinding): Promise<void> {}
     async setGatewayLifecycle(_state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped'): Promise<void> {}
     async setTerminalState(

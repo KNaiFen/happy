@@ -49,7 +49,7 @@ export interface CodexV4SessionBinding {
     syncClient: SyncV4Client;
     commandProcessor: CodexV4CommandProcessor;
     requestBroker: CodexV4RequestBroker;
-    recover(): Promise<void>;
+    recover(options?: { resumeCommands?: boolean }): Promise<void>;
     close(): Promise<void>;
 }
 

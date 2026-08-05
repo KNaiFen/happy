@@ -7,8 +7,10 @@ import type {
 } from '../codexAppServerClient';
 import type { ServerNotification, Thread } from '../protocol';
 import type {
+    CodexGatewayRootActivationOptions,
     CodexGatewayRootRuntime,
     CodexGatewayRuntimeBinding,
+    CodexGatewayRuntimeBindingUpdateOptions,
 } from './codexGatewayCoordinator';
 import type { CodexGatewayJournal } from './codexGatewayJournal';
 
@@ -131,10 +133,13 @@ export class CodexGatewayDeferredRuntime implements CodexGatewayRootRuntime {
         this.inner?.setConnection(event);
     }
 
-    async activate(snapshot: Thread): Promise<void> {
+    async activate(
+        snapshot: Thread,
+        options: CodexGatewayRootActivationOptions = {},
+    ): Promise<void> {
         await this.operationLock.inLock(async () => {
             this.latestSnapshot = snapshot;
-            if (this.inner) await this.inner.activate(snapshot);
+            if (this.inner) await this.inner.activate(snapshot, options);
             else await this.options.journal.enqueueSnapshotRequired(this.options.threadId);
         });
     }
@@ -147,10 +152,18 @@ export class CodexGatewayDeferredRuntime implements CodexGatewayRootRuntime {
         });
     }
 
-    async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
+    async resumeCommandRecovery(): Promise<void> {
+        const inner = await this.operationLock.inLock(async () => this.inner);
+        await inner?.resumeCommandRecovery();
+    }
+
+    async updateBinding(
+        binding: CodexGatewayRuntimeBinding,
+        options: CodexGatewayRuntimeBindingUpdateOptions = {},
+    ): Promise<void> {
         await this.operationLock.inLock(async () => {
+            await this.inner?.updateBinding(binding, options);
             this.binding = binding;
-            await this.inner?.updateBinding(binding);
         });
     }
 

@@ -14,6 +14,7 @@ import {
     type CodexGatewayRuntimeBinding,
 } from './codexGatewayCoordinator';
 import { CodexGatewayArchivedSessionError } from './codexGatewayPresence';
+import { CodexGatewayRuntimeBindingUpdateError } from './codexGatewaySyncRuntime';
 
 describe('Codex Gateway coordinator', () => {
     it('restores exact current and draining generations before accepting new work', async () => {
@@ -67,6 +68,25 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.acquire).toHaveBeenCalledWith('thread-a', 'gateway-1');
         expect(harness.leases.release).toHaveBeenCalledWith('thread-a', 'gateway-1');
         expect(harness.client.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('releases the binding lock before restored command recovery can retry a handoff', async () => {
+        let harness!: ReturnType<typeof createHarness>;
+        harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+        }, {
+            onResumeCommandRecovery: async (threadId) => {
+                if (threadId === 'thread-a') await harness.coordinator.bindRoot('thread-b');
+            },
+        });
+        await harness.coordinator.connect();
+
+        await expect(harness.coordinator.restoreBindings([
+            { threadId: 'thread-a', sessionId: 'session-thread-a', generation: 1, role: 'current' },
+        ])).resolves.toBeUndefined();
+
+        expect(harness.coordinator.currentThreadId).toBe('thread-b');
     });
 
     it('keeps the prior root draining until its authoritative turn completes', async () => {
@@ -531,6 +551,156 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.leases.release).toHaveBeenCalledWith('thread-b', 'gateway-1');
     });
 
+    it('retains the target runtime and lease when durable binding rollback needs recovery', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        harness.failBindingRecoveryForThread = 'thread-b';
+
+        const failure = await harness.coordinator.bindRoot('thread-b').then(
+            () => null,
+            (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(CodexGatewayRootBindingError);
+        expect(failure).toMatchObject({ phase: 'targetBinding', recoveryRequired: true });
+        expect(harness.coordinator.currentThreadId).toBe('thread-a');
+        expect(harness.coordinator.currentGeneration).toBe(1);
+        expect(harness.runtimes.get('thread-a')!.bindings.at(-1)?.role).toBe('current');
+        expect(harness.coordinator.bindingSnapshot()).toEqual(expect.arrayContaining([
+            expect.objectContaining({ threadId: 'thread-a', role: 'draining' }),
+            expect.objectContaining({ threadId: 'thread-b', role: 'recovering' }),
+        ]));
+        expect(() => harness.runtimes.get('thread-a')!.assertCurrentGeneration(1))
+            .toThrow(CodexV4CommandCancelledError);
+        expect(harness.runtimes.get('thread-b')!.gatewayLifecycleStates.at(-1)).toBe('recovering');
+        expect(harness.runtimes.get('thread-b')!.close).not.toHaveBeenCalled();
+        expect(harness.leases.release).not.toHaveBeenCalledWith('thread-b', 'gateway-1');
+
+        harness.failBindingRecoveryForThread = null;
+        await expect(harness.coordinator.recoverPendingBinding()).resolves.toBe(true);
+        expect(harness.coordinator.bindingSnapshot()).toEqual([
+            expect.objectContaining({ threadId: 'thread-b', role: 'current' }),
+        ]);
+        expect(harness.runtimes.get('thread-b')!.gatewayLifecycleStates.at(-1)).toBe('running');
+        await expect(harness.coordinator.bindRoot('thread-b')).resolves.toMatchObject({
+            generation: 2,
+            changed: false,
+        });
+        expect(harness.coordinator.currentThreadId).toBe('thread-b');
+    });
+
+    it('recovers a first root whose durable compensation failed without a source session', async () => {
+        const harness = createHarness({ 'thread-a': thread('thread-a', 'idle') });
+        await harness.coordinator.connect();
+        harness.failBindingRecoveryForThread = 'thread-a';
+
+        await expect(harness.coordinator.bindRoot('thread-a')).rejects.toMatchObject({
+            phase: 'targetBinding',
+            recoveryRequired: true,
+        });
+        expect(harness.coordinator.currentThreadId).toBeNull();
+        expect(harness.coordinator.bindingSnapshot()).toEqual([
+            expect.objectContaining({ threadId: 'thread-a', role: 'recovering' }),
+        ]);
+
+        harness.failBindingRecoveryForThread = null;
+        await expect(harness.coordinator.recoverPendingBinding()).resolves.toBe(true);
+        expect(harness.coordinator.currentThreadId).toBe('thread-a');
+        expect(harness.coordinator.currentGeneration).toBe(1);
+    });
+
+    it('fails closed and recovers forward when restoring the source current binding fails', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        harness.failBindingForThread = 'thread-b';
+        harness.failCurrentBindingOnceForThread = 'thread-a';
+
+        const failure = await harness.coordinator.bindRoot('thread-b').then(
+            () => null,
+            (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(CodexGatewayRootBindingError);
+        expect(failure).toMatchObject({
+            phase: 'sourceBinding',
+            recoveryRequired: true,
+            rollbackCause: expect.objectContaining({ phase: 'targetBinding' }),
+        });
+        expect(harness.coordinator.bindingSnapshot()).toEqual(expect.arrayContaining([
+            expect.objectContaining({ threadId: 'thread-a', role: 'draining' }),
+            expect.objectContaining({ threadId: 'thread-b', role: 'recovering' }),
+        ]));
+        expect(harness.runtimes.get('thread-b')!.close).not.toHaveBeenCalled();
+        expect(harness.leases.release).not.toHaveBeenCalledWith('thread-b', 'gateway-1');
+
+        harness.failBindingForThread = null;
+        await expect(harness.coordinator.recoverPendingBinding()).resolves.toBe(true);
+        expect(harness.coordinator.currentThreadId).toBe('thread-b');
+        expect(harness.runtimes.get('thread-b')!.gatewayLifecycleStates.at(-1)).toBe('running');
+    });
+
+    it('does not let a newer root overtake a binding that still requires recovery', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+            'thread-c': thread('thread-c', 'idle'),
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        harness.failBindingRecoveryForThread = 'thread-b';
+        await expect(harness.coordinator.bindRoot('thread-b')).rejects.toMatchObject({
+            recoveryRequired: true,
+        });
+
+        await expect(harness.coordinator.bindRoot('thread-c')).rejects.toMatchObject({
+            phase: 'targetBinding',
+            recoveryRequired: true,
+        });
+        expect(harness.runtimes.has('thread-c')).toBe(false);
+        expect(harness.leases.acquire).not.toHaveBeenCalledWith('thread-c', 'gateway-1');
+
+        harness.failBindingRecoveryForThread = null;
+        await expect(harness.coordinator.recoverPendingBinding()).resolves.toBe(true);
+        expect(harness.coordinator.currentThreadId).toBe('thread-b');
+    });
+
+    it('does not recreate a recovering root relinquished before its queued retry', async () => {
+        const harness = createHarness({
+            'thread-a': thread('thread-a', 'idle'),
+            'thread-b': thread('thread-b', 'idle'),
+        });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-a');
+        harness.failBindingRecoveryForThread = 'thread-b';
+        await expect(harness.coordinator.bindRoot('thread-b')).rejects.toMatchObject({
+            recoveryRequired: true,
+        });
+        harness.failBindingRecoveryForThread = null;
+        const acquireCount = harness.leases.acquire.mock.calls.filter(
+            (call) => (call as unknown as [string, string])[0] === 'thread-b',
+        ).length;
+
+        const relinquished = harness.coordinator.relinquishThread('thread-b');
+        const recovery = harness.coordinator.recoverPendingBinding();
+        await expect(relinquished).resolves.toBe(true);
+        await expect(recovery).resolves.toBe(false);
+
+        expect(harness.leases.acquire.mock.calls.filter(
+            (call) => (call as unknown as [string, string])[0] === 'thread-b',
+        )).toHaveLength(acquireCount);
+        expect(harness.coordinator.bindingSnapshot()).not.toEqual(expect.arrayContaining([
+            expect.objectContaining({ threadId: 'thread-b' }),
+        ]));
+    });
+
     it('classifies a root snapshot failure without exposing provider payloads', async () => {
         const harness = createHarness({ 'thread-a': thread('thread-a', 'idle') });
         await harness.coordinator.connect();
@@ -612,6 +782,7 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     readonly notifications: ServerNotification[] = [];
     readonly ownedThreads = new Set<string>();
     readonly activatedSnapshots: Thread[] = [];
+    readonly gatewayLifecycleStates: Array<'starting' | 'running' | 'recovering' | 'stopping' | 'stopped'> = [];
     drained = true;
     onNotification: ((notification: ServerNotification) => Promise<void>) | null = null;
     readonly close = vi.fn<() => Promise<void>>(async () => undefined);
@@ -622,9 +793,10 @@ class FakeRuntime implements CodexGatewayRootRuntime {
         public sessionId: string | null,
         readonly registerThreadOwnership: (threadId: string) => void,
         readonly assertCurrentGeneration: (generation: number | undefined) => void,
-        rootThreadId: string,
+        private readonly rootThreadId: string,
+        private readonly onResumeCommandRecovery?: (threadId: string) => Promise<void>,
     ) {
-        this.ownedThreads.add(rootThreadId);
+        this.ownedThreads.add(this.rootThreadId);
     }
 
     async handleNotification(notification: ServerNotification): Promise<void> {
@@ -645,10 +817,17 @@ class FakeRuntime implements CodexGatewayRootRuntime {
     async activate(snapshot: Thread): Promise<void> {
         this.activatedSnapshots.push(snapshot);
     }
+    async resumeCommandRecovery(): Promise<void> {
+        await this.onResumeCommandRecovery?.(this.rootThreadId);
+    }
     async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
         this.bindings.push(binding);
     }
-    async setGatewayLifecycle(_state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped'): Promise<void> {}
+    async setGatewayLifecycle(
+        state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped',
+    ): Promise<void> {
+        this.gatewayLifecycleStates.push(state);
+    }
     async setTerminalState(
         _state: 'attached' | 'pendingDetach' | 'detached' | 'headless',
         _detachedAt: number | null,
@@ -721,6 +900,7 @@ function createHarness(
         registerDuringCreation?: string;
         sessionIdForThread?: (threadId: string) => string | null;
         archivedThread?: string;
+        onResumeCommandRecovery?: (threadId: string) => Promise<void>;
     } = {},
 ) {
     const client = new FakeClient(new Map(Object.entries(threads)));
@@ -730,6 +910,8 @@ function createHarness(
         release: vi.fn(async () => true),
     };
     let failBindingForThread: string | null = null;
+    let failBindingRecoveryForThread: string | null = null;
+    let failCurrentBindingOnceForThread: string | null = null;
     const coordinator = new CodexGatewayCoordinator({
         gatewayId: 'gateway-1',
         client: client as unknown as import('../codexAppServerClient').CodexAppServerClient,
@@ -746,6 +928,7 @@ function createHarness(
                 factoryOptions.registerThreadOwnership,
                 factoryOptions.assertCurrentGeneration,
                 factoryOptions.threadId,
+                options.onResumeCommandRecovery,
             );
             if (options.registerDuringCreation) {
                 runtime.ownedThreads.add(options.registerDuringCreation);
@@ -753,6 +936,24 @@ function createHarness(
             }
             const updateBinding = runtime.updateBinding.bind(runtime);
             runtime.updateBinding = async (binding) => {
+                if (
+                    failCurrentBindingOnceForThread === factoryOptions.threadId
+                    && binding.role === 'current'
+                ) {
+                    failCurrentBindingOnceForThread = null;
+                    throw new Error('source current rollback failed');
+                }
+                if (
+                    failBindingRecoveryForThread === factoryOptions.threadId
+                    && binding.role === 'current'
+                ) {
+                    throw new CodexGatewayRuntimeBindingUpdateError(
+                        'mapperFlush',
+                        new Error('binding update failed'),
+                        true,
+                        new Error('binding rollback failed'),
+                    );
+                }
                 if (failBindingForThread === factoryOptions.threadId && binding.role === 'current') {
                     throw new Error('binding update failed');
                 }
@@ -772,6 +973,18 @@ function createHarness(
         },
         set failBindingForThread(threadId: string | null) {
             failBindingForThread = threadId;
+        },
+        get failBindingRecoveryForThread() {
+            return failBindingRecoveryForThread;
+        },
+        set failBindingRecoveryForThread(threadId: string | null) {
+            failBindingRecoveryForThread = threadId;
+        },
+        get failCurrentBindingOnceForThread() {
+            return failCurrentBindingOnceForThread;
+        },
+        set failCurrentBindingOnceForThread(threadId: string | null) {
+            failCurrentBindingOnceForThread = threadId;
         },
     };
 }
