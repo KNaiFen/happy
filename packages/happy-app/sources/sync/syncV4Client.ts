@@ -102,6 +102,14 @@ function diagnosticErrorKind(
     return classified === 'unknown' ? fallback : classified;
 }
 
+function samePendingOutbox(
+    left: readonly SyncMutationV4[],
+    right: readonly SyncMutationV4[],
+): boolean {
+    return left.length === right.length
+        && left.every((mutation, index) => mutation.mutationId === right[index]?.mutationId);
+}
+
 export interface AppSyncV4AppliedEntity {
     entity: CodexEntityV4;
     source: 'cache' | 'change' | 'snapshot';
@@ -1069,56 +1077,90 @@ export class AppSyncV4Client {
                 });
                 throw error;
             }
-            try {
-                failureKind = 'crypto';
-                for (const mutation of pendingOutbox) {
-                    if ((snapshotRevisions.get(mutation.entityId) ?? 0) >= mutation.revision) continue;
-                    const entity = await this.crypto.decryptEntity(
-                        toAad(this.sessionId, mutation),
-                        mutation.ciphertext,
-                    );
-                    if (!this.isCurrentGeneration(generation)) return;
-                    replacement.push({
-                        entity,
+            let committed = false;
+            let replacementCount = replacement.length;
+            while (!committed) {
+                const pendingReplacement: AppSyncV4AppliedEntity[] = [];
+                try {
+                    failureKind = 'crypto';
+                    for (const mutation of pendingOutbox) {
+                        if ((snapshotRevisions.get(mutation.entityId) ?? 0) >= mutation.revision) continue;
+                        const entity = await this.crypto.decryptEntity(
+                            toAad(this.sessionId, mutation),
+                            mutation.ciphertext,
+                        );
+                        if (!this.isCurrentGeneration(generation)) return;
+                        pendingReplacement.push({
+                            entity,
+                            source: 'cache',
+                            op: mutation.op,
+                            revision: mutation.revision,
+                            seq: null,
+                        });
+                    }
+                } catch (error) {
+                    this.recordDiagnostic({
+                        level: 'error',
+                        event: 'outbox',
+                        phase: 'failed',
                         source: 'cache',
-                        op: mutation.op,
-                        revision: mutation.revision,
-                        seq: null,
+                        count: pendingOutbox.length,
+                        errorKind: diagnosticErrorKind(error, 'crypto'),
                     });
+                    throw error;
                 }
-            } catch (error) {
-                this.recordDiagnostic({
-                    level: 'error',
-                    event: 'outbox',
-                    phase: 'failed',
-                    source: 'cache',
-                    count: pendingOutbox.length,
-                    errorKind: diagnosticErrorKind(error, 'crypto'),
+
+                // Revalidate at commit so a publish is either replayed by this replacement
+                // or persists after it; snapshot network and decryption stay outside the lock.
+                await this.publishLock.inLock(async () => {
+                    if (!this.isCurrentGeneration(generation)) return;
+                    let currentPendingOutbox: SyncMutationV4[];
+                    try {
+                        failureKind = 'storage';
+                        currentPendingOutbox = this.persistence.getPendingOutbox(this.sessionId);
+                    } catch (error) {
+                        this.recordDiagnostic({
+                            level: 'error',
+                            event: 'outbox',
+                            phase: 'failed',
+                            source: 'cache',
+                            errorKind: diagnosticErrorKind(error, 'storage'),
+                        });
+                        throw error;
+                    }
+                    if (!samePendingOutbox(pendingOutbox, currentPendingOutbox)) {
+                        pendingOutbox = currentPendingOutbox;
+                        return;
+                    }
+
+                    const committedReplacement = [...replacement, ...pendingReplacement];
+                    replacementCount = committedReplacement.length;
+                    failureKind = 'projection';
+                    await this.replaceSnapshotForGeneration(committedReplacement, generation);
+                    if (!this.isCurrentGeneration(generation)) return;
+                    try {
+                        failureKind = 'storage';
+                        this.persistence.finishSnapshot(
+                            this.sessionId,
+                            snapshotGeneration,
+                            highWatermark ?? 0,
+                        );
+                    } catch (error) {
+                        this.recordDiagnostic({
+                            level: 'error',
+                            event: 'cursor',
+                            phase: 'failed',
+                            direction: 'inbound',
+                            cursor: this.receiveCursor,
+                            highWatermark: highWatermark ?? 0,
+                            count: replacementCount,
+                            errorKind: 'storage',
+                        });
+                        throw error;
+                    }
+                    committed = true;
                 });
-                throw error;
-            }
-            failureKind = 'projection';
-            await this.replaceSnapshotForGeneration(replacement, generation);
-            if (!this.isCurrentGeneration(generation)) return;
-            try {
-                failureKind = 'storage';
-                this.persistence.finishSnapshot(
-                    this.sessionId,
-                    snapshotGeneration,
-                    highWatermark ?? 0,
-                );
-            } catch (error) {
-                this.recordDiagnostic({
-                    level: 'error',
-                    event: 'cursor',
-                    phase: 'failed',
-                    direction: 'inbound',
-                    cursor: this.receiveCursor,
-                    highWatermark: highWatermark ?? 0,
-                    count: replacement.length,
-                    errorKind: 'storage',
-                });
-                throw error;
+                if (!this.isCurrentGeneration(generation)) return;
             }
             this.recordDiagnostic({
                 level: 'info',
@@ -1127,7 +1169,7 @@ export class AppSyncV4Client {
                 direction: 'inbound',
                 cursor: highWatermark ?? 0,
                 highWatermark: highWatermark ?? 0,
-                count: replacement.length,
+                count: replacementCount,
                 page: pageNumber,
                 durationMs: elapsedMs(snapshotStartedAt),
             });
