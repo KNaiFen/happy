@@ -1,7 +1,7 @@
 # Happy CLI 架构
 
 > **当前文档（2026-08-05）：** 未指定 provider 的新会话只启动 Codex。
-> Claude 的启动、认证、连接、恢复、fork、UI、SDK 和 prompt fallback 已移除。
+> 历史非 Codex 路径的启动、认证、连接、恢复、fork、UI、SDK 和 prompt fallback 已移除。
 
 ## 入口与运行形态
 
