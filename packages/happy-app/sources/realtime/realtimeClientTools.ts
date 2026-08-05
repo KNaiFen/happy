@@ -8,6 +8,7 @@ import {
     getVoiceMessageCount,
     incrementVoiceMessageCount,
 } from '@/sync/persistence';
+import { voiceLog } from './voiceLog';
 
 /**
  * Static client tools for the realtime voice interface.
@@ -25,13 +26,13 @@ export const realtimeClientTools = {
         const parsed = schema.safeParse(parameters);
 
         if (!parsed.success) {
-            console.error('❌ Invalid parameters:', parsed.error);
+            voiceLog('tool.parameters.invalid', { tool: 'message' }, 'error');
             return "error (invalid parameters)";
         }
 
         const { sessionId, message } = parsed.data;
-        console.log('📤 Sending message to session:', sessionId);
         await sync.sendMessage(sessionId, message, { source: 'voice' });
+        voiceLog('tool.message.sent', { tool: 'message', outcome: 'success' });
         incrementVoiceMessageCount();
         const voiceMessageCount = getVoiceMessageCount();
         if (isVoiceSessionStarted()) {
@@ -54,7 +55,7 @@ export const realtimeClientTools = {
         const parsed = schema.safeParse(parameters);
 
         if (!parsed.success) {
-            console.error('❌ Invalid parameters:', parsed.error);
+            voiceLog('tool.parameters.invalid', { tool: 'permission' }, 'error');
             return "error (invalid parameters)";
         }
 
@@ -71,11 +72,9 @@ export const realtimeClientTools = {
         }
 
         if (!sessionId) {
-            console.error('❌ No session found with request:', requestId);
+            voiceLog('tool.permission.missing', { tool: 'permission', outcome: 'blocked' }, 'warn');
             return "error (permission request not found)";
         }
-
-        console.log('🔍 processPermissionRequest:', decision, 'for session:', sessionId, 'request:', requestId);
 
         try {
             if (decision === 'allow') {
@@ -85,9 +84,18 @@ export const realtimeClientTools = {
                 await sessionDeny(sessionId, requestId);
                 trackVoicePermissionResponse(false);
             }
+            voiceLog('tool.permission.resolved', {
+                tool: 'permission',
+                decision,
+                outcome: 'success',
+            });
             return "done [DO NOT say anything else, simply say 'done']";
-        } catch (error) {
-            console.error('❌ Failed to process permission:', error);
+        } catch {
+            voiceLog('tool.permission.failed', {
+                tool: 'permission',
+                decision,
+                outcome: 'failed',
+            }, 'error');
             return `error (failed to ${decision} permission)`;
         }
     }

@@ -1,6 +1,7 @@
 import { Platform, Linking } from 'react-native';
 import { Modal } from '@/modal';
 import { AudioModule } from 'expo-audio';
+import { voiceLog } from '@/realtime/voiceLog';
 
 export interface MicrophonePermissionResult {
   granted: boolean;
@@ -24,7 +25,7 @@ export async function requestMicrophonePermission(): Promise<MicrophonePermissio
         return { granted: true };
       } catch (error: any) {
         // User denied permission or browser doesn't support getUserMedia
-        console.error('Web microphone permission denied:', error);
+        voiceLog('microphone.permission.denied', { outcome: 'blocked' }, 'warn');
         return { granted: false, canAskAgain: error.name !== 'NotAllowedError' };
       }
     } else {
@@ -43,8 +44,8 @@ export async function requestMicrophonePermission(): Promise<MicrophonePermissio
 
       return { granted: false, canAskAgain: result.canAskAgain };
     }
-  } catch (error) {
-    console.error('Error requesting microphone permission:', error);
+  } catch {
+    voiceLog('microphone.permission.request.failed', { outcome: 'failed' }, 'error');
     return { granted: false };
   }
 }
@@ -72,8 +73,8 @@ export async function checkMicrophonePermission(): Promise<MicrophonePermissionR
       const result = await AudioModule.getRecordingPermissionsAsync();
       return { granted: result.granted, canAskAgain: result.canAskAgain };
     }
-  } catch (error) {
-    console.error('Error checking microphone permission:', error);
+  } catch {
+    voiceLog('microphone.permission.check.failed', { outcome: 'failed' }, 'error');
     return { granted: false };
   }
 }

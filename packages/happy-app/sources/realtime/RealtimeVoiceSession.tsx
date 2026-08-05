@@ -5,6 +5,7 @@ import { storage } from '@/sync/storage';
 import { realtimeClientTools } from './realtimeClientTools';
 import { getElevenLabsCodeFromPreference } from '@/constants/Languages';
 import type { VoiceSession, VoiceSessionConfig } from './types';
+import { voiceLog } from './voiceLog';
 
 // Static reference to the conversation hook instance
 let conversationInstance: ReturnType<typeof useConversation> | null = null;
@@ -20,7 +21,7 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
     
     async startSession(config: VoiceSessionConfig): Promise<string | null> {
         if (!conversationInstance) {
-            console.warn('Realtime voice session not initialized');
+            voiceLog('session.unavailable', undefined, 'warn');
             throw new Error('Realtime voice session not initialized');
         }
 
@@ -57,7 +58,7 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
             await conversationInstance.startSession(sessionConfig);
             return conversationInstance.getId?.() ?? null;
         } catch (error) {
-            console.error('Failed to start realtime session:', error);
+            voiceLog('provider.error', { outcome: 'failed' }, 'error');
             storage.getState().setRealtimeStatus('error');
             throw error;
         }
@@ -71,8 +72,8 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
 
         try {
             await conversationInstance.endSession();
-        } catch (error) {
-            console.error('Failed to end realtime session:', error);
+        } catch {
+            voiceLog('provider.error', { outcome: 'failed' }, 'error');
         } finally {
             storage.getState().setRealtimeStatus('disconnected');
         }
@@ -80,27 +81,27 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
 
     sendTextMessage(message: string): void {
         if (!conversationInstance) {
-            console.warn('Realtime voice session not initialized');
+            voiceLog('session.unavailable', undefined, 'warn');
             return;
         }
 
         try {
             conversationInstance.sendUserMessage(message);
-        } catch (error) {
-            console.error('Failed to send text message:', error);
+        } catch {
+            voiceLog('provider.send.failed', { outcome: 'failed' }, 'error');
         }
     }
 
     sendContextualUpdate(update: string): void {
         if (!conversationInstance) {
-            console.warn('Realtime voice session not initialized');
+            voiceLog('session.unavailable', undefined, 'warn');
             return;
         }
 
         try {
             conversationInstance.sendContextualUpdate(update);
-        } catch (error) {
-            console.error('Failed to send contextual update:', error);
+        } catch {
+            voiceLog('provider.send.failed', { outcome: 'failed' }, 'error');
         }
     }
 }
@@ -108,13 +109,13 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
 export const RealtimeVoiceSession: React.FC = () => {
     const conversation = useConversation({
         clientTools: realtimeClientTools,
-        onConnect: (data) => {
-            console.log('Realtime session connected:', data);
+        onConnect: () => {
+            voiceLog('provider.connected', { outcome: 'success' }, 'info');
             storage.getState().setRealtimeStatus('connected');
             storage.getState().setRealtimeMode('idle');
         },
         onDisconnect: () => {
-            console.log('Realtime session disconnected');
+            voiceLog('provider.disconnected', undefined, 'info');
             // Bump generation only when an active session ends — skipping the
             // initial 'disconnected' state avoids remounting on cold launch
             // (which previously caused a phantom keyboard).
@@ -126,13 +127,13 @@ export const RealtimeVoiceSession: React.FC = () => {
                 storage.getState().incrementVoiceSessionGeneration();
             }
         },
-        onMessage: (data) => {
-            console.log('Realtime message:', data);
+        onMessage: () => {
+            voiceLog('provider.message.received');
         },
-        onError: (error) => {
+        onError: () => {
             // Log but don't block app - voice features will be unavailable
             // This prevents initialization errors from showing "Terminals error" on startup
-            console.warn('Realtime voice not available:', error);
+            voiceLog('provider.error', { outcome: 'failed' }, 'warn');
             // Don't set error status during initialization - just set disconnected
             // This allows the app to continue working without voice features.
             // Don't bump generation here — onError can fire on transient/recoverable
@@ -141,13 +142,14 @@ export const RealtimeVoiceSession: React.FC = () => {
             storage.getState().setRealtimeStatus('disconnected');
             storage.getState().setRealtimeMode('idle', true); // immediate mode change
         },
-        onStatusChange: (data) => {
-            console.log('Realtime status change:', data);
+        onStatusChange: () => {
+            voiceLog('provider.status.changed');
         },
         onModeChange: (data) => {
-            console.log('Realtime mode change:', data);
-
             const mode = data.mode as string;
+            voiceLog('provider.mode.changed', {
+                mode: mode === 'speaking' || mode === 'listening' ? mode : 'other',
+            });
             agentIsSpeaking = mode === 'speaking';
 
             // Use centralized debounce logic from storage
@@ -179,8 +181,8 @@ export const RealtimeVoiceSession: React.FC = () => {
                 }
             }
         },
-        onDebug: (message) => {
-            console.debug('Realtime debug:', message);
+        onDebug: () => {
+            voiceLog('provider.debug');
         }
     });
 
@@ -195,8 +197,8 @@ export const RealtimeVoiceSession: React.FC = () => {
             try {
                 registerVoiceSession(new RealtimeVoiceSessionImpl());
                 hasRegistered.current = true;
-            } catch (error) {
-                console.error('Failed to register voice session:', error);
+            } catch {
+                voiceLog('provider.registration.failed', { outcome: 'failed' }, 'error');
             }
         }
 

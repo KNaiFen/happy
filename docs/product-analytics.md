@@ -47,16 +47,12 @@
 - voice_permission_response
   - allowed
 - voice_session_started
-  - session_id
-  - elevenlabs_conversation_id
+  - has_pro
+  - onboarding_prompt_band (`none` / `one` / `few` / `many`)
+  - voice_message_band (`none` / `one` / `few` / `many`)
 - voice_session_error
-  - session_id
-  - elevenlabs_conversation_id
-  - error
 - voice_session_stopped
-  - session_id
-  - elevenlabs_conversation_id
-  - duration_seconds
+  - duration_band (`under-1m` / `1-5m` / `5-20m` / `20m-plus`)
 
 ## Paywall
 
@@ -147,7 +143,8 @@ all include flow property which customizes the upsell screen shown by revenue ca
 ## Notes
 
 - session_switched now includes stable identity (`session_id`, `session_created_at`) plus recency. Entry source is still merged until we add an explicit source property.
-- elevenlabs_conversation_id is the conversation id returned by the ElevenLabs voice session layer.
+- Voice analytics never carry Happy session IDs, ElevenLabs conversation/provider IDs, prompt/context,
+  token, raw errors, or exact usage counts. They are limited to booleans and fixed count/duration bands.
 - github_connected is a plain event with no GitHub profile data attached.
 
 ## Relevant Sources

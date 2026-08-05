@@ -46,9 +46,10 @@ arguments。初始 context 也会进入 voice system prompt。这些数据会发
 服务，因此不属于 Happy Relay 的端到端密文边界。用户使用 BYO ElevenLabs 时直接使用自己的
 ElevenLabs 账户，并负责该服务配置与数据处理。
 
-当前实现仍有已核验的日志缺口：App 的调试路径可能记录完整 contextual update 和包含
-`conversationToken` 的响应，Server 也会记录 user/conversation ID。目标安全边界要求生产
-日志只保留事件类型、计数和耗时；整改见
+生产语音日志通过 App 与 Server 独立的白名单边界输出。日志只保留固定事件、成功/失败、
+布尔决策、受限枚举和配额区间；不得记录 contextual update、prompt、conversation token、
+user/conversation/provider ID、SDK 原始数据或 Error。App 默认关闭 SDK payload 调试。
+实现与 canary 记录见
 [Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md)。
 
 ## 配额

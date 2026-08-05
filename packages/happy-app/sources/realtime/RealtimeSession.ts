@@ -15,6 +15,7 @@ import {
 } from '@/sync/persistence';
 import { buildVoiceFirstMessage, buildVoiceSystemPrompt } from './voiceSystemPrompt';
 import { getVoiceUpsellVariant } from './voiceExperiment';
+import { voiceLog } from './voiceLog';
 
 let voiceSession: VoiceSession | null = null;
 let voiceSessionStarted: boolean = false;
@@ -30,7 +31,7 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
     currentVoiceSessionStartedAt = null;
 
     if (!voiceSession) {
-        console.warn('No voice session registered');
+        voiceLog('session.unavailable', undefined, 'warn');
         return null;
     }
 
@@ -50,7 +51,7 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
         // Bypass Happy server token — only when user has their own custom agent
         const { voiceBypassToken, voiceCustomAgentId } = storage.getState().settings;
         if (voiceBypassToken && voiceCustomAgentId) {
-            console.log('[Voice] Bypassing token, custom agent ID:', voiceCustomAgentId);
+            voiceLog('session.start.requested', { source: 'byo' }, 'info');
             currentSessionId = sessionId;
             const conversationId = await voiceSession.startSession({
                 sessionId,
@@ -60,6 +61,7 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
             currentVoiceConversationId = conversationId;
             currentVoiceSessionStartedAt = Date.now();
             voiceSessionStarted = true;
+            voiceLog('session.start.succeeded', { source: 'byo', outcome: 'success' }, 'info');
             return conversationId;
         }
 
@@ -70,8 +72,9 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
             return null;
         }
 
+        voiceLog('session.start.requested', { source: 'managed' }, 'info');
         const response = await fetchVoiceCredentials(credentials, sessionId);
-        console.log('[Voice] fetchVoiceCredentials response:', response);
+        voiceLog('credentials.received', { source: 'managed', outcome: 'success' });
 
         if (!response.allowed) {
             storage.getState().setRealtimeStatus('disconnected');
@@ -85,9 +88,13 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
             }
 
             // Server hard-declined — must pay to continue
-            console.log('[Voice] Not allowed (reason: %s), presenting must-pay paywall...', response.reason);
+            voiceLog('credentials.blocked', {
+                source: 'managed',
+                outcome: 'blocked',
+                reason: response.reason,
+            }, 'info');
             const result = await sync.presentPaywall('voice_must_pay');
-            console.log('[Voice] Must-pay paywall result:', result);
+            voiceLog('paywall.completed', { purchased: result.purchased });
             if (result.purchased) {
                 return startRealtimeSession(sessionId, initialContext);
             }
@@ -106,10 +113,10 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
             voiceUpsellVariant === 'show-paywall-before-first-voice-chat' &&
             getVoiceSoftPaywallShownCount() < 1
         ) {
-            console.log('[Voice] First voice attempt on free tier, showing soft paywall...');
+            voiceLog('paywall.shown');
             incrementVoiceSoftPaywallShown();
             const result = await sync.presentPaywall('voice_trial_eligible');
-            console.log('[Voice] Soft paywall result:', result);
+            voiceLog('paywall.completed', { purchased: result.purchased });
             // Dismissed or error — continue anyway, they can still use free tier.
         }
 
@@ -143,9 +150,10 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
         currentVoiceConversationId = response.conversationId ?? startedConversationId;
         currentVoiceSessionStartedAt = Date.now();
         voiceSessionStarted = true;
+        voiceLog('session.start.succeeded', { source: 'managed', outcome: 'success' }, 'info');
         return currentVoiceConversationId;
-    } catch (error) {
-        console.error('Failed to start realtime session:', error);
+    } catch {
+        voiceLog('session.start.failed', { outcome: 'failed' }, 'error');
         storage.getState().setRealtimeStatus('disconnected');
         currentSessionId = null;
         currentVoiceConversationId = null;
@@ -163,8 +171,8 @@ export async function stopRealtimeSession() {
 
     try {
         await voiceSession.endSession();
-    } catch (error) {
-        console.error('Failed to stop realtime session:', error);
+    } catch {
+        voiceLog('session.stop.failed', { outcome: 'failed' }, 'error');
     } finally {
         currentSessionId = null;
         currentVoiceConversationId = null;
@@ -175,7 +183,7 @@ export async function stopRealtimeSession() {
 
 export function registerVoiceSession(session: VoiceSession) {
     if (voiceSession) {
-        console.warn('Voice session already registered, replacing with new one');
+        voiceLog('session.replaced', undefined, 'warn');
     }
     voiceSession = session;
 }

@@ -36,8 +36,10 @@
 - `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING`：只限受控开发环境。
 
 目标安全边界要求生产日志不得记录 prompt、reasoning、tool 参数/输出、provider ID、
-bearer token、加密 key 或签名材料。语音链路尚有已核验的 user/conversation ID 与
-context/token 调试日志缺口，见
+bearer token、加密 key 或签名材料。语音链路由 App 与 Server 各自的白名单 logger
+收口：只允许固定事件名、布尔值、枚举和用量区间；conversation token、context、
+用户/会话/provider 标识符和原始 SDK/Error 对象一律不可进入生产日志。对应 canary
+覆盖成功和异常路径，实施记录见
 [Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md)。
 
 ## Kubernetes 与容器
@@ -63,8 +65,8 @@ Postgres、MinIO、Prometheus 和 Grafana 示例。
 - bundle 包含镜像、compose、安装/控制脚本、SBOM、manifest 和 SHA-256。
 
 云端工作流验证镜像身份、amd64、distroless runtime、部署依赖、迁移、重启持久性、
-secret ownership、SBOM 与 Critical vulnerability gate。它尚未验收语音 payload 日志脱敏；
-该项以活动整改计划为准。成功前不得把产物称为已发布。
+secret ownership、SBOM 与 Critical vulnerability gate。语音日志脱敏由 App/Server
+源码 canary 和 monorepo CI 验收；Relay workflow 不单独复跑该测试。成功前不得把产物称为已发布。
 
 ## 升级
 

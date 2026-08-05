@@ -25,7 +25,8 @@ import { useDraft } from '@/hooks/useDraft';
 import { useImagePicker } from '@/hooks/useImagePicker';
 import { Modal } from '@/modal';
 import { voiceHooks } from '@/realtime/hooks/voiceHooks';
-import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
+import { getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
+import { voiceLog } from '@/realtime/voiceLog';
 import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat } from '@/sync/ops';
 import { archiveSession } from '@/sync/sessionArchiveCoordinator';
@@ -55,7 +56,7 @@ import { HappyError } from '@/utils/errors';
 import { Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
-import { tracking } from '@/track';
+import { trackVoiceSessionError, trackVoiceSessionStarted, trackVoiceSessionStopped } from '@/track';
 import { getVoiceMessageCount, getVoiceOnboardingPromptLoadCount } from '@/sync/persistence';
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
@@ -1060,35 +1061,24 @@ export function SessionViewLoaded({
         if (realtimeStatus === 'disconnected' || realtimeStatus === 'error') {
             try {
                 const initialPrompt = voiceHooks.onVoiceStarted(sessionId);
-                const conversationId = await startRealtimeSession(sessionId, initialPrompt);
-                if (conversationId) {
+                const voiceSessionId = await startRealtimeSession(sessionId, initialPrompt);
+                if (voiceSessionId) {
                     const hasPro = storage.getState().purchases.entitlements['pro'] ?? false;
-                    tracking?.capture('voice_session_started', {
-                        session_id: sessionId,
-                        elevenlabs_conversation_id: conversationId,
-                        has_pro: hasPro,
-                        onboarding_prompt_load_count: getVoiceOnboardingPromptLoadCount(),
-                        voice_message_count: getVoiceMessageCount(),
-                    });
+                    trackVoiceSessionStarted(
+                        hasPro,
+                        getVoiceOnboardingPromptLoadCount(),
+                        getVoiceMessageCount(),
+                    );
                 }
-            } catch (error) {
-                console.error('Failed to start realtime session:', error);
+            } catch {
+                voiceLog('session.start.failed', { outcome: 'failed' }, 'error');
                 Modal.alert(t('common.error'), t('errors.voiceSessionFailed'));
-                tracking?.capture('voice_session_error', {
-                    session_id: sessionId,
-                    elevenlabs_conversation_id: getCurrentVoiceConversationId(),
-                    error: error instanceof Error ? error.message : 'Unknown error',
-                });
+                trackVoiceSessionError();
             }
         } else if (realtimeStatus === 'connected') {
-            const conversationId = getCurrentVoiceConversationId();
             const durationSeconds = getCurrentVoiceSessionDurationSeconds();
             await stopRealtimeSession();
-            tracking?.capture('voice_session_stopped', {
-                session_id: sessionId,
-                elevenlabs_conversation_id: conversationId,
-                ...(durationSeconds !== undefined ? { duration_seconds: durationSeconds } : {}),
-            });
+            trackVoiceSessionStopped(durationSeconds);
 
             // Notify voice assistant about voice session stop
             voiceHooks.onVoiceStopped();
