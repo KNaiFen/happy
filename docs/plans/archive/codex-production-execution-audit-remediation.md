@@ -7,7 +7,7 @@
 - 范围：App、Relay/Wire、CLI/Gateway、happy-agent 的生产执行链
 - 排除项：安全、认证授权、密码学、隐私、依赖漏洞、纯风格和无生产矛盾的覆盖率建议
 - 回归基线：`docs/plans/codex-v4-runtime-lifecycle-audit.md` 中 F1-F10 均视为已修复；本台账不重复报告。原 F3 仍为未归因现场异常。
-- 当前状态：修复进行中
+- 当前状态：已完成并归档；7/7 项均已解决
 
 ## 执行规则
 
@@ -36,7 +36,7 @@
 | 4 | F-04 | P2 | 高 | 已解决 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
 | 5 | P-01 | P2 | 高 | 已解决 | App 为全部 Codex 会话启动固定 5 秒轮询 |
 | 6 | P-02 | P2 | 高 | 已解决 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
-| 7 | P-03 | P3 | 高 | 进行中 | happy-agent 等待循环每秒重新拉取完整 snapshot |
+| 7 | P-03 | P3 | 高 | 已解决 | happy-agent 等待循环每秒重新拉取完整 snapshot |
 
 ## F-01 happy-agent 把命令结果或 interrupt ACK 当作 turn 终态
 
@@ -135,7 +135,7 @@
 
 ## P-03 happy-agent 等待循环每秒重新拉取完整 snapshot
 
-- 状态：进行中
+- 状态：已解决
 - 严重度：P3
 - 置信度：高
 - 生产链：`packages/happy-agent/src/session.ts:354 waitForCommand` / `:370 waitForCommandAndIdle` / `:408 waitForIdle` -> `:223 readSnapshot`，每页 100 条并以 1 秒间隔重复。
@@ -146,7 +146,7 @@
 - 当前覆盖：小型 snapshot 单测验证结果，不覆盖实体规模相关请求复杂度。
 - 最小修复方向：等待时改用增量 changes/cursor 或 Relay 提供的窄状态查询，并保留 polling 作为持久收敛机制；不得把 Socket.IO 提示当真值。
 - 实施计划：真实性复核确认三个等待循环每轮都从 snapshot 第一页重新读取，固定分页 100，并重复解密、解析和投影全部实体；默认轮询间隔为 1 秒。Relay 已有 `GET /v4/sessions/:sessionId/changes`：以 `after_seq` 读取严格连续、固定 high watermark 的 journal 增量，单页最多 100，`hasMore` 时可立即 drain；snapshot 完整读取后的 `highWatermark` 可作为无缝增量起点。修复仅改 happy-agent：为一次等待建立进程内 snapshot state（实体索引、投影与 receive cursor），首次读取一次完整 snapshot，随后轮询 `/changes`；按连续 sequence 应用 upsert/delete 并重新投影，只对空增量页按原 1 秒间隔等待，`hasMore` 时不休眠继续 drain。空页不是完成证据，Socket.IO 仍只可作为唤醒提示；terminal turn/runtime 判定继续来自持久 snapshot/changes。服务端返回 `410 snapshotRequired` 时必须丢弃增量 state 并重新读取完整 snapshot，序号断档、倒退、越过 high watermark 或 `hasMore` 与游标不一致必须作为协议错误，绝不跳过 journal。补充大型多页初始 snapshot 后的请求预算测试，证明每个空闲轮询周期只产生一次 `/changes` 请求且不再重复 snapshot/decrypt；覆盖多页增量、upsert/delete、同实体 revision、command result 到 turn 终态、idle、410 重建、序号断档、超时预算和传输失败。happy-agent 补丁版本升级至 `0.1.9`，完成包内全量测试、`tsc --noEmit`、PR/主 CI 与 happy-agent 云端发布验收。
-- 解决证据：待填写。
+- 解决证据：实现提交 `c5523360abdd9a0c8bb1216f944ac49bd89bbbf2` 由 PR #16 squash 合并为 `6cd9f952fc6a7246b5e9ca57c867f8842d9fcb81`，happy-agent 升级至 `0.1.9`。等待方法只读取一次固定 high watermark 的完整 snapshot，随后以 receive cursor 轮询 `/changes` 并维护进程内实体/revision 状态；多页增量使用固定 drain watermark、严格连续 sequence 和 `hasMore` 一致性校验，空页不作为终态，`410 snapshotRequired` 在同一截止时间内重建 snapshot，upsert/delete 和 snapshot tombstone 均先通过 AEAD 验证。10,000 实体回归证明初始 100 个 snapshot 分页后只发出一次 changes 请求且只进行 10,002 次解密，不再按等待周期重复全量 snapshot/decrypt。本地 `session.test.ts` 32/32、happy-agent 12 files / 209 tests、`tsc --noEmit` 与 `git diff --check` 全部通过。PR push/PR 工作流 `31008045772`、`31008158182` 全部成功，包括官方 app-server 生命周期、真实 Codex TUI 11 分钟 idle/attach/normal-stop 和 Required CI gates；合并提交的主干 CI `31009475503` 全部成功。happy-agent 发布工作流 `31009475223` 完成源码/fixture 类型检查、全量测试、构建、打包、元数据与源码 SHA 校验、安装后 CLI 冒烟，并上传未过期 Actions artifact `8931853997`（`happy-agent-0.1.9`）。GitHub Release [`happy-agent-0.1.9`](https://github.com/KNaiFen/happy/releases/tag/happy-agent-0.1.9) 已发布到精确合并提交，资产 `happy-agent-0.1.9.tgz` 的 SHA-256 为 `a330a0c094c39814d44078daf26d44b4028079297f3cbd809b9e04f8ea58462b`。
 
 ## 审计验证基线
 
@@ -172,3 +172,4 @@
 | F-04 | `11c8b367` | #10 | PR：`30991392616`、`30991430323`：34/34；主干：`30992685385`；Android field：`30992685309`；发布：`30992685109`：均成功 | App 101 files / 976 tests；相关 1 file / 39 tests；`tsc --noEmit` | 2026-08-05 |
 | P-01 | `09f79fc3` | #12 | PR：`30996482047`、`30996508237`：34/34；主干：`30997669607` attempt 2；Android field：`30997669569`；发布：`30997669324`：均成功 | App 101 files / 982 tests；相关 2 files / 57 tests；`tsc --noEmit` | 2026-08-05 |
 | P-02 | `41be7ecf` | #14 | PR：`31001409846`、`31001480689`、`31001480338`：38/38；主干：`31002692890`；Android field：`31002692935`；发布：`31002692643`：均成功 | Server 27 files / 169 tests；相关 3 files / 33 tests；`tsc --noEmit` | 2026-08-05 |
+| P-03 | `6cd9f952` | #16 | PR：`31008045772`、`31008158182`；主干：`31009475503`；发布：`31009475223`：均成功 | happy-agent 12 files / 209 tests；session 32/32；`tsc --noEmit` | 2026-08-05 |
