@@ -136,7 +136,7 @@ interface AppSyncV4ClientOptions {
     crypto?: AppSyncV4Crypto;
     generateMutationId?: () => string;
     generateTraceId?: () => string;
-    pollIntervalMs?: number;
+    pollIntervalMs?: number | null;
     diagnostics?: SyncV4DiagnosticSink;
     diagnosticStats?: AppSyncV4DiagnosticStatsProvider;
     transportSecurity?: SyncV4DiagnosticTransportSecurity;
@@ -167,7 +167,7 @@ export class AppSyncV4Client {
             options.onSnapshotReplace ?? null,
             options.generateMutationId ?? defaultRandomUUID,
             options.generateTraceId ?? defaultTraceId,
-            options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+            options.pollIntervalMs === undefined ? DEFAULT_POLL_INTERVAL_MS : options.pollIntervalMs,
             options.diagnostics ?? null,
             options.diagnosticStats ?? null,
             diagnosticSessionHash,
@@ -204,7 +204,7 @@ export class AppSyncV4Client {
         private readonly onSnapshotReplace: ((events: readonly AppSyncV4AppliedEntity[]) => Promise<void>) | null,
         private readonly generateMutationId: () => string,
         private readonly generateTraceId: () => string,
-        private readonly pollIntervalMs: number,
+        private readonly pollIntervalMs: number | null,
         private readonly diagnostics: SyncV4DiagnosticSink | null,
         private readonly diagnosticStats: AppSyncV4DiagnosticStatsProvider | null,
         private readonly diagnosticSessionHash: string,
@@ -212,7 +212,7 @@ export class AppSyncV4Client {
         private readonly canSendOutbound: () => boolean,
     ) {
         this.sendSync = new InvalidateSync(() => this.flushOutboundOnce());
-        this.receiveSync = new InvalidateSync(() => this.pullChangesOnce());
+        this.receiveSync = new InvalidateSync(() => this.pullInvalidatedChanges());
     }
 
     get receiveCursor(): number {
@@ -260,7 +260,9 @@ export class AppSyncV4Client {
             });
             throw error;
         }
-        this.pollTimer = setInterval(() => this.receiveSync.invalidate(), this.pollIntervalMs);
+        if (this.pollIntervalMs !== null) {
+            this.pollTimer = setInterval(() => this.receiveSync.invalidate(), this.pollIntervalMs);
+        }
         this.recordDiagnostic({
             level: 'info',
             event: 'lifecycle',
@@ -396,6 +398,15 @@ export class AppSyncV4Client {
     invalidate(highWatermark?: number): void {
         if (!this.started) return;
         if (highWatermark === undefined || highWatermark > this.receiveCursor) this.receiveSync.invalidate();
+    }
+
+    private async pullInvalidatedChanges(): Promise<void> {
+        try {
+            await this.pullChangesOnce();
+        } catch (error) {
+            // On-demand wakes are one-shot; the next external signal owns retry.
+            if (this.pollIntervalMs !== null) throw error;
+        }
     }
 
     async hydrate(): Promise<void> {
