@@ -34,6 +34,7 @@
 - [Debian 13 amd64 Happy Relay 1.1.23 云端门禁归档](./debian13-amd64-relay-bundle-1.1.23-ci.md)
 - [Debian 13 amd64 Happy Relay 1.1.23 本地修复归档](./debian13-amd64-relay-bundle-1.1.23-local.md)
 - [Debian 13 amd64 Happy Relay 1.1.24 发布归档](./debian13-amd64-relay-bundle-1.1.24-release.md)
+- [Debian 13 amd64 Happy Relay 现场升级计划](./debian13-amd64-relay-bundle-1.1.40-field-upgrade.md)
 - [ElevenLabs Voice Usage Gating](./elevenlabs-voice-usage-gating.md)
 - [Experimental Chat File Links](./experimental-chat-file-links.md)
 - [Expo SDK 55 Upgrade](./expo-sdk-55-upgrade.md)
@@ -58,3 +59,4 @@
 - [New Session Right Sidebar Design](./superpowers/specs/2026-05-20-new-session-right-sidebar-design.md)
 - [Attachment Storage Diagnostics Design](./superpowers/specs/2026-06-10-attachment-storage-diagnostics-design.md)
 - [Codex Image Attachments Design](./superpowers/specs/2026-06-10-codex-image-attachments-design.md)
+- [Tauri Desktop 云端打包计划](./tauri-desktop-packaging-cancelled.md)

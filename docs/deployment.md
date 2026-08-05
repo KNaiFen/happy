@@ -72,4 +72,5 @@ secret ownership、SBOM 与 Critical vulnerability gate。它尚未验收语音 
 secret。升级后验证 health、设备/会话目录、Sync v4 mutation/change/snapshot、重启恢复、
 容器安全约束和物理 CLI/App 生命周期。
 
-当前现场事项见 [Debian Relay 活动计划](plans/debian13-amd64-relay-bundle.md)。
+Relay `1.1.40` 的现场升级已完成；历史证据见
+[Debian Relay 现场升级归档](plans/archive/debian13-amd64-relay-bundle-1.1.40-field-upgrade.md)。

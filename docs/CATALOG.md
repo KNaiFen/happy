@@ -40,8 +40,9 @@
 
 ## 活动计划
 
-- [Debian 13 amd64 Happy Relay 现场升级计划](./plans/debian13-amd64-relay-bundle.md)
-- [Tauri Desktop 云端打包计划](./plans/tauri-desktop-packaging.md)
+- [2026-08-06 安全、恢复与输入队列修复台账](./plans/2026-08-06-remediation-ledger.md)
+- [Codex 悬浮待发送条与队列管理计划](./plans/codex-composer-pending-message-dock.md)
+- [Codex 首页旧会话恢复与状态回归修复计划](./plans/codex-home-old-session-resume-state-regression.md)
 - [Voice 敏感日志收敛计划](./plans/voice-sensitive-logging-hardening.md)
 
 ## 审查记录
@@ -132,6 +133,7 @@
 - [Debian 13 amd64 Happy Relay 1.1.23 云端门禁归档](./plans/archive/debian13-amd64-relay-bundle-1.1.23-ci.md)
 - [Debian 13 amd64 Happy Relay 1.1.23 本地修复归档](./plans/archive/debian13-amd64-relay-bundle-1.1.23-local.md)
 - [Debian 13 amd64 Happy Relay 1.1.24 发布归档](./plans/archive/debian13-amd64-relay-bundle-1.1.24-release.md)
+- [Debian 13 amd64 Happy Relay 现场升级计划](./plans/archive/debian13-amd64-relay-bundle-1.1.40-field-upgrade.md)
 - [ElevenLabs Voice Usage Gating](./plans/archive/elevenlabs-voice-usage-gating.md)
 - [Experimental Chat File Links](./plans/archive/experimental-chat-file-links.md)
 - [Expo SDK 55 Upgrade](./plans/archive/expo-sdk-55-upgrade.md)
@@ -156,6 +158,7 @@
 - [New Session Right Sidebar Design](./plans/archive/superpowers/specs/2026-05-20-new-session-right-sidebar-design.md)
 - [Attachment Storage Diagnostics Design](./plans/archive/superpowers/specs/2026-06-10-attachment-storage-diagnostics-design.md)
 - [Codex Image Attachments Design](./plans/archive/superpowers/specs/2026-06-10-codex-image-attachments-design.md)
+- [Tauri Desktop 云端打包计划](./plans/archive/tauri-desktop-packaging-cancelled.md)
 
 ## 通用历史归档
 

@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：活动；真实性核验已完成，App 与 Server 仍存在不符合 payload-free 日志边界的语音日志。
+- 当前状态：进行中；真实性核验已完成，正在按审计台账 `LOG-01` 收敛 App 与 Server 的语音日志。
 - 优先级：高。完成前不得在架构或隐私文档中宣称语音链路已经完全脱敏。
 - 范围：App、Server、Wire 测试与云端验证；不改变 ElevenLabs 必需的数据传输契约。
 
@@ -22,8 +22,7 @@
 - [ ] 删除或替换 App 对 conversation 响应与 contextual update 的完整日志。
 - [ ] Server 日志对 user/conversation/provider ID 使用不可逆、进程外不可关联的安全摘要，
       或只记录无 ID 的聚合计数。
-- [ ] 建立共享 redaction helper，覆盖 token、authorization、context、message history、
-      tool name/arguments、project path 和 provider identifiers。
+- [ ] 在 App 与 Server 各自建立白名单日志边界；不在 Wire 引入日志 API，避免扩大协议消费者版本。
 - [ ] 新增 logger capture 测试，向语音响应和 context 注入 canary，断言 stdout/stderr、
       test logs 和错误路径均不出现 canary。
 - [ ] 在 App/Server 受影响包递增 patch version，通过对应源码 CI 与发行工作流。
