@@ -59,6 +59,7 @@ export async function spawnSessionOnMachine(
     machine: DecryptedMachine,
     token: string,
     options: {
+        operationId: string;
         directory: string;
         approvedNewDirectoryCreation?: boolean;
         agent: 'codex';
@@ -82,6 +83,7 @@ export async function spawnSessionOnMachine(
         const params = encodeBase64(
             encrypt(machine.encryption.key, machine.encryption.variant, {
                 type: 'spawn-in-directory',
+                operationId: options.operationId,
                 directory: options.directory,
                 approvedNewDirectoryCreation: options.approvedNewDirectoryCreation ?? false,
                 agent: 'codex',

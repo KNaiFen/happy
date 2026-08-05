@@ -58,6 +58,7 @@ function makeConfig(): Config {
         serverUrl: 'https://test-server.example.com',
         homeDir: '/tmp/happy-test',
         credentialPath: '/tmp/happy-test/agent.key',
+        operationReceiptDir: '/tmp/happy-test/agent-operations',
     };
 }
 

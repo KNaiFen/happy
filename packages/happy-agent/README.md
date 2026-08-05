@@ -74,6 +74,9 @@ happy-agent spawn --machine <machine-id> --path ~/new-project --create-dir
 
 # Output as JSON
 happy-agent spawn --machine <machine-id> --path ~/project --json
+
+# Retry an ambiguous result with the operation ID printed by the first attempt
+happy-agent spawn --machine <machine-id> --path ~/project --operation-id <uuid>
 ```
 
 ### Session status
@@ -100,7 +103,22 @@ happy-agent send <session-id> "Run the tests" --wait
 
 # Output as JSON
 happy-agent send <session-id> "Hello" --json
+
+# Retry an ambiguous result with the operation ID printed by the first attempt
+happy-agent send <session-id> "Hello" --operation-id <uuid>
 ```
+
+### Durable write retries
+
+`spawn` and `send` persist a local operation receipt before publishing a write. If a response is
+lost, repeating the same request automatically reuses its single pending operation. Both commands
+also print an operation UUID that can be supplied explicitly with `--operation-id`.
+
+An operation UUID is bound to its original command and cannot be reused for different content while
+its receipt exists. Pending receipts are retained until the operation is acknowledged so an
+uncertain write is never forgotten; acknowledged receipts are retained for 7 days. Receipts are
+stored under `$HAPPY_HOME_DIR/agent-operations` (normally
+`~/.happy/agent-operations`).
 
 ### Message history
 

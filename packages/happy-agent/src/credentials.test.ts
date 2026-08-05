@@ -12,6 +12,7 @@ function makeTestConfig(): Config {
         serverUrl: 'https://api.cluster-fluster.com',
         homeDir,
         credentialPath: join(homeDir, 'agent.key'),
+        operationReceiptDir: join(homeDir, 'agent-operations'),
     };
 }
 

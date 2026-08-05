@@ -8,6 +8,9 @@ import {
     type SyncEntitySnapshotV4,
 } from '@slopus/happy-wire';
 import axios from 'axios';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     SessionClient,
@@ -17,6 +20,7 @@ import {
     type PublishedCodexCommand,
     type CodexV4Snapshot,
 } from './session';
+import { OperationReceiptStore } from './operationReceipts';
 
 vi.mock('axios', () => ({
     default: {
@@ -194,7 +198,7 @@ async function snapshotResponse(entities: CodexEntityV4[]) {
     };
 }
 
-function client(): SessionClient {
+function client(operationReceipts?: OperationReceiptStore): SessionClient {
     return new SessionClient({
         sessionId: 'session-1',
         encryptionKey: sessionKey,
@@ -202,6 +206,7 @@ function client(): SessionClient {
         serverUrl: 'https://happy.example',
         threadId: 'thread-1',
         pollIntervalMs: 1,
+        operationReceipts,
     });
 }
 
@@ -279,6 +284,56 @@ describe('SessionClient Codex Sync v4', () => {
 
         expect(published.command.command).toBe('turn.start');
         expect((published.command as unknown as { queueEntryId?: string | null }).queueEntryId).toBeNull();
+    });
+
+    it('replays an exact persisted mutation after a lost response and process restart', async () => {
+        const receiptDir = mkdtempSync(join(tmpdir(), 'happy-agent-session-receipts-'));
+        try {
+            mockCapabilities();
+            mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+            mockedPost.mockRejectedValue(new Error('lost mutation response'));
+            vi.useFakeTimers();
+            const firstAttempt = client(new OperationReceiptStore(receiptDir)).sendMessage('retry after restart');
+            const rejection = expect(firstAttempt).rejects.toThrow('remains pending');
+            await vi.runAllTimersAsync();
+            await rejection;
+            const firstBody = mockedPost.mock.calls[0][1];
+            expect(mockedPost).toHaveBeenCalledTimes(5);
+            const receiptFile = readdirSync(receiptDir).find((name) => name.endsWith('.json'));
+            expect(receiptFile).toBeTruthy();
+            expect(readFileSync(join(receiptDir, receiptFile!), 'utf8')).not.toContain(
+                'retry after restart',
+            );
+            vi.useRealTimers();
+
+            vi.resetAllMocks();
+            vi.mocked(axios.isAxiosError).mockReturnValue(false);
+            mockCapabilities();
+            mockedPost.mockImplementationOnce(async (_url, body) => ({
+                data: {
+                    acknowledgements: [{
+                        mutationId: (body as { mutations: Array<{ mutationId: string }> }).mutations[0].mutationId,
+                        seq: 4,
+                        revision: 1,
+                        status: 'accepted',
+                    }],
+                },
+            }));
+
+            const published = await client(new OperationReceiptStore(receiptDir)).sendMessage(
+                'retry after restart',
+            );
+
+            expect(mockedGet).toHaveBeenCalledTimes(1);
+            expect(mockedPost).toHaveBeenCalledTimes(1);
+            expect(mockedPost.mock.calls[0][1]).toEqual(firstBody);
+            expect(published.command.commandId).toBe(
+                (firstBody as { mutations: Array<{ mutationId: string }> }).mutations[0].mutationId,
+            );
+        } finally {
+            vi.useRealTimers();
+            rmSync(receiptDir, { recursive: true, force: true });
+        }
     });
 
     it('rejects a mismatched mutation acknowledgement', async () => {

@@ -30,6 +30,11 @@ describe('config', () => {
             const config = loadConfig();
             expect(config.credentialPath).toBe(join(homedir(), '.happy', 'agent.key'));
         });
+
+        it('derives operation receipt directory from home directory', () => {
+            const config = loadConfig();
+            expect(config.operationReceiptDir).toBe(join(homedir(), '.happy', 'agent-operations'));
+        });
     });
 
     describe('env var overrides', () => {
@@ -58,6 +63,7 @@ describe('config', () => {
             expect(config.serverUrl).toBe('https://other.example.com');
             expect(config.homeDir).toBe('/opt/happy');
             expect(config.credentialPath).toBe('/opt/happy/agent.key');
+            expect(config.operationReceiptDir).toBe('/opt/happy/agent-operations');
         });
     });
 });

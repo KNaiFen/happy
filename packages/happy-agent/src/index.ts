@@ -9,11 +9,20 @@ import type { Credentials } from './credentials';
 import { authLogin, authLogout, authStatus } from './auth';
 import { listSessions, listActiveSessions, listMachines } from './api';
 import type { DecryptedMachine, DecryptedSession } from './api';
-import { resumeSessionOnMachine, spawnSessionOnMachine } from './machineRpc';
+import {
+    resumeSessionOnMachine,
+    spawnSessionOnMachine,
+    type SpawnMachineSessionResult,
+} from './machineRpc';
 import { SessionClient, codexHistoryFromSnapshot } from './session';
 import { formatMachineTable, formatSessionTable, formatSessionStatus, formatMessageHistory, formatJson } from './output';
 import { filterSupportedAgentSessions } from './sessionClassification';
 import { HAPPY_AGENT_VERSION } from './clientVersion';
+import {
+    OperationReceiptStore,
+    pendingOperationError,
+    spawnOperationRequestHash,
+} from './operationReceipts';
 
 // --- Helpers ---
 
@@ -52,6 +61,7 @@ function createClient(session: DecryptedSession, creds: Credentials, config: Con
         serverUrl: config.serverUrl,
         threadId: typeof metadata.codexThreadId === 'string' ? metadata.codexThreadId : null,
         machineId: typeof metadata.machineId === 'string' ? metadata.machineId : null,
+        operationReceipts: new OperationReceiptStore(config.operationReceiptDir),
     });
 }
 
@@ -200,25 +210,46 @@ program
     .requiredOption('--machine <machine-id>', 'Machine ID or prefix')
     .option('--path <path>', 'Working directory path (defaults to machine home directory)')
     .option('--create-dir', 'Allow creating the directory if it does not exist')
+    .option('--operation-id <uuid>', 'Reuse a durable operation UUID for retries')
     .option('--json', 'Output as JSON')
     .action(async (opts: {
         machine: string;
         path?: string;
         createDir?: boolean;
+        operationId?: string;
         json?: boolean;
     }) => {
         const config = loadConfig();
         const creds = requireCredentials(config);
         const machine = await resolveMachine(config, creds, opts.machine);
         const directory = resolveRemotePath(opts.path, machine);
-
-        const result = await spawnSessionOnMachine(config, machine, creds.token, {
+        const receipts = new OperationReceiptStore(config.operationReceiptDir);
+        const receipt = receipts.claimSpawn(spawnOperationRequestHash({
+            machineId: machine.id,
             directory,
-            approvedNewDirectoryCreation: opts.createDir,
             agent: 'codex',
-        });
+        }), opts.operationId);
+        let result: SpawnMachineSessionResult;
+        if (receipt.sessionId) {
+            result = { type: 'success' as const, sessionId: receipt.sessionId };
+        } else {
+            try {
+                result = await spawnSessionOnMachine(config, machine, creds.token, {
+                    directory,
+                    approvedNewDirectoryCreation: opts.createDir,
+                    operationId: receipt.operationId,
+                    agent: 'codex',
+                });
+            } catch (error) {
+                throw pendingOperationError(receipt.operationId, error);
+            }
+        }
+        if (result.type === 'success') {
+            receipts.recordSpawnSuccess(receipt.operationId, result.sessionId);
+        }
 
         const payload = {
+            operationId: receipt.operationId,
             machineId: machine.id,
             directory,
             agent: 'codex',
@@ -229,6 +260,8 @@ program
             console.log(formatJson(payload));
             if (result.type !== 'success') {
                 process.exitCode = 1;
+            } else {
+                receipts.markAcknowledged(receipt.operationId);
             }
             return;
         }
@@ -238,6 +271,7 @@ program
                 console.log([
                     '## Session Spawned',
                     '',
+                    `- Operation ID: \`${receipt.operationId}\``,
                     `- Machine ID: \`${machine.id}\``,
                     `- Session ID: \`${result.sessionId}\``,
                     `- Path: ${directory}`,
@@ -245,10 +279,14 @@ program
                 ].join('\n'));
                 break;
             case 'requestToApproveDirectoryCreation':
-                throw new Error(`The directory '${result.directory}' does not exist. Re-run with --create-dir to allow creating it.`);
+                throw pendingOperationError(
+                    receipt.operationId,
+                    new Error(`The directory '${result.directory}' does not exist. Re-run with --create-dir to allow creating it`),
+                );
             case 'error':
-                throw new Error(result.errorMessage);
+                throw pendingOperationError(receipt.operationId, new Error(result.errorMessage));
         }
+        receipts.markAcknowledged(receipt.operationId);
     });
 
 program
@@ -303,33 +341,47 @@ program
     .argument('<message>', 'Message text')
     .option('--yolo', 'Send with permissionMode=yolo')
     .option('--wait', 'Wait for agent to become idle')
+    .option('--operation-id <uuid>', 'Reuse a durable operation UUID for retries')
     .option('--json', 'Output as JSON')
-    .action(async (sessionId: string, message: string, opts: { yolo?: boolean; wait?: boolean; json?: boolean }) => {
+    .action(async (sessionId: string, message: string, opts: {
+        yolo?: boolean;
+        wait?: boolean;
+        operationId?: string;
+        json?: boolean;
+    }) => {
         const config = loadConfig();
         const creds = requireCredentials(config);
         const session = await resolveSession(config, creds, sessionId);
         const permissionMode = opts.yolo ? 'yolo' : null;
 
         const client = createClient(session, creds, config);
-        const published = await client.sendMessage(
-            message,
-            permissionMode ? { permissionMode } : undefined,
-        );
+        const published = await client.sendMessage(message, {
+            ...(permissionMode ? { permissionMode } : {}),
+            ...(opts.operationId ? { operationId: opts.operationId } : {}),
+        });
         if (opts.wait) {
             await client.waitForCommandAndIdle(published.command.commandId);
         }
 
         if (opts.json) {
-            console.log(formatJson({ sessionId: session.id, message, sent: true, permissionMode }));
+            console.log(formatJson({
+                operationId: published.command.commandId,
+                sessionId: session.id,
+                message,
+                sent: true,
+                permissionMode,
+            }));
         } else {
             console.log([
                 '## Message Sent',
                 '',
+                `- Operation ID: \`${published.command.commandId}\``,
                 `- Session ID: \`${session.id}\``,
                 `- Permission Mode: ${permissionMode ?? 'default'}`,
                 `- Waited For Idle: ${opts.wait ? 'yes' : 'no'}`,
             ].join('\n'));
         }
+        client.markOperationAcknowledged(published.command.commandId);
     });
 
 program

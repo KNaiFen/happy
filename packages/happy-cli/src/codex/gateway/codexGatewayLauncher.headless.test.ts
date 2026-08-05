@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     descriptors: [] as any[],
@@ -13,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     createFiles: vi.fn(),
     spawnHappyCLI: vi.fn(() => ({ pid: 1234, unref: vi.fn() })),
     callControl: vi.fn(),
+    happyHomeDir: '',
 }));
 
 vi.mock('@/daemon/ensureDaemonRunning', () => ({ ensureDaemonRunning: vi.fn() }));
@@ -27,6 +31,7 @@ vi.mock('./codexGatewayState', async (importOriginal) => {
     const actual = await importOriginal<typeof import('./codexGatewayState')>();
     return {
         ...actual,
+        codexGatewayStateRoot: () => `${mocks.happyHomeDir}/codex-gateways`,
         codexGatewayPaths: (gatewayId: string) => ({
             descriptorPath: `/state/${gatewayId}/descriptor.json`,
             secretPath: `/state/${gatewayId}/secret.json`,
@@ -83,6 +88,7 @@ function descriptorFixture(overrides: Record<string, unknown> = {}) {
 describe('Codex Gateway App bootstrap launcher', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        mocks.happyHomeDir = mkdtempSync(join(tmpdir(), 'happy-gateway-launcher-'));
         mocks.descriptors = [];
         mocks.secret.resumeBootstrap = null;
         mocks.createFiles.mockImplementation(async (options: {
@@ -120,6 +126,10 @@ describe('Codex Gateway App bootstrap launcher', () => {
         });
     });
 
+    afterEach(() => {
+        rmSync(mocks.happyHomeDir, { recursive: true, force: true });
+    });
+
     it('reuses the same worker and provider operation after a lost App response', async () => {
         const options = {
             operationId: 'd94231c7-6601-483f-a8f3-92912d759423',
@@ -128,7 +138,10 @@ describe('Codex Gateway App bootstrap launcher', () => {
             action: 'start' as const,
         };
 
-        await expect(launchCodexGatewayHeadless(options)).resolves.toMatchObject({
+        await expect(launchCodexGatewayHeadless({
+            ...options,
+            operationId: options.operationId.toUpperCase(),
+        })).resolves.toMatchObject({
             gatewayId: mocks.secret.gatewayId,
             sessionId: 'session-a',
         });
@@ -147,6 +160,28 @@ describe('Codex Gateway App bootstrap launcher', () => {
             options.operationId,
             options.operationId,
         ]);
+    });
+
+    it('serializes concurrent spawn retries before checking or creating a Gateway', async () => {
+        const options = {
+            operationId: 'd94231c7-6601-483f-a8f3-92912d759423',
+            cwd: '/workspace/project',
+            env: {},
+            action: 'start' as const,
+        };
+
+        const [first, second] = await Promise.all([
+            launchCodexGatewayHeadless(options),
+            launchCodexGatewayHeadless(options),
+        ]);
+
+        expect(first.sessionId).toBe('session-a');
+        expect(second.sessionId).toBe(first.sessionId);
+        expect(mocks.createFiles).toHaveBeenCalledOnce();
+        expect(mocks.spawnHappyCLI).toHaveBeenCalledOnce();
+        expect(mocks.callControl.mock.calls
+            .map(([request]) => request)
+            .filter((request) => request.path === '/root/open')).toHaveLength(2);
     });
 
     it('rejects parameter drift for a reused App operation before provider work', async () => {
@@ -210,30 +245,45 @@ describe('Codex Gateway App bootstrap launcher', () => {
         expect(JSON.stringify(request.body)).not.toContain(resumeBootstrap.dataEncryptionKey);
     });
 
-    it('cancels an uncertain root open before stopping the Gateway', async () => {
+    it('preserves an accepted root after its response is lost and replays the result', async () => {
+        let openAttempts = 0;
         mocks.callControl.mockImplementation(async (options: { path: string }) => {
             if (options.path === '/status') {
                 return { ...mocks.descriptors[0], state: 'running', pid: 1234 };
             }
-            if (options.path === '/root/open') throw new Error('Gateway control request timed out');
-            if (options.path === '/root/cancel') return { cancelled: true };
-            if (options.path === '/stop') return { stopping: true };
+            if (options.path === '/root/open') {
+                openAttempts += 1;
+                if (openAttempts === 1) throw new Error('Gateway control response was lost');
+                return {
+                    gatewayId: mocks.secret.gatewayId,
+                    threadId: 'thread-a',
+                    sessionId: 'session-a',
+                    generation: 1,
+                };
+            }
             throw new Error(`Unexpected control path ${options.path}`);
         });
 
-        await expect(launchCodexGatewayHeadless({
+        const options = {
             operationId: 'd94231c7-6601-483f-a8f3-92912d759423',
             cwd: '/workspace/project',
             env: {},
-            action: 'start',
-        })).rejects.toThrow('timed out');
+            action: 'start' as const,
+        };
+        await expect(launchCodexGatewayHeadless(options)).rejects.toThrow('response was lost');
+        await expect(launchCodexGatewayHeadless(options)).resolves.toMatchObject({
+            gatewayId: mocks.secret.gatewayId,
+            sessionId: 'session-a',
+        });
 
         expect(mocks.callControl.mock.calls.map(([request]) => request.path)).toEqual([
             '/status',
             '/root/open',
-            '/root/cancel',
-            '/stop',
+            '/status',
+            '/root/open',
         ]);
+        expect(mocks.createFiles).toHaveBeenCalledOnce();
+        expect(mocks.spawnHappyCLI).toHaveBeenCalledOnce();
     });
 
     it('restarts a stale descriptor with the same gateway identity', async () => {

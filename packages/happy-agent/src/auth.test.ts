@@ -52,6 +52,7 @@ function makeTestConfig(): Config {
         serverUrl: 'https://test-server.example.com',
         homeDir,
         credentialPath: join(homeDir, 'agent.key'),
+        operationReceiptDir: join(homeDir, 'agent-operations'),
     };
 }
 
