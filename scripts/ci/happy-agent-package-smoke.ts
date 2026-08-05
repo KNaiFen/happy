@@ -65,6 +65,7 @@ async function main(): Promise<void> {
     const secret = new Uint8Array(randomBytes(32));
     const token = 'packed-happy-agent-smoke-token';
     const machineId = 'packed-agent-machine';
+    const operationId = '7e6b3546-00fe-4b1e-9a17-6d60f2bc9b19';
     const machineMetadata = { homeDir: '/workspace' };
     const rawMachine = {
         id: machineId,
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
             'spawn',
             '--machine', machineId,
             '--path', '/workspace',
+            '--operation-id', operationId,
             '--json',
         ], env);
         assert.equal(spawnResult.exitCode, 0, spawnResult.stderr);
@@ -157,6 +159,7 @@ async function main(): Promise<void> {
             directory: '/workspace',
             approvedNewDirectoryCreation: false,
             agent: 'codex',
+            operationId,
         });
 
         const removedAgentResult = await runCommand(process.execPath, [
