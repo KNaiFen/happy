@@ -210,6 +210,19 @@ const {
         return selectFields(row as unknown as Record<string, unknown>, args?.select);
     });
 
+    const mutationCreateMany = vi.fn(async (args: any) => {
+        for (const data of args.data) {
+            const row: MutationRecord = {
+                id: `mutation-row-${state.nextMutationId++}`,
+                ...data,
+                createdAt: new Date(state.nowMs++),
+                prunedAt: data.prunedAt ?? null,
+            };
+            state.mutations.push(row);
+        }
+        return { count: args.data.length };
+    });
+
     const mutationAggregate = vi.fn(async (args: any) => {
         let rows = state.mutations.filter((mutation) => mutation.sessionId === args?.where?.sessionId);
         if (args?.where?.prunedAt === null) {
@@ -270,6 +283,66 @@ const {
         return created;
     });
 
+    const executeRaw = vi.fn(async (query: { values?: unknown[] }) => {
+        const values = query.values;
+        if (!Array.isArray(values) || values.length % 9 !== 0) {
+            throw new Error("Unexpected SessionEntityV4 batch query");
+        }
+        for (let offset = 0; offset < values.length; offset += 9) {
+            const [
+                id,
+                sessionId,
+                producerId,
+                entityId,
+                entityType,
+                revision,
+                op,
+                ciphertext,
+                updatedSeq,
+            ] = values.slice(offset, offset + 9) as [
+                string,
+                string,
+                string,
+                string,
+                string,
+                number,
+                string,
+                string,
+                number,
+            ];
+            const existing = state.entities.find((entity) => (
+                entity.sessionId === sessionId && entity.entityId === entityId
+            ));
+            if (existing) {
+                Object.assign(existing, {
+                    producerId,
+                    entityType,
+                    revision,
+                    op,
+                    ciphertext,
+                    updatedSeq,
+                    updatedAt: new Date(state.nowMs++),
+                });
+                continue;
+            }
+            const now = new Date(state.nowMs++);
+            state.entities.push({
+                id,
+                sessionId,
+                producerId,
+                entityId,
+                entityType,
+                revision,
+                op,
+                ciphertext,
+                updatedSeq,
+                createdAt: now,
+                updatedAt: now,
+            });
+        }
+        return values.length / 9;
+    });
+
     const txClient = {
         session: {
             findFirst: sessionFindFirst,
@@ -279,9 +352,11 @@ const {
         sessionMutationV4: {
             findMany: mutationFindMany,
             create: mutationCreate,
+            createMany: mutationCreateMany,
             aggregate: mutationAggregate,
         },
         sessionEntityV4: { findMany: entityFindMany, upsert: entityUpsert },
+        $executeRaw: executeRaw,
     };
 
     const dbMock = {
@@ -294,11 +369,29 @@ const {
         sessionMutationV4: {
             findMany: mutationFindMany,
             create: mutationCreate,
+            createMany: mutationCreateMany,
             aggregate: mutationAggregate,
             updateMany: mutationUpdateMany,
         },
         sessionEntityV4: { findMany: entityFindMany, upsert: entityUpsert },
-        $transaction: vi.fn(async (operation: any) => operation(txClient)),
+        $executeRaw: executeRaw,
+        $transaction: vi.fn(async (operation: any) => {
+            const snapshot = structuredClone({
+                sessions: state.sessions,
+                machines: state.machines,
+                mutations: state.mutations,
+                entities: state.entities,
+                nextMutationId: state.nextMutationId,
+                nextEntityId: state.nextEntityId,
+                nowMs: state.nowMs,
+            });
+            try {
+                return await operation(txClient);
+            } catch (error) {
+                Object.assign(state, snapshot);
+                throw error;
+            }
+        }),
     };
 
     return {
@@ -670,6 +763,10 @@ describe("v4SessionRoutes", () => {
         prunedRecordsMetricMock.mockClear();
         projectionLagMetricMock.mockClear();
         snapshotFallbackMetricMock.mockClear();
+        dbMock.$executeRaw.mockClear();
+        dbMock.sessionMutationV4.create.mockClear();
+        dbMock.sessionMutationV4.createMany.mockClear();
+        dbMock.sessionEntityV4.upsert.mockClear();
         dbMock.sessionMutationV4.updateMany.mockClear();
     });
 
@@ -736,6 +833,64 @@ describe("v4SessionRoutes", () => {
             1,
         );
         expect(response.headers["x-happy-sync-trace"]).toMatch(/^[0-9a-f]{32}$/);
+    });
+
+    it("persists a maximum accepted batch with two bounded write operations", async () => {
+        seedSession("session-1", "user-1");
+        app = await createApp();
+        const mutations = Array.from({ length: 100 }, (_, index) => ({
+            ...mutation,
+            mutationId: `mutation-${index + 1}`,
+            entityId: `opaque-entity-${index + 1}`,
+        }));
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: { mutations },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json().acknowledgements).toEqual(mutations.map((candidate, index) => ({
+            mutationId: candidate.mutationId,
+            seq: index + 1,
+            revision: candidate.revision,
+            status: "accepted",
+        })));
+        expect(state.sessions[0].syncV4Seq).toBe(100);
+        expect(state.entities).toHaveLength(100);
+        expect(state.mutations).toHaveLength(100);
+        expect(dbMock.$executeRaw).toHaveBeenCalledTimes(1);
+        expect(dbMock.$executeRaw.mock.calls[0][0].values).toHaveLength(900);
+        expect(dbMock.sessionMutationV4.createMany).toHaveBeenCalledTimes(1);
+        expect(dbMock.sessionMutationV4.createMany.mock.calls[0][0].data).toHaveLength(100);
+        expect(dbMock.sessionEntityV4.upsert).not.toHaveBeenCalled();
+        expect(dbMock.sessionMutationV4.create).not.toHaveBeenCalled();
+    });
+
+    it("rolls back sequence and projections when a batched journal write fails", async () => {
+        seedSession("session-1", "user-1");
+        app = await createApp();
+        dbMock.sessionMutationV4.createMany.mockRejectedValueOnce(new Error("journal batch failed"));
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v4/sessions/session-1/mutations",
+            headers: { "x-user-id": "user-1" },
+            payload: {
+                mutations: [
+                    mutation,
+                    { ...mutation, mutationId: "mutation-2", entityId: "opaque-entity-2" },
+                ],
+            },
+        });
+
+        expect(response.statusCode).toBe(500);
+        expect(state.sessions[0].syncV4Seq).toBe(0);
+        expect(state.entities).toHaveLength(0);
+        expect(state.mutations).toHaveLength(0);
+        expect(emitEphemeralMock).not.toHaveBeenCalled();
     });
 
     it("deduplicates mutation ids without allocating another sequence", async () => {
@@ -1025,6 +1180,9 @@ describe("v4SessionRoutes", () => {
         ]);
         expect(state.entities).toHaveLength(1);
         expect(state.entities[0]).toMatchObject({ revision: 3, ciphertext: "encrypted-v3", updatedSeq: 3 });
+        expect(dbMock.$executeRaw).toHaveBeenCalledTimes(1);
+        expect(dbMock.$executeRaw.mock.calls[0][0].values).toHaveLength(9);
+        expect(dbMock.sessionMutationV4.createMany.mock.calls[0][0].data).toHaveLength(3);
     });
 
     it("persists delete tombstones in snapshots", async () => {
