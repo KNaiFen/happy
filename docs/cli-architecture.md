@@ -1,383 +1,86 @@
-# CLI Architecture
-
-This document describes the Happy CLI (`packages/happy-cli`) and its daemon. The CLI is both an interactive tool and a background session manager that keeps machine state in sync with the server.
-
-## System overview
-
-```mermaid
-graph TB
-    subgraph "Happy CLI"
-        Entry[src/index.ts]
-        API[API Client]
-        Daemon[Daemon Process]
-        Agents[Agent Runners]
-        Persist[Persistence]
-    end
-
-    subgraph "~/.happy"
-        Settings[settings.json]
-        AccessKey[access.key]
-        DaemonState[daemon.state.json]
-        Logs[logs/]
-    end
-
-    subgraph Server
-        HTTP[HTTP API]
-        Socket[Socket.IO]
-    end
-
-    Entry --> API
-    Entry --> Daemon
-    Entry --> Agents
-    Entry --> Persist
-
-    Persist --> Settings & AccessKey & DaemonState & Logs
-
-    API --> HTTP & Socket
-    Daemon --> API
-    Agents --> API
-```
-
-## High-level layout
-- **Entry point:** `src/index.ts` parses subcommands and routes execution.
-- **API client:** `src/api` handles HTTP + Socket.IO, encryption, and RPC.
-- **Daemon:** `src/daemon` runs in the background, spawns sessions, and maintains machine state.
-- **Persistence/config:** `src/persistence.ts` + `src/configuration.ts` manage local state in `~/.happy`.
-- **Agents:** `src/codex` contains the official app-server gateway; `src/agent`,
-  `src/gemini`, `src/agy`, and `src/openclaw` contain retained provider-neutral or
-  provider-specific runners.
-
-## CLI entry flow
-
-```mermaid
-flowchart TD
-    Start([happy ...]) --> Parse[Parse subcommand]
-
-    Parse --> Doctor{doctor?}
-    Parse --> Auth{auth?}
-    Parse --> Connect{connect?}
-    Parse --> Agent{codex/retained agent?}
-    Parse --> Default{default}
-
-    Doctor --> RunDoctor[Run diagnostics]
-    Auth --> RunAuth[Auth flow]
-    Connect --> RunConnect[Connect machine]
-
-    Agent --> Setup[authAndSetupMachineIfNeeded]
-    Default --> Setup
-
-    Setup --> Context{Background?}
-    Context --> |Yes| StartDaemon[Start daemon]
-    Context --> |No| RunAgent[Run agent directly]
-
-    StartDaemon --> SpawnSession[Spawn session]
-```
-
-`src/index.ts` is the CLI router. It:
-- Parses subcommands (`doctor`, `auth`, `connect`, `codex`, retained agents, and the default Codex flow).
-- Ensures auth and machine setup when needed (`authAndSetupMachineIfNeeded`).
-- Starts the daemon or runs an agent directly based on subcommand/context.
-
-## Local state and configuration
-
-```mermaid
-graph LR
-    subgraph "~/.happy"
-        direction TB
-        settings["settings.json<br/><i>profile, onboarding</i>"]
-        access["access.key<br/><i>encryption keys</i>"]
-        daemon["daemon.state.json<br/><i>PID, port, version</i>"]
-        logs["logs/<br/><i>CLI/daemon logs</i>"]
-    end
-
-    subgraph "Environment Overrides"
-        direction TB
-        E1[HAPPY_HOME_DIR]
-        E2[HAPPY_SERVER_URL]
-        E3[HAPPY_WEBAPP_URL]
-        E4[HAPPY_VARIANT]
-        E5[HAPPY_EXPERIMENTAL]
-        E6[HAPPY_DISABLE_CAFFEINATE]
-    end
-
-    E1 -.-> settings & access & daemon & logs
-```
-
-Local state lives under `~/.happy` (or `HAPPY_HOME_DIR`):
-- `settings.json`: onboarding and profile settings (validated/migrated).
-- `access.key`: local key material for encryption/auth.
-- `daemon.state.json`: daemon PID + control port + version.
-- `logs/`: CLI/daemon logs.
-
-Configuration lives in `src/configuration.ts`:
-- `HAPPY_SERVER_URL` and `HAPPY_WEBAPP_URL` override defaults.
-- `HAPPY_VARIANT`, `HAPPY_EXPERIMENTAL`, `HAPPY_DISABLE_CAFFEINATE` control behavior.
-
-## API client architecture
-
-```mermaid
-graph TB
-    subgraph "API Clients"
-        Base[ApiClient]
-        Session[ApiSessionClient]
-        Machine[ApiMachineClient]
-        Encrypt[encryption.ts]
-    end
-
-    subgraph "Server"
-        HTTP[HTTP API]
-        Socket[Socket.IO]
-    end
-
-    Base --> |POST /v1/sessions| HTTP
-    Base --> |POST /v1/machines| HTTP
-
-    Session --> |session-scoped| Socket
-    Machine --> |machine-scoped| Socket
-
-    Encrypt --> Base & Session & Machine
-```
-
-### HTTP
-`ApiClient` (`src/api/api.ts`) handles:
-- Session creation (`POST /v1/sessions`) with encrypted metadata/state.
-- Machine registration (`POST /v1/machines`) with encrypted metadata/daemon state.
-- Other CRUD actions through `ApiSessionClient` and `ApiMachineClient`.
-
-### WebSocket
-
-```mermaid
-graph LR
-    subgraph "ApiSessionClient"
-        S_In[Receive: update]
-        S_Out[Emit: message, update-metadata,<br/>update-state, session-alive, usage-report]
-    end
-
-    subgraph "ApiMachineClient"
-        M_In[Receive: machine updates]
-        M_Out[Emit: machine-alive,<br/>update metadata/state]
-    end
-
-    Server((Socket.IO)) --> S_In & M_In
-    S_Out & M_Out --> Server
-```
-
-`ApiSessionClient` (`src/api/apiSession.ts`) connects to Socket.IO as a **session-scoped** client:
-- Receives `update` events and decrypts message content.
-- Emits `message`, `update-metadata`, `update-state`, `session-alive`, and `usage-report`.
-
-`ApiMachineClient` (`src/api/apiMachine.ts`) connects as a **machine-scoped** client:
-- Sends `machine-alive` heartbeats.
-- Updates machine metadata/daemon state with optimistic concurrency.
-- Receives machine updates and merges them locally.
-
-### Encryption
-
-```mermaid
-flowchart LR
-    subgraph "Client-side"
-        Plain[Plaintext Data]
-        Encrypt[encryption.ts]
-        B64[Base64 Encoded]
-    end
-
-    Plain --> |encrypt| Encrypt --> B64 --> |send| Server[(Server)]
-    Server --> |receive| B64 --> |decrypt| Encrypt --> Plain
-
-    style Plain fill:#e8f5e9
-    style B64 fill:#fff3e0
-```
-
-The CLI encrypts client content before it leaves the machine using `src/api/encryption.ts`.
-- Session metadata, agent state, messages, machine state, artifacts, and KV values are encrypted client-side.
-- On-wire encoding is base64; see `encryption.md`.
-
-## Daemon architecture
-
-```mermaid
-graph TB
-    subgraph "Daemon Process"
-        Control[Control Server<br/>127.0.0.1:port]
-        Sessions[Session Map]
-        MachineClient[ApiMachineClient]
-    end
-
-    subgraph "Child Processes"
-        S1[Session 1]
-        S2[Session 2]
-        S3[Session N]
-    end
-
-    CLI[CLI] --> |IPC| Control
-    Control --> Sessions
-    Sessions --> S1 & S2 & S3
-
-    MachineClient --> |heartbeat| Server[(Server)]
-    MachineClient --> |state sync| Server
-```
-
-The daemon is a long-lived process responsible for running sessions in the background and maintaining machine presence.
-
-### Lifecycle
-
-```mermaid
-flowchart TD
-    Start([startDaemon]) --> Validate[Validate version]
-    Validate --> Lock[Acquire lock file]
-    Lock --> Auth[Authenticate]
-    Auth --> Register[Register machine with server]
-    Register --> Control[Start control server]
-    Control --> Track[Track child sessions]
-    Track --> Sync[Sync daemon state to server]
-    Sync --> Running([Running])
-
-    Running --> |SIGTERM| Shutdown[Cleanup & exit]
-```
-
-1. `startDaemon()` validates the running version and acquires a lock file.
-2. It authenticates and registers the machine with the server.
-3. It starts a local **control server** for IPC.
-4. It keeps a map of tracked child sessions and updates daemon state on the server.
-
-### Control server (local IPC)
-
-```mermaid
-sequenceDiagram
-    participant CLI
-    participant State as daemon.state.json
-    participant Control as Control Server
-    participant Daemon
-
-    CLI->>State: Read port
-    State-->>CLI: port: 12345
-
-    CLI->>Control: GET /list
-    Control-->>CLI: [sessions...]
-
-    CLI->>Control: POST /spawn-session
-    Control->>Daemon: Spawn child process
-    Daemon-->>Control: Session started
-    Control-->>CLI: OK
-
-    CLI->>Control: POST /stop
-    Control->>Daemon: Shutdown
-```
-
-`startDaemonControlServer()` (`src/daemon/controlServer.ts`) runs an HTTP server on `127.0.0.1` and exposes:
-- `/list` (list active sessions)
-- `/stop-session`
-- `/spawn-session`
-- `/stop` (shutdown daemon)
-- `/session-started` (session self-report)
-
-The CLI talks to this server via `controlClient.ts`, using a port stored in `daemon.state.json`.
-
-### Session spawning
-
-```mermaid
-flowchart LR
-    subgraph "Session Sources"
-        CLI[CLI<br/><i>foreground</i>]
-        Daemon[Daemon<br/><i>background</i>]
-        Remote[Mobile/Web<br/><i>via RPC</i>]
-    end
-
-    subgraph "Session Process"
-        Session[Agent Session]
-        Handlers[RPC Handlers]
-    end
-
-    CLI --> Session
-    Daemon --> Session
-    Remote --> |spawn-session| Daemon --> Session
-
-    Session --> Handlers
-
-    subgraph "RPC Surface"
-        Handlers --> Bash[bash]
-        Handlers --> Files[file read/write]
-        Handlers --> Search[ripgrep]
-        Handlers --> Diff[difftastic]
-    end
-```
-
-Sessions can be started by:
-- The CLI directly (foreground).
-- The daemon (background).
-- Remote requests over RPC (from mobile/web via machine connection).
-
-Daemon session spawning uses `registerCommonHandlers` to expose a controlled RPC surface (shell commands, file operations, search/diff helpers).
-
-### Machine state
-
-```mermaid
-graph TB
-    subgraph "Machine Metadata (static)"
-        M1[host]
-        M2[platform]
-        M3[CLI version]
-        M4[paths]
-    end
-
-    subgraph "Daemon State (dynamic)"
-        D1[pid]
-        D2[httpPort]
-        D3[startedAt]
-        D4[shutdown info]
-    end
-
-    subgraph "Sync Targets"
-        Server[(Server)]
-        Local[daemon.state.json]
-    end
-
-    ApiMachine[ApiMachineClient]
-
-    M1 & M2 & M3 & M4 --> ApiMachine
-    D1 & D2 & D3 & D4 --> ApiMachine
-    D1 & D2 & D3 & D4 --> Local
-
-    ApiMachine --> Server
-```
-
-- **Machine metadata** is static info (host, platform, CLI version, paths).
-- **Daemon state** is dynamic (pid, httpPort, startedAt, shutdown info).
-
-The daemon updates these via `ApiMachineClient` and mirrors local state into `daemon.state.json` for control/diagnostics.
-
-## RPC and tool bridge
-
-```mermaid
-sequenceDiagram
-    participant Mobile
-    participant Server
-    participant Daemon
-    participant Session
-
-    Mobile->>Server: RPC: spawn-session
-    Server->>Daemon: Forward via Socket.IO
-    Daemon->>Session: Spawn process
-    Session-->>Daemon: Running
-
-    Mobile->>Server: RPC: bash "ls -la"
-    Server->>Session: Forward via Socket.IO
-    Session->>Session: Execute command
-    Session-->>Server: Result
-    Server-->>Mobile: Result
-
-    Note over Mobile,Session: All RPC flows through Socket.IO<br/>No direct REST exposure
-```
-
-RPC is used to send commands over the Socket.IO connection:
-- Sessions register RPC handlers (e.g., `bash`, file read/write, `ripgrep`, `difftastic`).
-- The daemon registers a spawn-session handler so the server/mobile client can ask it to start a local session.
-
-This mechanism allows the server and mobile clients to drive local actions without exposing a broad REST surface.
-
-## Implementation references
-- CLI entry: `packages/happy-cli/src/index.ts`
-- Daemon: `packages/happy-cli/src/daemon`
-- Control server/client: `packages/happy-cli/src/daemon/controlServer.ts`, `packages/happy-cli/src/daemon/controlClient.ts`
-- API clients: `packages/happy-cli/src/api`
-- Persistence: `packages/happy-cli/src/persistence.ts`
-- Config: `packages/happy-cli/src/configuration.ts`
+# Happy CLI 架构
+
+> **当前文档（2026-08-05）：** 未指定 provider 的新会话只启动 Codex。
+> 历史非 Codex 路径的启动、认证、连接、恢复、fork、UI、SDK 和 prompt fallback 已移除。
+
+## 入口与运行形态
+
+`happy` 和 `happy codex` 都进入 Codex 路径。CLI 负责：
+
+- 设备认证与 Happy Server 连接；
+- 启动或附着官方 Codex app-server；
+- 本地 Native TUI 与远端 App 同时控制同一 thread；
+- Codex stable-v2 通知到 Sync v4 实体的投影；
+- mutation、command、cursor 和恢复状态的持久化；
+- machine daemon 与保留 RPC 基础设施。
+
+主要源码位于 `packages/happy-cli/src/codex`，持久 Gateway 位于
+`packages/happy-cli/src/codex/gateway`。
+
+## Codex app-server 边界
+
+Happy 以 `codex-cli 0.145.0` 为最低支持版本，生成协议类型时固定使用
+`codex app-server generate-ts` 且不开 experimental API。运行时拒绝更旧或无法识别的
+Codex 版本；已识别的控制命令使用官方 RPC，失败时显式报错，不退化为 prompt 文本。
+
+`codexAppServerClient.ts` 与 WebSocket transport 管理初始化和 RPC；
+`codexThreadRegistry.ts` 按真实 thread/turn/item ID 路由通知。未知 thread 先建立
+placeholder 并执行权威读取，绝不猜测为当前 thread 或 parent。
+
+只同步官方 reasoning summary。raw reasoning 只允许本地计数，不写入 journal、日志或网络。
+
+## 持久 Gateway
+
+Gateway 将 Codex app-server 生命周期从一次前台 shell 中分离：
+
+- launcher/worker 创建并守护 app-server；
+- descriptor、secret、lease 和 append-only journal 位于
+  `~/.happy/codex-gateways/` 的私有目录；
+- control server 与 WebSocket proxy 让 Native TUI、headless CLI 和恢复流程附着同一 Gateway；
+- thread lease 阻止两个存活 Gateway 同时拥有同一 Codex thread；
+- stale descriptor、worker crash 和 handoff 通过进程身份、generation 和 journal 恢复；
+- Gateway state 不允许泄露 bearer token、加密 key 或 provider payload。
+
+Native TUI 的终端字节流和 App 的结构化 Sync v4 投影是两条不同视图，生命周期所有权仍在
+同一个 Gateway/app-server。架构决定见
+[ADR-004](decisions/ADR-004-codex-native-tui-gateway.md)。
+
+## Sync v4 客户端
+
+`codexSyncV4Mapper.ts` 把 provider 通知映射为 thread、runtime、turn、item、part、
+request、command/result 和 parent/child relation。`codexV4CommandProcessor.ts` 与
+`codexV4CommandExecutor.ts` 执行来自 App 的不可变 command。
+
+客户端先把 outbound mutation 写入 `~/.happy/sync-v4/` JSONL journal，再按 FIFO 上传。
+inbound change 先落 journal、再解密执行，处理成功后才推进 receive cursor。最终截断记录可恢复，
+compaction 使用原子替换。
+
+Socket.IO 只是唤醒提示；CLI 通过 changes polling 和 snapshot replay 保证恢复。RPC timeout、
+transport loss 或 interrupt ACK 只表示结果未知，不能结束 turn。
+
+## 命令与控制
+
+- prompt/steer 通过稳定 RPC，并使用 command ID 关联 `clientUserMessageId`；
+- `/compact` 映射 `thread/compact/start`，以对应 compaction item 生命周期为完成证据；
+- `/review` 映射 `review/start`；
+- approval、user input 和 interrupt 都绑定预期 request/turn ID；
+- 非幂等控制在 RPC 结果未知时不会盲目重放；
+- provider child thread 是隔离的只读 side session，不能接受 App 写命令。
+
+Codex stable-v2 没有稳定写入 permission profile 与 collaboration mode 的请求字段；
+Happy 只展示官方观测值，不使用 experimental API 或 prompt 伪造。
+
+## 共享基础设施
+
+CLI 仍使用 API auth、machine/session clients、Socket.IO RPC 与 `@slopus/happy-wire`。
+Gemini、OpenClaw、Agy、generic ACP 和共享 v3 基础设施只有在保留消费者仍使用时才存在；
+这些保留模块不会让未知会话获得 Codex 写权限。
+
+## 验证与发行
+
+源码验证覆盖 app-server client、thread registry、Gateway launcher/proxy/journal/lease、
+Sync v4 mapper、command routing、migration、child identity 和集成 fixtures。官方 Codex
+源码编译与真实 app-server 接受测试只在 GitHub Actions 运行。
+
+CLI 可交付包由 `.github/workflows/build-cli-release.yml` 在版本变更时构建。产物必须是单个
+`happy-X.Y.Z.tgz`，包含 macOS ARM64 `rg` 与 `difftastic` 归档，并经过安装冒烟测试。

@@ -1,6 +1,6 @@
 # Happy Server
 
-Minimal relay for open-source end-to-end encrypted coding-agent clients.
+Minimal relay for open-source end-to-end encrypted Codex clients.
 
 ## What is Happy?
 
@@ -10,7 +10,7 @@ Happy Server is the synchronization backbone for secure Codex clients. It enable
 
 - 🔐 **Zero Knowledge** - The server stores encrypted data but has no ability to decrypt it
 - 🎯 **Minimal Surface** - Only essential features for secure sync, nothing more  
-- 🕵️ **Privacy First** - No analytics, no tracking, no data mining
+- 🕵️ **Privacy First** - The Relay does not run product analytics or mine encrypted session payloads; App analytics are documented separately and can be disabled
 - 📖 **Open Source** - Transparent implementation you can audit and self-host
 - 🔑 **Cryptographic Auth** - No passwords stored, only public key signatures
 - ⚡ **Real-time Sync** - WebSocket-based synchronization across all your devices
@@ -24,16 +24,22 @@ Happy clients generate encryption keys locally and use Happy Server as a secure 
 
 ## Hosting
 
-**You don't need to self-host!** Our free cloud Happy Server at `happy-api.slopus.com` is just as secure as running your own. Since all data is end-to-end encrypted before it reaches our servers, we literally cannot read your messages even if we wanted to. The encryption happens on your device, and only you have the keys.
+**You don't need to self-host.** The default Happy Relay endpoint is
+`https://api.cluster-fluster.com`. Happy session payloads are encrypted before
+relay synchronization; unencrypted routing metadata and optional voice data
+have the separate boundaries documented in the repository privacy policy.
 
-That said, Happy Server is open source and self-hostable if you prefer running your own infrastructure. The security model is identical whether you use our servers or your own.
+That said, Happy Server is open source and self-hostable if you prefer running
+your own infrastructure. A correctly configured HTTPS deployment preserves the
+same encrypted session-payload boundary. Explicit trusted-LAN HTTP opt-in does
+not provide HTTPS transport protection and is outside that guarantee.
 
 ## Self-Hosting with Docker
 
 The standalone Docker image runs everything in a single container with no external dependencies (no Postgres, no Redis, no S3).
 
 ```bash
-docker build -t happy-server -f Dockerfile .
+docker build -t happy-server -f Dockerfile.server .
 ```
 
 Run from the monorepo root:
@@ -70,7 +76,8 @@ cd happy-relay
 
 The installer verifies checksums, generates a file-backed master secret, runs
 database migrations, and waits for a database-backed health check. It binds to
-`127.0.0.1:3005`; Codex Sync v4 is the only session message protocol. See the
+`127.0.0.1:3005`; Sync v4 is the normative Codex session-state protocol, while
+shared v1-v3 compatibility infrastructure remains for retained features. See the
 bundled `README.md` before exposing plain HTTP on a trusted LAN.
 
 ### Environment Variables

@@ -1,80 +1,75 @@
-# Deployment
+# Happy Server 部署
 
-This document describes how to deploy the Happy backend (`packages/happy-server`) and the infrastructure it expects.
+> **当前文档（2026-08-05）：** Redis 与 S3 都是可选能力；Debian Relay 的可交付镜像
+> 和 bundle 只由 GitHub Actions 构建。
 
-## Runtime overview
-- **App server:** Node.js running `tsx ./sources/main.ts` (Fastify + Socket.IO).
-- **Database:** Postgres via Prisma.
-- **Cache:** Redis (currently used for connectivity and future expansion).
-- **Object storage:** S3-compatible storage for user-uploaded assets (MinIO works).
-- **Metrics:** Optional Prometheus `/metrics` server on a separate port.
+## 运行模式
 
-## Required services
-1. **Postgres**
-   - Required for all persisted data.
-   - Configure via `DATABASE_URL`.
+| 模式 | 数据库 | 文件存储 | Redis | 适用范围 |
+| --- | --- | --- | --- | --- |
+| 托管 Server | Postgres/Prisma | S3 兼容存储或本地目录 | 多副本时可选 | 云端/集群 |
+| Standalone | PGlite | 本地持久目录 | 不需要 | 单机开发或嵌入 |
+| Debian 13 Relay bundle | PGlite/交付配置 | Docker volume | 不需要 | amd64 自托管 Relay |
 
-2. **Redis**
-   - Required by startup (`redis.ping()` is called).
-   - Configure via `REDIS_URL`.
-   - Managed by this repo: `packages/happy-server/deploy/happy-redis.yaml` (StatefulSet + redis-exporter sidecar).
+常规入口是 `packages/happy-server/sources/main.ts`；standalone 入口是
+`packages/happy-server/sources/standalone.ts`。
 
-3. **S3-compatible storage**
-   - Used for avatars and other uploaded assets.
-   - Configure via `S3_HOST`, `S3_PORT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_URL`, `S3_USE_SSL`.
-   - **Deployed separately** — not managed by this repo's Kubernetes manifests. In prod, the S3-compatible service (MinIO or similar) behind `S3_PUBLIC_URL` is provisioned and managed by external infrastructure. The app only consumes it via env vars: `S3_PUBLIC_URL` is set in the Deployment, and credentials come from Vault via ExternalSecret (`/handy-files`).
-   - If `S3_HOST` is unset, the server falls back to local filesystem storage (`./data/files/`).
-   - For local k8s dev, a MinIO pod is deployed via `deploy/overlays/local/minio.yaml`.
+## 配置
 
-## Environment variables
-**Required**
-- `DATABASE_URL`: Postgres connection string.
-- `HANDY_MASTER_SECRET`: master key for auth tokens and server-side encryption.
-- `REDIS_URL`: Redis connection string.
-- `S3_HOST`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_URL`: object storage config.
+所有模式都需要安全生成并持久保存的 `HANDY_MASTER_SECRET`。不要在升级时重建或输出它。
 
-**Common**
-- `PORT`: API server port (default `3005`).
-- `METRICS_ENABLED`: set to `false` to disable metrics server.
-- `METRICS_PORT`: metrics server port (default `9090`).
-- `S3_PORT`: optional S3 port.
-- `S3_USE_SSL`: `true`/`false` (default `true`).
+托管 Postgres：
 
-**Optional integrations**
-- GitHub OAuth/App: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, plus redirect URL/URI.
-  - `GITHUB_REDIRECT_URL` is used by the OAuth callback handler.
-  - `GITHUB_REDIRECT_URI` is used by the GitHub App initializer.
-- Voice: `ELEVENLABS_API_KEY` (required for `/v1/voice/conversations` in production).
-- Subscriptions: `REVENUECAT_API_KEY` (server-side RevenueCat key, required for voice subscription checks).
-- Debug logging: `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING` (enables file logging + dev log endpoint).
+- `DATABASE_URL`：Prisma/Postgres 连接；
+- `REDIS_URL`：可选；配置时启用跨副本 Socket.IO adapter；
+- `S3_HOST`、`S3_ACCESS_KEY`、`S3_SECRET_KEY`、`S3_BUCKET`、
+  `S3_PUBLIC_URL`、`S3_PORT`、`S3_USE_SSL`：可选对象存储；
+- 未配置 S3 时使用本地文件目录，该目录必须挂载持久卷。
 
-## Docker image
-A production Dockerfile is provided at `Dockerfile.server`.
+通用配置：
 
-Key notes:
-- The server defaults to port `3005` (set `PORT` explicitly in container environments).
-- The image includes FFmpeg and Python for media processing.
+- `PORT`：API 端口，默认 `3005`；
+- `METRICS_ENABLED` / `METRICS_PORT`：可选 Prometheus 指标；
+- `GITHUB_*`：可选 GitHub 连接；
+- `ELEVENLABS_API_KEY`：默认语音 agent；
+- `REVENUECAT_API_KEY`：语音订阅资格；
+- `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING`：只限受控开发环境。
 
-## Kubernetes manifests
-Example manifests live in `packages/happy-server/deploy`:
-- `handy.yaml`: Deployment + Service + ExternalSecrets for the server.
-- `happy-redis.yaml`: Redis StatefulSet + Service + ConfigMap.
+目标安全边界要求生产日志不得记录 prompt、reasoning、tool 参数/输出、provider ID、
+bearer token、加密 key 或签名材料。语音链路尚有已核验的 user/conversation ID 与
+context/token 调试日志缺口，见
+[Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md)。
 
-The deployment config expects:
-- Prometheus scraping annotations on port `9090`.
-- A secret named `handy-secrets` populated by ExternalSecrets.
-- A service mapping port `3000` to container port `3005`.
+## Kubernetes 与容器
 
-## Local dev helpers
-The server package includes scripts for local infrastructure:
-- `pnpm --filter happy-server db` (Postgres in Docker)
-- `pnpm --filter happy-server redis`
-- `pnpm --filter happy-server s3` + `s3:init`
+`packages/happy-server/deploy/handy.yaml` 和 `deploy/base`/`deploy/overlays` 是托管部署示例。
+本仓库没有 `happy-redis.yaml`；Redis 若需要由部署环境单独提供。本地 overlay 提供
+Postgres、MinIO、Prometheus 和 Grafana 示例。
 
-Use `.env`/`.env.dev` to load local settings when running `pnpm --filter happy-server dev`.
+`Dockerfile.server` 是通用 Server 镜像入口。不要把它与 Debian Relay 交付混淆。
 
-## Implementation references
-- Entrypoint: `packages/happy-server/sources/main.ts`
-- Dockerfile: `Dockerfile.server`
-- Kubernetes manifests: `packages/happy-server/deploy`
-- Env usage: `packages/happy-server/sources` (`rg -n "process.env"`)
+## Debian 13 amd64 Relay
+
+交付定义位于 `packages/happy-server/deploy/debian13-amd64`，工作流为
+`.github/workflows/build-debian13-relay-release.yml`。
+
+固定契约：
+
+- 镜像只包含 Relay，不包含 Web App；
+- host 安装与 `relayctl.sh` 以 root 运行，容器保持 `65532:65532`；
+- root filesystem 只读，drop all capabilities，`no-new-privileges`，只给 `/tmp` tmpfs；
+- master secret 以窄范围 file secret 挂载；
+- 默认绑定 `127.0.0.1:3005`；HTTP 仅允许显式可信网络；
+- bundle 包含镜像、compose、安装/控制脚本、SBOM、manifest 和 SHA-256。
+
+云端工作流验证镜像身份、amd64、distroless runtime、部署依赖、迁移、重启持久性、
+secret ownership、SBOM 与 Critical vulnerability gate。它尚未验收语音 payload 日志脱敏；
+该项以活动整改计划为准。成功前不得把产物称为已发布。
+
+## 升级
+
+升级现有 Relay 时保留 `.env`、`secrets/master-secret` 和数据 volume，不清库、不重建
+secret。升级后验证 health、设备/会话目录、Sync v4 mutation/change/snapshot、重启恢复、
+容器安全约束和物理 CLI/App 生命周期。
+
+当前现场事项见 [Debian Relay 活动计划](plans/debian13-amd64-relay-bundle.md)。

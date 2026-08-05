@@ -6,7 +6,7 @@ Reviewed on 2026-03-20 from these main sources:
 - `../happy-adjacent/research/claude-code-acp` at `521d1f766d421f8d21d162e1c799edc094781dfc`
 - `../happy-adjacent/research/agent-client-protocol` at `cd10d9b86e04caaf05bd5e75d860da4c17fcd2f8`
 - local `~/.claude/` state
-- `docs/research/agent-teams-claude-code.md`
+- `docs/research/archive/agent-teams-claude-code.md`
 
 ## Why it matters
 
@@ -33,7 +33,7 @@ state, but it is not one clean protocol surface.
 - `../happy-adjacent/research/claude-code-acp/src/acp-agent.ts`
 - `../happy-adjacent/research/agent-client-protocol/src/agent.rs`
 - `../happy-adjacent/research/agent-client-protocol/src/client.rs`
-- `docs/research/agent-teams-claude-code.md`
+- `docs/research/archive/agent-teams-claude-code.md`
 
 See `docs/competition/claude/message-protocol.md` and
 `docs/competition/claude/sources.md`.

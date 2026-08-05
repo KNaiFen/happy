@@ -1,5 +1,8 @@
 # API
 
+> `/v1` 与 `/v2` 提供账户、设备、目录和兼容数据面；Codex 的规范同步接口位于
+> `/v4`。Socket.IO 事件不能替代 v4 change/snapshot 恢复。
+
 This document covers the HTTP API surface and authentication flows. For WebSocket updates and event payloads, see `protocol.md`. For encryption boundaries and encoding details, see `encryption.md`.
 
 ## Method conventions
@@ -44,12 +47,35 @@ Auth flows:
 - `GET /v2/sessions?cursor=cursor_v1_<id>&limit=...&changedSince=...`
 - `POST /v1/sessions` (create or load by `tag`)
 - `GET /v1/sessions/:sessionId/messages`
+- `POST /v1/sessions/:sessionId/push-event`
 - `DELETE /v1/sessions/:sessionId`
+
+### Codex Sync v4
+- `GET /v4/capabilities`
+- `POST /v4/sessions/:sessionId/mutations`
+- `GET /v4/sessions/:sessionId/changes?after_seq=...`
+- `GET /v4/sessions/:sessionId/snapshot`
+- `POST /v4/sessions/:sessionId/presence/claim`
+- `POST /v4/sessions/:sessionId/presence/touch`
+- `POST /v4/sessions/:sessionId/presence/release`
+- `POST /v4/sessions/:sessionId/archive`
+- `POST /v4/sessions/:sessionId/unarchive`
+
+Mutation, changes, and snapshot routes require a compatible `X-Happy-Client`
+header. Unsupported clients receive HTTP 426 and must upgrade rather than
+falling back to a legacy Codex protocol.
+
+### Attachments
+- `POST /v1/sessions/:sessionId/attachments/request-upload`
+- `PUT /v1/sessions/:sessionId/attachments/:attachmentFile`
+- `POST /v1/sessions/:sessionId/attachments/request-download`
+- `GET /v1/sessions/:sessionId/attachments/:attachmentFile`
 
 ### Machines
 - `POST /v1/machines` (create or load by id)
 - `GET /v1/machines`
 - `GET /v1/machines/:id`
+- `DELETE /v1/machines/:id`
 
 ### Artifacts
 - `GET /v1/artifacts`
@@ -100,7 +126,8 @@ Auth flows:
 
 ### Version and voice
 - `POST /v1/version`
-- `POST /v1/voice/token`
+- `POST /v1/voice/conversations`
+- `GET /v1/voice/usage`
 
 ### Dev-only
 - `POST /logs-combined-from-cli-and-mobile-for-simple-ai-debugging` (only if enabled)

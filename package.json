@@ -2,7 +2,7 @@
     "name": "monorepo",
     "private": true,
     "scripts": {
-        "cli": "pnpm --filter happy cli",
+        "cli": "pnpm --filter happy exec tsx src/index.ts",
         "release": "node ./scripts/release.cjs",
         "web": "pnpm --filter happy-app web",
         "codium": "pnpm --filter codium dev",
@@ -22,7 +22,9 @@
         "env:up": "tsx environments/environments.ts up",
         "env:up:authenticated": "pnpm env:up --template authenticated-empty",
         "env:down": "tsx environments/environments.ts down",
-        "env:tailscale": "tsx environments/environments.ts tailscale"
+        "env:tailscale": "tsx environments/environments.ts tailscale",
+        "docs:sync": "node ./scripts/docs/knowledge-base.mjs --write",
+        "docs:check": "node ./scripts/docs/knowledge-base.mjs --check"
     },
     "workspaces": {
         "packages": [

@@ -1,0 +1,46 @@
+name: Documentation knowledge base
+
+on:
+  push:
+    paths:
+      - "**/*.md"
+      - "**/*.mdx"
+      - "scripts/docs/**"
+      - "package.json"
+      - "packages/*/package.json"
+      - ".github/workflows/build-*-release.yml"
+      - ".github/workflows/docs-knowledge-base.yml"
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "**/*.mdx"
+      - "scripts/docs/**"
+      - "package.json"
+      - "packages/*/package.json"
+      - ".github/workflows/build-*-release.yml"
+      - ".github/workflows/docs-knowledge-base.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-knowledge-base-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Generated indexes and links
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Validate knowledge base
+        run: node scripts/docs/knowledge-base.mjs --check

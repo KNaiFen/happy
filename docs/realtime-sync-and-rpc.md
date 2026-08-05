@@ -1,6 +1,9 @@
 # Realtime Sync and RPC
 
-This is the high-level doc for how Happy uses Socket.IO for realtime sync and point-to-point RPC.
+> **兼容范围：** 本文描述共享 Socket.IO update/RPC 基础设施。Codex Sync v4 只把
+> Socket.IO 当作 invalidation hint；恢复必须依赖 changes polling、journal 和 snapshot。
+
+This is the high-level doc for how Happy uses Socket.IO for retained realtime updates and point-to-point RPC.
 
 Related docs:
 - `protocol.md`: wire contract, event names, and payload shapes
