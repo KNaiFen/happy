@@ -35,8 +35,8 @@
 | 3 | F-03 | P1 | 高 | 已解决 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
 | 4 | F-04 | P2 | 高 | 已解决 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
 | 5 | P-01 | P2 | 高 | 已解决 | App 为全部 Codex 会话启动固定 5 秒轮询 |
-| 6 | P-02 | P2 | 高 | 进行中 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
-| 7 | P-03 | P3 | 高 | 待修复 | happy-agent 等待循环每秒重新拉取完整 snapshot |
+| 6 | P-02 | P2 | 高 | 已解决 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
+| 7 | P-03 | P3 | 高 | 进行中 | happy-agent 等待循环每秒重新拉取完整 snapshot |
 
 ## F-01 happy-agent 把命令结果或 interrupt ACK 当作 turn 终态
 
@@ -120,7 +120,7 @@
 
 ## P-02 Relay mutation 在 Serializable 事务内逐条执行 ORM 写入
 
-- 状态：进行中
+- 状态：已解决
 - 严重度：P2
 - 置信度：高
 - 生产链：`packages/happy-server/sources/app/api/routes/v4SessionRoutes.ts:394 POST mutations` -> `classifySyncV4Mutations` -> session sequence update -> per-mutation entity upsert + journal create；事务由 `packages/happy-server/sources/storage/inTx.ts:17` 以 Serializable、10 秒 timeout、最多三次重试执行。
@@ -131,21 +131,21 @@
 - 当前覆盖：路由测试验证语义和幂等结果，不限制批量 ORM 调用数或冲突成本。
 - 最小修复方向：在保持 entity/journal/seq 原子性的前提下批量写入，或重新设计单 session sequence 分配，减少事务往返和冲突窗口。
 - 实施计划：真实性复核确认当前 mutation 事务先读取 owned session、既有 mutation receipts 与当前 entities，再更新一次 session sequence；随后对每个非 duplicate classification 逐条执行 entity upsert（accepted）和 journal create。100 条全接受且 entity 各异的批次因此在一次 Serializable 事务中约执行 204 次 ORM/数据库往返，且 `inTx` 遇到 P2034 时会重放整个事务。修复保持 classifier、连续 sequence、ACK 顺序、duplicate/superseded 语义和 entity/journal/session 原子性不变：先在内存中按请求顺序为每个非 duplicate classification 分配 sequence 并构造 journal rows，同时把 accepted classifications 按 `entityId` 折叠为该批次的最终投影；随后使用一条完全参数化的 PostgreSQL `INSERT ... ON CONFLICT (sessionId, entityId) DO UPDATE` 批量写最终 entity projections，并用一次 Prisma `createMany` 写全部 journal receipts。两项写入仍处于原 Serializable 事务内，不使用 `skipDuplicates`，任何唯一键竞争或写入失败都必须使 session sequence、projection 与 journal 一起回滚。补充 100 条全接受批次只执行一次 entity batch upsert 和一次 journal createMany 的往返预算测试，以及同实体多 revision、accepted/superseded/duplicate 混合、delete tombstone、序号/ACK 顺序和失败原子性回归；Server 补丁版本升级到 `1.1.40`。
-- 解决证据：待填写。
+- 解决证据：实现提交 `b96859f6` 由 PR #14 squash 合并为 `41be7ecf`，Server 升级至 `1.1.40`。路由现在先按请求顺序分配连续 sequence/ACK，在内存中把 accepted mutations 按 `entityId` 折叠为最终投影，再用一条完全参数化的 PostgreSQL `INSERT ... ON CONFLICT ... DO UPDATE` 写 entity projections，并用一次 `createMany` 写全部 journal receipts；两项写入仍处于原 Serializable 事务且任何失败都会连同 session sequence 一起回滚。100 条全接受批次回归证明 entity 写入固定为一次 `$executeRaw`、journal 固定为一次 `createMany`，同实体多 revision 只写一个最终投影但保留全部 receipts；真实 PGlite/Prisma 测试证明成功语义和 journal 失败后的 sequence/entity/journal 原子回滚。相关 3 files / 33 tests、Server 27 files / 169 tests、`tsc --noEmit` 和 `git diff --check` 本地通过。push/PR CI `31001409846`、`31001480689` 与跨平台 smoke `31001480338` 共 38/38 成功；合并后主 CI `31002692890`、Debian 13 relay 发布 `31002692643` 和 API 36 Android field E2E `31002692935` 均成功。发布通过 distroless/relay-only 身份、Critical 漏洞、SBOM、校验和、交付安装及迁移/重启生命周期门禁，并上传未过期 artifact `8929345949`（`happy-relay-server-1.1.40-debian13-amd64`，190,193,868 bytes）。
 
 ## P-03 happy-agent 等待循环每秒重新拉取完整 snapshot
 
-- 状态：待修复
+- 状态：进行中
 - 严重度：P3
 - 置信度：高
-- 生产链：`packages/happy-agent/src/session.ts:293 waitForCommand` / `:309 waitForIdle` -> `:209 readSnapshot`，每页 100 条并以 1 秒间隔重复。
+- 生产链：`packages/happy-agent/src/session.ts:354 waitForCommand` / `:370 waitForCommandAndIdle` / `:408 waitForIdle` -> `:223 readSnapshot`，每页 100 条并以 1 秒间隔重复。
 - 成本模型：等待 W 秒、session 有 E 个实体时产生 `O(W * ceil(E/100))` HTTP 请求和 `O(W * E)` 解密/解析。10,000 个实体时每秒约 100 个 snapshot 分页请求。
 - 用户影响：长会话上的 wait/stop 造成 Relay 请求突发、客户端 CPU/网络放大，并与 P-01 的固定轮询叠加。
 - 已排除保护：snapshot 有固定 high watermark 和分页边界，但等待循环没有增量 cursor，也没有只查询 command/runtime 的窄接口。
 - 最小复现：构造 10,000 entity session，等待 10 秒并统计 snapshot 请求数、传输字节和解析时间。
 - 当前覆盖：小型 snapshot 单测验证结果，不覆盖实体规模相关请求复杂度。
 - 最小修复方向：等待时改用增量 changes/cursor 或 Relay 提供的窄状态查询，并保留 polling 作为持久收敛机制；不得把 Socket.IO 提示当真值。
-- 实施计划：待真实性复核后填写。
+- 实施计划：真实性复核确认三个等待循环每轮都从 snapshot 第一页重新读取，固定分页 100，并重复解密、解析和投影全部实体；默认轮询间隔为 1 秒。Relay 已有 `GET /v4/sessions/:sessionId/changes`：以 `after_seq` 读取严格连续、固定 high watermark 的 journal 增量，单页最多 100，`hasMore` 时可立即 drain；snapshot 完整读取后的 `highWatermark` 可作为无缝增量起点。修复仅改 happy-agent：为一次等待建立进程内 snapshot state（实体索引、投影与 receive cursor），首次读取一次完整 snapshot，随后轮询 `/changes`；按连续 sequence 应用 upsert/delete 并重新投影，只对空增量页按原 1 秒间隔等待，`hasMore` 时不休眠继续 drain。空页不是完成证据，Socket.IO 仍只可作为唤醒提示；terminal turn/runtime 判定继续来自持久 snapshot/changes。服务端返回 `410 snapshotRequired` 时必须丢弃增量 state 并重新读取完整 snapshot，序号断档、倒退、越过 high watermark 或 `hasMore` 与游标不一致必须作为协议错误，绝不跳过 journal。补充大型多页初始 snapshot 后的请求预算测试，证明每个空闲轮询周期只产生一次 `/changes` 请求且不再重复 snapshot/decrypt；覆盖多页增量、upsert/delete、同实体 revision、command result 到 turn 终态、idle、410 重建、序号断档、超时预算和传输失败。happy-agent 补丁版本升级至 `0.1.9`，完成包内全量测试、`tsc --noEmit`、PR/主 CI 与 happy-agent 云端发布验收。
 - 解决证据：待填写。
 
 ## 审计验证基线
@@ -171,3 +171,4 @@
 | F-03 | `ed296318` | #8 | PR：`30988090259`、`30988090531`、`30988045755`：38/38；主干：`30989318480`；发布：`30989317886`：均成功 | CLI 101 files / 936 tests；相关 4 files / 54 tests；`tsc --noEmit` | 2026-08-05 |
 | F-04 | `11c8b367` | #10 | PR：`30991392616`、`30991430323`：34/34；主干：`30992685385`；Android field：`30992685309`；发布：`30992685109`：均成功 | App 101 files / 976 tests；相关 1 file / 39 tests；`tsc --noEmit` | 2026-08-05 |
 | P-01 | `09f79fc3` | #12 | PR：`30996482047`、`30996508237`：34/34；主干：`30997669607` attempt 2；Android field：`30997669569`；发布：`30997669324`：均成功 | App 101 files / 982 tests；相关 2 files / 57 tests；`tsc --noEmit` | 2026-08-05 |
+| P-02 | `41be7ecf` | #14 | PR：`31001409846`、`31001480689`、`31001480338`：38/38；主干：`31002692890`；Android field：`31002692935`；发布：`31002692643`：均成功 | Server 27 files / 169 tests；相关 3 files / 33 tests；`tsc --noEmit` | 2026-08-05 |
