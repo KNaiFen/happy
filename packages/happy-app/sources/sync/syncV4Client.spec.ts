@@ -256,6 +256,87 @@ describe('AppSyncV4Client', () => {
         }));
     });
 
+    it('hydrates once without installing a periodic poll in on-demand mode', async () => {
+        vi.useFakeTimers();
+        try {
+            const storage = new MemoryStorage();
+            const transport = new FakeTransport();
+            const getChanges = vi.spyOn(transport, 'getChanges');
+            let failNextPull = false;
+            getChanges.mockImplementation(async (_sessionId, afterSeq) => {
+                if (failNextPull) {
+                    failNextPull = false;
+                    throw new Error('offline');
+                }
+                return SyncChangesResponseV4Schema.parse({
+                    changes: [],
+                    hasMore: false,
+                    highWatermark: afterSeq,
+                });
+            });
+            const receiver = await AppSyncV4Client.create({
+                sessionId: 'session-1',
+                sessionKey: new Uint8Array(32),
+                appVersion: '1.11.28',
+                persistence: persistence(storage),
+                transport,
+                crypto: fakeCrypto,
+                pollIntervalMs: null,
+                onEntity: async () => undefined,
+                onSnapshotReset: async () => undefined,
+            });
+
+            await receiver.start();
+            expect(getChanges).toHaveBeenCalledTimes(1);
+            await vi.advanceTimersByTimeAsync(20_000);
+            expect(getChanges).toHaveBeenCalledTimes(1);
+
+            failNextPull = true;
+            receiver.invalidate();
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(getChanges).toHaveBeenCalledTimes(2);
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(getChanges).toHaveBeenCalledTimes(2);
+
+            receiver.invalidate();
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(getChanges).toHaveBeenCalledTimes(3);
+            receiver.stop();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps configured periodic polling for continuous mode', async () => {
+        vi.useFakeTimers();
+        try {
+            const storage = new MemoryStorage();
+            const transport = new FakeTransport();
+            const getChanges = vi.spyOn(transport, 'getChanges');
+            const receiver = await AppSyncV4Client.create({
+                sessionId: 'session-1',
+                sessionKey: new Uint8Array(32),
+                appVersion: '1.11.28',
+                persistence: persistence(storage),
+                transport,
+                crypto: fakeCrypto,
+                pollIntervalMs: 5_000,
+                onEntity: async () => undefined,
+                onSnapshotReset: async () => undefined,
+            });
+
+            await receiver.start();
+            expect(getChanges).toHaveBeenCalledTimes(1);
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(getChanges).toHaveBeenCalledTimes(2);
+            receiver.stop();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('refuses a v4 session when the App is below the advertised minimum', async () => {
         const transport = new FakeTransport();
         transport.capabilities = {

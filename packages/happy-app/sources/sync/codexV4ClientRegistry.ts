@@ -11,6 +11,8 @@ import {
     type AppSyncV4DiagnosticStatsProvider,
 } from './syncV4Diagnostics';
 
+const MAX_PENDING_ON_DEMAND_STARTS = 256;
+
 export interface CodexV4RegistryClient {
     readonly diagnosticSessionId?: string;
     start(): Promise<void>;
@@ -22,6 +24,7 @@ export interface CodexV4RegistrySession {
     sessionId: string;
     sessionKey: Uint8Array;
     machineId?: string | null;
+    pollIntervalMs?: number | null;
 }
 
 export interface CodexV4RegistrySyncState {
@@ -36,6 +39,13 @@ export function isCodexV4SyncEligible(metadata: {
     codexSyncVersion?: number;
 } | null | undefined): boolean {
     return metadata?.flavor === 'codex' && metadata.codexSyncVersion === 4;
+}
+
+export function codexV4PollIntervalMsForLifecycle(lifecycle: {
+    active: boolean;
+    archivedAt?: number | null;
+}): number | null {
+    return lifecycle.active && lifecycle.archivedAt == null ? 5_000 : null;
 }
 
 export function isCodexV4SyncActive<TProjection extends { activated?: boolean }>(
@@ -83,6 +93,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
     private readonly starts = new Map<string, StartingClient<TClient>>();
     private readonly generations = new Map<string, number>();
     private readonly desired = new Map<string, CodexV4RegistrySession>();
+    private readonly pendingStarts = new Set<string>();
     private readonly retryAttempts = new Map<string, number>();
     private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -100,7 +111,13 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             if (!desired.has(sessionId)) this.stop(sessionId);
         }
         for (const session of desired.values()) {
+            const pendingStart = this.pendingStarts.delete(session.sessionId);
+            const previous = this.desired.get(session.sessionId);
+            if (previous && previous.pollIntervalMs !== session.pollIntervalMs) {
+                this.stop(session.sessionId);
+            }
             this.desired.set(session.sessionId, session);
+            if (session.pollIntervalMs === null && !pendingStart) continue;
             if (
                 this.clients.has(session.sessionId)
                 || this.starts.has(session.sessionId)
@@ -116,11 +133,25 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             client.invalidate(highWatermark);
             return;
         }
+        if (!this.desired.has(sessionId)) {
+            if (
+                !this.pendingStarts.has(sessionId)
+                && this.pendingStarts.size >= MAX_PENDING_ON_DEMAND_STARTS
+            ) {
+                this.pendingStarts.delete(this.pendingStarts.values().next().value!);
+            }
+            this.pendingStarts.add(sessionId);
+            return;
+        }
         this.wakeRetry(sessionId);
     }
 
     invalidateAll(): void {
-        for (const sessionId of this.desired.keys()) this.invalidate(sessionId);
+        const sessionIds = new Set(this.clients.keys());
+        for (const [sessionId, session] of this.desired) {
+            if (session.pollIntervalMs !== null) sessionIds.add(sessionId);
+        }
+        for (const sessionId of sessionIds) this.invalidate(sessionId);
     }
 
     stop(sessionId: string): void {
@@ -138,6 +169,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             listenerFailures: diagnosticStats?.listenerFailures,
         });
         this.desired.delete(sessionId);
+        this.pendingStarts.delete(sessionId);
         this.retryAttempts.delete(sessionId);
         const retryTimer = this.retryTimers.get(sessionId);
         if (retryTimer) clearTimeout(retryTimer);
@@ -173,7 +205,15 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             return await operation(active);
         }
 
-        const starting = this.starts.get(sessionId);
+        let starting = this.starts.get(sessionId);
+        if (!starting && this.desired.has(sessionId)) {
+            if (!this.options.isEligible(sessionId)) {
+                this.stop(sessionId);
+                throw new Error('Codex Sync v4 client is no longer eligible');
+            }
+            this.wakeRetry(sessionId);
+            starting = this.starts.get(sessionId);
+        }
         if (!starting) throw new Error('Codex Sync v4 client is not available');
         const client = starting.client ?? await starting.created;
         if (
@@ -295,7 +335,12 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                         generation,
                     });
                     this.options.onStartError?.(session.sessionId, error);
-                    this.scheduleRetry(session.sessionId);
+                    const desired = this.desired.get(session.sessionId);
+                    if (desired?.pollIntervalMs === null) {
+                        this.deferRetryUntilInvalidated(session.sessionId);
+                    } else {
+                        this.scheduleRetry(session.sessionId);
+                    }
                 }
             } finally {
                 if (this.starts.get(session.sessionId) === record) this.starts.delete(session.sessionId);
@@ -305,7 +350,8 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
     }
 
     private scheduleRetry(sessionId: string): void {
-        if (!this.desired.has(sessionId) || !this.options.isEligible(sessionId)) return;
+        const desired = this.desired.get(sessionId);
+        if (!desired || desired.pollIntervalMs === null || !this.options.isEligible(sessionId)) return;
         const attempt = (this.retryAttempts.get(sessionId) ?? 0) + 1;
         this.retryAttempts.set(sessionId, attempt);
         const base = this.options.retryBaseMs ?? 1_000;
@@ -331,12 +377,27 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         const timer = setTimeout(() => {
             if (this.retryTimers.get(sessionId) !== timer) return;
             this.retryTimers.delete(sessionId);
-            const desired = this.desired.get(sessionId);
-            if (!desired || !this.options.isEligible(sessionId)) return;
+            const latestDesired = this.desired.get(sessionId);
+            if (
+                !latestDesired
+                || latestDesired.pollIntervalMs === null
+                || !this.options.isEligible(sessionId)
+            ) return;
             if (this.clients.has(sessionId) || this.starts.has(sessionId)) return;
-            this.start(desired, true);
+            this.start(latestDesired, true);
         }, delay);
         this.retryTimers.set(sessionId, timer);
+    }
+
+    private deferRetryUntilInvalidated(sessionId: string): void {
+        const attempt = (this.retryAttempts.get(sessionId) ?? 0) + 1;
+        this.retryAttempts.set(sessionId, attempt);
+        this.emitSyncState(sessionId, {
+            type: 'unknown',
+            attempt,
+            nextRetryAt: null,
+            lastErrorAt: Date.now(),
+        });
     }
 
     private wakeRetry(sessionId: string): void {

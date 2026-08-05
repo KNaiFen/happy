@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     CodexV4ClientRegistry,
+    codexV4PollIntervalMsForLifecycle,
     isCodexV4SyncActive,
     isCodexV4SyncEligible,
     type CodexV4RegistryClient,
@@ -76,7 +77,55 @@ describe('isCodexV4SyncActive', () => {
     });
 });
 
+describe('codexV4PollIntervalMsForLifecycle', () => {
+    it('polls only active, unarchived sessions continuously', () => {
+        expect(codexV4PollIntervalMsForLifecycle({ active: true, archivedAt: null })).toBe(5_000);
+        expect(codexV4PollIntervalMsForLifecycle({ active: true })).toBe(5_000);
+        expect(codexV4PollIntervalMsForLifecycle({ active: false, archivedAt: null })).toBeNull();
+        expect(codexV4PollIntervalMsForLifecycle({ active: true, archivedAt: 100 })).toBeNull();
+    });
+});
+
 describe('CodexV4ClientRegistry', () => {
+    it('keeps 150 dormant sessions uninstantiated and wakes only the invalidated target', async () => {
+        const clients = new Map<string, TestClient>();
+        const createdSessionIds: string[] = [];
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async (options) => {
+                createdSessionIds.push(options.sessionId);
+                const client = new TestClient();
+                clients.set(options.sessionId, client);
+                return client;
+            },
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+        });
+        const dormantSessions = Array.from({ length: 150 }, (_, index) => ({
+            sessionId: `session-${index}`,
+            sessionKey: new Uint8Array(32),
+            pollIntervalMs: null,
+        }));
+
+        registry.invalidate('session-73', 42);
+        expect(createdSessionIds).toEqual([]);
+
+        registry.reconcile(dormantSessions);
+        await Promise.resolve();
+        expect(createdSessionIds).toEqual(['session-73']);
+        expect(registry.hasStartingClient('session-73')).toBe(true);
+
+        const target = clients.get('session-73')!;
+        target.started.resolve();
+        await target.started.promise;
+        await Promise.resolve();
+        registry.invalidateAll();
+
+        expect(createdSessionIds).toEqual(['session-73']);
+        expect(target.invalidations).toEqual([undefined]);
+        registry.reconcile([]);
+    });
+
     it('does not register a client when the session stops being Codex during startup', async () => {
         let eligible = true;
         const client = new TestClient();
@@ -183,7 +232,7 @@ describe('CodexV4ClientRegistry', () => {
         expect(clients[1].invalidations).toEqual([42]);
     });
 
-    it('allows a durable publish while client hydration is still starting', async () => {
+    it('starts an on-demand client for a durable publish without waiting for hydration', async () => {
         const client = new TestClient();
         const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
             createClient: async () => client,
@@ -191,7 +240,8 @@ describe('CodexV4ClientRegistry', () => {
             onEntity: async () => undefined,
             onSnapshotReset: async () => undefined,
         });
-        registry.reconcile([session]);
+        registry.reconcile([{ ...session, pollIntervalMs: null }]);
+        expect(registry.hasStartingClient(session.sessionId)).toBe(false);
 
         const published = await registry.withClient(session.sessionId, async (startingClient) => {
             expect(startingClient).toBe(client);
@@ -203,6 +253,38 @@ describe('CodexV4ClientRegistry', () => {
         client.started.resolve();
         await client.started.promise;
         await Promise.resolve();
+    });
+
+    it('stops and recreates a client when its polling mode changes', async () => {
+        const clients = [new TestClient(), new TestClient()];
+        let createIndex = 0;
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async () => clients[createIndex++],
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+        });
+
+        registry.reconcile([{ ...session, pollIntervalMs: 5_000 }]);
+        await Promise.resolve();
+        clients[0].started.resolve();
+        await clients[0].started.promise;
+        await Promise.resolve();
+        expect(registry.hasClient(session.sessionId)).toBe(true);
+
+        registry.reconcile([{ ...session, pollIntervalMs: null }]);
+        expect(clients[0].stopCount).toBe(1);
+        expect(registry.hasClient(session.sessionId)).toBe(false);
+        expect(createIndex).toBe(1);
+
+        registry.reconcile([{ ...session, pollIntervalMs: 5_000 }]);
+        await Promise.resolve();
+        expect(createIndex).toBe(2);
+        clients[1].started.resolve();
+        await clients[1].started.promise;
+        await Promise.resolve();
+        expect(registry.hasClient(session.sessionId)).toBe(true);
+        registry.reconcile([]);
     });
 
     it('stops an active client before publishing after eligibility is revoked', async () => {
@@ -263,6 +345,48 @@ describe('CodexV4ClientRegistry', () => {
 
             expect(states).toEqual(['starting', 'unknown', 'retrying', 'ready']);
             expect(registry.hasClient(session.sessionId)).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('retries an on-demand startup only after another explicit invalidation', async () => {
+        vi.useFakeTimers();
+        try {
+            const clients = [new TestClient(), new TestClient()];
+            let createIndex = 0;
+            const states: string[] = [];
+            const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+                createClient: async () => clients[createIndex++],
+                isEligible: () => true,
+                onEntity: async () => undefined,
+                onSnapshotReset: async () => undefined,
+                onSyncState: (_sessionId, state) => states.push(state.type),
+                retryBaseMs: 100,
+                random: () => 0.5,
+            });
+
+            registry.reconcile([{ ...session, pollIntervalMs: null }]);
+            registry.invalidate(session.sessionId);
+            await Promise.resolve();
+            clients[0].started.reject(new Error('offline'));
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(createIndex).toBe(1);
+            expect(states).toEqual(['starting', 'unknown']);
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(createIndex).toBe(1);
+
+            registry.invalidate(session.sessionId);
+            await Promise.resolve();
+            expect(createIndex).toBe(2);
+            expect(states).toEqual(['starting', 'unknown', 'retrying']);
+            clients[1].started.resolve();
+            await clients[1].started.promise;
+            await Promise.resolve();
+            expect(states).toEqual(['starting', 'unknown', 'retrying', 'ready']);
+            registry.reconcile([]);
         } finally {
             vi.useRealTimers();
         }

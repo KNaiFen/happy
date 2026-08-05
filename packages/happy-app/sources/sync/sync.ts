@@ -68,6 +68,7 @@ import { HttpAppSyncV4Transport } from './syncV4Transport';
 import { appSyncV4Diagnostics } from './syncV4Diagnostics.mmkv';
 import {
     CodexV4ClientRegistry,
+    codexV4PollIntervalMsForLifecycle,
     isCodexV4SyncActive,
     isCodexV4SyncEligible,
 } from './codexV4ClientRegistry';
@@ -141,6 +142,7 @@ class Sync {
                 sessionId,
                 sessionKey,
                 machineId,
+                pollIntervalMs,
                 onEntity,
                 onEntities,
                 onSnapshotReset,
@@ -149,6 +151,7 @@ class Sync {
                 sessionId,
                 sessionKey,
                 appVersion,
+                pollIntervalMs,
                 persistence: syncV4Persistence,
                 transport: new HttpAppSyncV4Transport(machineId),
                 diagnostics: appSyncV4Diagnostics,
@@ -198,7 +201,7 @@ class Sync {
             softwareVersion: appVersion,
             transportSecurity: syncV4TransportSecurity,
             onStartError: () => {
-                log.log('Codex Sync v4 client start failed; retry scheduled');
+                log.log('Codex Sync v4 client start failed');
             },
         });
         this.sessionsSync = new InvalidateSync(this.fetchSessions);
@@ -2127,6 +2130,7 @@ class Sync {
         if (sessions.length > 0) {
             // console.log('flushing activity updates ' + sessions.length);
             this.applySessions(sessions);
+            this.reconcileCodexV4Clients(Object.values(storage.getState().sessions));
             // log.log(`🔄 Activity updates flushed - updated ${sessions.length} sessions`);
         }
     }
@@ -2205,6 +2209,8 @@ class Sync {
 
     private reconcileCodexV4Clients(sessions: Array<{
         id: string;
+        active: boolean;
+        archivedAt?: number | null;
         metadata: Session['metadata'];
         originMachineId?: string | null;
     }>): void {
@@ -2215,6 +2221,7 @@ class Sync {
                 sessionId: session.id,
                 sessionKey,
                 machineId: session.metadata?.machineId ?? session.originMachineId ?? null,
+                pollIntervalMs: codexV4PollIntervalMsForLifecycle(session),
             }] : [];
         }));
     }
