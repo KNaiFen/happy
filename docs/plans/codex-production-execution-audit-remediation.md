@@ -30,7 +30,7 @@
 
 | 顺序 | 编号 | 严重度 | 置信度 | 状态 | 标题 |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | F-01 | P1 | 高 | 待修复 | happy-agent 把命令结果或 interrupt ACK 当作 turn 终态 |
+| 1 | F-01 | P1 | 高 | 进行中 | happy-agent 把命令结果或 interrupt ACK 当作 turn 终态 |
 | 2 | F-02 | P1 | 高 | 待修复 | happy-agent 写操作缺少跨进程持久幂等凭据 |
 | 3 | F-03 | P1 | 高 | 待修复 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
 | 4 | F-04 | P2 | 高 | 待修复 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
@@ -40,7 +40,7 @@
 
 ## F-01 happy-agent 把命令结果或 interrupt ACK 当作 turn 终态
 
-- 状态：待修复
+- 状态：进行中
 - 严重度：P1
 - 置信度：高
 - 生产链：`packages/happy-agent/src/index.ts:313 send` -> `packages/happy-agent/src/session.ts:249 sendMessage` -> `packages/happy-agent/src/session.ts:293 waitForCommand` -> `packages/happy-cli/src/codex/codexV4CommandProcessor.ts:192 execute` -> `packages/happy-cli/src/codex/codexAppServerClient.ts:2223 turn/start`
@@ -51,7 +51,7 @@
 - 最小复现：让 command result 先于 runtime idle snapshot 出现，断言 CLI 不得在 idle snapshot 前返回；让 snapshot 为 `statusUnknown` 且无 active turn，断言 stop 不得报告已停止。
 - 当前覆盖：happy-agent 单测覆盖 command result 和独立 `waitForIdle`，没有覆盖两阶段等待或未知状态 stop。
 - 最小修复方向：让等待型 send 和已发布 interrupt 的 stop 在 command result 后继续等待权威 idle；无 active turn 时只允许已知 idle 快速成功。
-- 实施计划：待真实性复核后填写。
+- 实施计划：在 `SessionClient` 中增加共享超时预算的“command result 成功、该 result 的 `turnId` 已观测到终态且 snapshot 已知 idle”等待方法；`send --wait` 和已发布 interrupt 的 `stop` 使用该方法，未发布 interrupt 的 `stop` 也调用 `waitForIdle`，因此 runtime 缺失或 `statusUnknown` 时不能假报停止。等待循环将剩余预算传给 snapshot 请求并限制 delay。补充 command result 早于目标 turn 生命周期、unknown snapshot 先于 idle、interrupt 以及已知 idle 的回归测试，并将 `happy-agent` 补丁版本升级为 `0.1.5`。
 - 解决证据：待填写。
 
 ## F-02 happy-agent 写操作缺少跨进程持久幂等凭据
