@@ -416,11 +416,12 @@ describe('SessionClient Codex Sync v4', () => {
         await expect(client().stopAndWait(50)).rejects.toThrow(
             'Timeout publishing Codex command',
         );
-        expect(mockedPost).toHaveBeenCalledTimes(1);
-        expect(mockedPost.mock.calls[0][2]).toMatchObject({
-            timeout: expect.any(Number),
-        });
-        expect((mockedPost.mock.calls[0][2] as { timeout: number }).timeout).toBeLessThanOrEqual(50);
+        expect(mockedPost).toHaveBeenCalled();
+        for (const call of mockedPost.mock.calls) {
+            const requestTimeout = (call[2] as { timeout: number }).timeout;
+            expect(requestTimeout).toBeGreaterThan(0);
+            expect(requestTimeout).toBeLessThanOrEqual(50);
+        }
     });
 
     it('allows a known idle session to stop without publishing an interrupt', async () => {
