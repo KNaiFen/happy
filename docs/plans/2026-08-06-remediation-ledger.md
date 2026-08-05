@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：活动；`LOG-01` 已解决，`RESUME-01` 进入真实性复核，未解决问题剩余 2 项。
+- 当前状态：活动；`LOG-01` 已解决，`RESUME-01` 进行中，未解决问题剩余 2 项。
 - 审计基线：`fd967d830bb4bc53250617c8baad440d55ffd17d`。
 - 集成分支：`audit/2026-08-06-remediation`；各项依次合入本分支，最终一次合入 `main`。
 - 发布策略：全部问题完成后统一触发 CLI、Android App 与 Debian Relay 云端发布。
@@ -22,7 +22,7 @@
 | 顺序 | 编号 | 严重度 | 状态 | 项目 | 活动计划 |
 | ---: | --- | --- | --- | --- | --- |
 | 1 | LOG-01 | P1 高 | 已解决 | 语音链路可能把上下文、token、标识符或原始错误写入日志 | [Voice 敏感日志收敛归档](archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md) |
-| 2 | RESUME-01 | P1 高 | 待修复 | 首页旧会话恢复失败、局部 Gateway 假状态及失败后空闲 Gateway 残留 | [旧会话恢复](codex-home-old-session-resume-state-regression.md) |
+| 2 | RESUME-01 | P1 高 | 进行中 | 首页旧会话恢复失败、局部 Gateway 假状态及失败后空闲 Gateway 残留 | [旧会话恢复](codex-home-old-session-resume-state-regression.md) |
 | 3 | QUEUE-01 | P2 中 | 待修复 | 执行期间排队/引导控件嵌入输入框，待发送消息缺少完整管理 | [悬浮待发送条](codex-composer-pending-message-dock.md) |
 
 ## 已核验现场证据
