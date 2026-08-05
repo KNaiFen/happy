@@ -14,6 +14,7 @@ import {
     SyncV4Crypto,
     codexHistoryFromSnapshot,
     isCodexSnapshotIdle,
+    type PublishedCodexCommand,
     type CodexV4Snapshot,
 } from './session';
 
@@ -108,6 +109,52 @@ function turn(overrides: Partial<CodexTurnEntityV4> = {}): CodexTurnEntityV4 {
         planRevision: 0,
         diffRevision: 0,
         ...overrides,
+    };
+}
+
+function commandResult(
+    overrides: Partial<CodexCommandResultEntityV4> = {},
+): CodexCommandResultEntityV4 {
+    return {
+        schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+        entityType: 'codex.commandResult',
+        providerId: 'command-1',
+        createdAt: now,
+        updatedAt: now,
+        commandId: 'command-1',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        status: 'succeeded',
+        providerRequestId: null,
+        result: null,
+        error: null,
+        ...overrides,
+    };
+}
+
+function publishedInterrupt(commandId = 'command-1'): PublishedCodexCommand {
+    return {
+        command: {
+            schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+            entityType: 'codex.command',
+            providerId: commandId,
+            createdAt: now,
+            updatedAt: now,
+            commandId,
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-1',
+            command: 'turn.interrupt',
+            payload: { expectedTurnId: 'turn-1' },
+            clientUserMessageId: commandId,
+            replacesCommandId: null,
+            queueEntryId: null,
+        } as PublishedCodexCommand['command'],
+        acknowledgement: {
+            mutationId: 'mutation-1',
+            seq: 1,
+            revision: 1,
+            status: 'accepted',
+        } as PublishedCodexCommand['acknowledgement'],
     };
 }
 
@@ -273,27 +320,122 @@ describe('SessionClient Codex Sync v4', () => {
     });
 
     it('waits for an authoritative command result', async () => {
-        const result: CodexCommandResultEntityV4 = {
-            schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
-            entityType: 'codex.commandResult',
-            providerId: 'command-1',
-            createdAt: now,
-            updatedAt: now,
-            commandId: 'command-1',
-            threadId: 'thread-1',
-            turnId: 'turn-1',
-            status: 'succeeded',
-            providerRequestId: null,
-            result: null,
-            error: null,
-        };
         mockCapabilities();
-        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime(), result]));
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime(), commandResult()]));
 
         await expect(client().waitForCommand('command-1', 50)).resolves.toMatchObject({
             status: 'succeeded',
         });
     });
+
+    it('waits for authoritative idle after a command succeeds', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime(),
+                commandResult(),
+            ]))
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+                commandResult(),
+            ]))
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime(),
+                turn({ status: 'completed', completedAt: now + 1 }),
+                commandResult(),
+            ]));
+
+        await expect(client().waitForCommandAndIdle('command-1', 50)).resolves.toMatchObject({
+            runtime: expect.objectContaining({ execution: { type: 'idle' } }),
+        });
+        expect(mockedGet).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not report stopped while the runtime state is unknown', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime({ statusUnknown: true }),
+            ]))
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime({ statusUnknown: true }),
+            ]))
+            .mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+
+        await expect(client().stopAndWait(50)).resolves.toMatchObject({
+            runtime: expect.objectContaining({ statusUnknown: false }),
+        });
+        expect(mockedPost).not.toHaveBeenCalled();
+        expect(mockedGet).toHaveBeenCalledTimes(4);
+    });
+
+    it('waits for the interrupted turn after its interrupt command succeeds', async () => {
+        const session = client();
+        vi.spyOn(session, 'sendStop').mockResolvedValue(publishedInterrupt());
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime(),
+                commandResult(),
+            ]))
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+                commandResult(),
+            ]))
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime(),
+                turn({ status: 'interrupted', completedAt: now + 1 }),
+                commandResult(),
+            ]));
+
+        await expect(session.stopAndWait(50)).resolves.toMatchObject({
+            runtime: expect.objectContaining({ execution: { type: 'idle' } }),
+        });
+        expect(mockedGet).toHaveBeenCalledTimes(4);
+    });
+
+    it('keeps interrupt publication within the stop timeout budget', async () => {
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce(await snapshotResponse([
+            thread({ status: { type: 'active', activeFlags: [] } }),
+            runtime({ execution: { type: 'active', activeFlags: [] } }),
+            turn(),
+        ]));
+        mockedPost.mockRejectedValue(new Error('lost mutation response'));
+
+        await expect(client().stopAndWait(50)).rejects.toThrow(
+            'Timeout publishing Codex command',
+        );
+        expect(mockedPost).toHaveBeenCalledTimes(1);
+        expect(mockedPost.mock.calls[0][2]).toMatchObject({
+            timeout: expect.any(Number),
+        });
+        expect((mockedPost.mock.calls[0][2] as { timeout: number }).timeout).toBeLessThanOrEqual(50);
+    });
+
+    it('allows a known idle session to stop without publishing an interrupt', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]))
+            .mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+
+        await expect(client().stopAndWait(50)).resolves.toMatchObject({
+            runtime: expect.objectContaining({ execution: { type: 'idle' } }),
+        });
+        expect(mockedPost).not.toHaveBeenCalled();
+        expect(mockedGet).toHaveBeenCalledTimes(3);
+    });
+
 });
 
 describe('Codex snapshot projections', () => {

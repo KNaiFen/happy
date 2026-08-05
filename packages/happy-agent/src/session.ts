@@ -206,8 +206,11 @@ export class SessionClient {
         this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     }
 
-    async readSnapshot(): Promise<CodexV4Snapshot> {
-        await this.assertCompatible();
+    async readSnapshot(timeoutMs?: number): Promise<CodexV4Snapshot> {
+        const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
+        await this.assertCompatible(deadline === null
+            ? undefined
+            : Math.min(30_000, this.snapshotRequestTimeout(deadline)));
         let cursor: string | null = null;
         let highWatermark: number | null = null;
         const entities: CodexEntityV4[] = [];
@@ -218,7 +221,7 @@ export class SessionClient {
                 {
                     params: { ...(cursor ? { cursor } : {}), limit: SNAPSHOT_PAGE_SIZE },
                     headers: this.headers(),
-                    timeout: 60_000,
+                    timeout: this.snapshotRequestTimeout(deadline),
                 },
             );
             const page = SyncSnapshotResponseV4Schema.parse(response.data);
@@ -273,8 +276,11 @@ export class SessionClient {
         });
     }
 
-    async sendStop(): Promise<PublishedCodexCommand | null> {
-        const snapshot = await this.readSnapshot();
+    async sendStop(timeoutMs?: number): Promise<PublishedCodexCommand | null> {
+        const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
+        const snapshot = await this.readSnapshot(deadline === null
+            ? undefined
+            : this.remainingTimeout(deadline));
         const threadId = snapshot.thread?.threadId ?? this.preferredThreadId;
         if (!threadId) throw new Error('Codex thread identity is unavailable');
         const activeTurn = latestEntity(snapshot.turns.filter((turn) => (
@@ -287,13 +293,13 @@ export class SessionClient {
             expectedTurnId: activeTurn.turnId,
             payload: { expectedTurnId: activeTurn.turnId },
             ...bindingGeneration(snapshot.runtime),
-        });
+        }, deadline === null ? undefined : this.remainingTimeout(deadline));
     }
 
     async waitForCommand(commandId: string, timeoutMs = 300_000): Promise<CodexCommandResultEntityV4> {
         const deadline = Date.now() + timeoutMs;
-        while (Date.now() <= deadline) {
-            const snapshot = await this.readSnapshot();
+        while (Date.now() < deadline) {
+            const snapshot = await this.readSnapshot(this.remainingTimeout(deadline));
             const result = latestEntity(snapshot.commandResults.filter((candidate) => (
                 candidate.commandId === commandId
             )));
@@ -301,22 +307,64 @@ export class SessionClient {
             if (result && !['received', 'executing'].includes(result.status)) {
                 throw new Error(result.error ?? `Codex command ended with status ${result.status}`);
             }
-            await delay(this.pollIntervalMs);
+            if (!await this.delayUntil(deadline)) break;
         }
         throw new Error('Timeout waiting for Codex command completion');
     }
 
+    async waitForCommandAndIdle(commandId: string, timeoutMs = 300_000): Promise<CodexV4Snapshot> {
+        const deadline = Date.now() + timeoutMs;
+        let targetTurnId: string | null = null;
+        while (Date.now() < deadline) {
+            const snapshot = await this.readSnapshot(this.remainingTimeout(deadline));
+            const result = latestEntity(snapshot.commandResults.filter((candidate) => (
+                candidate.commandId === commandId
+            )));
+            if (result?.status === 'succeeded') {
+                if (!result.turnId) {
+                    throw new Error('Codex turn command succeeded without a turn ID');
+                }
+                targetTurnId = result.turnId;
+            }
+            if (result && !['received', 'executing', 'succeeded'].includes(result.status)) {
+                throw new Error(result.error ?? `Codex command ended with status ${result.status}`);
+            }
+            const targetTurn = targetTurnId
+                ? latestEntity(snapshot.turns.filter((turn) => turn.turnId === targetTurnId))
+                : null;
+            if (targetTurn && isCodexTurnTerminal(targetTurn) && isCodexSnapshotIdle(snapshot)) {
+                return snapshot;
+            }
+            if (!await this.delayUntil(deadline)) break;
+        }
+        throw new Error('Timeout waiting for Codex command completion and idle state');
+    }
+
+    async stopAndWait(timeoutMs = 300_000): Promise<CodexV4Snapshot> {
+        const deadline = Date.now() + timeoutMs;
+        const published = await this.sendStop(this.remainingTimeout(deadline));
+        const remainingTimeoutMs = this.remainingTimeout(deadline);
+        if (published) {
+            return await this.waitForCommandAndIdle(published.command.commandId, remainingTimeoutMs);
+        }
+        return await this.waitForIdle(remainingTimeoutMs);
+    }
+
     async waitForIdle(timeoutMs = 300_000): Promise<CodexV4Snapshot> {
         const deadline = Date.now() + timeoutMs;
-        while (Date.now() <= deadline) {
-            const snapshot = await this.readSnapshot();
+        while (Date.now() < deadline) {
+            const snapshot = await this.readSnapshot(this.remainingTimeout(deadline));
             if (isCodexSnapshotIdle(snapshot)) return snapshot;
-            await delay(this.pollIntervalMs);
+            if (!await this.delayUntil(deadline)) break;
         }
         throw new Error('Timeout waiting for Codex to become idle');
     }
 
-    private async publishCommand(draft: CommandDraft): Promise<PublishedCodexCommand> {
+    private async publishCommand(
+        draft: CommandDraft,
+        timeoutMs?: number,
+    ): Promise<PublishedCodexCommand> {
+        const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
         const commandId = randomUUID();
         const now = Date.now();
         const queueEntryId = draft.command === 'turn.queue'
@@ -349,7 +397,12 @@ export class SessionClient {
                 const response = await axios.post(
                     `${this.serverUrl}/v4/sessions/${encodeURIComponent(this.sessionId)}/mutations`,
                     body,
-                    { headers: this.headers(), timeout: 60_000 },
+                    {
+                        headers: this.headers(),
+                        timeout: deadline === null
+                            ? 60_000
+                            : Math.min(60_000, this.remainingTimeout(deadline)),
+                    },
                 );
                 let parsed: ReturnType<typeof SyncMutationBatchResponseV4Schema.parse>;
                 try {
@@ -374,8 +427,20 @@ export class SessionClient {
             } catch (error) {
                 lastError = error;
                 if (error instanceof SyncV4ProtocolError || (axios.isAxiosError(error) && error.response)) break;
-                if (attempt < 4) await delay(250 * 2 ** attempt);
+                if (attempt < 4) {
+                    const retryDelayMs = 250 * 2 ** attempt;
+                    if (deadline === null) {
+                        await delay(retryDelayMs);
+                    } else {
+                        const remaining = deadline - Date.now();
+                        if (remaining <= 0) break;
+                        await delay(Math.min(retryDelayMs, remaining));
+                    }
+                }
             }
+        }
+        if (deadline !== null && Date.now() >= deadline) {
+            throw new Error('Timeout publishing Codex command');
         }
         throw normalizeTransportError(lastError, 'publishing Codex command');
     }
@@ -401,11 +466,11 @@ export class SessionClient {
         };
     }
 
-    private async assertCompatible(): Promise<void> {
+    private async assertCompatible(timeoutMs = 30_000): Promise<void> {
         if (this.capabilitiesChecked) return;
         const response = await axios.get(`${this.serverUrl}/v4/capabilities`, {
             headers: this.headers(),
-            timeout: 30_000,
+            timeout: timeoutMs,
         });
         const codex = asRecord(asRecord(response.data).codex);
         if (codex.enabled !== true || codex.protocolVersion !== 4) {
@@ -421,6 +486,25 @@ export class SessionClient {
             );
         }
         this.capabilitiesChecked = true;
+    }
+
+    private snapshotRequestTimeout(deadline: number | null): number {
+        return deadline === null
+            ? 60_000
+            : Math.min(60_000, this.remainingTimeout(deadline));
+    }
+
+    private remainingTimeout(deadline: number): number {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error('Timeout waiting for Codex state');
+        return remaining;
+    }
+
+    private async delayUntil(deadline: number): Promise<boolean> {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        await delay(Math.min(this.pollIntervalMs, remaining));
+        return true;
     }
 
     private headers(): Record<string, string> {
@@ -439,6 +523,10 @@ export function isCodexSnapshotIdle(snapshot: CodexV4Snapshot): boolean {
     return !snapshot.turns.some((turn) => (
         turn.threadId === snapshot.thread?.threadId && turn.status === 'inProgress'
     ));
+}
+
+function isCodexTurnTerminal(turn: CodexTurnEntityV4): boolean {
+    return ['completed', 'interrupted', 'failed'].includes(turn.status);
 }
 
 export function codexHistoryFromSnapshot(snapshot: CodexV4Snapshot): CodexV4HistoryEntry[] {

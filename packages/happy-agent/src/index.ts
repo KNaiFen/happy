@@ -316,7 +316,7 @@ program
             permissionMode ? { permissionMode } : undefined,
         );
         if (opts.wait) {
-            await client.waitForCommand(published.command.commandId);
+            await client.waitForCommandAndIdle(published.command.commandId);
         }
 
         if (opts.json) {
@@ -371,10 +371,7 @@ program
         const session = await resolveSession(config, creds, sessionId);
 
         const client = createClient(session, creds, config);
-        const published = await client.sendStop();
-        if (published) {
-            await client.waitForCommand(published.command.commandId);
-        }
+        await client.stopAndWait();
 
         console.log([
             '## Session Stopped',
