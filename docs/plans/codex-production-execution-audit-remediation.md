@@ -33,8 +33,8 @@
 | 1 | F-01 | P1 | 高 | 已解决 | happy-agent 把命令结果或 interrupt ACK 当作 turn 终态 |
 | 2 | F-02 | P1 | 高 | 已解决 | happy-agent 写操作缺少跨进程持久幂等凭据 |
 | 3 | F-03 | P1 | 高 | 已解决 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
-| 4 | F-04 | P2 | 高 | 进行中 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
-| 5 | P-01 | P2 | 高 | 待修复 | App 为全部 Codex 会话启动固定 5 秒轮询 |
+| 4 | F-04 | P2 | 高 | 已解决 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
+| 5 | P-01 | P2 | 高 | 进行中 | App 为全部 Codex 会话启动固定 5 秒轮询 |
 | 6 | P-02 | P2 | 高 | 待修复 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
 | 7 | P-03 | P3 | 高 | 待修复 | happy-agent 等待循环每秒重新拉取完整 snapshot |
 
@@ -89,7 +89,7 @@
 
 ## F-04 App snapshot 替换会覆盖并发发布的本地乐观投影
 
-- 状态：进行中
+- 状态：已解决
 - 严重度：P2
 - 置信度：高
 - 生产链：`packages/happy-app/sources/sync/syncV4Client.ts:865 rebuildFromSnapshot` -> `:1058 getPendingOutbox` -> snapshot decrypt -> `:1101 replaceSnapshotForGeneration`；并发链为 `:484 publishEntities` -> `:525 persist outbox` -> `:540 optimistic projection`。
@@ -101,11 +101,11 @@
 - 当前覆盖：App sync v4 单测覆盖 snapshot/outbox 重放和 generation fencing，未覆盖同 generation 并发 publish。
 - 最小修复方向：在一致的锁/提交边界内重新读取 pending outbox，或让 snapshot replace 与 publish 串行化，同时保持网络和解密工作不长期占用发布锁。
 - 实施计划：保留 snapshot 网络分页和服务端实体解密在 publish lock 之外；分页完成后先构造 pending outbox 的候选重放集合，在最终提交前取得 `publishLock` 并重新读取有序 pending mutation 集合。若集合已变化，则释放锁、解密最新集合并重试；只有集合稳定时才在同一锁内执行 projection 全量替换和 `finishSnapshot`。因此，提交边界前已持久化的本地写入必定包含在替换集合中，提交边界后的写入只能在替换完成后进入 outbox 和乐观投影，同时避免让网络与常规解密长期占用发布锁。补充确定性交错测试：阻塞旧 pending mutation 的解密，在首次 outbox 捕获后并发发布第二条 mutation，随后恢复 snapshot，断言 durable outbox 和最终 projection 都同时保留两条本地写入；保留 stop/generation fencing 与 snapshot 失败不提交的覆盖。App 补丁版本升级到 `1.11.27`。
-- 解决证据：待填写。
+- 解决证据：行为修复提交 `49b28afb6fa5dddcada4f7d5b3223d8c803b188c` 由 PR #10 合并为 `11c8b3677564e9f04669764645cb22d2ac25d94a`。snapshot 网络分页和服务端实体解密仍在 publish lock 外执行；最终提交会在 `publishLock` 内重读有序 pending outbox，候选集合变化时释放锁、解密并重试，只有集合稳定时才在同一锁内替换 projection 并完成 snapshot，从而线性化 snapshot 替换和 durable optimistic publish。确定性交错回归测试阻塞旧 mutation 解密、并发发布第二条 mutation，并证明最终 projection 与 durable outbox 均保留两条写入。本地 App 全量验证 101 files / 976 tests、相关 1 file / 39 tests、`tsc --noEmit` 和 `git diff --check` 全部通过。PR push/PR 工作流 `30991392616`、`30991430323` 共 34 项检查全部成功，两套 Required CI gate 和官方 Codex TUI 真实 PTY 路径均通过；合并提交的主分支 CI `30992685385`、官方 Codex Android API 36 field E2E `30992685309` 均成功。App `1.11.27` 发布工作流 `30992685109` 完成类型检查、单测、ARM64/SDK 36/无 OTA/签名/16 KB 对齐验证并上传未过期 artifact `8925431278`（`happy-app-1.11.27-android-arm64-v8a-no-ota`，69,812,524 bytes）。
 
 ## P-01 App 为全部 Codex 会话启动固定 5 秒轮询
 
-- 状态：待修复
+- 状态：进行中
 - 严重度：P2
 - 置信度：高
 - 生产链：`packages/happy-server/sources/app/api/routes/sessionRoutes.ts:87 list sessions`（最多 150、无 lifecycle 过滤）-> `packages/happy-app/sources/sync/sync.ts:845 fetchSessions` -> `:2206 reconcileCodexV4Clients` -> `packages/happy-app/sources/sync/codexV4ClientRegistry.ts:34 eligibility` -> `packages/happy-app/sources/sync/syncV4Client.ts:255 setInterval(5000)`。
@@ -115,7 +115,7 @@
 - 最小复现：构造 150 个合格但 inactive/archived session，运行前台 App，统计 60 秒 changes 请求数及 Relay 查询数。
 - 当前覆盖：registry 测试验证创建/移除 client，没有轮询预算或生命周期过滤断言。
 - 最小修复方向：定义有限的活跃同步集合和按需唤醒策略；inactive/archived session 通过选中、可见、Socket.IO 提示或低频刷新激活，而不是每个 session 固定轮询。
-- 实施计划：待真实性复核后填写。
+- 实施计划：真实性复核确认当前 `/v1/sessions` 仍按 `updatedAt` 返回最多 150 个会话，App 解密整批后把所有 `flavor=codex`、`codexSyncVersion=4` 会话交给 registry，而 registry 会为每个 desired session 创建 client；`AppSyncV4Client.start` 对每个 client 固定安装 5 秒 interval，`active` 与 `archivedAt` 均未参与预算。修复将把同步模式作为 registry desired state 的一部分：只有 `active=true && archivedAt=null` 的会话使用 5 秒连续轮询，inactive/archived 会话保留为按需 desired entry 且不被 reconcile 批量实例化；可见会话、Socket.IO high-watermark invalidation 或写操作通过 `invalidate`/`withClient` 精确启动目标 client。`invalidateAll` 只唤醒连续模式或已实例化 client，避免前台切换/重连瞬间启动全部 150 个 dormant session。`AppSyncV4Client` 接受 `pollIntervalMs: number | null`：按需模式启动时仍执行一次 hydrate/pull，但不创建 interval；连续/按需模式转换会停止并重建 client，使 timer 策略立即一致。连续模式保留有界启动重试，按需模式启动失败则等待下一次显式 invalidation，不能自行演化为永久轮询。补充 150 个 dormant session 零实例化、visible/socket/write 只唤醒目标、`invalidateAll` 不扩散、active client 定时收敛、null timer 不周期请求、模式转换停止旧 client、按需失败只在下一次唤醒重试的回归测试；App 补丁版本升级到 `1.11.28`。
 - 解决证据：待填写。
 
 ## P-02 Relay mutation 在 Serializable 事务内逐条执行 ORM 写入
@@ -169,3 +169,4 @@
 | F-01 | `659e9058`、`e2cd9788` | #3、#4 | `30972788354`、`30972790180`：34/34；发布 `30973559091`：成功 | happy-agent 10 files / 178 tests；`tsc --noEmit` | 2026-08-05 |
 | F-02 | `e08de0b1`、`39eabdf2` | #5、#6 | PR：`30978888123`、`30978890922`、`30978890729`、`30980955912`、`30981020451`；发布：`30979937023`、`30981917207`；主干：`30981917433`：均成功 | happy-agent 12 files / 191 tests；CLI 100 files / 922 tests；两包 `tsc --noEmit` | 2026-08-05 |
 | F-03 | `ed296318` | #8 | PR：`30988090259`、`30988090531`、`30988045755`：38/38；主干：`30989318480`；发布：`30989317886`：均成功 | CLI 101 files / 936 tests；相关 4 files / 54 tests；`tsc --noEmit` | 2026-08-05 |
+| F-04 | `11c8b367` | #10 | PR：`30991392616`、`30991430323`：34/34；主干：`30992685385`；Android field：`30992685309`；发布：`30992685109`：均成功 | App 101 files / 976 tests；相关 1 file / 39 tests；`tsc --noEmit` | 2026-08-05 |
