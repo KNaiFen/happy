@@ -1126,6 +1126,58 @@ describe('AppSyncV4Client', () => {
         expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
     });
 
+    it('keeps a publish that becomes durable while a snapshot replacement is being prepared', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        const replayStarted = new Deferred<void>();
+        const resumeReplay = new Deferred<void>();
+        let blockInitialReplay = true;
+        const crypto: AppSyncV4Crypto = {
+            ...fakeCrypto,
+            decryptEntity: async (aad, ciphertext) => {
+                const entity = await fakeCrypto.decryptEntity(aad, ciphertext);
+                if (blockInitialReplay && entity.providerId === 'pending-before-snapshot') {
+                    blockInitialReplay = false;
+                    replayStarted.resolve();
+                    await resumeReplay.promise;
+                }
+                return entity;
+            },
+        };
+        let projection: CodexV4Projection = createCodexV4Projection();
+        const receiver = await client(
+            storage,
+            transport,
+            [],
+            async (event) => {
+                projection = applyCodexV4ProjectionUpdate(projection, event);
+            },
+            undefined,
+            undefined,
+            async (events) => {
+                projection = resetCodexV4Projection(projection);
+                for (const event of events) {
+                    projection = applyCodexV4ProjectionUpdate(projection, event);
+                }
+            },
+            crypto,
+        );
+        await receiver.publishEntity(command('pending-before-snapshot'));
+        transport.requireSnapshot = true;
+        transport.snapshots = [{ entities: [], highWatermark: 0, nextCursor: null }];
+
+        const snapshot = receiver.pullChangesOnce();
+        await replayStarted.promise;
+        await receiver.publishEntity(command('published-during-snapshot'));
+        expect(projection.entities['codex.command']['published-during-snapshot']).toBeDefined();
+        resumeReplay.resolve();
+        await snapshot;
+
+        expect(projection.entities['codex.command']['pending-before-snapshot']).toBeDefined();
+        expect(projection.entities['codex.command']['published-during-snapshot']).toBeDefined();
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(2);
+    });
+
     it('does not acknowledge an in-flight POST after stop and session cleanup', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();
