@@ -32,8 +32,8 @@
 | ---: | --- | --- | --- | --- | --- |
 | 1 | F-01 | P1 | 高 | 已解决 | happy-agent 把命令结果或 interrupt ACK 当作 turn 终态 |
 | 2 | F-02 | P1 | 高 | 已解决 | happy-agent 写操作缺少跨进程持久幂等凭据 |
-| 3 | F-03 | P1 | 高 | 进行中 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
-| 4 | F-04 | P2 | 高 | 待修复 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
+| 3 | F-03 | P1 | 高 | 已解决 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
+| 4 | F-04 | P2 | 高 | 进行中 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
 | 5 | P-01 | P2 | 高 | 待修复 | App 为全部 Codex 会话启动固定 5 秒轮询 |
 | 6 | P-02 | P2 | 高 | 待修复 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
 | 7 | P-03 | P3 | 高 | 待修复 | happy-agent 等待循环每秒重新拉取完整 snapshot |
@@ -73,7 +73,7 @@
 
 ## F-03 Gateway handoff 失败会留下目标 generation 的 current 元数据
 
-- 状态：进行中
+- 状态：已解决
 - 严重度：P1
 - 置信度：高
 - 生产链：`packages/happy-cli/src/codex/gateway/codexGatewayCoordinator.ts:360 performHandoff` -> `packages/happy-cli/src/codex/gateway/codexGatewaySyncRuntime.ts:106 updateBinding` -> metadata durable write -> mapper state/flush -> transport flush -> coordinator catch rollback。
@@ -85,11 +85,11 @@
 - 当前覆盖：分别覆盖 coordinator 早期失败和 runtime 阶段失败，未覆盖两者组合后的 durable rollback。
 - 最小修复方向：把 binding 更新设计为可补偿阶段，handoff 失败时显式恢复 source/target durable metadata，并在补偿失败时进入可对账的 unknown/recovery 状态。
 - 实施计划：在 `CodexGatewaySyncRuntime.updateBinding` 内记录调用前 binding；metadata、runtime projection、mapper flush 或 transport flush 任一阶段失败时，保留原始失败阶段和内存 cause，并以原 binding 补偿恢复 durable metadata、mapper projection 及 outbound transport。补偿自身失败时显式标记为需要恢复，不把 target 当成已安全回滚。`CodexGatewayCoordinator.bindRoot` 仅在 target 补偿确认成功后移除新建 target、关闭 runtime 并释放 lease；补偿不完整时保留 target runtime/lease、发布 `recovering` 生命周期。source 的 durable `current` 回写只有成功后才恢复内存角色；回写失败时 source 保持不可写的 `draining` 恢复态，并将 target 保留给前向重试。worker heartbeat 调用 coordinator 的恢复入口，既覆盖无新请求的 terminal handoff，也与已有 `providerAccepted` journal/command reconciliation 协作；重启时，deterministic Gateway/thread session identity 会重建未入 descriptor 的 recovery target。恢复 binding 期间延迟 command replay 到 coordinator lock 释放后，避免 handoff 重入死锁；重试成功前将 target lifecycle 从 `recovering` 显式恢复为 `running`。未决 recovery target 会阻止更新的 root 越权绑定；heartbeat 携带 runtime 身份、generation 和前序 session 令牌，并在取得 binding lock 后复核，防止已 relinquish/stop 的 target 被复活。补充 metadata 已成功后 mapper flush、transport flush 失败的 target durable rollback 测试，补偿失败时 target 恢复主体保留、source 回写失败的 fail-closed/自动恢复、重启期 lock 顺序、过期 target/取消竞态，以及 coordinator 组合场景中 source/target durable metadata 唯一 `current` 的回归测试；CLI 补丁版本升级到 `1.4.42`。
-- 解决证据：待填写。
+- 解决证据：PR #8 的行为修复提交 `529e1016dcbc117f442c224a0f9e3871d1c01772` 合并为 `ed296318f7b84bb0851ee3878ea189a44c326fd8`。Sync runtime 会在 metadata、projection、mapper 或 transport 任一阶段失败时恢复调用前 binding；补偿不完整会显式进入 recovery-required。Coordinator 对 source 回写失败保持 fail-closed，保留 target runtime/lease，并由 heartbeat 在 runtime/generation/previous-session 令牌复核后前向恢复；重启恢复延迟 command replay 到 binding lock 释放后，且恢复中的旧 target 不能覆盖更新 root 或在 relinquish 后复活。PR 的 CLI Smoke `30988090259`、PR CI `30988090531` 与 push CI `30988045755` 共 38 项检查全部成功，两套 Required CI gate 和官方 Codex TUI 真实 PTY 回环均通过。合并提交的主分支 CI `30989318480` 全部成功；CLI `1.4.42` 发布 `30989317886` 完成版本、源码、测试、构建、打包和上传，artifact `8923493061` 未过期。归档 `dist/release-artifacts/happy-1.4.42.tgz` 的 SHA-256 为 `fea084c4c98a262c479e56e200d9cbf19b45bb6a0c6f8ed582a95637773aac2d`，包内版本为 `1.4.42`，并包含 macOS ARM64 `difftastic` 与 `ripgrep` 归档。本地验证：CLI 101 files / 936 tests、相关 4 files / 54 tests、`tsc --noEmit` 与 `git diff --check` 均通过。
 
 ## F-04 App snapshot 替换会覆盖并发发布的本地乐观投影
 
-- 状态：待修复
+- 状态：进行中
 - 严重度：P2
 - 置信度：高
 - 生产链：`packages/happy-app/sources/sync/syncV4Client.ts:865 rebuildFromSnapshot` -> `:1058 getPendingOutbox` -> snapshot decrypt -> `:1101 replaceSnapshotForGeneration`；并发链为 `:484 publishEntities` -> `:525 persist outbox` -> `:540 optimistic projection`。
@@ -100,7 +100,7 @@
 - 最小复现：在 snapshot pending capture 与 replace 之间发布 B，断言替换后 projection 同时包含 A 和 B。审计期 `/tmp` harness 已复现 `pendingOutbox=2` 但 projection 仅含 A。
 - 当前覆盖：App sync v4 单测覆盖 snapshot/outbox 重放和 generation fencing，未覆盖同 generation 并发 publish。
 - 最小修复方向：在一致的锁/提交边界内重新读取 pending outbox，或让 snapshot replace 与 publish 串行化，同时保持网络和解密工作不长期占用发布锁。
-- 实施计划：待真实性复核后填写。
+- 实施计划：保留 snapshot 网络分页和服务端实体解密在 publish lock 之外；分页完成后先构造 pending outbox 的候选重放集合，在最终提交前取得 `publishLock` 并重新读取有序 pending mutation 集合。若集合已变化，则释放锁、解密最新集合并重试；只有集合稳定时才在同一锁内执行 projection 全量替换和 `finishSnapshot`。因此，提交边界前已持久化的本地写入必定包含在替换集合中，提交边界后的写入只能在替换完成后进入 outbox 和乐观投影，同时避免让网络与常规解密长期占用发布锁。补充确定性交错测试：阻塞旧 pending mutation 的解密，在首次 outbox 捕获后并发发布第二条 mutation，随后恢复 snapshot，断言 durable outbox 和最终 projection 都同时保留两条本地写入；保留 stop/generation fencing 与 snapshot 失败不提交的覆盖。App 补丁版本升级到 `1.11.27`。
 - 解决证据：待填写。
 
 ## P-01 App 为全部 Codex 会话启动固定 5 秒轮询
@@ -168,3 +168,4 @@
 | --- | --- | --- | --- | --- | --- |
 | F-01 | `659e9058`、`e2cd9788` | #3、#4 | `30972788354`、`30972790180`：34/34；发布 `30973559091`：成功 | happy-agent 10 files / 178 tests；`tsc --noEmit` | 2026-08-05 |
 | F-02 | `e08de0b1`、`39eabdf2` | #5、#6 | PR：`30978888123`、`30978890922`、`30978890729`、`30980955912`、`30981020451`；发布：`30979937023`、`30981917207`；主干：`30981917433`：均成功 | happy-agent 12 files / 191 tests；CLI 100 files / 922 tests；两包 `tsc --noEmit` | 2026-08-05 |
+| F-03 | `ed296318` | #8 | PR：`30988090259`、`30988090531`、`30988045755`：38/38；主干：`30989318480`；发布：`30989317886`：均成功 | CLI 101 files / 936 tests；相关 4 files / 54 tests；`tsc --noEmit` | 2026-08-05 |
