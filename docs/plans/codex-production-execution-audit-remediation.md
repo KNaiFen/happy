@@ -31,7 +31,7 @@
 | 顺序 | 编号 | 严重度 | 置信度 | 状态 | 标题 |
 | ---: | --- | --- | --- | --- | --- |
 | 1 | F-01 | P1 | 高 | 已解决 | happy-agent 把命令结果或 interrupt ACK 当作 turn 终态 |
-| 2 | F-02 | P1 | 高 | 进行中 | happy-agent 写操作缺少跨进程持久幂等凭据 |
+| 2 | F-02 | P1 | 高 | 已解决 | happy-agent 写操作缺少跨进程持久幂等凭据 |
 | 3 | F-03 | P1 | 高 | 待修复 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
 | 4 | F-04 | P2 | 高 | 待修复 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
 | 5 | P-01 | P2 | 高 | 待修复 | App 为全部 Codex 会话启动固定 5 秒轮询 |
@@ -56,7 +56,7 @@
 
 ## F-02 happy-agent 写操作缺少跨进程持久幂等凭据
 
-- 状态：进行中
+- 状态：已解决
 - 严重度：P1
 - 置信度：高
 - 生产链（send）：`packages/happy-agent/src/index.ts:313` -> `packages/happy-agent/src/session.ts:319 publishCommand` -> `packages/happy-server/sources/app/api/routes/v4SessionRoutes.ts:394 POST mutations`。
@@ -69,7 +69,7 @@
 - 当前覆盖：覆盖进程内 retry/idempotency，没有覆盖调用方退出后的相同操作重放。
 - 最小修复方向：为写操作提供调用方可指定且可持久复用的 operation key/receipt，并让 spawn 透传稳定 `operationId`；明确生命周期、冲突语义和清理策略。
 - 实施计划：为 happy-agent 增加按 operation UUID 分文件的本地 receipt store，目录权限为 `0700`、文件权限为 `0600`；只持久化请求 SHA-256、完整加密 mutation、状态和必要的 spawn 结果，不写入明文 prompt。`send`/`spawn` 增加 `--operation-id <uuid>`，未显式提供时自动复用相同请求哈希下唯一的未确认 receipt，否则生成新 UUID；同一 UUID 绑定不同操作或请求哈希时显式失败。send 在首次网络发布前持久化 command/mutation 的完整密文，跨进程重试复用相同 command/mutation/producer ID 与密文；spawn 将稳定 `operationId` 透传 daemon，并在输出前缓存成功 sessionId。daemon 在 Gateway 状态目录按 operation UUID 获取跨进程租约，在同一临界区内重新查找 descriptor、创建/恢复 Gateway 并重放 `/root/open`；未知控制响应不取消 root 或停止 Gateway，保留 descriptor/journal 供同 ID 恢复。用户可见成功输出后再把 receipt 标记为已确认；未确认 receipt 永不机会式清理，已确认 receipt 保留 7 天。补充丢失全部响应后新进程重放、并发 spawn 单实例、同 ID 内容冲突、spawn operationId 透传/结果缓存、权限与清理测试，更新 CLI help/smoke，并将 happy-agent 升级到 `0.1.8`、happy-cli 升级到 `1.4.41`。
-- 解决证据：待填写。
+- 解决证据：行为修复由 PR #5 合并为 `e08de0b1c2305596e5aaa3273620751475922b77`，其中 happy-agent 为 send/spawn 写操作提供加密持久 receipt、稳定 operation ID、跨进程冲突检测、权限和 7 天确认后清理；CLI Gateway 使用跨进程 generation lease 保护同一 spawn，并保留未知 `/root/open` 结果供同 ID 恢复。修正打包冒烟的 PR #6 合并为 `39eabdf2261e7cfb1330383fa67a5337f9116543`：显式 UUID `7e6b3546-00fe-4b1e-9a17-6d60f2bc9b19` 贯穿打包后的 happy-agent CLI 请求并被精确断言。PR #5 的 push/PR/CLI Smoke 工作流 `30978888123`、`30978890922`（第 2 次）和 `30978890729` 均通过；PR #6 的 push/PR 工作流 `30980955912`、`30981020451` 共 34 项检查均通过。主分支 CLI `1.4.41` 发布 `30979937023` 成功，归档 `dist/release-artifacts/happy-1.4.41.tgz` 的 SHA-256 为 `af12a0d7d28d0bdb0df5a6c99931dbe0a22aec9b8e6c3355cff174cbe9c85c6f`，并已验证包含 macOS ARM64 `rg` 与 `difftastic` 归档。happy-agent `0.1.7` 发布 `30979937010` 曾因旧冒烟期望缺少新增 `operationId` 而失败，按版本不可复用规则由 `0.1.8` 取代；`0.1.8` 发布 `30981917207` 成功完成源码和 fixture 类型检查、191 tests、打包元数据/源码 SHA 校验、安装压缩包后真实 CLI 冒烟并上传未过期 artifact `happy-agent-0.1.8`（`8920517132`）。合并提交 `39eabdf2` 的主分支 CI `30981917433` 全部通过，包括官方 app-server 生命周期、12:56 的真实 PTY 11 分钟 idle/attach/normal-stop 验收及 Required CI gate。本地验证：happy-agent 12 files / 191 tests、CLI 100 files / 922 tests、两包 `tsc --noEmit` 和 `git diff --check` 均通过；packed fixture 的根目录 typecheck 因本机非 hoisted 依赖布局无法解析根依赖，已由发布工作流中的实际 fixture typecheck 成功覆盖。
 
 ## F-03 Gateway handoff 失败会留下目标 generation 的 current 元数据
 
@@ -167,3 +167,4 @@
 | 编号 | 合并提交 | PR | GitHub CI | 本地验证 | 完成日期 |
 | --- | --- | --- | --- | --- | --- |
 | F-01 | `659e9058`、`e2cd9788` | #3、#4 | `30972788354`、`30972790180`：34/34；发布 `30973559091`：成功 | happy-agent 10 files / 178 tests；`tsc --noEmit` | 2026-08-05 |
+| F-02 | `e08de0b1`、`39eabdf2` | #5、#6 | PR：`30978888123`、`30978890922`、`30978890729`、`30980955912`、`30981020451`；发布：`30979937023`、`30981917207`；主干：`30981917433`：均成功 | happy-agent 12 files / 191 tests；CLI 100 files / 922 tests；两包 `tsc --noEmit` | 2026-08-05 |
