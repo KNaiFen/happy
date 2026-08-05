@@ -2,8 +2,10 @@ import {
     CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
     CodexCommandEntityV4Schema,
     CodexEntityV4Schema,
+    SyncChangesResponseV4Schema,
     SyncMutationBatchResponseV4Schema,
     SyncMutationBatchV4Schema,
+    SyncSnapshotRequiredV4Schema,
     SyncSnapshotResponseV4Schema,
     encodeSyncV4Aad,
     encodeSyncV4OpaqueEntityIdInput,
@@ -43,6 +45,7 @@ import {
 } from './operationReceipts';
 
 const SNAPSHOT_PAGE_SIZE = 100;
+const CHANGES_PAGE_SIZE = 100;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const SYNC_V4_CIPHERTEXT_VERSION = 1;
 const SYNC_V4_NONCE_BYTES = 12;
@@ -99,6 +102,13 @@ interface CommandDraft {
 interface CommandMutation {
     command: CodexCommandEntityV4;
     mutation: SyncMutationV4;
+}
+
+interface IncrementalSnapshotState {
+    receiveCursor: number;
+    entitiesById: Map<string, CodexEntityV4>;
+    entityRevisions: Map<string, number>;
+    snapshot: CodexV4Snapshot;
 }
 
 class SyncV4ProtocolError extends Error {
@@ -222,12 +232,19 @@ export class SessionClient {
 
     async readSnapshot(timeoutMs?: number): Promise<CodexV4Snapshot> {
         const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
+        return (await this.readSnapshotState(deadline)).snapshot;
+    }
+
+    private async readSnapshotState(deadline: number | null): Promise<IncrementalSnapshotState> {
         await this.assertCompatible(deadline === null
             ? undefined
             : Math.min(30_000, this.snapshotRequestTimeout(deadline)));
         let cursor: string | null = null;
         let highWatermark: number | null = null;
-        const entities: CodexEntityV4[] = [];
+        const entitiesById = new Map<string, CodexEntityV4>();
+        const entityRevisions = new Map<string, number>();
+        const seenEntityIds = new Set<string>();
+        const seenCursors = new Set<string>();
 
         do {
             const response = await axios.get(
@@ -240,26 +257,36 @@ export class SessionClient {
             );
             const page = SyncSnapshotResponseV4Schema.parse(response.data);
             if (highWatermark !== null && page.highWatermark !== highWatermark) {
-                throw new Error('Codex Sync v4 snapshot watermark changed across pages');
+                throw new SyncV4ProtocolError('Codex Sync v4 snapshot watermark changed across pages');
             }
             highWatermark = page.highWatermark;
             for (const record of page.entities) {
-                if (record.op === 'delete') continue;
-                entities.push(this.crypto.decryptEntity({
+                if (seenEntityIds.has(record.entityId)) {
+                    throw new SyncV4ProtocolError('Codex Sync v4 snapshot repeated an entity across pages');
+                }
+                seenEntityIds.add(record.entityId);
+                const entity = this.crypto.decryptEntity({
                     sessionId: this.sessionId,
                     entityId: record.entityId,
                     entityType: record.entityType,
                     revision: record.revision,
                     op: record.op,
-                }, record.ciphertext));
+                }, record.ciphertext);
+                entityRevisions.set(record.entityId, record.revision);
+                if (record.op === 'delete') entitiesById.delete(record.entityId);
+                else entitiesById.set(record.entityId, entity);
+            }
+            if (page.nextCursor && seenCursors.has(page.nextCursor)) {
+                throw new SyncV4ProtocolError('Codex Sync v4 snapshot pagination stalled');
             }
             cursor = page.nextCursor;
+            if (cursor) seenCursors.add(cursor);
         } while (cursor);
 
-        return projectSnapshot(
+        return this.snapshotState(
             highWatermark ?? 0,
-            entities,
-            this.preferredThreadId,
+            entitiesById,
+            entityRevisions,
         );
     }
 
@@ -353,8 +380,9 @@ export class SessionClient {
 
     async waitForCommand(commandId: string, timeoutMs = 300_000): Promise<CodexCommandResultEntityV4> {
         const deadline = Date.now() + timeoutMs;
+        let state = await this.readSnapshotState(deadline);
         while (Date.now() < deadline) {
-            const snapshot = await this.readSnapshot(this.remainingTimeout(deadline));
+            const snapshot = state.snapshot;
             const result = latestEntity(snapshot.commandResults.filter((candidate) => (
                 candidate.commandId === commandId
             )));
@@ -363,6 +391,7 @@ export class SessionClient {
                 throw new Error(result.error ?? `Codex command ended with status ${result.status}`);
             }
             if (!await this.delayUntil(deadline)) break;
+            state = await this.readChanges(state, deadline);
         }
         throw new Error('Timeout waiting for Codex command completion');
     }
@@ -370,8 +399,9 @@ export class SessionClient {
     async waitForCommandAndIdle(commandId: string, timeoutMs = 300_000): Promise<CodexV4Snapshot> {
         const deadline = Date.now() + timeoutMs;
         let targetTurnId: string | null = null;
+        let state = await this.readSnapshotState(deadline);
         while (Date.now() < deadline) {
-            const snapshot = await this.readSnapshot(this.remainingTimeout(deadline));
+            const snapshot = state.snapshot;
             const result = latestEntity(snapshot.commandResults.filter((candidate) => (
                 candidate.commandId === commandId
             )));
@@ -391,6 +421,7 @@ export class SessionClient {
                 return snapshot;
             }
             if (!await this.delayUntil(deadline)) break;
+            state = await this.readChanges(state, deadline);
         }
         throw new Error('Timeout waiting for Codex command completion and idle state');
     }
@@ -407,12 +438,124 @@ export class SessionClient {
 
     async waitForIdle(timeoutMs = 300_000): Promise<CodexV4Snapshot> {
         const deadline = Date.now() + timeoutMs;
+        let state = await this.readSnapshotState(deadline);
         while (Date.now() < deadline) {
-            const snapshot = await this.readSnapshot(this.remainingTimeout(deadline));
+            const snapshot = state.snapshot;
             if (isCodexSnapshotIdle(snapshot)) return snapshot;
             if (!await this.delayUntil(deadline)) break;
+            state = await this.readChanges(state, deadline);
         }
         throw new Error('Timeout waiting for Codex to become idle');
+    }
+
+    private async readChanges(
+        state: IncrementalSnapshotState,
+        deadline: number,
+    ): Promise<IncrementalSnapshotState> {
+        let targetWatermark: number | null = null;
+        while (true) {
+            const cursor = state.receiveCursor;
+            if (targetWatermark !== null && cursor >= targetWatermark) break;
+            let response: ReturnType<typeof SyncChangesResponseV4Schema.parse>;
+            try {
+                const result = await axios.get(
+                    `${this.serverUrl}/v4/sessions/${encodeURIComponent(this.sessionId)}/changes`,
+                    {
+                        params: { after_seq: cursor, limit: CHANGES_PAGE_SIZE },
+                        headers: this.headers(),
+                        timeout: this.snapshotRequestTimeout(deadline),
+                    },
+                );
+                response = SyncChangesResponseV4Schema.parse(result.data);
+            } catch (error) {
+                if (axios.isAxiosError(error) && error.response?.status === 410) {
+                    SyncSnapshotRequiredV4Schema.parse(error.response.data);
+                    return await this.readSnapshotState(deadline);
+                }
+                throw error;
+            }
+
+            const drainWatermark: number = targetWatermark ?? response.highWatermark;
+            if (response.highWatermark < cursor) {
+                throw new SyncV4ProtocolError('Codex Sync v4 server watermark moved backwards');
+            }
+            if (targetWatermark !== null && response.highWatermark < targetWatermark) {
+                throw new SyncV4ProtocolError('Codex Sync v4 server watermark moved backwards during a drain');
+            }
+            if (response.changes.length === 0) {
+                if (response.hasMore || cursor < drainWatermark) {
+                    throw new SyncV4ProtocolError('Codex Sync v4 changes response has a sequence gap');
+                }
+                break;
+            }
+            if (response.changes[0].seq !== cursor + 1) {
+                throw new SyncV4ProtocolError('Codex Sync v4 changes response has a sequence gap');
+            }
+            const responseLastSeq = response.changes.at(-1)!.seq;
+            if (response.hasMore && responseLastSeq >= response.highWatermark) {
+                throw new SyncV4ProtocolError('Codex Sync v4 changes response has an inconsistent hasMore marker');
+            }
+
+            const changesInDrain = response.changes.filter((change) => (
+                change.seq <= drainWatermark
+            ));
+            const lastSeq = changesInDrain.at(-1)?.seq ?? cursor;
+            if (changesInDrain.length === 0 && cursor < drainWatermark) {
+                throw new SyncV4ProtocolError('Codex Sync v4 changes response has a sequence gap');
+            }
+            if (!response.hasMore && lastSeq < drainWatermark) {
+                throw new SyncV4ProtocolError('Codex Sync v4 changes response ended before its watermark');
+            }
+            if (!response.hasMore && responseLastSeq < response.highWatermark) {
+                throw new SyncV4ProtocolError('Codex Sync v4 changes response has an inconsistent hasMore marker');
+            }
+            targetWatermark = drainWatermark;
+
+            for (const change of changesInDrain) {
+                if (change.seq !== state.receiveCursor + 1) {
+                    throw new SyncV4ProtocolError('Codex Sync v4 changes response has a sequence gap');
+                }
+                const currentRevision = state.entityRevisions.get(change.entityId) ?? 0;
+                if (change.revision > currentRevision) {
+                    const entity = this.crypto.decryptEntity({
+                        sessionId: this.sessionId,
+                        entityId: change.entityId,
+                        entityType: change.entityType,
+                        revision: change.revision,
+                        op: change.op,
+                    }, change.ciphertext);
+                    state.entityRevisions.set(change.entityId, change.revision);
+                    if (change.op === 'delete') state.entitiesById.delete(change.entityId);
+                    else state.entitiesById.set(change.entityId, entity);
+                }
+                state.receiveCursor = change.seq;
+            }
+            if (state.receiveCursor >= drainWatermark) break;
+        }
+
+        state.snapshot = projectSnapshot(
+            state.receiveCursor,
+            [...state.entitiesById.values()],
+            this.preferredThreadId,
+        );
+        return state;
+    }
+
+    private snapshotState(
+        receiveCursor: number,
+        entitiesById: Map<string, CodexEntityV4>,
+        entityRevisions: Map<string, number>,
+    ): IncrementalSnapshotState {
+        return {
+            receiveCursor,
+            entitiesById,
+            entityRevisions,
+            snapshot: projectSnapshot(
+                receiveCursor,
+                [...entitiesById.values()],
+                this.preferredThreadId,
+            ),
+        };
     }
 
     private async publishCommand(

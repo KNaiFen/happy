@@ -1,6 +1,6 @@
 {
   "name": "happy-agent",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "CLI client for controlling Codex sessions remotely",
   "author": "Kirill Dubovitskiy",
   "license": "MIT",

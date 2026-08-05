@@ -2,10 +2,12 @@ import {
     CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
     type CodexCommandResultEntityV4,
     type CodexEntityV4,
+    type CodexPartEntityV4,
     type CodexRuntimeEntityV4,
     type CodexThreadEntityV4,
     type CodexTurnEntityV4,
     type SyncEntitySnapshotV4,
+    type SyncChangeV4,
 } from '@slopus/happy-wire';
 import axios from 'axios';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
@@ -136,6 +138,26 @@ function commandResult(
     };
 }
 
+function part(index: number): CodexPartEntityV4 {
+    return {
+        schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+        entityType: 'codex.part',
+        providerId: `part-${index}`,
+        createdAt: now + index,
+        updatedAt: now + index,
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: `item-${index}`,
+        partId: `part-${index}`,
+        kind: 'text',
+        index,
+        chunkIndex: 0,
+        content: 'x',
+        contentType: 'text',
+        final: true,
+    };
+}
+
 function publishedInterrupt(commandId = 'command-1'): PublishedCodexCommand {
     return {
         command: {
@@ -188,24 +210,70 @@ async function encryptedRecords(entities: CodexEntityV4[]): Promise<SyncEntitySn
     });
 }
 
-async function snapshotResponse(entities: CodexEntityV4[]) {
+function encryptedChange(
+    entity: CodexEntityV4,
+    options: { seq: number; revision: number; op?: 'upsert' | 'delete' },
+): SyncChangeV4 {
+    const crypto = new SyncV4Crypto('session-1', sessionKey);
+    const entityId = crypto.opaqueEntityId(entity.entityType, entity.providerId);
+    const op = options.op ?? 'upsert';
+    return {
+        mutationId: `mutation-${options.seq}`,
+        producerId: 'gateway-1',
+        entityId,
+        entityType: entity.entityType,
+        revision: options.revision,
+        op,
+        ciphertext: crypto.encryptEntity({
+            sessionId: 'session-1',
+            entityId,
+            entityType: entity.entityType,
+            revision: options.revision,
+            op,
+        }, entity),
+        seq: options.seq,
+        createdAt: now + options.seq,
+    };
+}
+
+async function snapshotResponse(
+    entities: CodexEntityV4[],
+    highWatermark = entities.length,
+) {
     return {
         data: {
             entities: await encryptedRecords(entities),
-            highWatermark: entities.length,
+            highWatermark,
             nextCursor: null,
         },
     };
 }
 
-function client(operationReceipts?: OperationReceiptStore): SessionClient {
+function changesResponse(
+    changes: SyncChangeV4[],
+    highWatermark = changes.at(-1)?.seq ?? 0,
+    hasMore = false,
+) {
+    return { data: { changes, hasMore, highWatermark } };
+}
+
+function tamperCiphertext(ciphertext: string): string {
+    const bytes = Buffer.from(ciphertext, 'base64');
+    bytes[bytes.length - 1] ^= 1;
+    return bytes.toString('base64');
+}
+
+function client(
+    operationReceipts?: OperationReceiptStore,
+    pollIntervalMs = 1,
+): SessionClient {
     return new SessionClient({
         sessionId: 'session-1',
         encryptionKey: sessionKey,
         token: 'token-1',
         serverUrl: 'https://happy.example',
         threadId: 'thread-1',
-        pollIntervalMs: 1,
+        pollIntervalMs,
         operationReceipts,
     });
 }
@@ -238,6 +306,19 @@ describe('SessionClient Codex Sync v4', () => {
         expect(snapshot.runtime?.execution).toEqual({ type: 'idle' });
         expect(mockedGet).toHaveBeenCalledTimes(2);
         expect(mockedGet.mock.calls[1][0]).toContain('/v4/sessions/session-1/snapshot');
+    });
+
+    it('authenticates delete tombstones in a full snapshot', async () => {
+        const [record] = await encryptedRecords([turn()]);
+        record.op = 'delete';
+        mockCapabilities();
+        mockedGet.mockResolvedValueOnce({
+            data: { entities: [record], highWatermark: 1, nextCursor: null },
+        });
+
+        await expect(client().readSnapshot()).rejects.toThrow(
+            'Unable to authenticate Codex Sync v4 entity',
+        );
     });
 
     it('publishes turn.queue while the runtime is active', async () => {
@@ -376,7 +457,18 @@ describe('SessionClient Codex Sync v4', () => {
 
     it('waits for an authoritative command result', async () => {
         mockCapabilities();
-        mockedGet.mockResolvedValueOnce(await snapshotResponse([thread(), runtime(), commandResult()]));
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime(),
+                commandResult({ status: 'received', turnId: null }),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(commandResult({ updatedAt: now + 1 }), {
+                    seq: 4,
+                    revision: 2,
+                }),
+            ], 4));
 
         await expect(client().waitForCommand('command-1', 50)).resolves.toMatchObject({
             status: 'succeeded',
@@ -391,18 +483,26 @@ describe('SessionClient Codex Sync v4', () => {
                 runtime(),
                 commandResult(),
             ]))
-            .mockResolvedValueOnce(await snapshotResponse([
-                thread({ status: { type: 'active', activeFlags: [] } }),
-                runtime({ execution: { type: 'active', activeFlags: [] } }),
-                turn(),
-                commandResult(),
-            ]))
-            .mockResolvedValueOnce(await snapshotResponse([
-                thread(),
-                runtime(),
-                turn({ status: 'completed', completedAt: now + 1 }),
-                commandResult(),
-            ]));
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(thread({
+                    updatedAt: now + 1,
+                    status: { type: 'active', activeFlags: [] },
+                }), { seq: 4, revision: 2 }),
+                encryptedChange(runtime({
+                    updatedAt: now + 1,
+                    execution: { type: 'active', activeFlags: [] },
+                }), { seq: 5, revision: 2 }),
+                encryptedChange(turn(), { seq: 6, revision: 1 }),
+            ], 6))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(thread({ updatedAt: now + 2 }), { seq: 7, revision: 3 }),
+                encryptedChange(runtime({ updatedAt: now + 2 }), { seq: 8, revision: 3 }),
+                encryptedChange(turn({
+                    updatedAt: now + 2,
+                    status: 'completed',
+                    completedAt: now + 1,
+                }), { seq: 9, revision: 2 }),
+            ], 9));
 
         await expect(client().waitForCommandAndIdle('command-1', 50)).resolves.toMatchObject({
             runtime: expect.objectContaining({ execution: { type: 'idle' } }),
@@ -421,7 +521,9 @@ describe('SessionClient Codex Sync v4', () => {
                 thread(),
                 runtime({ statusUnknown: true }),
             ]))
-            .mockResolvedValueOnce(await snapshotResponse([thread(), runtime()]));
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 3, revision: 2 }),
+            ], 3));
 
         await expect(client().stopAndWait(50)).resolves.toMatchObject({
             runtime: expect.objectContaining({ statusUnknown: false }),
@@ -440,18 +542,26 @@ describe('SessionClient Codex Sync v4', () => {
                 runtime(),
                 commandResult(),
             ]))
-            .mockResolvedValueOnce(await snapshotResponse([
-                thread({ status: { type: 'active', activeFlags: [] } }),
-                runtime({ execution: { type: 'active', activeFlags: [] } }),
-                turn(),
-                commandResult(),
-            ]))
-            .mockResolvedValueOnce(await snapshotResponse([
-                thread(),
-                runtime(),
-                turn({ status: 'interrupted', completedAt: now + 1 }),
-                commandResult(),
-            ]));
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(thread({
+                    updatedAt: now + 1,
+                    status: { type: 'active', activeFlags: [] },
+                }), { seq: 4, revision: 2 }),
+                encryptedChange(runtime({
+                    updatedAt: now + 1,
+                    execution: { type: 'active', activeFlags: [] },
+                }), { seq: 5, revision: 2 }),
+                encryptedChange(turn(), { seq: 6, revision: 1 }),
+            ], 6))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(thread({ updatedAt: now + 2 }), { seq: 7, revision: 3 }),
+                encryptedChange(runtime({ updatedAt: now + 2 }), { seq: 8, revision: 3 }),
+                encryptedChange(turn({
+                    updatedAt: now + 2,
+                    status: 'interrupted',
+                    completedAt: now + 1,
+                }), { seq: 9, revision: 2 }),
+            ], 9));
 
         await expect(session.stopAndWait(50)).resolves.toMatchObject({
             runtime: expect.objectContaining({ execution: { type: 'idle' } }),
@@ -491,6 +601,436 @@ describe('SessionClient Codex Sync v4', () => {
         expect(mockedPost).not.toHaveBeenCalled();
         expect(mockedGet).toHaveBeenCalledTimes(3);
     });
+
+    it('keeps an empty changes page as a poll result instead of completion evidence', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([], 3))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 4, revision: 2 }),
+                encryptedChange(turn({
+                    updatedAt: now + 1,
+                    status: 'completed',
+                    completedAt: now + 1,
+                }), { seq: 5, revision: 2 }),
+            ], 5));
+
+        await expect(client().waitForIdle(100)).resolves.toMatchObject({
+            runtime: expect.objectContaining({ execution: { type: 'idle' } }),
+        });
+        const changeRequests = mockedGet.mock.calls.filter(([url]) => (
+            String(url).includes('/changes')
+        ));
+        expect(changeRequests).toHaveLength(2);
+        expect(changeRequests.map((request) => request[1]?.params)).toEqual([
+            { after_seq: 3, limit: 100 },
+            { after_seq: 3, limit: 100 },
+        ]);
+    });
+
+    it('drains multiple change pages immediately and authenticates delete tombstones', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 4, revision: 2 }),
+            ], 5, true))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(turn({ updatedAt: now + 1 }), {
+                    seq: 5,
+                    revision: 2,
+                    op: 'delete',
+                }),
+            ], 5));
+        vi.useFakeTimers();
+
+        try {
+            const waiting = client(undefined, 1_000).waitForIdle(2_000);
+            const result = expect(waiting).resolves.toMatchObject({ turns: [] });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(mockedGet.mock.calls.filter(([url]) => String(url).includes('/changes'))).toHaveLength(0);
+            await vi.advanceTimersByTimeAsync(1_000);
+            await result;
+
+            const changeRequests = mockedGet.mock.calls.filter(([url]) => (
+                String(url).includes('/changes')
+            ));
+            expect(changeRequests.map((request) => request[1]?.params)).toEqual([
+                { after_seq: 3, limit: 100 },
+                { after_seq: 4, limit: 100 },
+            ]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps a fixed drain watermark when a later page includes concurrent changes', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({
+                    updatedAt: now + 1,
+                    execution: { type: 'active', activeFlags: [] },
+                }), { seq: 4, revision: 2 }),
+            ], 5, true))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(turn({ updatedAt: now + 1 }), {
+                    seq: 5,
+                    revision: 2,
+                    op: 'delete',
+                }),
+                encryptedChange(runtime({ updatedAt: now + 2 }), { seq: 6, revision: 3 }),
+            ], 6))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 2 }), { seq: 6, revision: 3 }),
+            ], 6));
+
+        await expect(client().waitForIdle(100)).resolves.toMatchObject({
+            highWatermark: 6,
+            turns: [],
+            runtime: expect.objectContaining({ execution: { type: 'idle' } }),
+        });
+        const changeRequests = mockedGet.mock.calls.filter(([url]) => (
+            String(url).includes('/changes')
+        ));
+        expect(changeRequests.map((request) => request[1]?.params)).toEqual([
+            { after_seq: 3, limit: 100 },
+            { after_seq: 4, limit: 100 },
+            { after_seq: 5, limit: 100 },
+        ]);
+    });
+
+    it('rejects a tampered upsert change before applying it', async () => {
+        const change = encryptedChange(runtime({ updatedAt: now + 1 }), {
+            seq: 4,
+            revision: 2,
+        });
+        change.ciphertext = tamperCiphertext(change.ciphertext);
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([change], 4));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow(
+            'Unable to authenticate Codex Sync v4 entity',
+        );
+    });
+
+    it('rejects a delete tombstone whose authenticated operation was changed', async () => {
+        const change = encryptedChange(turn({ updatedAt: now + 1 }), {
+            seq: 4,
+            revision: 2,
+        });
+        change.op = 'delete';
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([change], 4));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow(
+            'Unable to authenticate Codex Sync v4 entity',
+        );
+    });
+
+    it('advances the cursor past an older revision without replacing newer state', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({
+                    updatedAt: now + 2,
+                    execution: { type: 'active', activeFlags: ['waitingOnApproval'] },
+                }), { seq: 4, revision: 2 }),
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 5, revision: 1 }),
+            ], 5))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 3 }), { seq: 6, revision: 3 }),
+                encryptedChange(turn({
+                    updatedAt: now + 3,
+                    status: 'completed',
+                    completedAt: now + 3,
+                }), { seq: 7, revision: 2 }),
+            ], 7));
+
+        await expect(client().waitForIdle(100)).resolves.toMatchObject({
+            highWatermark: 7,
+            runtime: expect.objectContaining({
+                updatedAt: now + 3,
+                execution: { type: 'idle' },
+            }),
+        });
+        const changeRequests = mockedGet.mock.calls.filter(([url]) => (
+            String(url).includes('/changes')
+        ));
+        expect(changeRequests.map((request) => request[1]?.params)).toEqual([
+            { after_seq: 3, limit: 100 },
+            { after_seq: 5, limit: 100 },
+        ]);
+    });
+
+    it('rebuilds from a full snapshot when the changes cursor is no longer retained', async () => {
+        const snapshotRequired = {
+            response: {
+                status: 410,
+                data: { error: 'snapshotRequired', minimumSeq: 50, highWatermark: 100 },
+            },
+        };
+        vi.mocked(axios.isAxiosError).mockImplementation((error) => error === snapshotRequired);
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockRejectedValueOnce(snapshotRequired)
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread(),
+                runtime(),
+                turn({ status: 'completed', completedAt: now + 1 }),
+            ], 100));
+
+        await expect(client().waitForIdle(100)).resolves.toMatchObject({
+            highWatermark: 100,
+            runtime: expect.objectContaining({ execution: { type: 'idle' } }),
+        });
+        expect(mockedGet.mock.calls.filter(([url]) => String(url).includes('/snapshot'))).toHaveLength(2);
+        expect(mockedGet.mock.calls.filter(([url]) => String(url).includes('/changes'))).toHaveLength(1);
+    });
+
+    it('rejects a changes response that skips the next sequence', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 5, revision: 2 }),
+            ], 5));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow('sequence gap');
+    });
+
+    it('rejects a change that exceeds its response watermark', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 4, revision: 2 }),
+                encryptedChange(turn({ updatedAt: now + 1 }), { seq: 5, revision: 2 }),
+            ], 4));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow(
+            'change seq cannot exceed highWatermark',
+        );
+    });
+
+    it('rejects a changes response that stops before its advertised watermark', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 4, revision: 2 }),
+            ], 5));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow('ended before its watermark');
+    });
+
+    it('rejects an empty changes page that claims more data', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([], 3, true));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow('sequence gap');
+    });
+
+    it('rejects a changes page that reaches its watermark but claims more data', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({ updatedAt: now + 1 }), { seq: 4, revision: 2 }),
+            ], 4, true));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow('inconsistent hasMore marker');
+    });
+
+    it('rejects a later drain page that hides data above the fixed watermark', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(runtime({
+                    updatedAt: now + 1,
+                    execution: { type: 'active', activeFlags: [] },
+                }), { seq: 4, revision: 2 }),
+            ], 5, true))
+            .mockResolvedValueOnce(changesResponse([
+                encryptedChange(turn({ updatedAt: now + 1 }), { seq: 5, revision: 2 }),
+            ], 6));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow('inconsistent hasMore marker');
+    });
+
+    it('rejects a changes watermark that moves behind the receive cursor', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValueOnce(changesResponse([], 2));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow('watermark moved backwards');
+    });
+
+    it('propagates a changes transport failure without falling back to another snapshot', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockRejectedValueOnce(new Error('changes offline'));
+
+        await expect(client().waitForIdle(100)).rejects.toThrow('changes offline');
+        expect(mockedGet.mock.calls.filter(([url]) => String(url).includes('/snapshot'))).toHaveLength(1);
+        expect(mockedGet.mock.calls.filter(([url]) => String(url).includes('/changes'))).toHaveLength(1);
+    });
+
+    it('keeps snapshot, polling delays, and changes requests within one timeout budget', async () => {
+        mockCapabilities();
+        mockedGet
+            .mockResolvedValueOnce(await snapshotResponse([
+                thread({ status: { type: 'active', activeFlags: [] } }),
+                runtime({ execution: { type: 'active', activeFlags: [] } }),
+                turn(),
+            ]))
+            .mockResolvedValue(changesResponse([], 3));
+        vi.useFakeTimers();
+
+        try {
+            const waiting = client().waitForIdle(5);
+            const rejection = expect(waiting).rejects.toThrow('Timeout waiting for Codex');
+            await vi.runAllTimersAsync();
+            await rejection;
+
+            const changeRequests = mockedGet.mock.calls.filter(([url]) => (
+                String(url).includes('/changes')
+            ));
+            expect(changeRequests.length).toBeGreaterThan(0);
+            for (const request of changeRequests) {
+                const requestTimeout = (request[1] as { timeout: number }).timeout;
+                expect(requestTimeout).toBeGreaterThan(0);
+                expect(requestTimeout).toBeLessThanOrEqual(5);
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('loads a 10,000-entity snapshot once and then polls only changes', async () => {
+        const entities: CodexEntityV4[] = [
+            thread({ status: { type: 'active', activeFlags: [] } }),
+            runtime({ execution: { type: 'active', activeFlags: [] } }),
+            turn(),
+            ...Array.from({ length: 9_997 }, (_, index) => part(index)),
+        ];
+        const records = await encryptedRecords(entities);
+        mockCapabilities();
+        for (let offset = 0; offset < records.length; offset += 100) {
+            const nextOffset = offset + 100;
+            mockedGet.mockResolvedValueOnce({
+                data: {
+                    entities: records.slice(offset, nextOffset),
+                    highWatermark: 10_000,
+                    nextCursor: nextOffset < records.length ? `cursor-${nextOffset}` : null,
+                },
+            });
+        }
+        mockedGet.mockResolvedValueOnce(changesResponse([
+            encryptedChange(runtime({ updatedAt: now + 1 }), {
+                seq: 10_001,
+                revision: 2,
+            }),
+            encryptedChange(turn({
+                updatedAt: now + 1,
+                status: 'completed',
+                completedAt: now + 1,
+            }), { seq: 10_002, revision: 2 }),
+        ], 10_002));
+        const decryptSpy = vi.spyOn(SyncV4Crypto.prototype, 'decryptEntity');
+
+        try {
+            await expect(client().waitForIdle(30_000)).resolves.toMatchObject({
+                highWatermark: 10_002,
+                runtime: expect.objectContaining({ execution: { type: 'idle' } }),
+            });
+
+            const snapshotRequests = mockedGet.mock.calls.filter(([url]) => (
+                String(url).includes('/snapshot')
+            ));
+            const changeRequests = mockedGet.mock.calls.filter(([url]) => (
+                String(url).includes('/changes')
+            ));
+            expect(snapshotRequests).toHaveLength(100);
+            expect(changeRequests).toHaveLength(1);
+            expect(decryptSpy).toHaveBeenCalledTimes(10_002);
+        } finally {
+            decryptSpy.mockRestore();
+        }
+    }, 30_000);
 
 });
 
