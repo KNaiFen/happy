@@ -43,7 +43,6 @@
 - [2026-08-06 安全、恢复与输入队列修复台账](./plans/2026-08-06-remediation-ledger.md)
 - [Codex 悬浮待发送条与队列管理计划](./plans/codex-composer-pending-message-dock.md)
 - [Codex 首页旧会话恢复与状态回归修复计划](./plans/codex-home-old-session-resume-state-regression.md)
-- [Voice 敏感日志收敛计划](./plans/voice-sensitive-logging-hardening.md)
 
 ## 审查记录
 
@@ -159,6 +158,7 @@
 - [Attachment Storage Diagnostics Design](./plans/archive/superpowers/specs/2026-06-10-attachment-storage-diagnostics-design.md)
 - [Codex Image Attachments Design](./plans/archive/superpowers/specs/2026-06-10-codex-image-attachments-design.md)
 - [Tauri Desktop 云端打包计划](./plans/archive/tauri-desktop-packaging-cancelled.md)
+- [Voice 敏感日志收敛计划](./plans/archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md)
 
 ## 通用历史归档
 

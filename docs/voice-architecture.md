@@ -50,7 +50,7 @@ ElevenLabs 账户，并负责该服务配置与数据处理。
 布尔决策、受限枚举和配额区间；不得记录 contextual update、prompt、conversation token、
 user/conversation/provider ID、SDK 原始数据或 Error。App 默认关闭 SDK payload 调试。
 实现与 canary 记录见
-[Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md)。
+[Voice 敏感日志收敛归档](plans/archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md)。
 
 ## 配额
 

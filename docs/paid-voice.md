@@ -76,4 +76,4 @@ Single paywall template, rules driven by custom variable `flow`:
 - Agent ID in public repo is harmless
 - App 与 Server 的语音诊断日志只输出白名单事件和安全字段；不得输出 token、context、
   标识符、原始 SDK 数据或错误对象。见
-  [Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md)。
+  [Voice 敏感日志收敛归档](plans/archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md)。

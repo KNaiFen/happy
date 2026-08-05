@@ -60,3 +60,4 @@
 - [Attachment Storage Diagnostics Design](./superpowers/specs/2026-06-10-attachment-storage-diagnostics-design.md)
 - [Codex Image Attachments Design](./superpowers/specs/2026-06-10-codex-image-attachments-design.md)
 - [Tauri Desktop 云端打包计划](./tauri-desktop-packaging-cancelled.md)
+- [Voice 敏感日志收敛计划](./voice-sensitive-logging-hardening-1.11.29-1.1.41.md)

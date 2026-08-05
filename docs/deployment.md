@@ -40,7 +40,7 @@ bearer token、加密 key 或签名材料。语音链路由 App 与 Server 各�
 收口：只允许固定事件名、布尔值、枚举和用量区间；conversation token、context、
 用户/会话/provider 标识符和原始 SDK/Error 对象一律不可进入生产日志。对应 canary
 覆盖成功和异常路径，实施记录见
-[Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md)。
+[Voice 敏感日志收敛归档](plans/archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md)。
 
 ## Kubernetes 与容器
 

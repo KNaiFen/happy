@@ -7,4 +7,3 @@
 - [2026-08-06 安全、恢复与输入队列修复台账](./2026-08-06-remediation-ledger.md)
 - [Codex 悬浮待发送条与队列管理计划](./codex-composer-pending-message-dock.md)
 - [Codex 首页旧会话恢复与状态回归修复计划](./codex-home-old-session-resume-state-regression.md)
-- [Voice 敏感日志收敛计划](./voice-sensitive-logging-hardening.md)
