@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync, execSync } from 'child_process';
+import { createRequire } from 'node:module';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import packageJson from '../package.json';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sourceEntrypoint = resolve(__dirname, 'index.ts');
-const tsxEntrypoint = resolve(__dirname, '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const tsxEntrypoint = createRequire(import.meta.url).resolve('tsx/cli');
 
 function runCli(...args: string[]): { stdout: string; stderr: string; exitCode: number } {
     try {

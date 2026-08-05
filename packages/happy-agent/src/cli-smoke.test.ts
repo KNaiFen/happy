@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
+import { createRequire } from 'node:module';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import tweetnacl from 'tweetnacl';
@@ -34,7 +35,7 @@ import { formatSessionTable, formatMessageHistory, formatJson } from './output';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sourceEntrypoint = resolve(__dirname, 'index.ts');
-const tsxEntrypoint = resolve(__dirname, '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const tsxEntrypoint = createRequire(import.meta.url).resolve('tsx/cli');
 
 // --- CLI runner ---
 
