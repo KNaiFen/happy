@@ -64,7 +64,7 @@ monitored and controlled away from the terminal.
 - 🔔 **Push notifications** - Get alerted when Codex needs permission or encounters errors
 - ⚡ **Switch devices instantly** - Take control from phone or desktop with one keypress
 - 🔐 **End-to-end encrypted** - Your code never leaves your devices unencrypted
-- 🛠️ **Open source** - Audit the code yourself. No telemetry, no tracking
+- 🛠️ **Open source** - Audit the code, self-host the Relay, and opt out of documented product analytics
 
 ## 📦 Project Components
 
@@ -80,6 +80,7 @@ We're engineers scattered across Bay Area coffee shops and hacker houses, consta
 ## 📚 Documentation & Contributing
 
 - **[Documentation Website](https://happy.engineering/docs/)** - Learn how to use Happy Coder effectively
+- **[Engineering Knowledge Base](docs/README.md)** - Current architecture, decisions, plans, operations, and historical records
 - **[Contributing Guide](docs/CONTRIBUTING.md)** - How to contribute, PR guidelines, and development setup
 - **[Edit docs at github.com/slopus/slopus.github.io](https://github.com/slopus/slopus.github.io)** - Help improve our documentation and guides
 

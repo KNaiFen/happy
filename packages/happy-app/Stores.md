@@ -1,85 +1,70 @@
-# App Store & Google Play Store Information
+# App Store 与 Google Play 商店信息
 
-## App Name
+## App 名称
+
 Happy Coder
 
-## Subtitle / Short Description
-Claude Code on the go
+## 副标题 / 短描述
 
-## Categories
-- **App Store Primary**: Developer Tools
-- **App Store Secondary**: Productivity
-- **Google Play**: Productivity > Developer Tools
+Codex on the go
 
-## Keywords
-claude, code, ai, programming, developer, tools, encrypted, secure, coding, assistant, mobile, sync, offline, notifications, privacy
+## 分类
 
-## App Description / Full Description
+- App Store 主分类：Developer Tools
+- App Store 次分类：Productivity
+- Google Play：Productivity / Developer Tools
 
-Happy Coder is the secure mobile companion for Claude Code that lets you continue your AI coding sessions anywhere (not affiliated with Anthropic). Built by developers who needed to check on Claude's progress during coffee breaks, this app brings the full Claude Code experience to your phone with military-grade encryption.
+## 关键词
 
-**Important**: This app requires Claude Code to be installed on your computer. Happy Coder is a companion app that connects to your existing Claude Code setup.
+codex, code, ai, programming, developer, encrypted, secure, coding, assistant,
+mobile, sync, offline, notifications, privacy
 
-**Key Features:**
+## 完整描述
 
-• Continue Claude Code sessions seamlessly between desktop and mobile
-• Push notifications for permission requests and task completion
-• Access conversation history even when your terminal is offline
-• End-to-end encryption - your code stays private
-• Real-time streaming of Claude's responses
-• Zero-knowledge architecture - we can't read your data
+Happy Coder 是 Codex 的开源移动与 Web 伴侣。它把电脑上运行的 Happy CLI 与配对设备连接，
+让开发者在离开终端时查看 Codex 进度、处理批准请求并继续会话。
 
-**How It Works:**
-1. Install the happy CLI on your computer
-2. Scan a QR code to securely pair your devices
-3. Use 'happy' instead of 'claude' to start encrypted sessions
-4. Switch between desktop and mobile instantly
+主要能力：
 
-Perfect for developers who:
-- Want to monitor long-running tasks on the go
-- Need secure access to proprietary code discussions
-- Value privacy and open-source transparency
-- Work from coffee shops, trains, or anywhere
+- 查看 Codex thread、turn、工具、reasoning summary 与完成状态；
+- 在电脑、手机和 Web 之间恢复同一个 Happy session；
+- 接收批准请求、错误与任务状态通知；
+- 消息和 Codex 实体在客户端加密后再同步；
+- 断线后通过持久 journal、changes 和 snapshot 恢复；
+- 可选 ElevenLabs 语音桥与 BYO ElevenLabs 配置；
+- 完全开源，可审计客户端、CLI 与 Relay。
 
-Happy Coder uses the same encryption as Signal (TweetNaCl) and is completely open source. Your encryption keys never leave your device, and all data is encrypted before transmission.
+使用方式：
 
-Built by Bay Area engineers who believe the best tools come from scratching your own itch. We needed a way to securely check on our AI coding assistant while away from our desks - so we built it and shared it with the community.
+1. 在电脑安装 `happy` CLI 和受支持版本的 Codex CLI；
+2. 用 App 扫描二维码完成设备配对；
+3. 运行 `happy` 或 `happy codex` 启动会话；
+4. 从移动端或 Web 查看并控制同一 Codex session。
 
-Your code. Your privacy. Your Claude Code companion.
+Happy 是独立的第三方开源项目，不隶属于或由 OpenAI 背书。使用 Codex 和其他可选第三方
+服务时，用户仍需遵守相应服务条款。
 
 ## Promotional Text
-**App Store (170 chars)**: Securely continue your Claude Code sessions on mobile. End-to-end encrypted, open source, with push notifications for completed tasks. Your AI coding assistant, anywhere.
 
-**Google Play (80 chars)**: Secure mobile Claude Code companion. Encrypted, open source, with notifications.
+App Store（170 chars）：Use Codex from anywhere with encrypted sync, approval
+notifications, durable recovery, and open-source clients for mobile and web.
 
-## What's New (for updates)
-- Initial release
-- End-to-end encryption for all messages
-- Push notifications for permissions and task completion
-- Offline access to conversation history
-- Real-time sync with desktop sessions
+Google Play（80 chars）：Encrypted open-source mobile companion for Codex.
+
+## What's New
+
+商店提交前以 `sources/changelog/changelog.json` 的对应版本为内容来源，人工核对并填写
+商店版本说明；当前 release script 不会自动生成这段文案。不要复用 “Initial release” 占位文本。
 
 ## URLs
 
-### Privacy Policy
-https://github.com/slopus/happy/blob/main/PRIVACY.md
+- Privacy Policy: https://github.com/slopus/happy/blob/main/PRIVACY.md
+- Support: https://github.com/slopus/happy/issues
+- Website: https://github.com/slopus/happy
 
-### Support / Contact
-https://github.com/slopus/happy/issues
+## 商店声明
 
-### Website / Marketing
-https://github.com/slopus/happy
-
-## Additional Google Play Requirements
-
-### Content Rating
-Everyone
-
-### Target Audience
-Developers and software engineers
-
-### Contains Ads
-No
-
-### In-App Purchases
-No
+- Content Rating：按当次商店问卷确定
+- Target Audience：开发者与软件工程师
+- Contains Ads：No
+- In-App Purchases：Yes（提供地区可选的 Happy Pro/voice 订阅）

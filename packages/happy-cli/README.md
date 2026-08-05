@@ -113,14 +113,18 @@ happy sandbox status
 happy sandbox disable
 ```
 
-### Building from source
+### Source-level development
 
 ```bash
 git clone https://github.com/slopus/happy
 cd happy
 pnpm install --frozen-lockfile
-pnpm --filter happy cli --help
+pnpm --filter happy typecheck
+pnpm --filter happy exec tsx src/index.ts --help
 ```
+
+Release archives are built and installed in GitHub Actions. Routine local
+development does not build or globally link the CLI package.
 
 ## Requirements
 

@@ -1,3 +1,6 @@
+> **历史维护文件：** 本文件保留 package 级历史记录。App 内和发行时使用的当前版本说明
+> 以 `sources/changelog/changelog.json` 为准；新增发行说明不要只更新本文件。
+
 # August 1 — Readable settings descriptions
 
 - Long descriptions in Settings now wrap to show their full text instead of ending in an ellipsis.

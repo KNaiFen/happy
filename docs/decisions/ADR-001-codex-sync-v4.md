@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; provider-scope portions superseded by ADR-003
+Accepted and deployed; provider-scope portions superseded by ADR-003
 
 ## Date
 
@@ -43,13 +43,12 @@ dual-write v3 and v4 canonical state. The original decision to retain another
 provider on v3 is historical and is superseded by ADR-003.
 
 The four distributables are upgraded as one coordinated compatibility set.
-The Server routes may be deployed before the clients, but Codex v4 is enabled
-only after the matching App and CLI are available and no old Codex turn is
-running. Server route registration is opt-in through
-`HAPPY_CODEX_SYNC_V4_ENABLED=true` and remains off by default. The disabled
-legacy Codex adapter is retained for one patch cycle as an emergency code
-rollback. Database changes are additive and rollback never deletes Sync v4
-data.
+The original rollout used a temporary feature flag and rollback adapter. That
+cutover is complete: v4 routes are registered unconditionally,
+`GET /v4/capabilities` reports `enabled: true`, and writable Codex sessions
+must explicitly carry `flavor=codex` and `codexSyncVersion=4`. Empty, unknown,
+and legacy provider metadata is unsupported. Database changes remain additive,
+and rollback never deletes Sync v4 data.
 
 ### Outer synchronization protocol
 
@@ -57,8 +56,8 @@ The Server stores opaque, encrypted entity mutations and assigns a per-session
 `syncV4Seq`. It exposes three authenticated operations:
 
 - `POST /v4/sessions/:sessionId/mutations` returns ordered mutation ACKs only;
-- `GET /v4/sessions/:sessionId/changes?after_seq=N` advances only the caller's
-  receive cursor; and
+- `GET /v4/sessions/:sessionId/changes?after_seq=N` returns changes after the
+  caller-provided cursor; the Server neither owns nor advances that cursor; and
 - `GET /v4/sessions/:sessionId/snapshot` rebuilds the latest entity set at a
   declared high watermark.
 
@@ -246,8 +245,8 @@ provider IDs, prompts, tool arguments, and outputs to the relay.
 ### 2026-07-28 remediation addendum
 
 The initial implementation review found recovery, ordering, scale, and
-platform gaps that must be closed before the feature flag is enabled. The
-tracked execution baseline was completed on 2026-08-01 and is archived at
+platform gaps that were closed before unconditional cutover. The tracked
+execution baseline was completed on 2026-08-01 and is archived at
 `docs/plans/archive/codex-sync-v4-remediation-r12.md`.
 
 Three product boundaries are now explicit:

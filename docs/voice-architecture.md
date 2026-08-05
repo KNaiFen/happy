@@ -1,171 +1,74 @@
 # Voice Architecture
 
-How the ElevenLabs voice assistant integrates with the Happy app, routes messages to sessions, and manages context delivery.
+> **当前文档（2026-08-05）：** Happy App 使用 ElevenLabs conversation 作为可选语音桥；
+> 语音工具通过显式 `sessionId`/`requestId` 路由，不依赖全局焦点猜测目标。
 
-## Components
+## 组件
 
-```text
-SessionView.tsx            UI — mic button, triggers voice start/stop
-RealtimeSession.ts         Lifecycle — start/stop, token fetch, session routing state
-RealtimeVoiceSession.tsx   Native ElevenLabs bridge (useConversation hook)
-RealtimeVoiceSession.web.tsx  Web ElevenLabs bridge (same interface)
-voiceHooks.ts              Context delivery — formats and routes app events to voice agent
-contextFormatters.ts       Text formatters for session context, messages, permissions
-realtimeClientTools.ts     Tool implementations the voice agent can invoke
-voiceConfig.ts             Feature flags and constants
-storage.ts                 Global state (realtimeStatus, realtimeMode)
-types.ts                   Shared type definitions
-```
+- App `sources/realtime/RealtimeSession.ts`：语音会话生命周期、当前焦点和上下文更新；
+- App `sources/realtime/realtimeClientTools.ts`：客户端工具；
+- App `sources/realtime/voiceSystemPrompt.ts`：系统提示与工具使用边界；
+- Server `sources/app/api/routes/voiceRoutes.ts`：conversation token/usage 与配额；
+- RevenueCat：默认 Happy 语音服务的订阅资格；
+- ElevenLabs：实时语音传输与 agent runtime。
 
-## Session Routing
+## 启动流程
 
-A single module-level variable `currentSessionId` in `RealtimeSession.ts` controls which session the voice agent's tool calls route to. It is the single source of truth for both:
+1. 用户从一个 Happy session 启动语音。
+2. App 生成经过裁剪的初始会话上下文和计数器。
+3. App 请求 `POST /v1/voice/conversations`。
+4. Server 核验用户、30 天用量、conversation 数和订阅资格，再返回 conversation token。
+5. App 启动 ElevenLabs session，并通过 contextual update 批量发送后续状态变化。
+6. 结束时 App 清理 conversation ID、开始时间和焦点状态。
 
-- **Routing**: `messageClaudeCode` and `processPermissionRequest` in `realtimeClientTools.ts` read it via `getCurrentRealtimeSessionId()`.
-- **Focus dedup**: `voiceHooks.onSessionFocus()` compares against it to avoid re-injecting context for the already-focused session.
+`currentSessionId` 只表示语音界面的当前焦点和上下文来源。它不是消息工具的授权或路由
+依据；切换页面不会把缺少目标 ID 的工具调用自动改发到另一个 session。
 
-When the user navigates to a different session while voice is active, `onSessionFocus` updates `currentSessionId` so subsequent voice commands route to the newly viewed session.
+## 客户端工具
 
-```text
-User taps mic on Session A
-  │
-  v
-startRealtimeSession("A")
-  └──> currentSessionId = "A"
+### `sendMessageToSession`
 
-User navigates to Session B
-  │
-  v
-sync.onSessionVisible("B")
-  └──> voiceHooks.onSessionFocus("B")
-         └──> setCurrentRealtimeSessionId("B")
+参数为 `{ sessionId, message }`。工具校验两个字段后直接调用
+`sync.sendMessage(sessionId, message, { source: 'voice' })`。旧名称
+`messageClaudeCode` 已移除。
 
-Voice agent calls messageClaudeCode
-  └──> getCurrentRealtimeSessionId() → "B"
-```
+### `processPermissionRequest`
 
-## Voice Start
+参数为 `{ requestId, decision }`，其中 decision 只能为 `allow` 或 `deny`。App 在本地
+session state 中查找实际拥有该 request 的 session，再调用对应 allow/deny 操作。
+找不到 request 时显式失败，不回退到当前焦点。
 
-When the voice session starts, `onVoiceStarted(sessionId)` builds an initial prompt containing:
+## 上下文与隐私
 
-1. **Session directory** — one-liner per active session (id + summary), so the agent knows all available targets.
-2. **Current session context** — full dump via `injectSessionContext(sessionId)`: session metadata, path, summary, and message history.
+初始 context 可包含当前 session ID、project path、summary、最近最多 50 条消息和运行计数；
+后续 contextual update 可包含新消息、焦点/ready 状态、pending permission、tool name 与
+arguments。初始 context 也会进入 voice system prompt。这些数据会发送给配置的 ElevenLabs
+服务，因此不属于 Happy Relay 的端到端密文边界。用户使用 BYO ElevenLabs 时直接使用自己的
+ElevenLabs 账户，并负责该服务配置与数据处理。
 
-```text
-onVoiceStarted("A")
-  │
-  ├──> formatSessionDirectory()
-  │      → "Available sessions:\n- abc: "Refactor auth"\n- def: "Fix dark mode""
-  │
-  └──> injectSessionContext("A")
-         → "# Session ID: abc\n# Project path: ...\n## History\n..."
-```
+当前实现仍有已核验的日志缺口：App 的调试路径可能记录完整 contextual update 和包含
+`conversationToken` 的响应，Server 也会记录 user/conversation ID。目标安全边界要求生产
+日志只保留事件类型、计数和耗时；整改见
+[Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md)。
 
-## Context Delivery
+## 配额
 
-App events are delivered to the voice agent through two channels with different semantics:
+Server 以滚动 30 天窗口统计 ElevenLabs conversation：
 
-### sendContext() — silent background injection
+- 免费额度：`1,200` 秒（20 分钟）；
+- 已订阅用户默认硬上限：`18,000` 秒（5 小时）；实现中可有明确的运营例外；
+- 最多跟踪 `100` 个 conversation。
 
-Calls `voice.sendContextualUpdate()`. The agent receives the information but does **not** respond. Always sent immediately, never queued.
+达到免费额度且没有有效订阅时拒绝新 conversation；即使订阅有效也受其适用硬上限约束。
+具体错误结构与例外只以 `voiceRoutes.ts` 和 Wire schema 为准。
 
-Used for: new messages, session focus changes, session online/offline, full session dumps.
+## 失败与恢复
 
-### sendPrompt() — triggers agent response
+- token/订阅/配额失败：不启动 conversation，并向用户显示可恢复错误；
+- ElevenLabs 启动失败：重置 App voice state，不留下“已连接”状态；
+- 工具参数错误或目标不存在：返回显式错误，不猜测 session；
+- 页面切换：更新焦点和 context，但已经携带明确 ID 的调用仍发往指定目标；
+- 网络中断：由 ElevenLabs/App 生命周期结束会话；不得把它解释为 Codex turn 完成。
 
-Calls `voice.sendTextMessage()`. Acts as a user turn — the agent will respond. **Queued while anyone is speaking**, flushed as a single batch when mode transitions to `idle`.
-
-Used for: permission requests, ready events (agent finished working).
-
-### Batching
-
-When the user or agent is speaking, prompts queue up in `pendingPrompts[]`. A zustand subscription on `realtimeMode` triggers `flushPendingPrompts()` when mode returns to `idle`, joining all queued prompts into a single `sendTextMessage` call.
-
-```text
-realtimeMode = 'agent-speaking'
-  │
-  ├── onReady("abc")        → sendPrompt() → queued
-  ├── onPermission("abc")   → sendPrompt() → queued
-  ├── onMessages("abc")     → sendContext() → sent immediately
-  │
-  v
-realtimeMode → 'idle'
-  │
-  v
-flushPendingPrompts()
-  └──> voice.sendTextMessage(joined prompts)
-```
-
-### Session Context Injection
-
-`injectSessionContext(sessionId)` is the shared code path for injecting full session context. It is used by both `onVoiceStarted` (to build the initial prompt string) and `onSessionFocus` (to send a contextual update). It tracks which sessions have already been shown via `shownSessions` to avoid redundant dumps.
-
-## Realtime Mode
-
-`realtimeMode` in storage tracks who is currently speaking:
-
-| Mode | Meaning | Source |
-|------|---------|--------|
-| `idle` | Nobody is talking | Default / after speech ends |
-| `agent-speaking` | ElevenLabs agent is producing audio | `onModeChange({ mode: 'speaking' })` |
-| `user-speaking` | User mic VAD is above threshold | `onVadScore({ vadScore })` |
-
-Priority: `agent-speaking` > `user-speaking` > `idle`. If both fire simultaneously, agent wins (user speech during agent output is likely crosstalk).
-
-### VAD Detection
-
-ElevenLabs provides `onVadScore({ vadScore: number })` — a continuous 0-1 signal for user microphone activity. We derive a binary state with debounce:
-
-- `vadScore > VAD_THRESHOLD` (0.5) → `user-speaking`, reset silence timer
-- `vadScore <= VAD_THRESHOLD` → start silence timer (`VAD_SILENCE_MS` = 300ms), transition to `idle` on timeout
-
-Agent mode changes (`onModeChange`) take priority over VAD. When `onModeChange` reports `'speaking'`, we set `agent-speaking` regardless of VAD. When it reports `'listening'`, we defer to VAD state.
-
-```text
-ElevenLabs SDK
-  │
-  ├── onModeChange({ mode: 'speaking' })
-  │     └──> realtimeMode = 'agent-speaking'
-  │
-  ├── onModeChange({ mode: 'listening' })
-  │     └──> realtimeMode = (VAD active ? 'user-speaking' : 'idle')
-  │
-  └── onVadScore({ vadScore })
-        └──> if agent not speaking:
-               vadScore > 0.5 → 'user-speaking'
-               vadScore ≤ 0.5 → debounce → 'idle'
-```
-
-## Voice Agent Tools
-
-The voice agent can invoke these client tools (defined in `realtimeClientTools.ts`):
-
-- **messageClaudeCode** — sends a text message to the currently focused session via `sync.sendMessage(sessionId, message)`.
-- **processPermissionRequest** — allows or denies a pending permission request on the current session.
-
-Both read the target session from `getCurrentRealtimeSessionId()`.
-
-## Lifecycle
-
-```text
-App mounts RealtimeVoiceSession component
-  └──> useConversation() hook initializes
-  └──> registerVoiceSession(impl) — makes the instance available globally
-
-User taps mic
-  └──> voiceHooks.onVoiceStarted(sessionId) — builds initial prompt
-  └──> startRealtimeSession(sessionId, prompt)
-         ├──> fetchVoiceToken() — server-side gating (see plans/elevenlabs-voice-usage-gating.md)
-         ├──> currentSessionId = sessionId
-         └──> voiceSession.startSession({ token, initialContext, ... })
-
-User taps mic again (or navigates away)
-  └──> stopRealtimeSession()
-         ├──> voiceSession.endSession()
-         ├──> currentSessionId = null
-         └──> voiceHooks.onVoiceStopped() — clears state
-```
-
-## Related
-
-- `docs/plans/elevenlabs-voice-usage-gating.md` — usage gating and paywall flow for voice sessions.
+原始配额方案保存在
+[ElevenLabs Voice Usage Gating 归档](plans/archive/elevenlabs-voice-usage-gating.md)。

@@ -19,7 +19,7 @@ The strongest documentation in this repository is about runtime behavior, not op
 - [`../permission-resolution.md`](../permission-resolution.md) explains how permission mode is derived from app state, CLI flags, and sandbox policy.
 - [`../session-protocol.md`](../session-protocol.md) defines the unified event stream for user, agent, tool, turn, and subagent events.
 - [`../decisions/ADR-001-codex-sync-v4.md`](../decisions/ADR-001-codex-sync-v4.md) defines the recoverable Codex entity and lifecycle model.
-- [`agent-teams-claude-code.md`](./agent-teams-claude-code.md) captures research on Claude Code agent teams and on-disk subagent state.
+- [`agent-teams-claude-code.md`](./archive/agent-teams-claude-code.md) captures historical research on Claude Code agent teams and on-disk subagent state.
 
 Repository instructions now use the root Codex-native `AGENTS.md`, while reusable
 workflows live under `.agents/skills/`. These files are machine-local by project

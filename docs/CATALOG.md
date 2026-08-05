@@ -1,0 +1,180 @@
+# 文档总目录
+
+> 此文件由 `node scripts/docs/knowledge-base.mjs --write` 生成。不要手工编辑。
+
+本目录枚举 Git 索引中的 Markdown/MDX 文档（已跟踪或已暂存；不含其他生成索引）。
+权威性、生命周期和维护规则见 [知识库说明](knowledge-base.md)。
+
+## 当前工程文档
+
+- [Third-Party SaaS](./3dparty.md)
+- [Contributing to Happy](./CONTRIBUTING.md)
+- [Happy 工程知识库](./README.md)
+- [Agent Testing](./agent-testing.md)
+- [API](./api.md)
+- [Happy Server 架构](./backend-architecture.md)
+- [Happy CLI 架构](./cli-architecture.md)
+- [Happy Server 部署](./deployment.md)
+- [Dev Environments](./dev-environments.md)
+- [Encryption and Data Encoding](./encryption.md)
+- [happy-wire](./happy-wire.md)
+- [项目知识库](./knowledge-base.md)
+- [Happy Layout — Core Spec](./layout-core.md)
+- [Multi-process happy-server](./multi-process.md)
+- [Paid Voice — Rate Limiting & Auth](./paid-voice.md)
+- [Codex Permission Resolution (stable-v2)](./permission-resolution.md)
+- [Product Analytics](./product-analytics.md)
+- [Protocol](./protocol.md)
+- [Realtime Sync and RPC](./realtime-sync-and-rpc.md)
+- [项目路线图](./roadmap.md)
+- [Session Protocol](./session-protocol.md)
+- [User Identity Across Systems](./user-identity.md)
+- [Voice Architecture](./voice-architecture.md)
+
+## 决策记录（ADR）
+
+- [ADR-001: Use entity-based Sync v4 for Codex](./decisions/ADR-001-codex-sync-v4.md)
+- [ADR-002: Separate Codex lifecycle, transport state, and timeline order](./decisions/ADR-002-codex-session-lifecycle-and-timeline-order.md)
+- [ADR-003: Make Codex the only active default provider](./decisions/ADR-003-codex-only-provider.md)
+- [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
+
+## 活动计划
+
+- [Debian 13 amd64 Happy Relay 现场升级计划](./plans/debian13-amd64-relay-bundle.md)
+- [Tauri Desktop 云端打包计划](./plans/tauri-desktop-packaging.md)
+- [Voice 敏感日志收敛计划](./plans/voice-sensitive-logging-hardening.md)
+
+## 审查记录
+
+- [审查记录](./reviews/README.md)
+
+## 研究
+
+- [研究资料](./research/README.md)
+- [Unsupervised Development Guidance and Skills Ecosystem](./research/unsupervised-development-guidelines-and-skills.md)
+
+## 竞品研究
+
+- [竞品研究](./competition/README.md)
+- [Claude Code](./competition/claude/README.md)
+- [Claude Code Protocol and Control Surface](./competition/claude/message-protocol.md)
+- [Claude Code Sources](./competition/claude/sources.md)
+- [Codex](./competition/codex/README.md)
+- [Codex App-Server Protocol](./competition/codex/message-protocol.md)
+- [Codex Sources](./competition/codex/sources.md)
+- [Competitor Protocol Matrix](./competition/comparison-matrix.md)
+- [OpenCode](./competition/opencode/README.md)
+- [OpenCode Message Protocol](./competition/opencode/message-protocol.md)
+- [OpenCode Runtime Tracing](./competition/opencode/runtime-tracing.md)
+- [OpenCode Sources](./competition/opencode/sources.md)
+- [Superset](./competition/superset/README.md)
+- [Electric SQL — Sync Engine Evaluation](./competition/superset/electric-sql.md)
+- [Superset Sources](./competition/superset/sources.md)
+- [Superset Sync Architecture](./competition/superset/sync-architecture.md)
+- [Superset Terminal State Sync](./competition/superset/terminal-sync.md)
+
+## 包级文档
+
+- [Codex Design System Notes](../packages/codium/design-system.md)
+- [Happy Agent](../packages/happy-agent/README.md)
+- [August 1 — Readable settings descriptions](../packages/happy-app/CHANGELOG.md)
+- [App Store 与 Google Play 商店信息](../packages/happy-app/Stores.md)
+- [Terms of Use](../packages/happy-app/TERMS.md)
+- [Happy Coder Content Creator Brief](../packages/happy-app/docs/marketing/README-creators.md)
+- [Agent Input 自动补全与文本替换](../packages/happy-app/sources/docs/autocomplete-text-manipulation.md)
+- [Happy i18n (Object-Based Implementation)](../packages/happy-app/sources/text/README.md)
+- [Happy](../packages/happy-cli/README.md)
+- [Codex Experiments](../packages/happy-cli/experiments/NOTES.md)
+- [Codex app-server protocol](../packages/happy-cli/src/codex/protocol/README.md)
+- [Happy Server](../packages/happy-server/README.md)
+- [Happy Relay Server for Debian 13 amd64](../packages/happy-server/deploy/debian13-amd64/README.md)
+- [Multi-pod Redis adapter — postmortem](../packages/happy-server/deploy/integration-tests/POSTMORTEM.md)
+- [@slopus/happy-wire](../packages/happy-wire/README.md)
+
+## 仓库文档
+
+- [Privacy Policy for Happy Coder](../PRIVACY.md)
+- [Product](../PRODUCT.md)
+- [Mobile and Web Client for Codex](../README.md)
+- [Happy Codex Lab Rat Instructions](../environments/lab-rat-todo-project/AGENTS.template.md)
+- [Lab Rat Todo Project](../environments/lab-rat-todo-project/README.md)
+- [Agent Exercise Flow](../environments/lab-rat-todo-project/exercise-flow.md)
+
+## 计划归档
+
+- [Agent SDK Upgrade + Plan Mode Fix + Integration Tests](./plans/archive/agent-sdk-upgrade-plan-mode-fix.md)
+- [Agent Testing Layers](./plans/archive/agent-testing-layers.md)
+- [CLI V3 Messages API Migration (happy-cli)](./plans/archive/cli-v3-messages-api.md)
+- [Codex Agent 指令与 Claude 遗留清理计划](./plans/archive/codex-agent-instructions-migration.md)
+- [Codex App 语义时间线去重与 Resume 焦点修复](./plans/archive/codex-app-semantic-timeline-dedup.md)
+- [Codex: app-server integration](./plans/archive/codex-app-server-migration.md)
+- [Happy CLI 独立版本命令修复计划](./plans/archive/codex-cli-standalone-version-fix.md)
+- [Codex Gateway 真实配置传输修复计划](./plans/archive/codex-gateway-real-config-transport.md)
+- [macOS Codex Gateway Socket Path 修复计划](./plans/archive/codex-macos-gateway-socket-path.md)
+- [Codex Model-Aware Reasoning Effort](./plans/archive/codex-model-aware-reasoning-effort.md)
+- [Codex 原生 TUI Gateway 实施计划](./plans/archive/codex-native-tui-gateway.md)
+- [Codex 官方源码云端 E2E 计划](./plans/archive/codex-official-source-cloud-e2e.md)
+- [Codex 生产执行链审计与修复台账](./plans/archive/codex-production-execution-audit-remediation.md)
+- [Codex 过往会话选择与 Resume（已完成）](./plans/archive/codex-resume-thread-picker.md)
+- [Codex 会话生命周期、时间线与活动显示修复](./plans/archive/codex-session-lifecycle-ordering-activity.md)
+- [Codex Slash-Command Routing](./plans/archive/codex-slash-command-routing.md)
+- [Codex Sync v4 现场复验修复 R10](./plans/archive/codex-sync-v4-field-reacceptance-r10.md)
+- [Codex Sync v4 现场复验修复 R11](./plans/archive/codex-sync-v4-field-reacceptance-r11.md)
+- [Codex Sync v4 R1-R7 整改与发布归档](./plans/archive/codex-sync-v4-remediation-r1-r7.md)
+- [Codex Sync v4 现场修复 R12](./plans/archive/codex-sync-v4-remediation-r12.md)
+- [Codex Sync v4 R8 分支 CI 与 main 同步归档](./plans/archive/codex-sync-v4-remediation-r8-branch-ci.md)
+- [Codex Sync v4 R8 云端发布归档](./plans/archive/codex-sync-v4-remediation-r8-cloud-release.md)
+- [Codex Sync v4 R8 现场升级与验收记录](./plans/archive/codex-sync-v4-remediation-r8-field-acceptance.md)
+- [Codex Sync v4 R8 本地设备接入修复归档](./plans/archive/codex-sync-v4-remediation-r8-local.md)
+- [Codex Sync v4 R9 现场故障修复计划（已归档）](./plans/archive/codex-sync-v4-remediation-r9-device-lifecycle.md)
+- [Codex V4 运行生命周期审计](./plans/archive/codex-v4-runtime-lifecycle-audit.md)
+- [Debian 13 amd64 Happy Relay 1.1.15-1.1.22 归档](./plans/archive/debian13-amd64-relay-bundle-1.1.15-1.1.22.md)
+- [Debian 13 amd64 Happy Relay 1.1.23 云端门禁归档](./plans/archive/debian13-amd64-relay-bundle-1.1.23-ci.md)
+- [Debian 13 amd64 Happy Relay 1.1.23 本地修复归档](./plans/archive/debian13-amd64-relay-bundle-1.1.23-local.md)
+- [Debian 13 amd64 Happy Relay 1.1.24 发布归档](./plans/archive/debian13-amd64-relay-bundle-1.1.24-release.md)
+- [ElevenLabs Voice Usage Gating](./plans/archive/elevenlabs-voice-usage-gating.md)
+- [Experimental Chat File Links](./plans/archive/experimental-chat-file-links.md)
+- [Expo SDK 55 Upgrade](./plans/archive/expo-sdk-55-upgrade.md)
+- [Generic ACP Runner](./plans/archive/generic-acp-runner.md)
+- [happy-agent CLI Tool](./plans/archive/happy-agent.md)
+- [happy server — bundled self-host mode](./plans/archive/happy-serve-self-host.md)
+- [Minimal Fix Plan for Happy-CLI Bugs with TDD](./plans/archive/legacy/bug-fix-plan-2025-01-15-athundt.md)
+- [Metadata-Driven Model and Mode Selection on Client](./plans/archive/metadata-driven-model-mode-selection.md)
+- [pnpm Migration [Draft]](./plans/archive/pnpm-migration.md)
+- [Portable Single-Binary Distribution](./plans/archive/portable-binary.md)
+- [Provider Envelope Redesign](./plans/archive/provider-envelope-redesign.md)
+- [Reliable HTTP Messages API (v3)](./plans/archive/reliable-http-messages-api.md)
+- [移除 Claude 兼容并切换 Codex 默认计划](./plans/archive/remove-claude-codex-default.md)
+- [Plan: Remove Profiles & Wizard, Move CLI Detection to Daemon](./plans/archive/remove-profiles-wizard-cli-detection.md)
+- [Add Anthropic Sandbox Runtime to CLI](./plans/archive/sandbox-runtime.md)
+- [Session Protocol Implementation](./plans/archive/session-protocol-impl.md)
+- [Session Protocol Unification v2 — Draft](./plans/archive/session-protocol-unification-v2-draft.md)
+- [Session Protocol v2 Design](./plans/archive/session-protocol-v2.md)
+- [New Session Right Sidebar Implementation Plan](./plans/archive/superpowers/plans/2026-05-20-new-session-right-sidebar.md)
+- [Attachment Storage Diagnostics Implementation Plan](./plans/archive/superpowers/plans/2026-06-10-attachment-storage-diagnostics.md)
+- [Codex Image Attachments Implementation Plan](./plans/archive/superpowers/plans/2026-06-10-codex-image-attachments.md)
+- [New Session Right Sidebar Design](./plans/archive/superpowers/specs/2026-05-20-new-session-right-sidebar-design.md)
+- [Attachment Storage Diagnostics Design](./plans/archive/superpowers/specs/2026-06-10-attachment-storage-diagnostics-design.md)
+- [Codex Image Attachments Design](./plans/archive/superpowers/specs/2026-06-10-codex-image-attachments-design.md)
+
+## 通用历史归档
+
+- [通用历史归档](./archive/README.md)
+- [Engineer Agent](./archive/experimental/agents-engineer.md)
+- [Manager Agent](./archive/experimental/agents-manager.md)
+- [Agents (Experimental)](./archive/experimental/agents.md)
+- [Manual Product Validation](./archive/experimental/product.md)
+- [Roadmap](./archive/experimental/roadmap.md)
+- [Happy CLI 旧路线图残片](./archive/legacy/happy-cli-roadmap.md)
+- [Happy Roadmap](./archive/roadmaps/roadmap-legacy.md)
+
+## 审查归档
+
+- [Happy Codex Sync v4 R3-4 差异审查](./reviews/archive/HAPPY_CODEX_SYNC_V4_R3_4_DIFFERENTIAL_REVIEW_2026-07-28.md)
+- [审查归档](./reviews/archive/README.md)
+
+## 研究归档
+
+- [研究归档](./research/archive/README.md)
+- [Claude Code Agent Teams — Internal Architecture](./research/archive/agent-teams-claude-code.md)
+- [Happy User Deep Dive — Full Analysis](./research/archive/current-community-2026-04-12.md)

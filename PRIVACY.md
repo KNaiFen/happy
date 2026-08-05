@@ -1,6 +1,6 @@
 # Privacy Policy for Happy Coder
 
-**Last Updated: July 23, 2026**
+**Last Updated: August 5, 2026**
 
 ## Overview
 
@@ -20,10 +20,10 @@ Happy Coder is committed to protecting your privacy. This policy explains how we
 - **Push Notification Tokens**: Device tokens for sending push notifications via Expo's push notification service
 
 ### Analytics (PostHog)
-- **Anonymous Events**: We collect basic app usage events through PostHog to improve the app experience
-- **Privacy by Design**: All analytics events use an anonymized ID derived from a secret key - we cannot match this back to any user or account
-- **No Content Tracking**: We only track basic app usage events, never any message content, code, or personal information
-- **Opt-Out Available**: You can disable analytics collection at any time in the app settings
+- **Pseudonymous Events**: We collect basic app usage events through PostHog to improve the app experience
+- **Stable Identifier**: Analytics uses a stable pseudonymous ID. It can correlate events from the same installation/account context but is separate from plaintext message content
+- **Event Metadata**: Events can include feature state and opaque identifiers such as Happy session IDs or ElevenLabs conversation IDs; they do not intentionally include message or code content
+- **Default and Opt-Out**: Analytics is enabled by default. You can disable it at any time in the app settings
 
 ### Subscription Management (Revenue Cat)
 - **Account ID**: Revenue Cat uses your account ID to manage subscriptions and enable premium features
@@ -38,6 +38,7 @@ When you turn on voice, your device connects to ElevenLabs to provide the voice 
 - **Encryption Boundary**: Voice audio and context sent to the voice agent are not covered by Happy's end-to-end encryption or zero-knowledge architecture. Happy's server does not proxy this audio or context. For Happy-managed voice, it authenticates your Happy account, checks subscription and usage limits, and obtains a voice-session token. It processes account, agent, conversation, and voice-usage metadata for that purpose.
 - **Pseudonymous Voice Identifier**: For Happy-managed voice, Happy gives ElevenLabs a stable pseudonymous identifier derived from your Happy account ID using HMAC-SHA-256. This lets ElevenLabs apply per-user voice limits without using your raw Happy account ID as the voice user ID. The identifier can still link your voice sessions to one another.
 - **Direct Connection**: If you configure your own ElevenLabs agent and choose to bypass Happy's token flow, Happy bypasses its managed token and usage-limit flow. The selected ElevenLabs agent still receives the voice audio and context described above.
+- **Diagnostic Logs**: The current voice implementation can emit voice context, provider identifiers, and token-response data to App or Server diagnostic logs. This is a known security gap tracked in `docs/plans/voice-sensitive-logging-hardening.md`; do not treat those logs as part of the encrypted synchronization boundary.
 
 ## What We Don't Collect
 - Your actual code or conversation content sent through Happy's encrypted synchronization service (we can't decrypt it). This does not include voice audio or context you choose to send directly to ElevenLabs during an active voice session.
@@ -67,7 +68,7 @@ Push notifications are sent directly from your devices to each other, not from o
 
 ## Data Security
 
-- **End-to-End Encryption**: Using TweetNaCl (same as Signal) for sensitive data transmitted through Happy's encrypted synchronization service
+- **End-to-End Encryption**: Happy uses versioned authenticated client-side encryption schemes for synchronization data; current and legacy records may use different algorithms
 - **Zero-Knowledge**: We cannot decrypt encrypted synchronization data even if compelled
 - **Secure Key Exchange**: Encryption keys are transmitted between your devices only in encrypted form that we cannot access
 - **Open Source**: Our encryption implementation is publicly auditable
@@ -88,7 +89,7 @@ You have the right to:
 - Delete all your data through the app
 - Export your encrypted data
 - Audit our open-source code
-- Use the app without providing any personal information
+- Disable product analytics in app settings
 
 ## Data Sharing
 
@@ -112,10 +113,9 @@ For privacy concerns or questions:
 
 ## Compliance
 
-Happy Coder is designed with privacy by default and complies with:
-- GDPR (General Data Protection Regulation)
-- CCPA (California Consumer Privacy Act)
-- Privacy by Design principles
+Happy Coder is designed around data minimization, client-side encryption, user
+deletion, and analytics opt-out controls. This policy does not claim a legal
+certification; rights and obligations can vary by jurisdiction.
 
 ---
 

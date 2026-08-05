@@ -6,17 +6,16 @@ Unlike `happy-cli` which both runs and controls Codex, `happy-agent` only contro
 
 ## Installation
 
-From the monorepo during development:
+From the monorepo, use source-level checks and the TypeScript entrypoint:
 
 ```bash
-yarn workspace happy-agent build
+pnpm --filter happy-agent typecheck
+pnpm --filter happy-agent exec tsx src/index.ts --help
 ```
 
-Or link globally:
-
-```bash
-cd packages/happy-agent && npm link
-```
+Installable archives are built and smoke-tested by
+`.github/workflows/build-happy-agent-release.yml`; routine local development
+does not build or link a release package.
 
 ## Authentication
 

@@ -27,10 +27,10 @@ Happy Account CUID (e.g. cm4x7k2...)
 │                 Linked via OAuth in githubConnect.ts
 │                 Also stores encrypted access token in GithubUser.token
 │
-└─► AI Vendors ── ServiceAccountToken { accountId: CUID, vendor, token }
-   (OpenAI,       User's own API keys, encrypted at rest.
-    Anthropic,    connectRoutes.ts: POST /v1/connect/:vendor/register
-    Gemini)
+└─► Retained service tokens ── ServiceAccountToken { accountId: CUID, vendor, token }
+   (OpenAI/Gemini)             Optional integration credentials, encrypted at rest.
+                               They do not select a writable session provider.
+                               connectRoutes.ts: POST /v1/connect/:vendor/register
 ```
 
 ## Auth Flow
@@ -59,7 +59,7 @@ Server extracts CUID from JWT via app.authenticate decorator
 | ElevenLabs | HMAC-derived | Privacy — raw Happy ID never sent to ElevenLabs |
 | RevenueCat | Pass-through | Direct correlation needed for subscription API calls |
 | GitHub | Stored foreign key | Enables profile linking and account recovery via OAuth |
-| AI vendors | Stored encrypted | User-owned keys, need to be retrievable |
+| Retained service tokens | Stored encrypted | Optional OpenAI/Gemini integration credentials |
 
 ## Local Scripting
 

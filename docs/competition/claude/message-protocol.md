@@ -74,7 +74,7 @@ keep agent identity, team membership, and task lifecycle explicit.
 Primary source files:
 
 - `../happy-adjacent/research/claude-code/plugins/plugin-dev/skills/agent-development/SKILL.md`
-- `docs/research/agent-teams-claude-code.md`
+- `docs/research/archive/agent-teams-claude-code.md`
 - `~/.claude/teams/`
 - `~/.claude/tasks/`
 

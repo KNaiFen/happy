@@ -826,4 +826,4 @@ This is another argument for the `parts` approach, at least for some message typ
 - [A2A v1.0.0 (2026-03-12)](https://github.com/a2aproject/A2A)
 - [AGNTCY Agent Connect Protocol](https://github.com/agntcy/acp-spec)
 - [Linux Foundation AAIF](https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation)
-- [Original v1 session protocol spec](../session-protocol.md) — by Steve, Feb 2026
+- [Original v1 session protocol spec](../../session-protocol.md) — by Steve, Feb 2026

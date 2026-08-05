@@ -1,68 +1,57 @@
 # Happy Coder Content Creator Brief
 
+> **Current positioning:** Happy Coder is a mobile and web companion for Codex.
+> Do not advertise Claude Code, Gemini CLI, or unspecified provider support.
+
 ## Key Features
 
-Happy Coder is an open-source mobile app that lets developers control AI coding agents (Claude Code, Codex, Gemini-CLI) from their phone.
+- Monitor and control Codex sessions from iOS, Android, or the web
+- Keep Codex running on the user's own computer or server
+- Receive notifications when Codex needs input, requests approval, completes, or fails
+- Synchronize encrypted session state between paired devices
+- Resume after disconnects through durable journal, changes, and snapshots
+- View tools, official reasoning summaries, diffs, and lifecycle state
+- Work with multiple Codex sessions and switch between them
+- Use the optional ElevenLabs voice bridge or a BYO ElevenLabs agent
+- Audit and self-host the open-source App, CLI, and Relay
 
-- Control Claude Code from iOS, Android, or web browser
-- Runs on YOUR hardware (laptop, desktop, server, Raspberry Pi)
-- No subscription fees or cloud costs - completely free (you still need to pay your AI model provider for Claude Code, Codex, Text to Speech, Speach to Text, etc..)
-- Push notifications when agents need input or hit errors
-- End-to-end encrypted connection between devices
-- Run multiple coding agents in parallel
-- Voice input for hands-free control
-- Works with your existing dev setup and tools
+The core project is open source. Codex, hosted infrastructure, app-store
+subscriptions, voice, and other optional services can have separate account,
+usage, or provider costs. Do not claim the full experience is cost-free.
 
 ## Key Value Props
 
-- On Happy Coder, I can manage Claude Code from my phone without paying $600/year
-- On Happy Coder, I never miss when Claude gets stuck on a permission prompt
-- Happy Coder runs on my own computer, not expensive cloud servers
-- On Happy Coder, I can check on long-running tasks without returning to my desk
-- Happy Coder is open source - I can audit, modify, or self-host everything
-- On Happy Coder, I can run multiple agents in parallel and switch between them instantly
-- Happy Coder keeps my code on my machines with end-to-end encryption
-- On Happy Coder, I can keep coding while commuting, eating, or away from my desk
+- Check long-running Codex work without returning to the terminal
+- Respond to approval requests before a task sits blocked
+- Keep Happy Relay payloads encrypted while using mobile and web clients
+- Recover session state after App, CLI, or network interruption
+- Inspect and self-host the software instead of relying on a closed client
 
 ## Example Hooks
 
-- "I saved $600/year by switching from [competitor] to the open-source Happy Coder"
-- "Claude asked for sudo permission... and I was at the gym"
-- "That moment when your 2-hour refactor gets stuck 5 minutes after you leave"
-- "Running 3 Claude Code agents in parallel from my phone while getting coffee"
-- "Why pay $50/month for a middleman to relay text to Claude?"
-- "I left for lunch and Claude was still working when I got back"
-- "Managing my coding agents from the train saved me 2 hours today"
-- "Finally, a mobile app for Claude Code that doesn't cost more than Netflix"
-- "My code never leaves my laptop, but I can control it from anywhere"
-- "Open source alternative to all those $600/year coding apps"
+- "Codex requested approval while I was away from my desk"
+- "I checked a long-running refactor from my phone"
+- "My terminal disconnected, but the session state recovered"
+- "I switched between multiple Codex sessions from the train"
+- "An open-source mobile and web companion for Codex"
 
-## Requirements for Content
+## Content Requirements
 
-- Clearly say "Happy Coder" in the video or caption
-- Mention it's free and open source
-- Include link to github.com/slopus/happy
-- Show actual usage (QR code connection, mobile control, push notifications)
-- Emphasize running on YOUR hardware, not cloud servers
-- Compare to paid alternatives ($50/month or $600/year competitors)
-- Minimum video length: 15 seconds
-- Use the GitHub star count as social proof when relevant
+- Say "Happy Coder" and "Codex" clearly
+- Show real pairing, session state, approval, notification, or recovery behavior
+- Link to https://github.com/slopus/happy
+- Distinguish encrypted Happy Relay synchronization from optional ElevenLabs voice data
+- Describe self-hosting and pricing only with facts verified at publication time
+- Verify dynamic facts such as versions, prices, download counts, or stars immediately before publishing
 
-## Prohibited Content
+## Prohibited Claims
 
-- Don't claim AI does all the work (it doesn't)
-- Don't suggest you can code without reviewing output
-- Don't promise income or job guarantees
-- No misleading claims about AI capabilities
-- Don't show fake notification counts or metrics
-
-## Target Audiences
-
-**Students**: CS students who can't afford $600/year subscriptions
-**Remote Workers**: Developers who work from coffee shops, co-working spaces
-**Parents**: Developer parents who get interrupted constantly
-**Commuters**: Developers with long commutes who want to stay productive
-**Open Source Enthusiasts**: Developers who prefer owning their tools
+- Claude Code, Gemini CLI, or generic provider support
+- That Happy or Codex can replace human review
+- Guaranteed productivity, income, or job outcomes
+- "No cloud cost", "completely free", or a specific competitor saving without current evidence
+- That voice audio/context remains inside Happy's end-to-end encrypted relay
+- Fake notifications, metrics, reviews, or usage footage
 
 ## Resources
 
@@ -71,3 +60,5 @@ Happy Coder is an open-source mobile app that lets developers control AI coding 
 - iOS App: https://apps.apple.com/us/app/happy-claude-code-client/id6748571505
 - Android App: https://play.google.com/store/apps/details?id=com.ex3ndr.happy
 - Web App: https://app.happy.engineering/
+
+The iOS URL contains a legacy store slug; do not reuse that slug as current product copy.

@@ -1,9 +1,14 @@
 # Protocol
 
-This document describes the Happy wire protocol as implemented in `packages/happy-server`. The protocol is intentionally small: JSON over HTTP for reads/actions and Socket.IO for real-time sync. Most payloads are end-to-end encrypted client-side; see `encryption.md` for the encryption boundaries and encoding details. For the full HTTP surface and auth flows, see `api.md`.
+> **兼容范围：** 本文主要描述共享 v1/v2/v3 HTTP、update 与 Socket.IO/RPC 基础设施。
+> Codex 的规范状态使用 [Sync v4 ADR](decisions/ADR-001-codex-sync-v4.md)；v4 正确性来自
+> mutation journal、独立 cursor、polling 与 snapshot，Socket.IO 只提供唤醒提示。
+
+This document describes the retained Happy compatibility protocol as implemented in `packages/happy-server`. Most payloads are end-to-end encrypted client-side; see `encryption.md` for the encryption boundaries and encoding details. For the full HTTP surface and auth flows, see `api.md`.
 
 ## Transport and versioning
 - HTTP API: JSON requests/responses on `/v1` and `/v2` routes.
+- Codex Sync v4: JSON mutation, change, snapshot, and capability routes under `/v4`.
 - WebSocket: Socket.IO server at path `/v1/updates` (transports: websocket, polling).
 - CORS: `*` (server-side).
 

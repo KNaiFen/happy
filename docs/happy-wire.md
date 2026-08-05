@@ -1,117 +1,46 @@
 # happy-wire
 
-This document describes the shared wire package: `@slopus/happy-wire`.
+`@slopus/happy-wire` 是 App、CLI、Server 和 happy-agent 共享的协议 schema/type 包。
+当前版本见自动生成的 [发行矩阵](release-matrix.md)。
 
-## Why this package exists
+## 当前模块
 
-Before `happy-wire`, wire-level message and session-protocol schemas were duplicated across packages (CLI, app, server, and agent). That caused drift risk and made protocol evolution harder.
+`packages/happy-wire/src/index.ts` 只导出以下边界：
 
-`@slopus/happy-wire` centralizes those shared schemas and types so all clients and services agree on the same wire contract.
+- `messages.ts`：共享消息、update 与兼容 payload schema；
+- `controlMessages.ts`：控制面消息；
+- `voice.ts`：语音请求/响应类型；
+- `syncV4.ts`：mutation、ACK、change、snapshot 与 capability；
+- `syncV4Entities.ts`：Codex Sync v4 实体；
+- `syncV4Diagnostics.ts`：不含 payload 的诊断结构。
 
-## Package identity
+业务规则、provider SDK 和持久化实现不进入 Wire。Codex 新能力必须先判断是否改变跨包契约；
+只属于单一消费者的类型应留在该包。
 
-- npm name: `@slopus/happy-wire`
-- workspace path: `packages/happy-wire`
-- package type: publishable library (not private)
-- versioned dependency in consumers: `^0.1.0`
+## 依赖模型
 
-## What is shared
+所有 monorepo 消费者使用 `"@slopus/happy-wire": "workspace:*"`。这保证本地类型与 schema
+始终来自同一 workspace 源码，不再用旧的 `^0.1.0` 模拟已发布包。
 
-### 1. Wire message schemas
+Wire/protocol 变更会影响所有消费者。完成可分发行变更时，应同步递增 Wire 与受影响消费者的
+patch version，并在云端构建完整兼容集合；仅文档、测试或 CI 改动不递增版本。
 
-Shared from `@slopus/happy-wire`:
-- from `messages.ts`: `SessionMessageContentSchema`, `SessionMessageSchema`, `MessageMetaSchema`, `SessionProtocolMessageSchema`, `MessageContentSchema` (top-level `role` union: `user|agent|session`), `UpdateNewMessageBodySchema`, `UpdateSessionBodySchema`, `UpdateMachineBodySchema`, `CoreUpdateContainerSchema`
-- from `legacyProtocol.ts`: `UserMessageSchema` (`role: 'user'`), `AgentMessageSchema` (`role: 'agent'`), `LegacyMessageContentSchema` (`role`-discriminated union for legacy only)
+## 兼容与安全
 
-These are used for encrypted message/update contracts (`new-message`, `update-session`, `update-machine`).
+- Codex 的规范协议是 Sync v4 entity/mutation 模型；
+- v1/v2/v3 schema 仅为仍在使用的共享基础设施和历史数据保留；
+- schema 添加优先保持 additive；破坏性变更必须有迁移、ADR 和跨包测试；
+- Sync v4 schema 只描述密文容器与允许记录的元数据，不加入 plaintext prompt、
+  reasoning、tool arguments/output、provider ID、token 或 key；
+- `voice.ts` 另有明确边界：它会在 App/Server 间传输短期 `conversationToken`、
+  `conversationId`、`agentId` 与 pseudonymous ElevenLabs user ID。这些字段不可写入日志；
+- 只有官方 reasoning summary 可进入同步实体。
 
-### 2. Session protocol schema
+## 验证与发行
 
-Shared from `@slopus/happy-wire`:
-- `sessionEventSchema`
-- `sessionEnvelopeSchema`
-- `createEnvelope(...)`
-- `SessionEnvelope` and related types
+源码检查使用 package 的 `typecheck` 和测试。构建型验证在 GitHub Actions 完成。
+Wire 当前不作为独立用户制品交付；happy-agent 打包工作流会同时 pack 并安装 Wire 归档，
+其他消费者工作流也会先构建 Wire。
 
-This is the canonical schema for the unified session protocol event stream.
-
-Current role set in `sessionEnvelopeSchema`:
-- `'user'` (user-originated envelope)
-- `'agent'` (agent/system output envelopes)
-
-Current session wire payload shape (decrypted message body):
-- outer message `role` is always `'session'` for session-protocol records
-- `content` is the session envelope object directly (not wrapped under `content.data`)
-- envelope-level role remains inside `content.role` (`'user' | 'agent'`)
-- envelope timestamp is required as `content.time` (Unix ms)
-
-## Migration in this repository
-
-### CLI (`packages/happy-cli`)
-
-- Session protocol imports now reference `@slopus/happy-wire` directly.
-- `src/sessionProtocol/types.ts` now re-exports from `@slopus/happy-wire` as compatibility shim.
-- API wire schemas in `src/api/types.ts` now source shared message/update schemas from `@slopus/happy-wire`.
-
-### App (`packages/happy-app`)
-
-- Shared API message/update schemas in `sources/sync/apiTypes.ts` now import these from `@slopus/happy-wire`:
-  - `ApiMessageSchema`
-  - `ApiUpdateNewMessageSchema`
-  - `ApiUpdateSessionStateSchema`
-  - `ApiUpdateMachineStateSchema`
-
-### Server (`packages/happy-server`)
-
-- Prisma JSON message content type now references `SessionMessageContent` from `@slopus/happy-wire`.
-- Event router uses shared `SessionMessageContent` type for `new-message` payload typing.
-
-### Agent (`packages/happy-agent`)
-
-- `RawMessage` now aliases `SessionMessage` from `@slopus/happy-wire`.
-
-## Versioning model
-
-All other workspace packages now declare a versioned dependency on `@slopus/happy-wire`.
-
-This intentionally mirrors post-publish consumption and reduces hidden coupling to workspace-local files.
-
-## Build and release
-
-`@slopus/happy-wire` is configured the same way as existing publishable libraries in this repo:
-
-- ESM/CJS/types outputs via `pkgroll`
-- `build`: typecheck + bundle
-- `test`: build + vitest
-- `prepublishOnly`: build + test
-- `release`: `release-it`
-- npm publish registry configured via `publishConfig`
-
-Use the same release entrypoint as other publishable packages:
-
-```bash
-yarn release
-# choose happy-wire
-```
-
-or:
-
-```bash
-yarn workspace @slopus/happy-wire release
-```
-
-When building workspaces from a clean checkout, build `@slopus/happy-wire` first so dependent packages can resolve generated `dist` outputs.
-
-## Publish checklist (maintainer)
-
-1. Ensure all workspace builds/tests are green.
-2. Confirm wire schema changes are backward-compatible or documented.
-3. Bump and release `@slopus/happy-wire`.
-4. Update downstream package versions if needed.
-5. Publish dependent package updates only after the new `happy-wire` version is available.
-
-## Notes
-
-- `happy-wire` should stay focused on wire contracts only (types + Zod schemas + small helpers).
-- Domain/business logic should remain in consumer packages.
-- Keep schema additions additive where possible to minimize client breakage.
+不得恢复旧的 `yarn release`、本地 `release-it` 或手工 npm 发布流程。当前制品、版本和
+工作流入口见 [发行矩阵](release-matrix.md)。

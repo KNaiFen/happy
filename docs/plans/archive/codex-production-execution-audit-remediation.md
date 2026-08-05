@@ -6,7 +6,7 @@
 - 建立日期：2026-08-05
 - 范围：App、Relay/Wire、CLI/Gateway、happy-agent 的生产执行链
 - 排除项：安全、认证授权、密码学、隐私、依赖漏洞、纯风格和无生产矛盾的覆盖率建议
-- 回归基线：`docs/plans/codex-v4-runtime-lifecycle-audit.md` 中 F1-F10 均视为已修复；本台账不重复报告。原 F3 仍为未归因现场异常。
+- 回归基线：`docs/plans/archive/codex-v4-runtime-lifecycle-audit.md` 中 F1-F10 均视为已修复；本台账不重复报告。原 F3 仍为未归因现场异常。
 - 当前状态：已完成并归档；7/7 项均已解决
 
 ## 执行规则

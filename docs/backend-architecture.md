@@ -1,397 +1,89 @@
-# Backend Architecture
-
-This document describes the Happy backend structure as implemented in `packages/happy-server`. It focuses on how the server is wired, how data flows through the system, and which subsystems handle which responsibilities.
-
-## System overview
-
-```mermaid
-graph TB
-    subgraph Clients
-        CLI[CLI Client]
-        Mobile[Mobile App]
-        Daemon[Machine Daemon]
-    end
-
-    subgraph "Happy Server"
-        API[Fastify API]
-        Socket[Socket.IO]
-        Events[Event Router]
-    end
-
-    subgraph Storage
-        PG[(Postgres)]
-        Redis[(Redis)]
-        S3[(S3/MinIO)]
-    end
-
-    CLI --> API
-    Mobile --> API
-    Daemon --> API
-    CLI --> Socket
-    Mobile --> Socket
-    Daemon --> Socket
-
-    API --> PG
-    API --> S3
-    Socket --> Events
-    Events --> Redis
-    Events --> PG
-```
-
-## At a glance
-- Runtime: Node.js + Fastify for HTTP, Socket.IO for realtime.
-- Database: Postgres via Prisma.
-- Cache/bus: Redis client is initialized (currently only pinged).
-- Blob storage: S3-compatible (MinIO) for uploaded assets.
-- Crypto: privacy-kit for auth tokens and encrypted service tokens.
-- Metrics: Prometheus-style `/metrics` server + per-request HTTP metrics.
-
-## Process lifecycle
-Entry point: `packages/happy-server/sources/main.ts`.
-
-```mermaid
-flowchart TD
-    Start([main.ts]) --> DB[Connect Postgres]
-    DB --> Cache[Init Activity Cache]
-    Cache --> Redis[Redis ping]
-    Redis --> Crypto[Init Crypto Modules]
-
-    subgraph Crypto Initialization
-        Crypto --> Encrypt[initEncrypt - KeyTree]
-        Crypto --> GitHub[initGithub - OAuth/Webhooks]
-        Crypto --> S3[loadFiles - S3 Bucket]
-        Crypto --> Auth[auth.init - Token Gen]
-    end
-
-    Encrypt & GitHub & S3 & Auth --> Servers[Start Servers]
-
-    subgraph Server Startup
-        Servers --> API[API Server]
-        Servers --> Metrics[Metrics Server]
-        Servers --> DBMetrics[DB Metrics Updater]
-        Servers --> Presence[Presence Timeout Loop]
-    end
-
-    API & Metrics & DBMetrics & Presence --> Running([Running])
-    Running --> |SIGTERM| Shutdown[Shutdown Hooks]
-    Shutdown --> DBDisconnect[DB Disconnect]
-    Shutdown --> FlushCache[Flush Activity Cache]
-```
-
-Startup sequence:
-1. Connect Postgres (`db.$connect()`).
-2. Init activity cache (presence) and Redis connection check (`redis.ping()`).
-3. Initialize crypto modules:
-   - `initEncrypt()` derives a KeyTree from `HANDY_MASTER_SECRET`.
-   - `initGithub()` configures GitHub App/webhooks if env vars exist.
-   - `loadFiles()` verifies S3 bucket access.
-   - `auth.init()` prepares token generator/verifier.
-4. Start API server (`startApi()`), metrics server, database metrics updater, and presence timeout loop.
-5. Remain alive until shutdown signal.
-
-Shutdown hooks are registered for DB disconnect and activity-cache flush.
-
-## API layer
-`startApi()` in `sources/app/api/api.ts` wires the HTTP server:
-- Fastify instance with Zod validators/serializers.
-- Global hooks for monitoring and error handling.
-- `authenticate` decorator that verifies Bearer tokens.
-- Route modules under `sources/app/api/routes`.
-- Socket.IO server attached at `/v1/updates`.
-
-```mermaid
-graph LR
-    subgraph "Fastify Server"
-        Hooks[Global Hooks]
-        Auth[authenticate decorator]
-
-        subgraph Routes
-            direction TB
-            R1[authRoutes]
-            R2[sessionRoutes]
-            R3[machinesRoutes]
-            R4[artifactsRoutes]
-            R5[accessKeysRoutes]
-            R6[kvRoutes]
-            R7[accountRoutes]
-            R8[userRoutes / feedRoutes]
-            R9[pushRoutes]
-            R10[connectRoutes / voiceRoutes]
-        end
-    end
-
-    SocketIO[Socket.IO /v1/updates]
-
-    Client --> Hooks --> Auth --> Routes
-    Client --> SocketIO
-```
-
-HTTP routes are organized by domain:
-- Auth (`authRoutes`)
-- Sessions + messages (`sessionRoutes`)
-- Machines (`machinesRoutes`)
-- Artifacts (`artifactsRoutes`)
-- Access keys (`accessKeysRoutes`)
-- Key-value store (`kvRoutes`)
-- Account + usage (`accountRoutes`)
-- Social + feed (`userRoutes`, `feedRoutes`)
-- Push tokens (`pushRoutes`)
-- Integrations (`connectRoutes`, `voiceRoutes`)
-- Version checks (`versionRoutes`)
-- Dev-only logging (`devRoutes`)
-
-## Authentication and tokens
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Server
-    participant DB as Postgres
-    participant Cache as Token Cache
-
-    Client->>Server: POST /v1/auth (signed challenge + public key)
-    Server->>DB: Upsert account by public key
-    DB-->>Server: Account record
-    Server->>Server: Generate Bearer token (privacy-kit)
-    Server->>Cache: Cache token
-    Server-->>Client: Bearer token
-
-    Note over Client,Cache: Subsequent requests
-
-    Client->>Server: Request + Bearer token
-    Server->>Cache: Verify token
-    Cache-->>Server: Valid / Account ID
-    Server-->>Client: Response
-```
-
-The backend does not store passwords. Instead:
-- Clients authenticate with a signed challenge (`/v1/auth`) using a public key.
-- The server upserts the account by public key and returns a Bearer token.
-- Tokens are generated and verified by privacy-kit using `HANDY_MASTER_SECRET`.
-- Tokens are cached in-memory for fast verification.
-
-GitHub OAuth uses short-lived "ephemeral" tokens to protect the callback and is separate from normal auth.
-
-## Realtime sync architecture
-
-```mermaid
-graph TB
-    subgraph Connections
-        U1[User Client 1]
-        U2[User Client 2]
-        S1[Session Client]
-        M1[Machine Daemon]
-    end
-
-    subgraph "Socket.IO Server"
-        Router[Event Router]
-
-        subgraph Scopes
-            US[user-scoped]
-            SS[session-scoped]
-            MS[machine-scoped]
-        end
-    end
-
-    U1 & U2 --> US
-    S1 --> SS
-    M1 --> MS
-
-    US & SS & MS --> Router
-
-    Router --> |persistent update| DB[(Postgres)]
-    Router --> |ephemeral event| Clients((Filtered Recipients))
-```
-
-### Connection types
-Socket.IO connections are tagged by scope:
-- `user-scoped`: receive all user updates.
-- `session-scoped`: receive updates only for one session.
-- `machine-scoped`: daemon connections for machine state.
-
-### Event router
-`EventRouter` (`sources/app/events/eventRouter.ts`) maintains per-user connection sets and routes:
-- **Persistent `update` events**: database-backed changes with a user-level monotonic `seq`.
-- **Ephemeral events**: presence/usage signals that are not persisted.
-
-The router implements recipient filters so updates go only to interested connections (e.g., all session listeners or a specific machine).
-
-### Update sequence numbers
-- `Account.seq` is the per-user update counter. It is incremented by `allocateUserSeq` and used as `UpdatePayload.seq`.
-- Sessions and artifacts maintain their own `seq` for per-object ordering.
-
-## Presence and activity
-
-```mermaid
-flowchart LR
-    subgraph "High Frequency"
-        Events[session-alive / machine-alive]
-        Cache[Activity Cache]
-    end
-
-    subgraph "Batched Writes"
-        Batch[Batch Processor]
-        DB[(Postgres)]
-    end
-
-    subgraph "Timeout Loop"
-        Timer[10 min timer]
-        Offline[Mark Inactive]
-        Emit[Emit offline update]
-    end
-
-    Events --> |debounce| Cache
-    Cache --> |batch| Batch --> DB
-    Timer --> Cache
-    Cache --> |stale entries| Offline --> DB
-    Offline --> Emit
-```
-
-Presence is handled in `sources/app/presence`:
-- `session-alive` and `machine-alive` events are debounced in memory (ActivityCache).
-- Database writes are batched to reduce write load.
-- A timeout loop marks sessions/machines inactive after 10 minutes of silence and emits an offline ephemeral update.
-
-This splits high-frequency presence from durable storage updates.
-
-## Storage and persistence
-### Database (Prisma)
-Prisma models live in `prisma/schema.prisma`. Key tables:
-
-```mermaid
-erDiagram
-    Account ||--o{ Session : owns
-    Account ||--o{ Machine : owns
-    Account ||--o{ Artifact : owns
-    Account ||--o{ UserKVStore : owns
-    Account ||--o{ UsageReport : tracks
-    Account ||--o{ UserRelationship : has
-    Account ||--o{ UserFeedItem : receives
-
-    Session ||--o{ SessionMessage : contains
-    Session ||--o{ AccessKey : grants
-
-    Machine ||--o{ AccessKey : receives
-
-    Account {
-        string publicKey
-        string profile
-        int seq
-    }
-
-    Session {
-        string metadata
-        int seq
-    }
-
-    Machine {
-        string metadata
-        string daemonState
-    }
-
-    Artifact {
-        string header
-        bytes body
-        string key
-    }
-```
-
-- `Account`: public key identity, profile, settings, seq counters.
-- `Session` + `SessionMessage`: encrypted session metadata and message blobs.
-- `Machine`: encrypted machine metadata + daemon state.
-- `Artifact`: encrypted header/body + per-artifact key.
-- `AccessKey`: encrypted per-session-per-machine access keys.
-- `UserKVStore`: encrypted values with optimistic versions.
-- `UsageReport`: usage aggregation per session/key.
-- `UserRelationship` + `UserFeedItem`: social graph and feed.
-
-### Transactions and retries
-
-```mermaid
-flowchart TD
-    Start([inTx call]) --> Begin[Begin Transaction]
-    Begin --> |Serializable| Exec[Execute Operations]
-    Exec --> Commit{Commit}
-
-    Commit --> |Success| After[afterTx callbacks]
-    After --> Emit[Emit Socket Updates]
-    Emit --> Done([Complete])
-
-    Commit --> |P2034 Error| Retry{Retry?}
-    Retry --> |Yes| Begin
-    Retry --> |Max retries| Fail([Throw Error])
-```
-
-`inTx()` wraps Prisma transactions with:
-- Serializable isolation.
-- Automatic retry on `P2034` (serialization failures).
-- `afterTx()` to emit socket updates after commit.
-
-This pattern is used for multi-write operations like batch KV mutation and session deletion.
-
-### Blob storage (S3/MinIO)
-The server uses S3-compatible storage for user assets (e.g., avatars):
-- `storage/files.ts` configures the S3 client.
-- `uploadImage` processes and stores files and writes metadata to `UploadedFile`.
-- Public URLs are derived from `S3_PUBLIC_URL`.
-
-### Redis
-A Redis client is initialized in `main.ts` and pinged at startup. It can be expanded for caching or pub/sub if needed.
-
-## Data confidentiality model
-
-```mermaid
-graph TB
-    subgraph "Client-side Encryption"
-        C1[Session metadata]
-        C2[Agent state]
-        C3[Daemon state]
-        C4[Message content]
-        C5[Artifacts]
-        C6[KV values]
-    end
-
-    subgraph "Server-side Encryption"
-        S1[GitHub OAuth tokens]
-        S2[OpenAI tokens]
-        S3[Gemini tokens]
-    end
-
-    C1 & C2 & C3 & C4 & C5 & C6 --> |opaque blobs| DB[(Postgres)]
-    S1 & S2 & S3 --> |KeyTree from HANDY_MASTER_SECRET| DB
-
-    style C1 fill:#e1f5fe
-    style C2 fill:#e1f5fe
-    style C3 fill:#e1f5fe
-    style C4 fill:#e1f5fe
-    style C5 fill:#e1f5fe
-    style C6 fill:#e1f5fe
-    style S1 fill:#fff3e0
-    style S2 fill:#fff3e0
-    style S3 fill:#fff3e0
-```
-
-- Session metadata, agent state, daemon state, and message content are stored as opaque encrypted strings or blobs.
-- Artifacts and KV values are stored encrypted and encoded as base64 on the wire.
-- The server only encrypts/decrypts **service tokens** (GitHub OAuth tokens, vendor tokens) using the KeyTree derived from `HANDY_MASTER_SECRET`.
-
-## Integrations
-- **GitHub**: OAuth connect + webhook verification, optional if env vars are set.
-- **AI vendors**: encrypted token storage for the supported `openai` and `gemini` connect flows.
-- **Voice**: RevenueCat subscription check + ElevenLabs token minting.
-- **Push tokens**: stored for later notification delivery.
-
-## Observability
-- `/health` route checks DB connectivity.
-- Metrics server exposes `/metrics` for Prometheus.
-- HTTP request counters and duration histograms are captured via Fastify hooks.
-- WebSocket event counters and connection gauges are in `metrics2.ts`.
-
-## Key implementation references
-- Entrypoint: `packages/happy-server/sources/main.ts`
-- API server: `packages/happy-server/sources/app/api/api.ts`
-- Socket server: `packages/happy-server/sources/app/api/socket.ts`
-- Event routing: `packages/happy-server/sources/app/events/eventRouter.ts`
-- Presence: `packages/happy-server/sources/app/presence`
-- Storage: `packages/happy-server/sources/storage`
-- Prisma schema: `packages/happy-server/prisma/schema.prisma`
+# Happy Server 架构
+
+> **当前文档（2026-08-05）：** 本文描述 `packages/happy-server` 的现行边界。
+> Codex 同步以 [ADR-001](decisions/ADR-001-codex-sync-v4.md) 为权威来源。
+
+## 职责与安全边界
+
+Happy Server 是认证、加密数据中继、同步日志、设备/会话目录和可选集成的控制面。
+消息、Codex 实体、工具参数和输出在客户端加密；Relay 只持久化不透明密文、版本、
+序列号和路由元数据，不解密用户内容。
+
+主要入口：
+
+- `packages/happy-server/sources/main.ts`：常规 Fastify + Socket.IO 服务；
+- `packages/happy-server/sources/standalone.ts`：PGlite 与本地文件存储模式；
+- `packages/happy-server/sources/app/api`：HTTP、Socket.IO、认证和路由；
+- `packages/happy-server/prisma`：Postgres 数据模型与迁移。
+
+## 持久化与基础设施
+
+| 能力 | 托管模式 | Standalone / Relay bundle |
+| --- | --- | --- |
+| 关系数据 | Postgres + Prisma | PGlite |
+| 文件/头像 | S3 兼容对象存储；未配置时可用本地文件 | 本地持久目录 |
+| 跨副本 Socket.IO | 配置 `REDIS_URL` 时启用 Redis Streams adapter | 单副本，不要求 Redis |
+| 指标 | 可选 Prometheus 端点 | 按配置启用 |
+
+Redis 不是服务启动前置条件。它只在多副本实时通知和 RPC 路由需要跨进程传播时启用；
+没有 Redis 时，数据库同步与单进程 Socket.IO 仍可工作。
+
+## HTTP 与同步面
+
+`/v1`、`/v2` 保留账户、设备、会话目录、共享更新、资产、KV 和兼容基础设施。
+可写 Codex 会话必须明确携带 `flavor=codex` 和 `codexSyncVersion=4`；空、未知或旧
+provider 元数据不被当作 Codex。
+
+Codex 的规范同步面是：
+
+- `GET /v4/capabilities`；
+- `POST /v4/sessions/:sessionId/mutations`；
+- `GET /v4/sessions/:sessionId/changes?after_seq=N`；
+- `GET /v4/sessions/:sessionId/snapshot`。
+
+mutation 先持久化再 ACK；发送 ACK、接收 cursor 和 snapshot watermark 相互独立。
+每个 session 的 `syncV4Seq` 提供顺序，mutation ID 提供幂等性。journal 保留恢复窗口；
+过期 cursor 返回 snapshot-required，而不是猜测客户端状态。
+
+## Sync v4 数据流
+
+1. CLI 将 Codex thread、runtime、turn、item、part、request、command 和 relation 映射为独立实体。
+2. CLI 在本地 journal 持久化 mutation 后，按 FIFO 上传密文。
+3. Server 分配顺序并返回 ACK，不推进任何客户端的读取 cursor。
+4. Socket.IO 只发送 `{ sessionId, highWatermark }` 唤醒提示。
+5. App/CLI 轮询 changes；缺口、缓存损坏或 HTTP 410 通过 snapshot 重建。
+6. 客户端完成处理后才持久化自己的 cursor。
+
+因此 Socket.IO 丢包、重复或断线不会决定数据正确性。共享 v3 update/RPC 基础设施仍被
+保留组件使用，但不得为 Codex 新增规范状态。
+
+## 实时与 RPC
+
+`/v1/updates` 提供 user、session 和 machine 三种连接 scope。v1/v2 更新可通过
+`update`/`ephemeral` 事件传播；点对点控制使用 `rpc-register`、`rpc-call` 和
+`rpc-request`。配置 Redis 时房间与 RPC 注册可跨副本传播。详细兼容面见
+[Realtime Sync and RPC](realtime-sync-and-rpc.md)。
+
+## 会话生命周期
+
+执行完成只来自 provider 权威生命周期或重建后的 snapshot。断开连接、RPC timeout、
+interrupt ACK 和经过一段时间都不能把 turn 标记为完成。child Codex thread 映射为隔离、
+只读的 side session；child 更新不能覆盖 parent runtime。
+
+## 可选集成
+
+- ElevenLabs 语音：`/v1/voice/conversations` 与 `/v1/voice/usage`；
+- RevenueCat：订阅资格核验；
+- GitHub：连接与 webhook；
+- S3：文件对象存储；
+- Prometheus：运维指标。
+
+这些集成都不改变 Codex 消息的端到端加密边界。
+
+## 部署与验证
+
+开发、托管 Postgres 和 Debian 13 amd64 Relay bundle 的配置见
+[部署文档](deployment.md)。可交付 Server/镜像只由
+`.github/workflows/build-debian13-relay-release.yml` 构建；工作流验证 distroless、
+非 root、只读根文件系统、迁移/重启、secret 权限、SBOM 和 Critical 漏洞门禁。
+该工作流当前不验收语音 payload 日志脱敏；相关缺口与处理计划见[部署文档](deployment.md)。

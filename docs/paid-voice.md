@@ -38,14 +38,15 @@ User taps mic
 
 ## Limits
 
-| Tier | Limit | Window | Cost to us | What happens |
-|------|-------|--------|------------|--------------|
-| Free | 20 min | 30 days | ~$0.19 | Paywall |
-| Subscribed | 5 hours | 30 days | — | Hard block → BYO agent |
-| BYO Agent | Unlimited | — | $0 | User's own ElevenLabs |
-| Any | 100 conversations | 30 days | — | Hard block → file issue |
+| Tier | Happy-managed limit | Window | What happens |
+|------|---------------------|--------|--------------|
+| Free | 20 min | 30 days | Paywall |
+| Subscribed | 5 hours by default; explicit operational exceptions may differ | 30 days | Hard block → offer BYO agent |
+| BYO Agent | Subject to the user's ElevenLabs plan | ElevenLabs policy | Uses the user's own ElevenLabs account |
+| Any Happy-managed tier | 100 conversations | 30 days | Hard block → file issue |
 
-Cost: ~$0.01/min ($1600 / 171K min measured).
+Provider pricing and measured cost are operational inputs, not protocol
+constants. Verify them outside this document before making a pricing decision.
 
 ## Tracking
 
@@ -68,12 +69,10 @@ Single paywall template, rules driven by custom variable `flow`:
 | `voice_must_pay` | Server returns `allowed: false` | Hard — must purchase |
 | `voluntary_support` | Settings | User-initiated |
 
-### Future: Voice Agent Self-Sell
-
-Have the agent mention pricing naturally. Inject `usedSeconds`/`limitSeconds` into context, add `showUpgradePaywall` client tool.
-
 ## Security
 
 - JWT signed by ElevenLabs, single-use, can't be forged
 - Agent set to "authorized only" — needs server-minted token
 - Agent ID in public repo is harmless
+- Current diagnostic logging does not yet satisfy the payload-free boundary;
+  see [Voice 敏感日志收敛计划](plans/voice-sensitive-logging-hardening.md).

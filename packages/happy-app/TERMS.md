@@ -1,6 +1,6 @@
 # Terms of Use
 
-Last updated: January 2025
+Last updated: August 2026
 
 ## Acceptance of Terms
 
@@ -8,7 +8,7 @@ By downloading, installing, or using Happy, you agree to be bound by these Terms
 
 ## About Happy
 
-Happy is a free, open-source mobile client for AI code assistance, released under the MIT License. The software is provided as-is by the open-source community without any warranties or guarantees.
+Happy is a free, open-source mobile and web companion for Codex, released under the MIT License. Optional voice, account, and distribution services may have separate provider terms or paid plans. The software is provided as-is by the open-source community without any warranties or guarantees.
 
 ## License
 
@@ -23,26 +23,26 @@ The full MIT License text is available in the source code repository.
 
 ## Acceptable Use
 
-You agree to use Happy responsibly and in compliance with all applicable laws. You must not:
+You agree to use Happy and Codex responsibly and in compliance with all applicable laws. You must not:
 
 - Use Happy for any illegal or unauthorized purpose
 - Attempt to harm, disable, or impair the functionality of Happy
 - Use Happy to generate harmful, offensive, or inappropriate content
-- Violate the terms of service of any AI services you connect to through Happy
+- Violate the terms of service for Codex or an optional service used through Happy
 - Attempt to reverse engineer security features or encryption protocols
 
 ## Third-Party Services
 
-Happy may connect to third-party AI services (such as Claude, OpenAI, etc.). You acknowledge that:
+Happy connects to Codex and may use optional non-session services such as ElevenLabs, GitHub, RevenueCat, Apple, or Google. You acknowledge that:
 
 - You are responsible for complying with their terms of service
-- You need valid API keys and accounts with these services
+- You need valid accounts or credentials where a selected integration requires them
 - Happy is not responsible for the availability or performance of third-party services
 - Costs associated with API usage are your responsibility
 
 ## Independence and Disclaimers
 
-**Happy is an independent, community-driven project.** We are not affiliated with, endorsed by, or connected to Anthropic, Claude, OpenAI, or any other AI service providers. Happy is a third-party client that works with publicly available APIs.
+**Happy is an independent, community-driven project.** We are not affiliated with or endorsed by OpenAI or any optional service provider. Happy is a third-party Codex client.
 
 ## Limitation of Liability
 
@@ -55,12 +55,14 @@ Happy may connect to third-party AI services (such as Claude, OpenAI, etc.). You
 
 ## Privacy
 
-Happy respects your privacy. The app:
+Happy handles encrypted session content, unencrypted synchronization metadata,
+analytics, subscription records, and optional voice data as described in the
+[Privacy Policy](../../PRIVACY.md). In particular:
 
-- Does not collect personal information without your consent
-- Stores API keys locally on your device
-- Does not share your data with third parties (except when connecting to AI services you configure)
-- May use crash reporting and analytics tools as disclosed in the Privacy Policy
+- Happy session payloads are encrypted before relay synchronization; the relay is not intended to read plaintext message or Codex entity content
+- PostHog analytics uses a stable pseudonymous identifier and is enabled by default, with an in-app opt-out
+- Credentials and encryption material are stored only in the component that requires them, subject to the platform security model
+- Voice audio, project path, summaries, recent message history, permission/tool context, and related identifiers sent to ElevenLabs are outside the Happy Relay ciphertext boundary
 
 ## Changes to Terms
 

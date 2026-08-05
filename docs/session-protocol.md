@@ -1,6 +1,10 @@
 # Session Protocol
 
-This document defines the unified message protocol for Happy sessions. It replaces the existing mix of `output`, `codex`, and custom `acp` formats with a single, flat event stream. Old sessions continue using legacy formats; new sessions use this protocol exclusively.
+> **历史/兼容规范：** 本文记录早期统一 session envelope。它不再是 Codex 新会话的
+> 规范协议；可写 Codex session 必须明确使用 `flavor=codex` 与 `codexSyncVersion=4`，
+> 并按 Sync v4 entity 模型同步。保留本文是为了兼容数据和非 Codex 消费者。
+
+This document defines the retained unified session-envelope format that replaced an earlier mix of `output`, `codex`, and custom `acp` payloads. It must not be used to add new canonical Codex state.
 
 For context on the existing wire protocol (WebSocket transport, encryption, sequencing), see `protocol.md`.
 

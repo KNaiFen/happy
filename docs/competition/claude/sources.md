@@ -21,7 +21,7 @@ Reviewed on 2026-03-20.
 - `~/.claude/teams/`
 - `~/.claude/tasks/`
 - `~/.claude/projects/`
-- `docs/research/agent-teams-claude-code.md`
+- `docs/research/archive/agent-teams-claude-code.md`
 
 ## Primary files inspected
 
@@ -36,7 +36,7 @@ Reviewed on 2026-03-20.
 - `../happy-adjacent/research/agent-client-protocol/src/agent.rs`
 - `../happy-adjacent/research/agent-client-protocol/src/client.rs`
 - `../happy-adjacent/research/agent-client-protocol/src/tool_call.rs`
-- `docs/research/agent-teams-claude-code.md`
+- `docs/research/archive/agent-teams-claude-code.md`
 
 ## Notes
 
