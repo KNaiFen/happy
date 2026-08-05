@@ -2,7 +2,6 @@ import {
     classifySyncV4Mutations,
     MutationConflictError,
     RevisionConflictError,
-    syncV4MutationContentHash,
 } from "@/app/api/routes/syncV4MutationClassifier";
 import { eventRouter } from "@/app/events/eventRouter";
 import {
@@ -39,6 +38,10 @@ import {
     registerServerSyncV4Lifecycle,
     serverSyncV4DiagnosticHash,
 } from "./syncV4Diagnostics";
+import {
+    persistSyncV4MutationWrites,
+    type SequencedSyncV4Mutation,
+} from "./syncV4MutationPersistence";
 
 const JOURNAL_MINIMUM_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
@@ -451,6 +454,7 @@ export function v4SessionRoutes(app: Fastify): void {
                 }
 
                 const acknowledgements = [];
+                const writes: SequencedSyncV4Mutation[] = [];
                 for (const classification of classifications) {
                     if (classification.status === "duplicate") {
                         acknowledgements.push({
@@ -464,43 +468,10 @@ export function v4SessionRoutes(app: Fastify): void {
 
                     const seq = nextSeq++;
                     const mutation = classification.mutation;
-                    if (classification.status === "accepted") {
-                        await tx.sessionEntityV4.upsert({
-                            where: { sessionId_entityId: { sessionId, entityId: mutation.entityId } },
-                            create: {
-                                sessionId,
-                                producerId: mutation.producerId,
-                                entityId: mutation.entityId,
-                                entityType: mutation.entityType,
-                                revision: mutation.revision,
-                                op: mutation.op,
-                                ciphertext: mutation.ciphertext,
-                                updatedSeq: seq,
-                            },
-                            update: {
-                                producerId: mutation.producerId,
-                                entityType: mutation.entityType,
-                                revision: mutation.revision,
-                                op: mutation.op,
-                                ciphertext: mutation.ciphertext,
-                                updatedSeq: seq,
-                            },
-                        });
-                    }
-                    await tx.sessionMutationV4.create({
-                        data: {
-                            sessionId,
-                            mutationId: mutation.mutationId,
-                            producerId: mutation.producerId,
-                            entityId: mutation.entityId,
-                            entityType: mutation.entityType,
-                            revision: mutation.revision,
-                            op: mutation.op,
-                            ciphertext: mutation.ciphertext,
-                            contentHash: syncV4MutationContentHash(mutation),
-                            status: classification.status,
-                            seq,
-                        },
+                    writes.push({
+                        mutation,
+                        status: classification.status,
+                        seq,
                     });
                     acknowledgements.push({
                         mutationId: mutation.mutationId,
@@ -509,6 +480,7 @@ export function v4SessionRoutes(app: Fastify): void {
                         status: classification.status,
                     });
                 }
+                await persistSyncV4MutationWrites(tx, sessionId, writes);
 
                 return {
                     acknowledgements,
