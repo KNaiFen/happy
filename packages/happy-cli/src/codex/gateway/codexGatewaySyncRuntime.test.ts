@@ -126,6 +126,16 @@ describe('CodexGatewaySyncRuntime', () => {
         expect(harness.router.migrateRootSnapshot).toHaveBeenCalledWith('thread-1', snapshot);
     });
 
+    it('can defer command recovery until restored coordinator bindings release their lock', async () => {
+        const harness = createHarness();
+
+        await harness.runtime.activate(thread(), { deferCommandRecovery: true });
+        expect(harness.rootBinding.recover).toHaveBeenCalledWith({ resumeCommands: false });
+
+        await harness.runtime.resumeCommandRecovery();
+        expect(harness.rootBinding.recover).toHaveBeenLastCalledWith({ resumeCommands: true });
+    });
+
     it('persists and publishes inactive history without archiving the session', async () => {
         const harness = createHarness();
 
@@ -178,6 +188,33 @@ describe('CodexGatewaySyncRuntime', () => {
         expect(harness.calls).toEqual([]);
     });
 
+    it('force-writes an unchanged topology when durable state needs reconciliation', async () => {
+        const harness = createHarness();
+
+        await harness.runtime.updateBinding({
+            role: 'recovering',
+            generation: 4,
+            previousSessionId: null,
+            nextSessionId: null,
+            changedAt: 300,
+        }, { force: true });
+
+        expect(harness.calls).toEqual([
+            'metadata',
+            'projection',
+            'mapper.flush',
+            'sync.flush',
+        ]);
+        expect(harness.metadata().codexGatewayBinding).toEqual({
+            gatewayId: 'gateway-1',
+            generation: 4,
+            origin: 'terminal',
+            role: 'recovering',
+            terminal: 'attached',
+            changedAt: 300,
+        });
+    });
+
     it('reports the payload-free binding phase while retaining the cause in memory', async () => {
         const harness = createHarness();
         const cause = new Error('provider payload must stay private');
@@ -196,7 +233,131 @@ describe('CodexGatewaySyncRuntime', () => {
             message: 'Codex Gateway runtime binding update failed during mapperFlush',
             phase: 'mapperFlush',
             diagnosticCause: cause,
+            recoveryRequired: false,
         } satisfies Partial<CodexGatewayRuntimeBindingUpdateError>);
+        expect(harness.metadata().codexGatewayBinding).toEqual({
+            gatewayId: 'gateway-1',
+            generation: 4,
+            origin: 'terminal',
+            role: 'recovering',
+            terminal: 'attached',
+            changedAt: 100,
+        });
+        expect(harness.session.updateMetadataAndWait).toHaveBeenCalledTimes(2);
+        expect(harness.mapper.setGatewayState).toHaveBeenLastCalledWith({
+            gateway: expect.objectContaining({ generation: 4, role: 'recovering' }),
+            terminal: { state: 'attached', detachedAt: null },
+        });
+    });
+
+    it('compensates durable metadata and projection after transport flush fails', async () => {
+        const harness = createHarness();
+        const cause = new Error('response lost');
+        vi.mocked(harness.syncClient.flushOutboundOnce).mockRejectedValueOnce(cause);
+
+        const failure = await harness.runtime.updateBinding({
+            role: 'current',
+            generation: 5,
+            previousSessionId: 'session-0',
+            nextSessionId: null,
+            changedAt: 300,
+        }).then(() => null, (error: unknown) => error);
+
+        expect(failure).toMatchObject({
+            phase: 'transportFlush',
+            diagnosticCause: cause,
+            recoveryRequired: false,
+        });
+        expect(harness.metadata().codexGatewayBinding).toEqual({
+            gatewayId: 'gateway-1',
+            generation: 4,
+            origin: 'terminal',
+            role: 'recovering',
+            terminal: 'attached',
+            changedAt: 100,
+        });
+        expect(harness.session.updateMetadataAndWait).toHaveBeenCalledTimes(2);
+        expect(harness.mapper.setGatewayState).toHaveBeenLastCalledWith({
+            gateway: expect.objectContaining({ generation: 4, role: 'recovering' }),
+            terminal: { state: 'attached', detachedAt: null },
+        });
+        expect(harness.syncClient.flushOutboundOnce).toHaveBeenCalledTimes(2);
+    });
+
+    it('requires recovery when durable binding compensation does not complete', async () => {
+        const harness = createHarness();
+        const cause = new Error('mapper failed');
+        const rollbackCause = new Error('rollback offline');
+        const persistMetadata = vi.mocked(harness.session.updateMetadataAndWait)
+            .getMockImplementation()!;
+        vi.mocked(harness.session.updateMetadataAndWait)
+            .mockImplementationOnce(persistMetadata)
+            .mockRejectedValueOnce(rollbackCause);
+        vi.mocked(harness.mapper.flush).mockRejectedValueOnce(cause);
+
+        const failure = await harness.runtime.updateBinding({
+            role: 'current',
+            generation: 5,
+            previousSessionId: null,
+            nextSessionId: null,
+            changedAt: 300,
+        }).then(() => null, (error: unknown) => error);
+
+        expect(failure).toMatchObject({
+            phase: 'mapperFlush',
+            diagnosticCause: cause,
+            recoveryRequired: true,
+            rollbackCause,
+        });
+        expect(harness.metadata().codexGatewayBinding).toMatchObject({
+            generation: 5,
+            role: 'current',
+        });
+        expect(harness.mapper.setGatewayState).toHaveBeenLastCalledWith({
+            gateway: expect.objectContaining({ generation: 4, role: 'recovering' }),
+            terminal: { state: 'attached', detachedAt: null },
+        });
+    });
+
+    it.each([
+        {
+            name: 'mapper flush',
+            fail(harness: ReturnType<typeof createHarness>, primary: Error, rollback: Error) {
+                vi.mocked(harness.mapper.flush)
+                    .mockRejectedValueOnce(primary)
+                    .mockRejectedValueOnce(rollback);
+            },
+            phase: 'mapperFlush',
+        },
+        {
+            name: 'transport flush',
+            fail(harness: ReturnType<typeof createHarness>, primary: Error, rollback: Error) {
+                vi.mocked(harness.syncClient.flushOutboundOnce)
+                    .mockRejectedValueOnce(primary)
+                    .mockRejectedValueOnce(rollback);
+            },
+            phase: 'transportFlush',
+        },
+    ] as const)('requires recovery when $name compensation fails', async ({ fail, phase }) => {
+        const harness = createHarness();
+        const cause = new Error('primary failure');
+        const rollbackCause = new Error('rollback failure');
+        fail(harness, cause, rollbackCause);
+
+        const failure = await harness.runtime.updateBinding({
+            role: 'current',
+            generation: 5,
+            previousSessionId: null,
+            nextSessionId: null,
+            changedAt: 300,
+        }).then(() => null, (error: unknown) => error);
+
+        expect(failure).toMatchObject({
+            phase,
+            diagnosticCause: cause,
+            recoveryRequired: true,
+            rollbackCause,
+        });
     });
 
     it('rolls terminal state back when durable metadata cannot be updated', async () => {

@@ -47,6 +47,8 @@ export class CodexGatewayRootBindingError extends Error {
     constructor(
         readonly phase: CodexGatewayRootBindingPhase,
         readonly diagnosticCause: unknown,
+        readonly recoveryRequired = diagnosticRecoveryRequired(diagnosticCause),
+        readonly rollbackCause: unknown = null,
     ) {
         super(`Codex Gateway root binding failed during ${phase}`);
     }
@@ -60,14 +62,26 @@ export interface CodexGatewayRuntimeBinding {
     changedAt: number;
 }
 
+export interface CodexGatewayRuntimeBindingUpdateOptions {
+    force?: boolean;
+}
+
+export interface CodexGatewayRootActivationOptions {
+    deferCommandRecovery?: boolean;
+}
+
 export interface CodexGatewayRootRuntime {
     readonly sessionId: string | null;
     handleNotification(notification: ServerNotification): Promise<void>;
     handleRequest(request: CodexServerRequest): Promise<CodexManagedServerResponse | null>;
     setConnection(event: CodexConnectionEvent): void;
-    activate(snapshot: Thread): Promise<void>;
+    activate(snapshot: Thread, options?: CodexGatewayRootActivationOptions): Promise<void>;
     reconcile(snapshot: Thread): Promise<void>;
-    updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void>;
+    resumeCommandRecovery(): Promise<void>;
+    updateBinding(
+        binding: CodexGatewayRuntimeBinding,
+        options?: CodexGatewayRuntimeBindingUpdateOptions,
+    ): Promise<void>;
     setGatewayLifecycle(state: 'starting' | 'running' | 'recovering' | 'stopping' | 'stopped'): Promise<void>;
     setTerminalState(
         state: 'attached' | 'pendingDetach' | 'detached' | 'headless',
@@ -101,6 +115,7 @@ interface ManagedRoot {
     nextSessionId: string | null;
     title: string | null;
     rootActiveTurnId: string | null;
+    lifecycleRecoveryRequired: boolean;
     runtime: CodexGatewayRootRuntime;
 }
 
@@ -228,6 +243,18 @@ export class CodexGatewayCoordinator {
         generation: number;
         changed: boolean;
     }> {
+        return await this.bindRootAttempt(threadId, options, null);
+    }
+
+    private async bindRootAttempt(
+        threadId: string,
+        options: CodexGatewayBindRootOptions,
+        expectedRecoveryRuntime: CodexGatewayRootRuntime | null,
+    ): Promise<{
+        sessionId: string | null;
+        generation: number;
+        changed: boolean;
+    }> {
         validateThreadId(threadId);
         if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
         const subscription = options.subscription ?? 'resume';
@@ -238,6 +265,39 @@ export class CodexGatewayCoordinator {
             );
         }
         return await this.bindingLock.inLock(async () => {
+            if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
+            if (expectedRecoveryRuntime) {
+                const expectedTarget = this.roots.get(threadId);
+                if (
+                    !expectedTarget
+                    || expectedTarget === this.current
+                    || expectedTarget.role !== 'recovering'
+                    || expectedTarget.runtime !== expectedRecoveryRuntime
+                    || expectedTarget.generation !== this.generation + 1
+                    || expectedTarget.previousSessionId !== (this.current?.runtime.sessionId ?? null)
+                ) {
+                    return {
+                        sessionId: null,
+                        generation: this.generation,
+                        changed: false,
+                    };
+                }
+            } else {
+                const pendingRecovery = this.orderedRoots().find((root) => (
+                    root !== this.current && root.role === 'recovering'
+                ));
+                if (
+                    pendingRecovery
+                    && threadId !== pendingRecovery.threadId
+                    && threadId !== this.current?.threadId
+                ) {
+                    throw new CodexGatewayRootBindingError(
+                        'targetBinding',
+                        new Error('A prior Codex Gateway root binding still requires recovery'),
+                        true,
+                    );
+                }
+            }
             if (this.current?.threadId === threadId) {
                 if (subscription === 'terminalRootResponse' && options.providerSnapshot) {
                     this.current.title = safeThreadTitle(options.providerSnapshot);
@@ -310,6 +370,7 @@ export class CodexGatewayCoordinator {
                         nextSessionId: null,
                         title: null,
                         rootActiveTurnId: null,
+                        lifecycleRecoveryRequired: false,
                         runtime,
                     };
                     target = managed;
@@ -363,12 +424,18 @@ export class CodexGatewayCoordinator {
                         previousSessionId: previous.previousSessionId,
                         nextSessionId: previous.nextSessionId,
                         changedAt,
-                    }));
+                    }, { force: previous.role !== 'current' }));
                     previous.role = 'draining';
                     previousMarkedDraining = true;
                 }
                 target.previousSessionId = previous?.runtime.sessionId ?? null;
                 target.nextSessionId = null;
+                if (target.lifecycleRecoveryRequired) {
+                    await rootBindingStep(
+                        'targetBinding',
+                        () => target.runtime.setGatewayLifecycle('running'),
+                    );
+                }
                 await rootBindingStep('targetBinding', () => target.runtime.updateBinding({
                     role: 'current',
                     generation: nextGeneration,
@@ -378,29 +445,66 @@ export class CodexGatewayCoordinator {
                 }));
                 target.role = 'current';
                 target.generation = nextGeneration;
+                target.lifecycleRecoveryRequired = false;
                 if (subscription === 'terminalRootResponse' && options.providerSnapshot) {
                     this.options.client.adoptThreadSnapshot(options.providerSnapshot);
                 }
                 this.current = target;
                 this.generation = nextGeneration;
             } catch (error) {
+                const bindingError = error instanceof CodexGatewayRootBindingError
+                    ? error
+                    : new CodexGatewayRootBindingError('targetBinding', error);
+                let sourceRollbackError: unknown = null;
                 if (previousMarkedDraining && previous) {
-                    previous.role = 'current';
-                    previous.nextSessionId = null;
-                    await previous.runtime.updateBinding({
-                        role: 'current',
-                        generation: previous.generation,
-                        previousSessionId: previous.previousSessionId,
-                        nextSessionId: null,
-                        changedAt: this.now(),
-                    }).catch((rollbackError) => this.options.onError?.(rollbackError));
+                    try {
+                        await previous.runtime.updateBinding({
+                            role: 'current',
+                            generation: previous.generation,
+                            previousSessionId: previous.previousSessionId,
+                            nextSessionId: null,
+                            changedAt: this.now(),
+                        });
+                        previous.role = 'current';
+                        previous.nextSessionId = null;
+                    } catch (rollbackError) {
+                        sourceRollbackError = rollbackError;
+                        this.options.onError?.(rollbackError);
+                    }
                 }
-                if (created) {
+                if (
+                    bindingError.phase === 'sourceBinding'
+                    && bindingError.recoveryRequired
+                    && previous
+                ) {
+                    previous.role = 'draining';
+                    previous.nextSessionId = target.runtime.sessionId;
+                }
+                const retainTargetForRecovery = bindingError.recoveryRequired
+                    || sourceRollbackError !== null
+                    || target.lifecycleRecoveryRequired;
+                if (retainTargetForRecovery) {
+                    if (previous) {
+                        previous.role = 'draining';
+                        previous.nextSessionId = target.runtime.sessionId;
+                    }
+                    target.lifecycleRecoveryRequired = true;
+                    await target.runtime.setGatewayLifecycle('recovering')
+                        .catch((recoveryError) => this.options.onError?.(recoveryError));
+                } else if (created) {
                     this.removeRoot(target);
                     await target.runtime.close().catch(() => undefined);
                     await this.options.leases.release(threadId, this.options.gatewayId).catch(() => false);
                 }
-                throw error;
+                if (sourceRollbackError !== null) {
+                    throw new CodexGatewayRootBindingError(
+                        'sourceBinding',
+                        sourceRollbackError,
+                        true,
+                        bindingError,
+                    );
+                }
+                throw bindingError;
             }
 
             if (previous) {
@@ -412,6 +516,20 @@ export class CodexGatewayCoordinator {
                 changed: true,
             };
         });
+    }
+
+    async recoverPendingBinding(): Promise<boolean> {
+        if (this.stopped) return false;
+        const target = this.orderedRoots()
+            .filter((root) => root !== this.current && root.role === 'recovering')
+            .sort((left, right) => left.generation - right.generation)[0];
+        if (!target) return false;
+        const result = await this.bindRootAttempt(
+            target.threadId,
+            { subscription: 'resume' },
+            target.runtime,
+        );
+        return result.changed;
     }
 
     async subscribeMaterializedRoot(threadId: string): Promise<boolean> {
@@ -457,7 +575,7 @@ export class CodexGatewayCoordinator {
         if (bindings.length === 0) return;
         validateRecoveredBindings(bindings);
         if (this.stopped) throw new Error('Codex Gateway coordinator is stopped');
-        await this.bindingLock.inLock(async () => {
+        const restored = await this.bindingLock.inLock(async (): Promise<ManagedRoot[]> => {
             if (this.roots.size > 0 || this.current) {
                 throw new Error('Codex Gateway bindings can only be restored into an empty coordinator');
             }
@@ -511,6 +629,7 @@ export class CodexGatewayCoordinator {
                         nextSessionId: null,
                         title: null,
                         rootActiveTurnId: null,
+                        lifecycleRecoveryRequired: false,
                         runtime,
                     };
                     this.roots.set(binding.threadId, managed);
@@ -530,7 +649,9 @@ export class CodexGatewayCoordinator {
                     managed.rootActiveTurnId = activeTurnIdFromSnapshot(recoveredSnapshot.thread);
                     await rootBindingStep(
                         'runtimeProjection',
-                        () => runtime.activate(recoveredSnapshot.thread),
+                        () => runtime.activate(recoveredSnapshot.thread, {
+                            deferCommandRecovery: true,
+                        }),
                     );
                     await this.drainPending(binding.threadId, managed);
                 }
@@ -543,7 +664,7 @@ export class CodexGatewayCoordinator {
                             this.options.leases.release(root.threadId, this.options.gatewayId)
                         )),
                     ]);
-                    return;
+                    return [];
                 }
                 const changedAt = this.now();
                 for (const root of restored) {
@@ -555,8 +676,9 @@ export class CodexGatewayCoordinator {
                         previousSessionId: root.previousSessionId,
                         nextSessionId: root.nextSessionId,
                         changedAt,
-                    });
+                    }, { force: true });
                 }
+                return restored;
             } catch (error) {
                 this.current = null;
                 for (const root of restored) this.removeRoot(root);
@@ -569,6 +691,9 @@ export class CodexGatewayCoordinator {
                 throw error;
             }
         });
+        for (const root of restored) {
+            await root.runtime.resumeCommandRecovery();
+        }
     }
 
     async stop(options: { force?: boolean } = {}): Promise<void> {
@@ -1141,6 +1266,13 @@ function requestThreadId(request: CodexServerRequest): string | null {
     if (!request.params || typeof request.params !== 'object' || Array.isArray(request.params)) return null;
     const threadId = (request.params as Record<string, unknown>).threadId;
     return typeof threadId === 'string' && threadId.length > 0 ? threadId : null;
+}
+
+function diagnosticRecoveryRequired(value: unknown): boolean {
+    return typeof value === 'object'
+        && value !== null
+        && 'recoveryRequired' in value
+        && value.recoveryRequired === true;
 }
 
 function activeTurnIdFromSnapshot(thread: Thread): string | null {

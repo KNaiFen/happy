@@ -586,14 +586,16 @@ export class CodexGatewayRuntimeFactory {
             syncClient,
             commandProcessor,
             requestBroker,
-            recover: async () => {
+            recover: async (recoveryOptions = {}) => {
                 if (recoveryPromise) return await recoveryPromise;
                 const recovery = (async () => {
                     const recoveredRequests = await binding.requestBroker.recoverPending(
                         binding.syncClient.getPendingProviderRequests(),
                     );
                     if (recoveredRequests > 0) await binding.syncClient.flushOutboundOnce();
-                    await binding.commandProcessor.resumeExecution();
+                    if (recoveryOptions.resumeCommands !== false) {
+                        await binding.commandProcessor.resumeExecution();
+                    }
                 })();
                 recoveryPromise = recovery;
                 try {

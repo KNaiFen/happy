@@ -1301,6 +1301,11 @@ async function runCodexGatewayWorkerInternal(
     async function heartbeatOnce(): Promise<void> {
         if (stopping) return;
         try {
+            const recoveredBinding = await coordinator?.recoverPendingBinding() ?? false;
+            if (recoveredBinding) {
+                syncPendingFreshSubscriptions();
+                await syncDescriptorBindings({ clearRootBindingError: true });
+            }
             const heartbeatAt = Date.now();
             await descriptorStore.update((descriptor) => ({
                 ...descriptor,

@@ -452,6 +452,9 @@ describe('Codex Gateway worker composition', () => {
             presenceTouchMs: 20,
         });
         await vi.waitFor(() => expect(mocks.controlHandlers).not.toBeNull());
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
         const opened = await mocks.controlHandlers!.openRoot(openRootInput());
         await vi.waitFor(() => expect(mocks.presenceTouches.length).toBeGreaterThanOrEqual(2));
         const claimed = mocks.presenceClaims[0];

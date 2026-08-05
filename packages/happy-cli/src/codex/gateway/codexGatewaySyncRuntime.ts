@@ -13,8 +13,10 @@ import type { CodexV4SessionBinding, CodexV4ThreadRouter } from '../codexV4Threa
 import type { ServerNotification, Thread } from '../protocol';
 import type {
     CodexGatewayBindingRole,
+    CodexGatewayRootActivationOptions,
     CodexGatewayRootRuntime,
     CodexGatewayRuntimeBinding,
+    CodexGatewayRuntimeBindingUpdateOptions,
 } from './codexGatewayCoordinator';
 
 export type CodexGatewayLifecycleState = CodexGatewayRuntimeProjection['state'];
@@ -32,6 +34,8 @@ export class CodexGatewayRuntimeBindingUpdateError extends Error {
     constructor(
         readonly phase: CodexGatewayRuntimeBindingUpdatePhase,
         readonly diagnosticCause: unknown,
+        readonly recoveryRequired = false,
+        readonly rollbackCause: unknown = null,
     ) {
         super(`Codex Gateway runtime binding update failed during ${phase}`);
     }
@@ -83,11 +87,16 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
         this.options.router.setConnection(event);
     }
 
-    async activate(snapshot: Thread): Promise<void> {
+    async activate(
+        snapshot: Thread,
+        options: CodexGatewayRootActivationOptions = {},
+    ): Promise<void> {
         this.assertOpen();
         await this.options.router.registerRootThread(this.options.rootThreadId);
         await this.options.router.migrateRootSnapshot(this.options.rootThreadId, snapshot);
-        await this.options.rootBinding.recover();
+        await this.options.rootBinding.recover({
+            resumeCommands: !options.deferCommandRecovery,
+        });
         await this.options.router.recoverPendingNotifications();
         await this.options.router.recoverActiveThreads();
         await this.updateThreadMetadata(snapshot);
@@ -103,32 +112,60 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
         await this.updateThreadMetadata(snapshot);
     }
 
-    async updateBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
+    async resumeCommandRecovery(): Promise<void> {
         this.assertOpen();
+        await this.options.rootBinding.recover({ resumeCommands: true });
+    }
+
+    async updateBinding(
+        binding: CodexGatewayRuntimeBinding,
+        options: CodexGatewayRuntimeBindingUpdateOptions = {},
+    ): Promise<void> {
+        this.assertOpen();
+        const previous = { ...this.binding };
         const next = { ...binding };
-        if (sameBindingTopology(this.binding, next)) return;
-        await runtimeBindingUpdateStep(
-            'metadata',
-            () => this.options.session.updateMetadataAndWait((metadata) => (
-                this.bindingMetadata(metadata, next)
-            )),
-        );
-        await runtimeBindingUpdateStep(
-            'runtimeProjection',
-            () => this.options.rootBinding.mapper.setGatewayState({
-                gateway: this.gatewayProjection(next),
-                terminal: this.terminalProjection(),
-            }),
-        );
-        await runtimeBindingUpdateStep(
-            'mapperFlush',
-            () => this.options.rootBinding.mapper.flush(),
-        );
-        await runtimeBindingUpdateStep(
-            'transportFlush',
-            () => this.options.rootBinding.syncClient.flushOutboundOnce(),
-        );
-        this.binding = next;
+        if (!options.force && sameBindingTopology(previous, next)) return;
+        try {
+            await runtimeBindingUpdateStep(
+                'metadata',
+                () => this.options.session.updateMetadataAndWait((metadata) => (
+                    this.bindingMetadata(metadata, next)
+                )),
+            );
+            await runtimeBindingUpdateStep(
+                'runtimeProjection',
+                () => this.options.rootBinding.mapper.setGatewayState({
+                    gateway: this.gatewayProjection(next),
+                    terminal: this.terminalProjection(),
+                }),
+            );
+            await runtimeBindingUpdateStep(
+                'mapperFlush',
+                () => this.options.rootBinding.mapper.flush(),
+            );
+            await runtimeBindingUpdateStep(
+                'transportFlush',
+                () => this.options.rootBinding.syncClient.flushOutboundOnce(),
+            );
+            this.binding = next;
+        } catch (error) {
+            const updateError = error instanceof CodexGatewayRuntimeBindingUpdateError
+                ? error
+                : new CodexGatewayRuntimeBindingUpdateError('metadata', error);
+            const rollback = await this.restoreBinding(previous).then(
+                () => ({ succeeded: true as const }),
+                (rollbackCause: unknown) => ({ succeeded: false as const, rollbackCause }),
+            );
+            if (!rollback.succeeded) {
+                throw new CodexGatewayRuntimeBindingUpdateError(
+                    updateError.phase,
+                    updateError.diagnosticCause,
+                    true,
+                    rollback.rollbackCause,
+                );
+            }
+            throw updateError;
+        }
     }
 
     async setGatewayLifecycle(state: CodexGatewayLifecycleState): Promise<void> {
@@ -216,6 +253,31 @@ export class CodexGatewaySyncRuntime implements CodexGatewayRootRuntime {
             codexThreadId: this.options.rootThreadId,
             ...(title ? { name: title } : {}),
         }));
+    }
+
+    private async restoreBinding(binding: CodexGatewayRuntimeBinding): Promise<void> {
+        const failures: unknown[] = [];
+        try {
+            await this.options.session.updateMetadataAndWait((metadata) => (
+                this.bindingMetadata(metadata, binding)
+            ));
+        } catch (error) {
+            failures.push(error);
+        }
+        try {
+            await this.options.rootBinding.mapper.setGatewayState({
+                gateway: this.gatewayProjection(binding),
+                terminal: this.terminalProjection(),
+            });
+            await this.options.rootBinding.mapper.flush();
+            await this.options.rootBinding.syncClient.flushOutboundOnce();
+        } catch (error) {
+            failures.push(error);
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1) {
+            throw new AggregateError(failures, 'Codex Gateway runtime binding rollback failed');
+        }
     }
 
     private bindingMetadata(

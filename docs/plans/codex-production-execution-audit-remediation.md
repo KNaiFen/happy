@@ -32,7 +32,7 @@
 | ---: | --- | --- | --- | --- | --- |
 | 1 | F-01 | P1 | 高 | 已解决 | happy-agent 把命令结果或 interrupt ACK 当作 turn 终态 |
 | 2 | F-02 | P1 | 高 | 已解决 | happy-agent 写操作缺少跨进程持久幂等凭据 |
-| 3 | F-03 | P1 | 高 | 待修复 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
+| 3 | F-03 | P1 | 高 | 进行中 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
 | 4 | F-04 | P2 | 高 | 待修复 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
 | 5 | P-01 | P2 | 高 | 待修复 | App 为全部 Codex 会话启动固定 5 秒轮询 |
 | 6 | P-02 | P2 | 高 | 待修复 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
@@ -73,7 +73,7 @@
 
 ## F-03 Gateway handoff 失败会留下目标 generation 的 current 元数据
 
-- 状态：待修复
+- 状态：进行中
 - 严重度：P1
 - 置信度：高
 - 生产链：`packages/happy-cli/src/codex/gateway/codexGatewayCoordinator.ts:360 performHandoff` -> `packages/happy-cli/src/codex/gateway/codexGatewaySyncRuntime.ts:106 updateBinding` -> metadata durable write -> mapper state/flush -> transport flush -> coordinator catch rollback。
@@ -84,7 +84,7 @@
 - 最小复现：让 target `updateBinding` 完成 metadata write 后在 mapper flush 抛错；断言最终 durable metadata 恢复 source current 且 target 不再 current。
 - 当前覆盖：分别覆盖 coordinator 早期失败和 runtime 阶段失败，未覆盖两者组合后的 durable rollback。
 - 最小修复方向：把 binding 更新设计为可补偿阶段，handoff 失败时显式恢复 source/target durable metadata，并在补偿失败时进入可对账的 unknown/recovery 状态。
-- 实施计划：待真实性复核后填写。
+- 实施计划：在 `CodexGatewaySyncRuntime.updateBinding` 内记录调用前 binding；metadata、runtime projection、mapper flush 或 transport flush 任一阶段失败时，保留原始失败阶段和内存 cause，并以原 binding 补偿恢复 durable metadata、mapper projection 及 outbound transport。补偿自身失败时显式标记为需要恢复，不把 target 当成已安全回滚。`CodexGatewayCoordinator.bindRoot` 仅在 target 补偿确认成功后移除新建 target、关闭 runtime 并释放 lease；补偿不完整时保留 target runtime/lease、发布 `recovering` 生命周期。source 的 durable `current` 回写只有成功后才恢复内存角色；回写失败时 source 保持不可写的 `draining` 恢复态，并将 target 保留给前向重试。worker heartbeat 调用 coordinator 的恢复入口，既覆盖无新请求的 terminal handoff，也与已有 `providerAccepted` journal/command reconciliation 协作；重启时，deterministic Gateway/thread session identity 会重建未入 descriptor 的 recovery target。恢复 binding 期间延迟 command replay 到 coordinator lock 释放后，避免 handoff 重入死锁；重试成功前将 target lifecycle 从 `recovering` 显式恢复为 `running`。未决 recovery target 会阻止更新的 root 越权绑定；heartbeat 携带 runtime 身份、generation 和前序 session 令牌，并在取得 binding lock 后复核，防止已 relinquish/stop 的 target 被复活。补充 metadata 已成功后 mapper flush、transport flush 失败的 target durable rollback 测试，补偿失败时 target 恢复主体保留、source 回写失败的 fail-closed/自动恢复、重启期 lock 顺序、过期 target/取消竞态，以及 coordinator 组合场景中 source/target durable metadata 唯一 `current` 的回归测试；CLI 补丁版本升级到 `1.4.42`。
 - 解决证据：待填写。
 
 ## F-04 App snapshot 替换会覆盖并发发布的本地乐观投影
