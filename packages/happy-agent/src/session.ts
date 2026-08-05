@@ -1,5 +1,6 @@
 import {
     CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
+    CodexCommandEntityV4Schema,
     CodexEntityV4Schema,
     SyncMutationBatchResponseV4Schema,
     SyncMutationBatchV4Schema,
@@ -35,6 +36,11 @@ import {
     encodeBase64Url,
     hmac_sha512,
 } from './encryption';
+import {
+    OperationReceiptStore,
+    pendingOperationError,
+    sendOperationRequestHash,
+} from './operationReceipts';
 
 const SNAPSHOT_PAGE_SIZE = 100;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
@@ -52,6 +58,7 @@ export interface SessionClientOptions {
     threadId?: string | null;
     machineId?: string | null;
     pollIntervalMs?: number;
+    operationReceipts?: OperationReceiptStore;
 }
 
 export interface CodexV4Snapshot {
@@ -87,6 +94,11 @@ interface CommandDraft {
     payload: JsonValue;
     queueEntryId?: string;
     bindingGeneration?: number;
+}
+
+interface CommandMutation {
+    command: CodexCommandEntityV4;
+    mutation: SyncMutationV4;
 }
 
 class SyncV4ProtocolError extends Error {
@@ -194,6 +206,7 @@ export class SessionClient {
     private readonly preferredThreadId: string | null;
     private readonly machineId: string | null;
     private readonly pollIntervalMs: number;
+    private readonly operationReceipts: OperationReceiptStore | null;
     private capabilitiesChecked = false;
 
     constructor(opts: SessionClientOptions) {
@@ -204,6 +217,7 @@ export class SessionClient {
         this.preferredThreadId = nonEmptyString(opts.threadId);
         this.machineId = nonEmptyString(opts.machineId);
         this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+        this.operationReceipts = opts.operationReceipts ?? null;
     }
 
     async readSnapshot(timeoutMs?: number): Promise<CodexV4Snapshot> {
@@ -251,9 +265,28 @@ export class SessionClient {
 
     async sendMessage(
         text: string,
-        options: { permissionMode?: string } = {},
+        options: { permissionMode?: string; operationId?: string } = {},
     ): Promise<PublishedCodexCommand> {
         if (text.trim().length === 0) throw new Error('Message must not be empty');
+        if (options.operationId && !this.operationReceipts) {
+            throw new Error('Operation receipts are required when an operation ID is provided');
+        }
+        const requestHash = sendOperationRequestHash({
+            sessionId: this.sessionId,
+            message: text,
+            permissionMode: options.permissionMode,
+        });
+        const resolved = this.operationReceipts?.resolveSend(requestHash, options.operationId) ?? null;
+        if (resolved) {
+            await this.assertCompatible();
+            const prepared = this.commandMutationFromReceipt(resolved.mutation);
+            try {
+                return await this.publishCommandMutation(prepared);
+            } catch (error) {
+                throw pendingOperationError(resolved.operationId, error);
+            }
+        }
+
         const snapshot = await this.readSnapshot();
         const threadId = snapshot.thread?.threadId ?? this.preferredThreadId;
         if (!threadId) throw new Error('Codex thread identity is unavailable');
@@ -261,9 +294,9 @@ export class SessionClient {
             turn.threadId === threadId && turn.status === 'inProgress'
         )));
         const runtimeActive = snapshot.runtime?.execution.type === 'active';
-        const command = activeTurn || runtimeActive ? 'turn.queue' : 'turn.start';
-        return await this.publishCommand({
-            command,
+        const commandType = activeTurn || runtimeActive ? 'turn.queue' : 'turn.start';
+        const draft: CommandDraft = {
+            command: commandType,
             threadId,
             expectedTurnId: activeTurn?.turnId ?? null,
             payload: {
@@ -271,9 +304,31 @@ export class SessionClient {
                 displayText: text,
                 ...(options.permissionMode ? { permissionMode: options.permissionMode } : {}),
             },
-            ...(command === 'turn.queue' ? { queueEntryId: randomUUID() } : {}),
             ...bindingGeneration(snapshot.runtime),
-        });
+        };
+        let operationId: string | null = null;
+        let publishable: CommandMutation;
+        if (this.operationReceipts) {
+            const claimed = this.operationReceipts.claimSend(
+                requestHash,
+                options.operationId,
+                (claimedOperationId) => this.createCommandMutation(draft, claimedOperationId).mutation,
+            );
+            operationId = claimed.operationId;
+            publishable = this.commandMutationFromReceipt(claimed.mutation);
+        } else {
+            publishable = this.createCommandMutation(draft);
+        }
+        try {
+            return await this.publishCommandMutation(publishable);
+        } catch (error) {
+            if (operationId) throw pendingOperationError(operationId, error);
+            throw error;
+        }
+    }
+
+    markOperationAcknowledged(operationId: string): void {
+        this.operationReceipts?.markAcknowledged(operationId);
     }
 
     async sendStop(timeoutMs?: number): Promise<PublishedCodexCommand | null> {
@@ -364,13 +419,22 @@ export class SessionClient {
         draft: CommandDraft,
         timeoutMs?: number,
     ): Promise<PublishedCodexCommand> {
-        const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
-        const commandId = randomUUID();
+        return await this.publishCommandMutation(
+            this.createCommandMutation(draft),
+            timeoutMs,
+        );
+    }
+
+    private createCommandMutation(
+        draft: CommandDraft,
+        operationId?: string,
+    ): CommandMutation {
+        const commandId = operationId ?? randomUUID();
         const now = Date.now();
         const queueEntryId = draft.command === 'turn.queue'
             ? draft.queueEntryId ?? commandId
             : null;
-        const command = {
+        const command = CodexCommandEntityV4Schema.parse({
             schemaVersion: CODEX_SYNC_V4_ENTITY_SCHEMA_VERSION,
             entityType: 'codex.command',
             providerId: commandId,
@@ -388,8 +452,37 @@ export class SessionClient {
             ...(draft.bindingGeneration !== undefined
                 ? { bindingGeneration: draft.bindingGeneration }
                 : {}),
-        } as unknown as CodexCommandEntityV4;
-        const mutation = this.createMutation(command);
+        });
+        return {
+            command,
+            mutation: this.createMutation(command, operationId),
+        };
+    }
+
+    private commandMutationFromReceipt(mutation: SyncMutationV4): CommandMutation {
+        const entity = this.crypto.decryptEntity({
+            sessionId: this.sessionId,
+            entityId: mutation.entityId,
+            entityType: mutation.entityType,
+            revision: mutation.revision,
+            op: mutation.op,
+        }, mutation.ciphertext);
+        const command = CodexCommandEntityV4Schema.parse(entity);
+        if (
+            mutation.mutationId !== command.commandId
+            || mutation.producerId !== `happy-agent-${command.commandId}`
+        ) {
+            throw new Error(`Operation receipt ${mutation.mutationId} has inconsistent command identity`);
+        }
+        return { command, mutation };
+    }
+
+    private async publishCommandMutation(
+        prepared: CommandMutation,
+        timeoutMs?: number,
+    ): Promise<PublishedCodexCommand> {
+        const deadline = timeoutMs === undefined ? null : Date.now() + timeoutMs;
+        const { command, mutation } = prepared;
         const body = SyncMutationBatchV4Schema.parse({ mutations: [mutation] });
         let lastError: unknown = null;
         for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -445,13 +538,13 @@ export class SessionClient {
         throw normalizeTransportError(lastError, 'publishing Codex command');
     }
 
-    private createMutation(entity: CodexEntityV4): SyncMutationV4 {
+    private createMutation(entity: CodexEntityV4, operationId?: string): SyncMutationV4 {
         const entityId = this.crypto.opaqueEntityId(entity.entityType, entity.providerId);
         const revision = 1;
         const op: SyncMutationOperationV4 = 'upsert';
         return {
-            mutationId: randomUUID(),
-            producerId: `happy-agent-${randomUUID()}`,
+            mutationId: operationId ?? randomUUID(),
+            producerId: `happy-agent-${operationId ?? randomUUID()}`,
             entityId,
             entityType: entity.entityType,
             revision,

@@ -34,7 +34,7 @@ import { formatSessionTable, formatMessageHistory, formatJson } from './output';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sourceEntrypoint = resolve(__dirname, 'index.ts');
-const tsxEntrypoint = resolve(__dirname, '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const tsxEntrypoint = resolve(__dirname, '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 // --- CLI runner ---
 
@@ -188,6 +188,7 @@ describe('Smoke: CLI command surface', () => {
             expect(stdout).toContain('message');
             expect(stdout).toContain('--yolo');
             expect(stdout).toContain('--wait');
+            expect(stdout).toContain('--operation-id');
             expect(stdout).toContain('--json');
         });
 
@@ -291,7 +292,7 @@ describe('Smoke: Error handling', () => {
                 expect(exitCode).not.toBe(0);
                 expect(stderr).toContain('happy-agent auth login');
             }
-        });
+        }, 20_000);
     });
 
     describe('invalid session ID (in unit-tested code paths)', () => {

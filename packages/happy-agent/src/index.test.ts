@@ -6,7 +6,7 @@ import packageJson from '../package.json';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sourceEntrypoint = resolve(__dirname, 'index.ts');
-const tsxEntrypoint = resolve(__dirname, '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const tsxEntrypoint = resolve(__dirname, '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
 
 function runCli(...args: string[]): { stdout: string; stderr: string; exitCode: number } {
     try {
@@ -105,6 +105,7 @@ describe('happy-agent CLI', () => {
             expect(stdout).toContain('Spawn a new Codex session on a machine');
             expect(stdout).toContain('--machine');
             expect(stdout).toContain('--path');
+            expect(stdout).toContain('--operation-id');
             expect(stdout).not.toContain('--agent');
             expect(stdout).toContain('--json');
         });
@@ -146,6 +147,7 @@ describe('happy-agent CLI', () => {
             expect(stdout).toContain('message');
             expect(stdout).toContain('--yolo');
             expect(stdout).toContain('--wait');
+            expect(stdout).toContain('--operation-id');
             expect(stdout).toContain('--json');
         });
 

@@ -33,6 +33,10 @@ import {
     inspectCodexGatewayProviderProcess,
     inspectCodexGatewayWorkerProcess,
 } from './codexGatewayProcessIdentity';
+import {
+    normalizeCodexGatewayOperationId,
+    withCodexGatewayOperationLock,
+} from './codexGatewayOperationLock';
 
 const WORKER_READY_TIMEOUT_MS = 20_000;
 const WORKER_READY_POLL_MS = 50;
@@ -149,7 +153,16 @@ export async function launchCodexGatewayHeadless(
 ): Promise<CodexGatewayHeadlessLaunchResult> {
     assertMinimumCodexCliVersion();
     assertHeadlessLaunchOptions(options);
-    const operationId = options.operationId ?? randomUUID();
+    const operationId = normalizeCodexGatewayOperationId(options.operationId ?? randomUUID());
+    return await withCodexGatewayOperationLock(operationId, async () => (
+        await launchCodexGatewayHeadlessLocked(options, operationId)
+    ));
+}
+
+async function launchCodexGatewayHeadlessLocked(
+    options: CodexGatewayHeadlessLaunchOptions,
+    operationId: string,
+): Promise<CodexGatewayHeadlessLaunchResult> {
     let descriptor: CodexGatewayDescriptor;
     let secret: CodexGatewaySecret;
     const existing = (await listCodexGatewayDescriptors()).filter((candidate) => (
@@ -214,32 +227,13 @@ export async function launchCodexGatewayHeadless(
         forkedFromMessageId: protectedResume ? null : options.forkedFromMessageId ?? null,
         isSideChat: protectedResume ? false : options.isSideChat ?? false,
     };
-    let opened: CodexGatewayOpenRootResult;
-    try {
-        opened = await callCodexGatewayControl<CodexGatewayOpenRootResult>({
-            descriptor,
-            token: secret.controlToken,
-            path: '/root/open',
-            body: request,
-            timeoutMs: 30_000,
-        });
-    } catch (error) {
-        await callCodexGatewayControl({
-            descriptor,
-            token: secret.controlToken,
-            path: '/root/cancel',
-            body: { operationId },
-            timeoutMs: 1_000,
-        }).catch(() => undefined);
-        await callCodexGatewayControl({
-            descriptor,
-            token: secret.controlToken,
-            path: '/stop',
-            body: { force: true },
-            timeoutMs: 1_000,
-        }).catch(() => undefined);
-        throw error;
-    }
+    const opened = await callCodexGatewayControl<CodexGatewayOpenRootResult>({
+        descriptor,
+        token: secret.controlToken,
+        path: '/root/open',
+        body: request,
+        timeoutMs: 30_000,
+    });
     return {
         ...opened,
         pid: descriptor.pid,

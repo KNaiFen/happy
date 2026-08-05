@@ -11,6 +11,7 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': resolve('./src'),
+            '@slopus/happy-wire': resolve('../happy-wire/src/index.ts'),
         },
     },
 })
