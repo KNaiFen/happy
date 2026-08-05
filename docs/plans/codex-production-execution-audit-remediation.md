@@ -34,8 +34,8 @@
 | 2 | F-02 | P1 | 高 | 已解决 | happy-agent 写操作缺少跨进程持久幂等凭据 |
 | 3 | F-03 | P1 | 高 | 已解决 | Gateway handoff 失败会留下目标 generation 的 current 元数据 |
 | 4 | F-04 | P2 | 高 | 已解决 | App snapshot 替换会覆盖并发发布的本地乐观投影 |
-| 5 | P-01 | P2 | 高 | 进行中 | App 为全部 Codex 会话启动固定 5 秒轮询 |
-| 6 | P-02 | P2 | 高 | 待修复 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
+| 5 | P-01 | P2 | 高 | 已解决 | App 为全部 Codex 会话启动固定 5 秒轮询 |
+| 6 | P-02 | P2 | 高 | 进行中 | Relay mutation 在 Serializable 事务内逐条执行 ORM 写入 |
 | 7 | P-03 | P3 | 高 | 待修复 | happy-agent 等待循环每秒重新拉取完整 snapshot |
 
 ## F-01 happy-agent 把命令结果或 interrupt ACK 当作 turn 终态
@@ -105,7 +105,7 @@
 
 ## P-01 App 为全部 Codex 会话启动固定 5 秒轮询
 
-- 状态：进行中
+- 状态：已解决
 - 严重度：P2
 - 置信度：高
 - 生产链：`packages/happy-server/sources/app/api/routes/sessionRoutes.ts:87 list sessions`（最多 150、无 lifecycle 过滤）-> `packages/happy-app/sources/sync/sync.ts:845 fetchSessions` -> `:2206 reconcileCodexV4Clients` -> `packages/happy-app/sources/sync/codexV4ClientRegistry.ts:34 eligibility` -> `packages/happy-app/sources/sync/syncV4Client.ts:255 setInterval(5000)`。
@@ -116,21 +116,21 @@
 - 当前覆盖：registry 测试验证创建/移除 client，没有轮询预算或生命周期过滤断言。
 - 最小修复方向：定义有限的活跃同步集合和按需唤醒策略；inactive/archived session 通过选中、可见、Socket.IO 提示或低频刷新激活，而不是每个 session 固定轮询。
 - 实施计划：真实性复核确认当前 `/v1/sessions` 仍按 `updatedAt` 返回最多 150 个会话，App 解密整批后把所有 `flavor=codex`、`codexSyncVersion=4` 会话交给 registry，而 registry 会为每个 desired session 创建 client；`AppSyncV4Client.start` 对每个 client 固定安装 5 秒 interval，`active` 与 `archivedAt` 均未参与预算。修复将把同步模式作为 registry desired state 的一部分：只有 `active=true && archivedAt=null` 的会话使用 5 秒连续轮询，inactive/archived 会话保留为按需 desired entry 且不被 reconcile 批量实例化；可见会话、Socket.IO high-watermark invalidation 或写操作通过 `invalidate`/`withClient` 精确启动目标 client。`invalidateAll` 只唤醒连续模式或已实例化 client，避免前台切换/重连瞬间启动全部 150 个 dormant session。`AppSyncV4Client` 接受 `pollIntervalMs: number | null`：按需模式启动时仍执行一次 hydrate/pull，但不创建 interval；连续/按需模式转换会停止并重建 client，使 timer 策略立即一致。连续模式保留有界启动重试，按需模式启动失败则等待下一次显式 invalidation，不能自行演化为永久轮询。补充 150 个 dormant session 零实例化、visible/socket/write 只唤醒目标、`invalidateAll` 不扩散、active client 定时收敛、null timer 不周期请求、模式转换停止旧 client、按需失败只在下一次唤醒重试的回归测试；App 补丁版本升级到 `1.11.28`。
-- 解决证据：待填写。
+- 解决证据：行为修复提交 `2988302e964acf56d06adf8c1d2ef3a9b2984fe6` 由 PR #12 合并为 `09f79fc3b82d0c61975a836fcfbed7ebc21a6824`。registry 仍保存全部合格 Codex V4 会话，但只为 `active=true && archivedAt=null` 的会话实例化 5 秒连续轮询 client；inactive/archived 会话保持 dormant，并且只由目标 invalidation、可见会话或写操作按需启动一次 hydrate/pull。`invalidateAll` 不再把 150 个 dormant 会话全部唤醒，连续/按需模式转换会停止并重建 client，按需启动失败只等待下一次显式唤醒。本地 App 全量验证 101 files / 982 tests、相关 2 files / 57 tests、`tsc --noEmit` 和 `git diff --check` 全部通过。PR push/PR 工作流 `30996482047`、`30996508237` 共 34 项检查全部成功，两套 Required CI gate 和官方 Codex TUI 真实 PTY 路径均通过；主分支 CI `30997669607` 的首次执行仅在远程 session picker fixture 超时，同一提交的两套 PR TUI 路径已通过，失败 job 重跑后的 attempt 2 全部成功。官方 Codex Android API 36 field E2E `30997669569` 成功，真实 App 到官方 app-server 往返场景耗时 29 分 11 秒。App `1.11.28` 发布工作流 `30997669324` 完成类型检查、单测、ARM64/SDK 36/无 OTA/签名/16 KB 对齐验证并上传未过期 artifact `8927456295`（`happy-app-1.11.28-android-arm64-v8a-no-ota`，69,813,254 bytes）。
 
 ## P-02 Relay mutation 在 Serializable 事务内逐条执行 ORM 写入
 
-- 状态：待修复
+- 状态：进行中
 - 严重度：P2
 - 置信度：高
-- 生产链：`packages/happy-server/sources/app/api/routes/v4SessionRoutes.ts:394 POST mutations` -> `classifySyncV4Mutations` -> session sequence update -> per-mutation entity upsert + journal create；事务由 `packages/happy-server/sources/utils/inTx.ts:17` 以 Serializable、10 秒 timeout、最多三次重试执行。
+- 生产链：`packages/happy-server/sources/app/api/routes/v4SessionRoutes.ts:394 POST mutations` -> `classifySyncV4Mutations` -> session sequence update -> per-mutation entity upsert + journal create；事务由 `packages/happy-server/sources/storage/inTx.ts:17` 以 Serializable、10 秒 timeout、最多三次重试执行。
 - 成本模型：100 条全部接受的 mutation 单请求约产生 204 次 ORM 操作，并长期占用单 session Serializable 热点；冲突时整个事务重放，放大数据库工作。
 - 用户影响：长时间离线后的批量 flush、多 Gateway 同 session 写入时延迟陡增，可能触发 10 秒超时和 P2034 重试耗尽。
 - 已排除保护：请求批次上限为 100，分类会跳过重复/拒绝项，但接受项仍逐条写 entity 和 journal；重试只处理冲突，不降低事务工作量。
 - 最小复现：100 条接受 mutation，记录 SQL/ORM 调用数、事务时间和两个并发 writer 的重试率。
 - 当前覆盖：路由测试验证语义和幂等结果，不限制批量 ORM 调用数或冲突成本。
 - 最小修复方向：在保持 entity/journal/seq 原子性的前提下批量写入，或重新设计单 session sequence 分配，减少事务往返和冲突窗口。
-- 实施计划：待真实性复核后填写。
+- 实施计划：真实性复核确认当前 mutation 事务先读取 owned session、既有 mutation receipts 与当前 entities，再更新一次 session sequence；随后对每个非 duplicate classification 逐条执行 entity upsert（accepted）和 journal create。100 条全接受且 entity 各异的批次因此在一次 Serializable 事务中约执行 204 次 ORM/数据库往返，且 `inTx` 遇到 P2034 时会重放整个事务。修复保持 classifier、连续 sequence、ACK 顺序、duplicate/superseded 语义和 entity/journal/session 原子性不变：先在内存中按请求顺序为每个非 duplicate classification 分配 sequence 并构造 journal rows，同时把 accepted classifications 按 `entityId` 折叠为该批次的最终投影；随后使用一条完全参数化的 PostgreSQL `INSERT ... ON CONFLICT (sessionId, entityId) DO UPDATE` 批量写最终 entity projections，并用一次 Prisma `createMany` 写全部 journal receipts。两项写入仍处于原 Serializable 事务内，不使用 `skipDuplicates`，任何唯一键竞争或写入失败都必须使 session sequence、projection 与 journal 一起回滚。补充 100 条全接受批次只执行一次 entity batch upsert 和一次 journal createMany 的往返预算测试，以及同实体多 revision、accepted/superseded/duplicate 混合、delete tombstone、序号/ACK 顺序和失败原子性回归；Server 补丁版本升级到 `1.1.40`。
 - 解决证据：待填写。
 
 ## P-03 happy-agent 等待循环每秒重新拉取完整 snapshot
@@ -170,3 +170,4 @@
 | F-02 | `e08de0b1`、`39eabdf2` | #5、#6 | PR：`30978888123`、`30978890922`、`30978890729`、`30980955912`、`30981020451`；发布：`30979937023`、`30981917207`；主干：`30981917433`：均成功 | happy-agent 12 files / 191 tests；CLI 100 files / 922 tests；两包 `tsc --noEmit` | 2026-08-05 |
 | F-03 | `ed296318` | #8 | PR：`30988090259`、`30988090531`、`30988045755`：38/38；主干：`30989318480`；发布：`30989317886`：均成功 | CLI 101 files / 936 tests；相关 4 files / 54 tests；`tsc --noEmit` | 2026-08-05 |
 | F-04 | `11c8b367` | #10 | PR：`30991392616`、`30991430323`：34/34；主干：`30992685385`；Android field：`30992685309`；发布：`30992685109`：均成功 | App 101 files / 976 tests；相关 1 file / 39 tests；`tsc --noEmit` | 2026-08-05 |
+| P-01 | `09f79fc3` | #12 | PR：`30996482047`、`30996508237`：34/34；主干：`30997669607` attempt 2；Android field：`30997669569`；发布：`30997669324`：均成功 | App 101 files / 982 tests；相关 2 files / 57 tests；`tsc --noEmit` | 2026-08-05 |
