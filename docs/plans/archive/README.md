@@ -4,6 +4,7 @@
 
 这里保存已完成、取消或被替代的计划。归档保留决策与验收证据，但不代表当前路线图。
 
+- [2026-08-06 安全、恢复与输入队列修复台账](./2026-08-06-remediation-ledger.md)
 - [Agent SDK Upgrade + Plan Mode Fix + Integration Tests](./agent-sdk-upgrade-plan-mode-fix.md)
 - [Agent Testing Layers](./agent-testing-layers.md)
 - [CLI V3 Messages API Migration (happy-cli)](./cli-v3-messages-api.md)

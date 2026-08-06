@@ -252,14 +252,14 @@ function makePlanIndex(markdown, directory, outputPath, heading, intro) {
         file !== outputPath
         && (directory !== 'docs/plans' || !file.startsWith('docs/plans/archive/')),
     );
+    const entries = files.map((file) => markdownLink(title(file), relativeLink(outputPath, file)));
     return [
         `# ${heading}`,
         '',
         '> 此文件由 `node scripts/docs/knowledge-base.mjs --write` 生成。不要手工编辑。',
         '',
         intro,
-        '',
-        ...files.map((file) => markdownLink(title(file), relativeLink(outputPath, file))),
+        ...(entries.length ? ['', ...entries] : []),
         '',
     ].join('\n');
 }
@@ -442,6 +442,7 @@ function runSelfTests() {
     expect(anchorsFromContent('Setext heading\n--------------').has('setext-heading'), 'Setext headings must provide anchors');
     expect(planStatusKind('## 状态\n\n- 负责人：Docs\n- 当前状态：已完成') === 'terminal', 'terminal status may follow metadata');
     expect(planStatusKind('## 状态\n\n- 当前状态：活动；真实性核验已完成') === 'active', 'completed subtasks must not close an active plan');
+    expect(!makePlanIndex([], 'docs/plans', 'docs/plans/README.md', '活动计划', 'intro').endsWith('\n\n'), 'empty plan indexes must not end with a blank line');
     return failures;
 }
 

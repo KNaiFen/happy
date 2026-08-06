@@ -2,11 +2,12 @@
 
 ## 状态
 
-- 当前状态：活动；`LOG-01`、`RESUME-01`、`QUEUE-01` 均已解决，未解决问题剩余 0 项；
-  集成变更已合入 `main`，正在完成统一发布验收，发布完成后归档本台账。
+- 当前状态：已解决；已归档。`LOG-01`、`RESUME-01`、`QUEUE-01` 均已修复，
+  未解决问题剩余 0 项。
 - 审计基线：`fd967d830bb4bc53250617c8baad440d55ffd17d`。
-- 集成分支：`audit/2026-08-06-remediation`；各项依次合入本分支，最终一次合入 `main`。
-- 发布策略：全部问题完成后统一触发 CLI、Android App 与 Debian Relay 云端发布。
+- 集成分支：`audit/2026-08-06-remediation`；代码经 PR #19、#20、#21 合入 `main`。
+- 完成日期：2026-08-06；CLI、Android App 与 Debian Relay 均已通过云端构建、
+  制品校验并发布 GitHub Release。
 
 ## 执行规则
 
@@ -22,9 +23,9 @@
 
 | 顺序 | 编号 | 严重度 | 状态 | 项目 | 活动计划 |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | LOG-01 | P1 高 | 已解决 | 语音链路可能把上下文、token、标识符或原始错误写入日志 | [Voice 敏感日志收敛归档](archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md) |
-| 2 | RESUME-01 | P1 高 | 已解决 | 首页旧会话恢复失败、局部 Gateway 假状态及失败后空闲 Gateway 残留 | [旧会话恢复归档](archive/codex-home-old-session-resume-state-regression.md) |
-| 3 | QUEUE-01 | P2 中 | 已解决 | 执行期间排队/引导控件嵌入输入框，待发送消息缺少完整管理 | [悬浮待发送条归档](archive/codex-composer-pending-message-dock.md) |
+| 1 | LOG-01 | P1 高 | 已解决 | 语音链路可能把上下文、token、标识符或原始错误写入日志 | [Voice 敏感日志收敛归档](voice-sensitive-logging-hardening-1.11.29-1.1.41.md) |
+| 2 | RESUME-01 | P1 高 | 已解决 | 首页旧会话恢复失败、局部 Gateway 假状态及失败后空闲 Gateway 残留 | [旧会话恢复归档](codex-home-old-session-resume-state-regression.md) |
+| 3 | QUEUE-01 | P2 中 | 已解决 | 执行期间排队/引导控件嵌入输入框，待发送消息缺少完整管理 | [悬浮待发送条归档](codex-composer-pending-message-dock.md) |
 
 ## 已核验现场证据
 
@@ -43,30 +44,32 @@
 - `LOG-01`：实现提交 `4f6ea58e83f69e29162f0f4512ceb56904785c4a`，文档提交
   `17c23a97e293e086e6cf49355bd065e9ef940b0b`；monorepo CI run `31052901664`
   与文档 CI run `31053102538` 均通过。定向 canary、类型检查、独立复核和发布阶段版本见
-  [归档计划](archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md)。
+  [归档计划](voice-sensitive-logging-hardening-1.11.29-1.1.41.md)。
 - `RESUME-01`：实现提交 `796e3e4b2e4fec99044a9ae55fd0f9540eece060`，测试契约修正
   `9a271b6f2b3c870113e0a15adcd6acfb44428423`；monorepo CI run
   [`31060623946`](https://github.com/KNaiFen/happy/actions/runs/31060623946) 的完整矩阵与
   Required gate 均通过。定向测试、全量 CLI 单测和阶段版本见
-  [归档计划](archive/codex-home-old-session-resume-state-regression.md)。
+  [归档计划](codex-home-old-session-resume-state-regression.md)。
 - `QUEUE-01`：实现提交 `62f09e35bcfe19dbd3e02355c5a417a66ebb75b8`；Wire schema
   `8/8`、CLI processor `18/18`、App projection/ops `39/39`、受影响三包类型检查、
   全语言键一致性以及 `git diff --check` 均通过。浏览器实测 radio 为 `91×44px`，方向键、
   ARIA、320px 滚动与输入框边界均正确；[同一 HEAD 的 monorepo CI](https://github.com/KNaiFen/happy/actions/runs/31066864724)
-  全绿，详见 [归档计划](archive/codex-composer-pending-message-dock.md)。
+  全绿，详见 [归档计划](codex-composer-pending-message-dock.md)。
 
-## 发布验收进度
+## 发布验收与交付
 
 - 集成 PR [#19](https://github.com/KNaiFen/happy/pull/19) 已合入 `main`，合并提交为
   `8aeaa377620a2079c7789c6ade9407cd96aea48a`；同一 HEAD 的 monorepo CI run
   [`31068692915`](https://github.com/KNaiFen/happy/actions/runs/31068692915) 已通过。
-- CLI `1.4.44`、Android App `1.11.31` 与 Debian Relay `1.1.41` 的首轮云端构建均通过；
+- CLI `1.4.44`、Android App `1.11.31` 与 Debian Relay `1.1.41` 的首轮云端构建均通过。
   Android 现场 E2E run
   [`31068692919`](https://github.com/KNaiFen/happy/actions/runs/31068692919) 发现 Maestro 仍按旧 tab
   语义断言 `selected`。失败层级中 `Queue` 是 `android.widget.RadioButton`，状态为
   `checked=true`、`selected=false`，截图也确认控件可见且已选中，因此这是验收契约错位，
   不是产品视觉或交互失败。
-- 现场流程改用 radio 对应的 `checked` 断言；`1.11.32` 的 Android 构建 run
+- PR [#20](https://github.com/KNaiFen/happy/pull/20) 将现场流程改用 radio 对应的
+  `checked` 断言，并以 `5778288b043e91b7fc0e1753dac95b43df737037` 合入 `main`；
+  `1.11.32` 的 Android 构建 run
   [`31071637007`](https://github.com/KNaiFen/happy/actions/runs/31071637007) 已通过，制品已核验为
   `com.ex3ndr.happy`、`versionCode 11132`、OTA 关闭，且构建提交为
   `5778288b043e91b7fc0e1753dac95b43df737037`。
@@ -76,8 +79,28 @@
   `codex-queued-message-dock`，并提供“Send to active turn”“Remove queued message”及
   “More queued-message actions”。编辑按已实现的设计位于更多菜单中。
 - 现场流程改为打开更多菜单后断言编辑、引导、移除三项，并等待队列 dock 被当前轮次取走。
-  由于 `1.11.32` 的发布工作流已经运行，最终 App 版本继续按不可复用规则顺延为 `1.11.33`，
-  等待同一 HEAD 的现场 E2E 与 Android 构建重新通过。
+  由于 `1.11.32` 的发布工作流已经运行，App 版本按不可复用规则顺延为 `1.11.33`。
+- PR [#21](https://github.com/KNaiFen/happy/pull/21) 以
+  `f835060a0f8abf88686db1d6d3972cfb469348f3` 合入 `main`。同一 HEAD 的
+  [monorepo CI](https://github.com/KNaiFen/happy/actions/runs/31074590142)、
+  [Android 1.11.33 构建](https://github.com/KNaiFen/happy/actions/runs/31074589905)、
+  [官方 Codex API 36 现场 E2E](https://github.com/KNaiFen/happy/actions/runs/31074590051) 和
+  [文档检查](https://github.com/KNaiFen/happy/actions/runs/31074589936) 均成功。
+- CLI 发布构建 run
+  [`31068692776`](https://github.com/KNaiFen/happy/actions/runs/31068692776) 与 Debian Relay
+  发布构建 run [`31068692788`](https://github.com/KNaiFen/happy/actions/runs/31068692788)
+  均成功；三份外层制品均通过 SHA-256 复核。
+
+| 产品 | Release | 制品 | SHA-256 |
+| --- | --- | --- | --- |
+| CLI `1.4.44` | [cli-1.4.44](https://github.com/KNaiFen/happy/releases/tag/cli-1.4.44) | [happy-1.4.44.tgz](https://github.com/KNaiFen/happy/releases/download/cli-1.4.44/happy-1.4.44.tgz) | `15a7c90bf5fc92dfe97b85ec625e6e919427d723749d4e302df11b37e27fd125` |
+| Android App `1.11.33` | [happy-app-1.11.33](https://github.com/KNaiFen/happy/releases/tag/happy-app-1.11.33) | [ARM64 / SDK 36 / 无 OTA APK](https://github.com/KNaiFen/happy/releases/download/happy-app-1.11.33/happy-app-1.11.33-android-arm64-v8a-no-ota.apk) | `5315ebd15afefee2309a40d1659ba18252249e62bfabc5232f464e3c91a79c43` |
+| Debian Relay `1.1.41` | [happy-relay-server-1.1.41](https://github.com/KNaiFen/happy/releases/tag/happy-relay-server-1.1.41) | [Debian 13 amd64 离线包](https://github.com/KNaiFen/happy/releases/download/happy-relay-server-1.1.41/happy-relay-server-1.1.41-debian13-amd64.tar.gz) | `84ac04b19a236f25564c6941f5216ebfc3da6b3147deae017ab6a91b57ad1e29` |
+
+- Relay 离线包内含 `happy-relay-server-1.1.41-debian13-amd64.image.tar.gz` distroless
+  OCI 镜像，其 SHA-256 为
+  `683344a2d3adf1ed34903c177bac015658d713deb1c2d2f08c2cb3b99e89063b`。
+- 每个 Release 同时附带对应 `.sha256` 文件；不发布 Tauri Desktop，不推送服务器镜像仓库。
 
 ## 目标版本
 
