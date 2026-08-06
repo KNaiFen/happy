@@ -3,7 +3,7 @@
 ## 状态
 
 - 当前状态：活动；`LOG-01`、`RESUME-01`、`QUEUE-01` 均已解决，未解决问题剩余 0 项；
-  等待集成分支合入 `main` 与统一发布后归档本台账。
+  集成变更已合入 `main`，正在完成统一发布验收，发布完成后归档本台账。
 - 审计基线：`fd967d830bb4bc53250617c8baad440d55ffd17d`。
 - 集成分支：`audit/2026-08-06-remediation`；各项依次合入本分支，最终一次合入 `main`。
 - 发布策略：全部问题完成后统一触发 CLI、Android App 与 Debian Relay 云端发布。
@@ -55,8 +55,22 @@
   ARIA、320px 滚动与输入框边界均正确；[同一 HEAD 的 monorepo CI](https://github.com/KNaiFen/happy/actions/runs/31066864724)
   全绿，详见 [归档计划](archive/codex-composer-pending-message-dock.md)。
 
+## 发布验收进度
+
+- 集成 PR [#19](https://github.com/KNaiFen/happy/pull/19) 已合入 `main`，合并提交为
+  `8aeaa377620a2079c7789c6ade9407cd96aea48a`；同一 HEAD 的 monorepo CI run
+  [`31068692915`](https://github.com/KNaiFen/happy/actions/runs/31068692915) 已通过。
+- CLI `1.4.44`、Android App `1.11.31` 与 Debian Relay `1.1.41` 的首轮云端构建均通过；
+  Android 现场 E2E run
+  [`31068692919`](https://github.com/KNaiFen/happy/actions/runs/31068692919) 发现 Maestro 仍按旧 tab
+  语义断言 `selected`。失败层级中 `Queue` 是 `android.widget.RadioButton`，状态为
+  `checked=true`、`selected=false`，截图也确认控件可见且已选中，因此这是验收契约错位，
+  不是产品视觉或交互失败。
+- 现场流程改用 radio 对应的 `checked` 断言；由于 `1.11.31` 的发布工作流已经运行，最终 App
+  版本按不可复用规则顺延为 `1.11.32`，等待同一 HEAD 的现场 E2E 与 Android 构建重新通过。
+
 ## 目标版本
 
-- Android App：`1.11.31`；CLI：`1.4.44`；Debian Relay：`1.1.41`。
+- Android App：`1.11.32`；CLI：`1.4.44`；Debian Relay：`1.1.41`。
 - Wire 保持 `0.1.8`，happy-agent 保持 `0.1.9`。
 - 任一发布版本的工作流一旦运行，不论成功与否都不得复用该版本。

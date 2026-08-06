@@ -87,7 +87,7 @@ tags:
 - extendedWaitUntil:
     visible:
       text: Queue
-      selected: true
+      checked: true
     timeout: 30000
 - assertVisible:
     text: Steer
@@ -97,11 +97,11 @@ tags:
     enabled: true
 - assertVisible:
     text: Steer
-    selected: true
+    checked: true
 - tapOn: Queue
 - assertVisible:
     text: Queue
-    selected: true
+    checked: true
 
 - tapOn:
     id: agent-input-message
