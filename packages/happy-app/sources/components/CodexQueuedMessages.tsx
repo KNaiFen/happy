@@ -156,6 +156,7 @@ export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props
                                     )}
                                 </Pressable>
                                 <Pressable
+                                    testID="codex-queued-message-more"
                                     ref={(node) => setWebTitle(node, moreLabel)}
                                     accessibilityRole="button"
                                     accessibilityLabel={moreLabel}
@@ -184,6 +185,7 @@ export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props
             >
                 <View style={styles.menuLayer}>
                     <Pressable
+                        testID="codex-queued-message-menu-dismiss"
                         accessibilityRole="button"
                         accessibilityLabel={t('common.cancel')}
                         style={styles.menuBackdrop}

@@ -66,11 +66,21 @@
   语义断言 `selected`。失败层级中 `Queue` 是 `android.widget.RadioButton`，状态为
   `checked=true`、`selected=false`，截图也确认控件可见且已选中，因此这是验收契约错位，
   不是产品视觉或交互失败。
-- 现场流程改用 radio 对应的 `checked` 断言；由于 `1.11.31` 的发布工作流已经运行，最终 App
-  版本按不可复用规则顺延为 `1.11.32`，等待同一 HEAD 的现场 E2E 与 Android 构建重新通过。
+- 现场流程改用 radio 对应的 `checked` 断言；`1.11.32` 的 Android 构建 run
+  [`31071637007`](https://github.com/KNaiFen/happy/actions/runs/31071637007) 已通过，制品已核验为
+  `com.ex3ndr.happy`、`versionCode 11132`、OTA 关闭，且构建提交为
+  `5778288b043e91b7fc0e1753dac95b43df737037`。
+- 同一提交的 Android 现场 E2E run
+  [`31071637117`](https://github.com/KNaiFen/happy/actions/runs/31071637117) 继续发现一个过期验收：
+  发送 `Q` 后脚本直接断言“Edit queued message”，但失败截图和无障碍层级确认 `Q` 已显示在
+  `codex-queued-message-dock`，并提供“Send to active turn”“Remove queued message”及
+  “More queued-message actions”。编辑按已实现的设计位于更多菜单中。
+- 现场流程改为打开更多菜单后断言编辑、引导、移除三项，并等待队列 dock 被当前轮次取走。
+  由于 `1.11.32` 的发布工作流已经运行，最终 App 版本继续按不可复用规则顺延为 `1.11.33`，
+  等待同一 HEAD 的现场 E2E 与 Android 构建重新通过。
 
 ## 目标版本
 
-- Android App：`1.11.32`；CLI：`1.4.44`；Debian Relay：`1.1.41`。
+- Android App：`1.11.33`；CLI：`1.4.44`；Debian Relay：`1.1.41`。
 - Wire 保持 `0.1.8`，happy-agent 保持 `0.1.9`。
 - 任一发布版本的工作流一旦运行，不论成功与否都不得复用该版本。
