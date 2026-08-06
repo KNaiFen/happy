@@ -2,7 +2,8 @@
 
 ## 状态
 
-- 当前状态：活动；`LOG-01`、`RESUME-01` 已解决，`QUEUE-01` 进行中，未解决问题剩余 1 项。
+- 当前状态：活动；`LOG-01`、`RESUME-01`、`QUEUE-01` 均已解决，未解决问题剩余 0 项；
+  等待集成分支合入 `main` 与统一发布后归档本台账。
 - 审计基线：`fd967d830bb4bc53250617c8baad440d55ffd17d`。
 - 集成分支：`audit/2026-08-06-remediation`；各项依次合入本分支，最终一次合入 `main`。
 - 发布策略：全部问题完成后统一触发 CLI、Android App 与 Debian Relay 云端发布。
@@ -23,7 +24,7 @@
 | ---: | --- | --- | --- | --- | --- |
 | 1 | LOG-01 | P1 高 | 已解决 | 语音链路可能把上下文、token、标识符或原始错误写入日志 | [Voice 敏感日志收敛归档](archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md) |
 | 2 | RESUME-01 | P1 高 | 已解决 | 首页旧会话恢复失败、局部 Gateway 假状态及失败后空闲 Gateway 残留 | [旧会话恢复归档](archive/codex-home-old-session-resume-state-regression.md) |
-| 3 | QUEUE-01 | P2 中 | 进行中 | 执行期间排队/引导控件嵌入输入框，待发送消息缺少完整管理 | [悬浮待发送条](codex-composer-pending-message-dock.md) |
+| 3 | QUEUE-01 | P2 中 | 已解决 | 执行期间排队/引导控件嵌入输入框，待发送消息缺少完整管理 | [悬浮待发送条归档](archive/codex-composer-pending-message-dock.md) |
 
 ## 已核验现场证据
 
@@ -48,6 +49,11 @@
   [`31060623946`](https://github.com/KNaiFen/happy/actions/runs/31060623946) 的完整矩阵与
   Required gate 均通过。定向测试、全量 CLI 单测和阶段版本见
   [归档计划](archive/codex-home-old-session-resume-state-regression.md)。
+- `QUEUE-01`：实现提交 `62f09e35bcfe19dbd3e02355c5a417a66ebb75b8`；Wire schema
+  `8/8`、CLI processor `18/18`、App projection/ops `39/39`、受影响三包类型检查、
+  全语言键一致性以及 `git diff --check` 均通过。浏览器实测 radio 为 `91×44px`，方向键、
+  ARIA、320px 滚动与输入框边界均正确；[同一 HEAD 的 monorepo CI](https://github.com/KNaiFen/happy/actions/runs/31066864724)
+  全绿，详见 [归档计划](archive/codex-composer-pending-message-dock.md)。
 
 ## 目标版本
 

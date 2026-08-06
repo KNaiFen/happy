@@ -11,6 +11,7 @@
 - [Codex App 语义时间线去重与 Resume 焦点修复](./codex-app-semantic-timeline-dedup.md)
 - [Codex: app-server integration](./codex-app-server-migration.md)
 - [Happy CLI 独立版本命令修复计划](./codex-cli-standalone-version-fix.md)
+- [Codex 悬浮待发送条与队列管理计划](./codex-composer-pending-message-dock.md)
 - [Codex Gateway 真实配置传输修复计划](./codex-gateway-real-config-transport.md)
 - [Codex 首页旧会话恢复与状态回归修复计划](./codex-home-old-session-resume-state-regression.md)
 - [macOS Codex Gateway Socket Path 修复计划](./codex-macos-gateway-socket-path.md)

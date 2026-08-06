@@ -41,7 +41,6 @@
 ## 活动计划
 
 - [2026-08-06 安全、恢复与输入队列修复台账](./plans/2026-08-06-remediation-ledger.md)
-- [Codex 悬浮待发送条与队列管理计划](./plans/codex-composer-pending-message-dock.md)
 
 ## 审查记录
 
@@ -108,6 +107,7 @@
 - [Codex App 语义时间线去重与 Resume 焦点修复](./plans/archive/codex-app-semantic-timeline-dedup.md)
 - [Codex: app-server integration](./plans/archive/codex-app-server-migration.md)
 - [Happy CLI 独立版本命令修复计划](./plans/archive/codex-cli-standalone-version-fix.md)
+- [Codex 悬浮待发送条与队列管理计划](./plans/archive/codex-composer-pending-message-dock.md)
 - [Codex Gateway 真实配置传输修复计划](./plans/archive/codex-gateway-real-config-transport.md)
 - [Codex 首页旧会话恢复与状态回归修复计划](./plans/archive/codex-home-old-session-resume-state-regression.md)
 - [macOS Codex Gateway Socket Path 修复计划](./plans/archive/codex-macos-gateway-socket-path.md)

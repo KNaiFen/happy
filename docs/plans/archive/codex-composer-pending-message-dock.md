@@ -2,7 +2,8 @@
 
 ## 状态
 
-- 当前状态：进行中；实现与本地验证已完成，等待集成分支 CI 后归档。
+- 当前状态：已解决；实现提交 `62f09e35bcfe19dbd3e02355c5a417a66ebb75b8` 已通过
+  集成分支 monorepo CI，等待与其余两项一起合入 `main` 并统一发布。
 - 视觉目标：Agent 执行期间使用贴在输入框上沿的紧凑待发送层，桌面与手机保持同一信息层级。
 - 范围：App composer/队列交互、CLI Sync v4 队列取消语义及全部 App 翻译。
 
@@ -31,7 +32,7 @@
 - [x] 更新全部支持语言并运行翻译一致性检查。
 - [x] 增加 App projection/ops、CLI processor 和交互测试。
 - [x] 使用桌面、375px 与 320px Playwright 截图验收布局和遮挡。
-- [ ] 在集成分支运行 monorepo CI，记录结果后归档。
+- [x] 在集成分支运行 monorepo CI，记录结果后归档。
 
 ## 本地验证证据
 
@@ -41,6 +42,13 @@
   编辑弹层、移除竞争失败提示、radio 的鼠标/键盘操作及 `aria-checked`，以及自动补全层
   位于待发送层之上。最终复验确认两个 radio 均为 `91×44px`，方向键切换后焦点、
   `aria-checked` 与 roving `tabindex` 同步收敛；临时路由和开发服务器已删除。
+
+## 云端验收证据
+
+- [Documentation knowledge base](https://github.com/KNaiFen/happy/actions/runs/31066864614) 通过。
+- [Happy monorepo CI](https://github.com/KNaiFen/happy/actions/runs/31066864724) 在同一
+  `62f09e35` HEAD 全绿：CLI、Wire、Server、App、fake-provider 恢复、官方 Codex
+  app-server 生命周期、真实 TUI 11 分钟空闲/附着/停止以及 Required CI gate 均成功。
 
 ## 验收标准
 
