@@ -345,8 +345,11 @@ export const en = {
         statusBarPathTitle: 'Working directory',
         queuedMessageEdit: 'Edit queued message',
         queuedMessageSteer: 'Send to active turn',
+        queuedMessageRemove: 'Remove queued message',
+        queuedMessageMore: 'More queued-message actions',
         queuedMessageActionFailed: "Couldn't update the queued message. Its status may have changed; try again.",
         queuedAttachment: 'Queued attachment',
+        followUpMode: 'Follow-up mode',
         followUpQueue: 'Queue',
         followUpSteer: 'Steer',
         // Fork / duplicate / rewind flow

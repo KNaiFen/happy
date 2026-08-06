@@ -31,7 +31,8 @@ export type CodexV4CommandCancellationReason =
     | 'bindingSuperseded'
     | 'threadHandoff'
     | 'gatewayStopping'
-    | 'commandReplaced';
+    | 'commandReplaced'
+    | 'queueCancelled';
 
 export class CodexV4CommandCancelledError extends Error {
     constructor(
@@ -58,6 +59,12 @@ interface CommandStateStore {
         replacementCommand: CodexCommandEntityV4,
         replacementResult: CodexCommandResultEntityV4,
     ): ReturnType<SyncV4Client['publishCommandReplacement']>;
+    publishCommandCancellation(
+        queuedCommand: CodexCommandEntityV4,
+        queuedResult: CodexCommandResultEntityV4,
+        cancellationCommand: CodexCommandEntityV4,
+        cancellationResult: CodexCommandResultEntityV4,
+    ): ReturnType<SyncV4Client['publishCommandCancellation']>;
 }
 
 interface CommandProcessorOptions {
@@ -165,6 +172,11 @@ export class CodexV4CommandProcessor {
 
         if (command.clientUserMessageId !== command.commandId) {
             await this.transition(command, 'failed', { error: 'clientUserMessageId must equal commandId' });
+            return;
+        }
+
+        if (command.command === 'turn.queue.cancel') {
+            await this.cancelQueuedCommand(command);
             return;
         }
 
@@ -299,6 +311,44 @@ export class CodexV4CommandProcessor {
         return true;
     }
 
+    private async cancelQueuedCommand(command: CodexCommandEntityV4): Promise<void> {
+        const queuedCommandId = command.replacesCommandId;
+        const queued = queuedCommandId
+            ? this.options.store.getCommand(queuedCommandId)
+            : undefined;
+        const queuedStatus = queuedCommandId
+            ? this.options.store.getCommandStatus(queuedCommandId)
+            : undefined;
+        const requestedQueueEntryId = queueEntryId(command);
+        const validCancellation = queued?.command === 'turn.queue'
+            && (queuedStatus === undefined || queuedStatus === 'received')
+            && command.threadId === queued.threadId
+            && command.expectedTurnId === queued.expectedTurnId
+            && requestedQueueEntryId !== null
+            && requestedQueueEntryId === (queueEntryId(queued) ?? queued.commandId)
+            && queuedAt(command) === queuedAt(queued)
+            && bindingGeneration(command) === bindingGeneration(queued)
+            && isEmptyObject(command.payload);
+        if (!validCancellation) {
+            await this.transition(command, 'failed', {
+                error: 'The queued message is no longer available for cancellation',
+            });
+            return;
+        }
+
+        await this.options.store.publishCommandCancellation(
+            queued,
+            this.resultFor(queued, 'cancelled', {
+                error: 'Queued message cancelled',
+                reason: 'queueCancelled',
+            }),
+            command,
+            this.resultFor(command, 'succeeded', {
+                result: { cancelledCommandId: queued.commandId },
+            }),
+        );
+    }
+
     private shouldDefer(command: CodexCommandEntityV4): boolean {
         if (command.command !== 'turn.queue' || !command.threadId) return false;
         return this.queueStartsAwaitingLifecycle.has(command.threadId)
@@ -357,4 +407,27 @@ function queueEntryId(command: CodexCommandEntityV4): string | null {
         queueEntryId?: string | null;
     }).queueEntryId;
     return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function queuedAt(command: CodexCommandEntityV4): number {
+    const value = (command as CodexCommandEntityV4 & { queuedAt?: number }).queuedAt;
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? value
+        : command.createdAt;
+}
+
+function bindingGeneration(command: CodexCommandEntityV4): number | undefined {
+    const value = (command as CodexCommandEntityV4 & { bindingGeneration?: number }).bindingGeneration;
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? value
+        : undefined;
+}
+
+function isEmptyObject(value: unknown): boolean {
+    return Boolean(
+        value
+        && typeof value === 'object'
+        && !Array.isArray(value)
+        && Object.keys(value).length === 0,
+    );
 }

@@ -1,7 +1,7 @@
 {
   "name": "happy-app",
   "main": "index.ts",
-  "version": "1.11.30",
+  "version": "1.11.31",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",

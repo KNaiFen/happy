@@ -1060,8 +1060,11 @@ function shouldProjectCommandResult(
         const status = commandResultStatus(result);
         return status === 'failed'
             || status === 'notReplayed'
-            || (status === 'cancelled' && commandResultReason(result) !== 'commandReplaced');
+            || (status === 'cancelled'
+                && commandResultReason(result) !== 'commandReplaced'
+                && commandResultReason(result) !== 'queueCancelled');
     }
+    if (command?.command === 'turn.queue.cancel') return false;
     return isCommandFailure(result.status)
         || Boolean(command && QUERY_COMMANDS.has(command.command));
 }

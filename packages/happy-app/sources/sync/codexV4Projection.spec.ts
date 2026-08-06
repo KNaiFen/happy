@@ -1189,6 +1189,69 @@ describe('Codex v4 projection', () => {
         }]);
     });
 
+    it('hides a cancelled queue entry without projecting a blank provider message', () => {
+        const queued = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'queue-command',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'queue-command',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-active',
+            command: 'turn.queue',
+            payload: { text: 'queued text', displayText: 'queued text' },
+            clientUserMessageId: 'queue-command',
+            replacesCommandId: null,
+            queueEntryId: 'queue-entry-1',
+            queuedAt: 10,
+            bindingGeneration: 3,
+        } as unknown as CodexCommandEntityV4;
+        const cancellation = {
+            ...queued,
+            providerId: 'queue-cancel',
+            createdAt: 20,
+            updatedAt: 20,
+            commandId: 'queue-cancel',
+            command: 'turn.queue.cancel',
+            payload: {},
+            clientUserMessageId: 'queue-cancel',
+            replacesCommandId: queued.commandId,
+        } as unknown as CodexCommandEntityV4;
+        const cancelled = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'queue-command-result',
+            createdAt: 20,
+            updatedAt: 20,
+            commandId: queued.commandId,
+            threadId: 'thread-1',
+            turnId: null,
+            status: 'cancelled',
+            providerRequestId: null,
+            result: null,
+            error: 'Queued message cancelled',
+            reason: 'queueCancelled',
+        } as unknown as CodexCommandResultEntityV4;
+        const cancellationResult = {
+            ...cancelled,
+            providerId: 'queue-cancel-result',
+            commandId: cancellation.commandId,
+            status: 'succeeded',
+            result: { cancelledCommandId: queued.commandId },
+            error: null,
+            reason: null,
+        } as unknown as CodexCommandResultEntityV4;
+
+        let projection = apply(createCodexV4Projection('thread-1'), queued);
+        projection = apply(projection, cancellation);
+        projection = apply(projection, cancelled);
+        projection = apply(projection, cancellationResult);
+
+        expect(codexV4QueuedMessages(projection)).toEqual([]);
+        expect(projection.messages).toEqual([]);
+    });
+
     it('hides control progress but keeps failures as compact stable messages', () => {
         const control: CodexCommandEntityV4 = {
             schemaVersion: 1,

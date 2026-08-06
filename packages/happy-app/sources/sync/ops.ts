@@ -750,6 +750,26 @@ export async function sessionUpdateCodexQueuedMessage(
     }, undefined, text);
 }
 
+/** Cancel one CLI-owned follow-up before the Gateway claims it. */
+export async function sessionCancelCodexQueuedMessage(sessionId: string, id: string): Promise<void> {
+    assertSessionInteractionAllowed(sessionId);
+    const projection = storage.getState().codexV4Sessions[sessionId];
+    const queued = codexV4QueuedMessages(projection).find((message) => message.id === id);
+    if (!queued) throw new Error('Queued Codex message not found');
+    await sync.publishCodexV4Command(sessionId, {
+        command: 'turn.queue.cancel',
+        threadId: queued.command.threadId,
+        expectedTurnId: queued.command.expectedTurnId,
+        payload: {},
+        replacesCommandId: queued.command.commandId,
+        queueEntryId: queued.id,
+        queuedAt: queued.createdAt,
+        ...(commandBindingGeneration(queued.command) !== undefined
+            ? { bindingGeneration: commandBindingGeneration(queued.command) }
+            : {}),
+    });
+}
+
 /** Move one CLI-owned Codex follow-up into the currently active turn. */
 export async function sessionSteerCodexQueuedMessage(sessionId: string, id: string): Promise<void> {
     assertSessionInteractionAllowed(sessionId);

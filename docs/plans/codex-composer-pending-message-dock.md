@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：进行中；旧会话恢复已通过完整 CI 并归档，开始核验现有队列真值与 composer 布局。
+- 当前状态：进行中；实现与本地验证已完成，等待集成分支 CI 后归档。
 - 视觉目标：Agent 执行期间使用贴在输入框上沿的紧凑待发送层，桌面与手机保持同一信息层级。
 - 范围：App composer/队列交互、CLI Sync v4 队列取消语义及全部 App 翻译。
 
@@ -16,19 +16,31 @@
 
 ## 协议契约
 
-- 新增 `turn.queue.cancel` 命令，只能替换仍为 `received` 的 `turn.queue`。
+- 新增 `turn.queue.cancel` 命令，可原子取消已持久化且仍未被执行器认领的
+  `turn.queue`（状态为 `received` 或尚未写入状态）；`executing`、终态或身份不匹配一律拒绝。
 - 取消命令沿用 `queueEntryId`、`queuedAt`、`bindingGeneration` 和 `replacesCommandId`；
   CLI 原子取消原命令并在本地成功，不向供应商发送空输入。
-- Wire 的 command 字段已允许受控扩展字符串，因此不修改 Wire schema 或版本。
+- Wire 的 command 字段已允许受控扩展字符串；为可判别的取消结果新增稳定
+  `queueCancelled` 原因枚举，Wire 版本仍保持 `0.1.8`。
 
 ## 待完成
 
-- [ ] 将模式控件移出输入框 surface，并实现响应式待发送消息层。
-- [ ] 增加编辑、引导、移除和多消息菜单，保持主 composer 尺寸稳定。
-- [ ] 实现 App `sessionCancelCodexQueuedMessage` 与 CLI `turn.queue.cancel`。
-- [ ] 更新全部支持语言并运行翻译一致性检查。
-- [ ] 增加 App projection/ops、CLI processor 和交互测试。
-- [ ] 使用桌面、375px 与 320px Playwright 截图验收布局和遮挡。
+- [x] 将模式控件移出输入框 surface，并实现响应式待发送消息层。
+- [x] 增加编辑、引导、移除和多消息菜单，保持主 composer 尺寸稳定。
+- [x] 实现 App `sessionCancelCodexQueuedMessage` 与 CLI `turn.queue.cancel`。
+- [x] 更新全部支持语言并运行翻译一致性检查。
+- [x] 增加 App projection/ops、CLI processor 和交互测试。
+- [x] 使用桌面、375px 与 320px Playwright 截图验收布局和遮挡。
+- [ ] 在集成分支运行 monorepo CI，记录结果后归档。
+
+## 本地验证证据
+
+- Wire schema：`syncV4Entities.test.ts` 8/8；CLI processor：18/18；App queue
+  projection/ops：39/39；三个受影响包的 `tsc --noEmit` 均通过。
+- Playwright 临时路由验证了桌面、375px、320px：最多三条的滚动视口、更多菜单、
+  编辑弹层、移除竞争失败提示、radio 的鼠标/键盘操作及 `aria-checked`，以及自动补全层
+  位于待发送层之上。最终复验确认两个 radio 均为 `91×44px`，方向键切换后焦点、
+  `aria-checked` 与 roving `tabindex` 同步收敛；临时路由和开发服务器已删除。
 
 ## 验收标准
 

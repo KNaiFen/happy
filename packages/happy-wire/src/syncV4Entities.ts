@@ -234,7 +234,13 @@ export const CodexCommandResultEntityV4Schema = z.object({
   providerRequestId: idSchema.nullable(),
   result: jsonSchema.nullable(),
   error: z.string().nullable(),
-  reason: z.enum(['bindingSuperseded', 'threadHandoff', 'gatewayStopping', 'commandReplaced']).nullable().optional(),
+  reason: z.enum([
+    'bindingSuperseded',
+    'threadHandoff',
+    'gatewayStopping',
+    'commandReplaced',
+    'queueCancelled',
+  ]).nullable().optional(),
 }).strict();
 export type CodexCommandResultEntityV4 = z.infer<typeof CodexCommandResultEntityV4Schema>;
 

@@ -51,6 +51,7 @@ function queuedState(queueEntryId: string) {
         replacesCommandId: null,
         queueEntryId,
         queuedAt: 10,
+        bindingGeneration: 7,
     } as CodexCommandEntityV4;
     projection.entities['codex.turn']['turn-active'] = {
         schemaVersion: 1,
@@ -120,6 +121,7 @@ describe('Codex queued message ops', () => {
             replacesCommandId: 'queue-command',
             queueEntryId: 'queued-1',
             queuedAt: 10,
+            bindingGeneration: 7,
         }, undefined, 'edited text');
         expect(sessionRPC).not.toHaveBeenCalled();
     });
@@ -138,7 +140,27 @@ describe('Codex queued message ops', () => {
             replacesCommandId: 'queue-command',
             queueEntryId: 'queued-2',
             queuedAt: 10,
+            bindingGeneration: 7,
         }, undefined, 'original');
+        expect(sessionRPC).not.toHaveBeenCalled();
+    });
+
+    it('cancels a queued V4 command without drafting an empty provider message', async () => {
+        getState.mockReturnValue(queuedState('queued-3'));
+        const { sessionCancelCodexQueuedMessage } = await import('./ops');
+
+        await sessionCancelCodexQueuedMessage('session-1', 'queued-3');
+
+        expect(publishCodexV4Command).toHaveBeenCalledWith('session-1', {
+            command: 'turn.queue.cancel',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-active',
+            payload: {},
+            replacesCommandId: 'queue-command',
+            queueEntryId: 'queued-3',
+            queuedAt: 10,
+            bindingGeneration: 7,
+        });
         expect(sessionRPC).not.toHaveBeenCalled();
     });
 
@@ -160,6 +182,7 @@ describe('Codex queued message ops', () => {
             sessionAbort,
             sessionAllow,
             sessionArchive,
+            sessionCancelCodexQueuedMessage,
             sessionDelete,
             sessionGoalAction,
             sessionKill,
@@ -174,6 +197,7 @@ describe('Codex queued message ops', () => {
         await expect(sessionSteerCodexQueuedMessage('session-child', 'queued-1')).rejects.toThrow('read-only');
         await expect(sessionUpdateCodexQueuedMessage('session-child', 'queued-1', 'edited'))
             .rejects.toThrow('read-only');
+        await expect(sessionCancelCodexQueuedMessage('session-child', 'queued-1')).rejects.toThrow('read-only');
         await expect(sessionKill('session-child')).resolves.toMatchObject({
             success: false,
             message: expect.stringContaining('read-only'),

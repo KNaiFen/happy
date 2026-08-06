@@ -2,7 +2,6 @@ import { AgentContentView } from '@/components/AgentContentView';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentInput } from '@/components/AgentInput';
-import { CodexQueuedMessages } from '@/components/CodexQueuedMessages';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -1154,6 +1153,11 @@ export function SessionViewLoaded({
         </>
     ) : null;
 
+    const codexQueuedMessages = React.useMemo(
+        () => codexV4QueuedMessages(codexV4Session),
+        [codexV4Session],
+    );
+
     const composer = isCodexReadOnly ? null : (
         <ChatComposer
             composerHandleRef={composerHandleRef}
@@ -1174,6 +1178,7 @@ export function SessionViewLoaded({
             onSend={handleSend}
             followUpMode={isCodexV4Active && isSessionExecuting ? codexFollowUpMode : undefined}
             canSteerFollowUp={canSteerCodexTurn}
+            queuedMessages={isCodexV4Active ? codexQueuedMessages : []}
             onFollowUpModeChange={isCodexV4Active && isSessionExecuting
                 ? setCodexFollowUpMode
                 : undefined}
@@ -1227,10 +1232,6 @@ export function SessionViewLoaded({
 
     const showSessionStatusBar = sessionStatusBarDisplay === 'above' || sessionStatusBarDisplay === 'below';
     const sessionStatusBarPosition = sessionStatusBarDisplay === 'above' ? 'above' : 'below';
-    const codexQueuedMessages = React.useMemo(
-        () => codexV4QueuedMessages(codexV4Session),
-        [codexV4Session],
-    );
     const sessionStatusBar = showSessionStatusBar ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <SessionStatusBar
@@ -1267,15 +1268,6 @@ export function SessionViewLoaded({
                 </CenteredInputWidth>
             )}
             {sessionStatusBarPosition === 'above' ? sessionStatusBar : null}
-            {!isCodexReadOnly && codexQueuedMessages.length > 0 && (
-                <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
-                    <CodexQueuedMessages
-                        sessionId={sessionId}
-                        messages={codexQueuedMessages}
-                        canSteer={canSteerCodexTurn && isSessionExecuting}
-                    />
-                </CenteredInputWidth>
-            )}
             {composer}
             {sessionStatusBarPosition === 'below' ? sessionStatusBar : null}
         </>
