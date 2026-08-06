@@ -20,6 +20,7 @@ export const initialMachineMetadata: MachineMetadata = {
   resumeSupport: {
     rpcAvailable: true,
     codexThreadHistoryRpcAvailable: true,
+    preflightRpcAvailable: true,
     requiresSameMachine: true,
     detectedAt: Date.now(),
   },

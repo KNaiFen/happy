@@ -45,6 +45,25 @@ describe('MetadataSchema', () => {
 });
 
 describe('MachineMetadataSchema', () => {
+    it('preserves the daemon resume preflight capability', () => {
+        const metadata = MachineMetadataSchema.parse({
+            host: 'host',
+            platform: 'darwin',
+            happyCliVersion: '1.4.45',
+            happyHomeDir: '/home/.happy',
+            homeDir: '/home',
+            resumeSupport: {
+                rpcAvailable: true,
+                codexThreadHistoryRpcAvailable: true,
+                preflightRpcAvailable: true,
+                requiresSameMachine: true,
+                detectedAt: 123,
+            },
+        });
+
+        expect(metadata.resumeSupport?.preflightRpcAvailable).toBe(true);
+    });
+
     it('preserves Codex model capabilities and future machine fields', () => {
         const metadata = MachineMetadataSchema.parse({
             host: 'host',

@@ -12,7 +12,16 @@ import {
 } from '@/sync/ops';
 import { archiveSession as archiveSessionAuthoritatively } from '@/sync/sessionArchiveCoordinator';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
-import { storage, useIsSessionMachineDeleted, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
+import {
+    storage,
+    useIsSessionMachineDeleted,
+    useLocalSetting,
+    useMachine,
+    useMachinesLoaded,
+    useResumeEligibility,
+    useSetting,
+    type ResumeEligibilityEntry,
+} from '@/sync/storage';
 import { Machine, Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { resolveMessageModeMeta } from '@/sync/messageMeta';
@@ -27,6 +36,12 @@ import { useSession } from '@/sync/storage';
 import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
 import { canStopCodexGatewaySession } from '@/sync/codexV4Capabilities';
+import {
+    buildResumeEligibilityFingerprint,
+    ensureResumeEligibilityForSession,
+    isResumeEligibilityFresh,
+    useResumeEligibilityPreflight,
+} from '@/sync/resumeEligibility';
 
 export interface SessionActionItem {
     id: SessionActionShortcutId;
@@ -49,7 +64,12 @@ type ResumeAvailability = {
     message: string;
 };
 
-function getResumeAvailability(session: Session, machine: Machine | null | undefined, isConnected: boolean): ResumeAvailability {
+function getResumeAvailability(
+    session: Session,
+    machine: Machine | null | undefined,
+    isConnected: boolean,
+    resumeEligibility: ResumeEligibilityEntry | null,
+): ResumeAvailability {
     if (
         session.metadata?.codexReadOnly === true
         || session.metadata?.flavor !== 'codex'
@@ -84,7 +104,7 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
         const message = t('sessionInfo.resumeSessionMissingMachine');
         return {
             canResume: false,
-            canShowResume: true,
+            canShowResume: false,
             subtitle: message,
             message,
         };
@@ -95,7 +115,7 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
         const message = t('sessionInfo.resumeSessionMissingCodexThread');
         return {
             canResume: false,
-            canShowResume: true,
+            canShowResume: false,
             subtitle: message,
             message,
         };
@@ -105,17 +125,20 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
         const message = t('sessionInfo.resumeSessionSameMachineOnly');
         return {
             canResume: false,
-            canShowResume: true,
+            canShowResume: false,
             subtitle: message,
             message,
         };
     }
 
-    if (machine.metadata?.resumeSupport?.rpcAvailable !== true) {
+    if (
+        machine.metadata?.resumeSupport?.rpcAvailable !== true
+        || machine.metadata.resumeSupport.preflightRpcAvailable !== true
+    ) {
         const message = t('sessionInfo.resumeSessionRequiresUpgrade');
         return {
             canResume: false,
-            canShowResume: true,
+            canShowResume: false,
             subtitle: message,
             message,
         };
@@ -124,9 +147,23 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
     if (!isMachineOnline(machine)) {
         return {
             canResume: false,
-            canShowResume: true,
+            canShowResume: false,
             subtitle: t('sessionInfo.resumeSessionMachineOffline'),
             message: t('sessionInfo.resumeSessionMachineOffline'),
+        };
+    }
+
+    if (resumeEligibility?.state !== 'eligible') {
+        const message = resumeEligibility?.state === 'ineligible'
+            ? resumeEligibility.reason === 'threadUnavailable'
+                ? t('sessionInfo.resumeSessionThreadUnavailable')
+                : t('sessionInfo.resumeSessionInvalidBinding')
+            : t('sessionInfo.resumeSessionPendingVerification');
+        return {
+            canResume: false,
+            canShowResume: false,
+            subtitle: message,
+            message,
         };
     }
 
@@ -168,6 +205,19 @@ export function useSessionQuickActions(
     const machineDeleted = useIsSessionMachineDeleted(session.id);
     const machineId = session.metadata?.machineId ?? '';
     const machine = useMachine(machineId);
+    const machinesLoaded = useMachinesLoaded();
+    const storedResumeEligibility = useResumeEligibility(session.id);
+    const resumeEligibilityNow = useResumeEligibilityPreflight({
+        sessions: [session],
+        machines: machine ? [machine] : [],
+        machinesLoaded,
+    });
+    const resumeEligibilityFingerprint = buildResumeEligibilityFingerprint(session, machine);
+    const currentResumeEligibility = isResumeEligibilityFresh(
+        storedResumeEligibility,
+        resumeEligibilityFingerprint,
+        resumeEligibilityNow,
+    ) ? storedResumeEligibility : null;
     const canStopGateway = canStopCodexGatewaySession(session.metadata, { machineDeleted });
     const pendingResumeOperationRef = React.useRef<{
         id: string;
@@ -179,9 +229,14 @@ export function useSessionQuickActions(
     const expThreadActions = useSetting('expResumeSession');
     const resumeAvailability = React.useMemo(
         () => !machineDeleted
-            ? getResumeAvailability(session, machine, sessionStatus.isConnected)
+            ? getResumeAvailability(
+                session,
+                machine,
+                sessionStatus.isConnected,
+                currentResumeEligibility,
+            )
             : { canResume: false, canShowResume: false, subtitle: '', message: '' },
-        [machine, machineDeleted, session, sessionStatus.isConnected],
+        [currentResumeEligibility, machine, machineDeleted, session, sessionStatus.isConnected],
     );
 
     // Fork eligibility — separate from resume because fork works on both
@@ -230,6 +285,15 @@ export function useSessionQuickActions(
         setResumeBlockedReason(null);
         if (!resumeAvailability.canResume) {
             throw new HappyError(resumeAvailability.message, false);
+        }
+        const verifiedEligibility = await ensureResumeEligibilityForSession({
+            session,
+            machine,
+            machinesLoaded,
+            force: true,
+        });
+        if (verifiedEligibility?.state !== 'eligible') {
+            throw new HappyError(t('sessionInfo.resumeSessionPendingVerification'), false);
         }
 
         if (!machineId) {
@@ -290,6 +354,16 @@ export function useSessionQuickActions(
             }
             case 'blocked': {
                 const message = resumeBlockedMessage(result.reason);
+                storage.getState().applyResumeEligibility({
+                    [session.id]: {
+                        fingerprint: buildResumeEligibilityFingerprint(session, machine),
+                        state: result.reason === 'threadUnavailable' || result.reason === 'invalidBinding'
+                            ? 'ineligible'
+                            : 'checking',
+                        checkedAt: Date.now(),
+                        reason: result.reason,
+                    },
+                });
                 setResumeBlockedReason(result.reason);
                 setResumeError(message);
                 throw new HappyError(message, false);
@@ -297,6 +371,14 @@ export function useSessionQuickActions(
             case 'error':
                 {
                     const message = resumeErrorMessage(result.error);
+                    storage.getState().applyResumeEligibility({
+                        [session.id]: {
+                            fingerprint: buildResumeEligibilityFingerprint(session, machine),
+                            state: 'checking',
+                            checkedAt: Date.now(),
+                            reason: 'providerUnavailable',
+                        },
+                    });
                     setResumeError(message);
                     throw new HappyError(message, false);
                 }

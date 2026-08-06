@@ -9,6 +9,8 @@ import { configuration } from '@/configuration';
 import { MachineMetadata, DaemonState, Machine, Update, UpdateMachineBody } from './types';
 import {
     registerCommonHandlers,
+    type PreflightResumeSessionsRequest,
+    type PreflightResumeSessionsResponse,
     type ResumeSessionResult,
     SpawnSessionOptions,
     SpawnSessionResult,
@@ -106,6 +108,9 @@ type MachineRpcHandlers = {
         effort?: string;
         dataEncryptionKey?: string;
     }) => Promise<ResumeSessionResult>;
+    preflightResumeSessions?: (
+        request: PreflightResumeSessionsRequest,
+    ) => Promise<PreflightResumeSessionsResponse>;
     listCodexThreads: (request: CodexListThreadsRequest) => Promise<CodexListThreadsResult>;
     openCodexThread: (request: CodexOpenThreadRequest) => Promise<CodexOpenThreadResult>;
     stopSession: (sessionId: string, expectation?: {
@@ -181,6 +186,9 @@ export class ApiMachineClient {
         effort?: string;
         dataEncryptionKey?: string;
     }) => Promise<ResumeSessionResult>) | null = null;
+    private preflightResumeSessionsHandler: ((
+        request: PreflightResumeSessionsRequest,
+    ) => Promise<PreflightResumeSessionsResponse>) | null = null;
     private reconnectInterval: NodeJS.Timeout | null = null;
 
     constructor(
@@ -203,12 +211,14 @@ export class ApiMachineClient {
     setRPCHandlers({
         spawnSession,
         resumeSession,
+        preflightResumeSessions,
         listCodexThreads,
         openCodexThread,
         stopSession,
         requestShutdown
     }: MachineRpcHandlers) {
         this.resumeSessionHandler = resumeSession ?? null;
+        this.preflightResumeSessionsHandler = preflightResumeSessions ?? null;
 
         // Register spawn session handler
         this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
@@ -246,6 +256,7 @@ export class ApiMachineClient {
         });
 
         this.syncResumeSessionRpcRegistration();
+        this.syncPreflightResumeSessionsRpcRegistration();
 
         this.rpcHandlerManager.registerHandler('codex-list-threads', async (params: any) => {
             const directory = requireBoundedNonEmptyString(params?.directory, 'directory', 8_192);
@@ -466,6 +477,67 @@ export class ApiMachineClient {
         }
     }
 
+    private syncPreflightResumeSessionsRpcRegistration(): void {
+        const method = 'preflight-resume-sessions';
+
+        if (this.preflightResumeSessionsHandler) {
+            if (!this.rpcHandlerManager.hasHandler(method)) {
+                this.rpcHandlerManager.registerHandler(method, async (params: any) => {
+                    const sessions = params?.sessions;
+                    if (!Array.isArray(sessions) || sessions.length < 1 || sessions.length > 25) {
+                        throw new Error('sessions must contain between 1 and 25 items');
+                    }
+                    const normalized = sessions.map((item: any, index: number) => {
+                        if (!item || typeof item !== 'object') {
+                            throw new Error('sessions[' + index + '] is invalid');
+                        }
+                        const sessionId = requireBoundedNonEmptyString(
+                            item.sessionId,
+                            'sessions[' + index + '].sessionId',
+                            256,
+                        );
+                        const directory = requireBoundedNonEmptyString(
+                            item.directory,
+                            'sessions[' + index + '].directory',
+                            8_192,
+                        );
+                        const threadId = requireBoundedNonEmptyString(
+                            item.threadId,
+                            'sessions[' + index + '].threadId',
+                            256,
+                        );
+                        const dataEncryptionKey = requireBoundedNonEmptyString(
+                            item.dataEncryptionKey,
+                            'sessions[' + index + '].dataEncryptionKey',
+                            128,
+                        );
+                        let decodedKey: Uint8Array;
+                        try {
+                            decodedKey = decodeBase64(dataEncryptionKey);
+                        } catch {
+                            throw new Error('sessions[' + index + '].dataEncryptionKey is invalid');
+                        }
+                        if (decodedKey.length !== 32) {
+                            throw new Error('sessions[' + index + '].dataEncryptionKey must decode to 32 bytes');
+                        }
+                        return { sessionId, directory, threadId, dataEncryptionKey };
+                    });
+
+                    const handler = this.preflightResumeSessionsHandler;
+                    if (!handler) {
+                        throw new Error('Resume preflight handler not available');
+                    }
+                    return handler({ sessions: normalized });
+                });
+            }
+            return;
+        }
+
+        if (this.rpcHandlerManager.hasHandler(method)) {
+            this.rpcHandlerManager.unregisterHandler(method);
+        }
+    }
+
     /**
      * Update machine metadata
      * Currently unused, changes from the mobile client are more likely
@@ -629,6 +701,7 @@ export class ApiMachineClient {
                 resumeSupport: {
                     rpcAvailable: !!this.resumeSessionHandler,
                     codexThreadHistoryRpcAvailable: true,
+                    preflightRpcAvailable: !!this.preflightResumeSessionsHandler,
                     requiresSameMachine: true,
                     detectedAt: Date.now(),
                 },

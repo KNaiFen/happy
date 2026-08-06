@@ -98,6 +98,8 @@ export function getSessionShortcutIdsInDisplayOrder(
                         projectGroup.sessions.forEach((session) => sessionIds.push(session.id));
                     });
             });
+        } else if (item.type === 'resume-pending') {
+            item.sessions.forEach((session) => sessionIds.push(session.id));
         } else if (item.type === 'session') {
             sessionIds.push(item.session.id);
         }

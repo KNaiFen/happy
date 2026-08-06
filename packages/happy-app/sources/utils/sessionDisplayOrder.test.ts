@@ -69,6 +69,10 @@ describe('session display order', () => {
         }));
         const data: SessionListViewItem[] = [
             { type: 'active-sessions', sessions: activeSessions },
+            {
+                type: 'resume-pending',
+                sessions: [session('pending', 'machine-z', '/project')],
+            },
             { type: 'archive-toggle', hidden: false },
             ...inactiveSessions,
         ];
@@ -76,13 +80,13 @@ describe('session display order', () => {
         expect(getSessionShortcutIdsInDisplayOrder(data, machines, 'Unknown')).toEqual([
             'alpha',
             'zulu',
+            'pending',
             'inactive-0',
             'inactive-1',
             'inactive-2',
             'inactive-3',
             'inactive-4',
             'inactive-5',
-            'inactive-6',
         ]);
     });
 });

@@ -164,6 +164,36 @@ export type ResumeSessionResult =
     | { type: 'blocked'; reason: ResumeSessionBlockedReason }
     | { type: 'error'; error: ResumeSessionErrorCode };
 
+export type PreflightResumeSessionInput = {
+    sessionId: string;
+    directory: string;
+    threadId: string;
+    dataEncryptionKey: string;
+};
+
+export type PreflightResumeSessionResult =
+    | { type: 'eligible'; sessionId: string }
+    | { type: 'alreadyActive'; sessionId: string }
+    | {
+        type: 'pending';
+        sessionId: string;
+        reason: 'relayUnavailable' | 'providerUnavailable' | 'externalThreadActive' | 'gatewayRecovering';
+    }
+    | {
+        type: 'ineligible';
+        sessionId: string;
+        reason: 'threadUnavailable' | 'invalidBinding';
+    };
+
+export type PreflightResumeSessionsRequest = {
+    sessions: PreflightResumeSessionInput[];
+};
+
+export type PreflightResumeSessionsResponse = {
+    type: 'success';
+    results: PreflightResumeSessionResult[];
+};
+
 /**
  * Register all RPC handlers with the session
  *

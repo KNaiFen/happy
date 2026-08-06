@@ -34,7 +34,6 @@ import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
-import { CodexFollowUpModeSelector } from './CodexFollowUpModeSelector';
 import { CodexQueuedMessages } from './CodexQueuedMessages';
 import type { CodexV4QueuedMessage } from '@/sync/codexV4Projection';
 
@@ -96,9 +95,7 @@ interface AgentInputProps {
     blockSend?: boolean;
     isSendDisabled?: boolean;
     isSending?: boolean;
-    followUpMode?: 'queue' | 'steer';
     canSteerFollowUp?: boolean;
-    onFollowUpModeChange?: (mode: 'queue' | 'steer') => void;
     queuedMessages?: CodexV4QueuedMessage[];
     minHeight?: number;
     zenMode?: boolean;
@@ -452,11 +449,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     followUpDock: {
         zIndex: 1,
-        marginHorizontal: 8,
         marginBottom: 0,
-    },
-    followUpDockMode: {
-        alignItems: 'flex-end',
     },
 }));
 
@@ -1031,12 +1024,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hapticsLight();
         props.onMicPress();
     }, [props.isSendDisabled, props.onMicPress]);
-
-    const handleFollowUpModePress = React.useCallback((mode: 'queue' | 'steer') => {
-        if (!props.onFollowUpModeChange || (mode === 'steer' && !props.canSteerFollowUp)) return;
-        hapticsLight();
-        props.onFollowUpModeChange(mode);
-    }, [props.canSteerFollowUp, props.onFollowUpModeChange]);
 
     const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         if (!props.onPermissionModeChange || availableModes.length === 0) {
@@ -1825,22 +1812,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onPathClick={props.onPathClick}
                 />
 
-                {(props.followUpMode && props.onFollowUpModeChange) || (props.sessionId && (props.queuedMessages?.length ?? 0) > 0) ? (
+                {props.sessionId && (props.queuedMessages?.length ?? 0) > 0 ? (
                     <View style={styles.followUpDock} testID="codex-follow-up-dock">
-                        {props.followUpMode && props.onFollowUpModeChange ? (
-                            <View style={styles.followUpDockMode}>
-                                <CodexFollowUpModeSelector
-                                    value={props.followUpMode}
-                                    canSteer={props.canSteerFollowUp === true}
-                                    onChange={handleFollowUpModePress}
-                                />
-                            </View>
-                        ) : null}
-                        {props.sessionId && props.queuedMessages && props.queuedMessages.length > 0 ? (
+                        {props.queuedMessages && props.queuedMessages.length > 0 ? (
                             <CodexQueuedMessages
                                 sessionId={props.sessionId}
                                 messages={props.queuedMessages}
                                 canSteer={props.canSteerFollowUp === true}
+                                glassEnabled={glassEnabled}
+                                compactMobileComposer={compactMobileComposer}
                             />
                         ) : null}
                     </View>

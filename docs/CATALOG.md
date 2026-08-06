@@ -37,6 +37,11 @@
 - [ADR-002: Separate Codex lifecycle, transport state, and timeline order](./decisions/ADR-002-codex-session-lifecycle-and-timeline-order.md)
 - [ADR-003: Make Codex the only active default provider](./decisions/ADR-003-codex-only-provider.md)
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
+- [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
+
+## 活动计划
+
+- [App 排队消息堆栈与会话恢复资格实施计划](./plans/app-queue-stack-and-resume-eligibility.md)
 
 ## 审查记录
 

@@ -79,6 +79,7 @@ export const it: TranslationStructure = {
         online: 'online',
         offline: 'offline',
         recoverable: 'ripristinabile',
+        resumePending: 'in attesa di verifica',
         archived: 'archiviata',
         lastSeen: ({ time }: { time: string }) => `visto l'ultima volta ${time}`,
         permissionRequired: 'permesso richiesto',
@@ -316,6 +317,7 @@ export const it: TranslationStructure = {
         yesterday: 'Ieri',
         daysAgo: ({ count }: { count: number }) => `${count} ${count === 1 ? 'giorno' : 'giorni'} fa`,
         viewAll: 'Visualizza tutte le sessioni',
+        resumePending: 'In attesa di verifica',
     },
 
     session: {
@@ -350,9 +352,6 @@ export const it: TranslationStructure = {
         forkErrorMissingUuid: 'Il punto di ritorno scelto non esiste più nella sessione di origine — prova a biforcare senza troncare.',
         forkErrorMissingMetadata: 'Mancano i metadati della sessione necessari per biforcare.',
         forkErrorGeneric: 'Impossibile biforcare la sessione.',
-        followUpMode: 'Modalità seguito',
-        followUpQueue: 'In coda',
-        followUpSteer: 'Guida',
     },
 
     commandPalette: {
@@ -417,6 +416,7 @@ export const it: TranslationStructure = {
         viewMachineSubtitle: 'Visualizza dettagli e sessioni della macchina',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: 'È in corso la verifica della possibilità di riprendere questa sessione.',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

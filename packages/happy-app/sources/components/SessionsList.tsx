@@ -284,6 +284,11 @@ export function SessionsList({
                 if (sessions.length > 0) result.push({ ...item, sessions });
                 return;
             }
+            if (item.type === 'resume-pending') {
+                const sessions = item.sessions.filter(matches);
+                if (sessions.length > 0) result.push({ ...item, sessions });
+                return;
+            }
             if (keepIndices.has(index)) result.push(item);
         });
         return result;
@@ -300,6 +305,7 @@ export function SessionsList({
         switch (item.type) {
             case 'header': return `header-${item.title}-${index}`;
             case 'active-sessions': return 'active-sessions';
+            case 'resume-pending': return 'resume-pending';
             case 'archive-toggle': return 'archive-toggle';
             case 'project-group': return `project-group-${item.machine.id}-${item.displayPath}-${index}`;
             case 'session': return `session-${item.session.id}`;
@@ -336,6 +342,28 @@ export function SessionsList({
                     />
                 );
 
+            case 'resume-pending':
+                return (
+                    <View>
+                        <View style={styles.headerSection}>
+                            <Text style={styles.headerText}>
+                                {t('sessionHistory.resumePending')}
+                            </Text>
+                        </View>
+                        {item.sessions.map((session, sessionIndex) => (
+                            <SessionItem
+                                key={session.id}
+                                session={session}
+                                selected={session.id === selectedSessionId}
+                                isFirst={sessionIndex === 0}
+                                isLast={sessionIndex === item.sessions.length - 1}
+                                isSingle={item.sessions.length === 1}
+                                resumePending
+                            />
+                        ))}
+                    </View>
+                );
+
             case 'project-group':
                 return (
                     <View style={styles.projectGroup}>
@@ -354,7 +382,11 @@ export function SessionsList({
                 const nextItem = index < data.length - 1 ? data[index + 1] : null;
 
                 const isFirst = prevItem?.type === 'header';
-                const isLast = nextItem?.type === 'header' || nextItem == null || nextItem?.type === 'active-sessions';
+                const isLast = nextItem?.type === 'header'
+                    || nextItem == null
+                    || nextItem?.type === 'active-sessions'
+                    || nextItem?.type === 'resume-pending'
+                    || nextItem?.type === 'archive-toggle';
                 const isSingle = isFirst && isLast;
                 const selected = item.session.id === selectedSessionId;
 
@@ -420,19 +452,22 @@ const STATUS_CONFIG: Record<SessionState, { color: string; dotColor: string; isP
     error: { color: '#FF3B30', dotColor: '#FF3B30', isPulsing: false, isConnected: true },
 };
 
-const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }: {
+const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle, resumePending = false }: {
     session: SessionRowData;
     selected?: boolean;
     isFirst?: boolean;
     isLast?: boolean;
     isSingle?: boolean;
+    resumePending?: boolean;
 }) => {
     const styles = stylesheet;
     const navigateToSession = useNavigateToSession();
     const [actionsAnchor, setActionsAnchor] = React.useState<SessionActionsAnchor | null>(null);
     const baseStatus = STATUS_CONFIG[session.state];
     // Override to solid blue when session has unread results
-    const status = session.hasUnread
+    const status = resumePending
+        ? STATUS_CONFIG.disconnected
+        : session.hasUnread
         ? { ...baseStatus, color: '#007AFF', dotColor: '#007AFF', isPulsing: false, isConnected: baseStatus.isConnected }
         : session.statusUnknown
             ? STATUS_CONFIG.disconnected
@@ -449,7 +484,9 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
             : session.state === 'error'
                 ? t('status.error')
                 : null;
-    const statusText = session.hasUnread
+    const statusText = resumePending
+        ? t('status.resumePending')
+        : session.hasUnread
         ? t('status.unread')
         : !session.active
             ? session.archivedAt !== null
@@ -462,7 +499,7 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
             : session.state === 'thinking'
                 ? vibingMessage
             : session.state === 'disconnected'
-                ? t('status.recoverable')
+                ? t('status.disconnected')
                 : session.state === 'permission_required'
                     ? t('status.permissionRequired')
                     : session.state === 'error'

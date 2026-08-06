@@ -82,6 +82,7 @@ export const zhHans: TranslationStructure = {
         online: '在线',
         offline: '离线',
         recoverable: '可恢复',
+        resumePending: '等待验证',
         archived: '已归档',
         lastSeen: ({ time }: { time: string }) => `最后活跃时间 ${time}`,
         permissionRequired: '需要权限',
@@ -319,6 +320,7 @@ export const zhHans: TranslationStructure = {
         yesterday: '昨天',
         daysAgo: ({ count }: { count: number }) => `${count} 天前`,
         viewAll: '查看所有会话',
+        resumePending: '待验证',
     },
 
     session: {
@@ -353,9 +355,6 @@ export const zhHans: TranslationStructure = {
         forkErrorMissingUuid: '选定的回退点已不存在于源会话中 — 请尝试不截断地分叉。',
         forkErrorMissingMetadata: '缺少分叉所需的会话元数据。',
         forkErrorGeneric: '分叉会话失败。',
-        followUpMode: '后续消息模式',
-        followUpQueue: '排队',
-        followUpSteer: '引导',
     },
 
     commandPalette: {
@@ -420,6 +419,7 @@ export const zhHans: TranslationStructure = {
         viewMachineSubtitle: '查看设备详情和会话',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: '正在验证此会话是否可以恢复。',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

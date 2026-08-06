@@ -136,6 +136,25 @@ export interface SessionRowData {
     hasUnread: boolean;
 }
 
+export type ResumeEligibilityReason =
+    | 'relayUnavailable'
+    | 'providerUnavailable'
+    | 'externalThreadActive'
+    | 'gatewayRecovering'
+    | 'threadUnavailable'
+    | 'invalidBinding'
+    | 'machineOffline'
+    | 'machineDeleted'
+    | 'preflightUnavailable'
+    | 'alreadyActive';
+
+export type ResumeEligibilityEntry = {
+    fingerprint: string;
+    state: 'checking' | 'eligible' | 'ineligible';
+    checkedAt: number;
+    reason?: ResumeEligibilityReason;
+};
+
 function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): SessionRowData {
     const isOnline = session.presence === "online";
     const hasPermissions = session.codexState
@@ -196,6 +215,7 @@ function buildSessionRowData(session: Session, unreadSessionIds?: Set<string>): 
 export type SessionListViewItem =
     | { type: 'header'; title: string }
     | { type: 'active-sessions'; sessions: SessionRowData[] }
+    | { type: 'resume-pending'; sessions: SessionRowData[] }
     | { type: 'archive-toggle'; hidden: boolean }
     | { type: 'project-group'; displayPath: string; machine: Machine }
     | { type: 'session'; session: SessionRowData };
@@ -220,6 +240,7 @@ interface StorageState {
     sessionFileCache: Record<string, Record<string, { content: string | null; diff: string | null; isBinary: boolean; cachedAt: number }>>;
     machines: Record<string, Machine>;
     machinesLoaded: boolean;
+    resumeEligibilityBySessionId: Record<string, ResumeEligibilityEntry>;
     artifacts: Record<string, DecryptedArtifact>;  // New artifacts storage
     friends: Record<string, UserProfile>;  // All relationships (friends, pending, requested, etc.)
     users: Record<string, UserProfile | null>;  // Global user cache, null = 404/failed fetch
@@ -239,6 +260,7 @@ interface StorageState {
     nativeUpdateStatus: { available: boolean; updateUrl?: string } | null;
     applySessions: (sessions: SessionUpdate[]) => void;
     applyMachines: (machines: Machine[], replace?: boolean) => void;
+    applyResumeEligibility: (entries: Record<string, ResumeEligibilityEntry>) => void;
     deleteMachine: (machineId: string) => void;
     applyLoaded: () => void;
     applyReady: () => void;
@@ -431,6 +453,7 @@ export const storage = create<StorageState>()((set, get) => {
         sessions: {},
         machines: {},
         machinesLoaded: false,
+        resumeEligibilityBySessionId: {},
         artifacts: {},  // Initialize artifacts
         friends: {},  // Initialize relationships cache
         users: {},  // Initialize global user cache
@@ -458,6 +481,24 @@ export const storage = create<StorageState>()((set, get) => {
         nativeUpdateStatus: null,
         unreadSessionIds: new Set<string>(),
         currentViewingSessionId: null,
+        applyResumeEligibility: (entries) => set((state) => {
+            let changed = false;
+            const next = { ...state.resumeEligibilityBySessionId };
+            for (const [sessionId, entry] of Object.entries(entries)) {
+                const current = next[sessionId];
+                if (
+                    current?.fingerprint === entry.fingerprint
+                    && current.state === entry.state
+                    && current.checkedAt === entry.checkedAt
+                    && current.reason === entry.reason
+                ) {
+                    continue;
+                }
+                next[sessionId] = entry;
+                changed = true;
+            }
+            return changed ? { ...state, resumeEligibilityBySessionId: next } : state;
+        }),
         isMutableToolCall: (sessionId: string, callId: string) => {
             const sessionMessages = get().sessionMessages[sessionId];
             if (!sessionMessages) {
@@ -1368,6 +1409,10 @@ export const storage = create<StorageState>()((set, get) => {
             
             const { [sessionId]: _fileCache, ...remainingFileCache } = state.sessionFileCache;
             const { [sessionId]: _codexV4, ...remainingCodexV4Sessions } = state.codexV4Sessions;
+            const {
+                [sessionId]: _resumeEligibility,
+                ...remainingResumeEligibility
+            } = state.resumeEligibilityBySessionId;
 
             // Clear local session data from persistent storage (permission / model / effort
             // picks live in synced session metadata, #1492)
@@ -1389,6 +1434,7 @@ export const storage = create<StorageState>()((set, get) => {
                 sessionMessages: remainingSessionMessages,
                 sessionFileCache: remainingFileCache,
                 codexV4Sessions: remainingCodexV4Sessions,
+                resumeEligibilityBySessionId: remainingResumeEligibility,
                 sessionListViewData
             };
         }),
@@ -1782,6 +1828,14 @@ export function useMachine(machineId: string): Machine | null {
 
 export function useSessionListViewData(): SessionListViewItem[] | null {
     return storage(useDeepEqual((state) => state.isDataReady ? state.sessionListViewData : null));
+}
+
+export function useResumeEligibilityBySessionId(): Record<string, ResumeEligibilityEntry> {
+    return storage((state) => state.resumeEligibilityBySessionId);
+}
+
+export function useResumeEligibility(sessionId: string): ResumeEligibilityEntry | null {
+    return storage((state) => state.resumeEligibilityBySessionId[sessionId] ?? null);
 }
 
 export function useAllSessions(): Session[] {

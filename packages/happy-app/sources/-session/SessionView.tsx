@@ -32,7 +32,7 @@ import { archiveSession } from '@/sync/sessionArchiveCoordinator';
 import { shouldArchiveSideChatOnClose } from '@/sync/sideChatSessions';
 import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
-import { findActiveCodexV4Turn, type CodexV4FollowUpMode } from '@/sync/codexV4Commands';
+import { findActiveCodexV4Turn } from '@/sync/codexV4Commands';
 import { codexV4QueuedMessages } from '@/sync/codexV4Projection';
 import {
     resolveCodexGatewayBinding,
@@ -720,17 +720,8 @@ export function SessionViewLoaded({
         () => codexV4Session ? findActiveCodexV4Turn(codexV4Session)?.turnId ?? null : null,
         [codexV4Session],
     );
-    const [codexFollowUpMode, setCodexFollowUpMode] = React.useState<CodexV4FollowUpMode>('queue');
     const canSteerCodexTurn = session.metadata?.codexCapabilities?.queueSteering === true
         && activeCodexTurnId !== null;
-    React.useEffect(() => {
-        setCodexFollowUpMode('queue');
-    }, [sessionId, activeCodexTurnId]);
-    React.useEffect(() => {
-        if (!canSteerCodexTurn && codexFollowUpMode === 'steer') {
-            setCodexFollowUpMode('queue');
-        }
-    }, [canSteerCodexTurn, codexFollowUpMode]);
     const { messages, isLoaded } = useSessionMessages(sessionId);
     const acknowledgedCliVersions = useLocalSetting('acknowledgedCliVersions');
     const zenMode = useLocalSetting('zenMode');
@@ -923,13 +914,13 @@ export function SessionViewLoaded({
                 source: 'chat',
                 attachments,
                 ...(isCodexV4Active && isSessionExecuting
-                    ? { followUpMode: codexFollowUpMode }
+                    ? { followUpMode: 'queue' as const }
                     : {}),
             });
             composerHandleRef.current?.clearMessage();
             if (expImageUpload) clearImages();
         }
-    }, [sessionId, isCodexV4Active, isSessionExecuting, codexFollowUpMode, expImageUpload, selectedImages, clearImages]);
+    }, [sessionId, isCodexV4Active, isSessionExecuting, expImageUpload, selectedImages, clearImages]);
     const [, handleSend] = useHappyAction(sendMessage);
 
     const handleAbort = React.useCallback(() => {
@@ -1176,12 +1167,8 @@ export function SessionViewLoaded({
             connectionStatus={connectionStatus}
             blockSend={!showCodexGatewayLifecycle || !sessionStatus.isConnected || !gatewayUiState.canSend}
             onSend={handleSend}
-            followUpMode={isCodexV4Active && isSessionExecuting ? codexFollowUpMode : undefined}
             canSteerFollowUp={canSteerCodexTurn}
             queuedMessages={isCodexV4Active ? codexQueuedMessages : []}
-            onFollowUpModeChange={isCodexV4Active && isSessionExecuting
-                ? setCodexFollowUpMode
-                : undefined}
             onMicPress={(embedded || isDisconnected) ? undefined : micButtonState.onMicPress}
             isMicActive={(embedded || isDisconnected) ? false : micButtonState.isMicActive}
             onAbort={isDisconnected ? undefined : handleAbort}

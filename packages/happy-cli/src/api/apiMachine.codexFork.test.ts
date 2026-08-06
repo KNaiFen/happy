@@ -241,6 +241,57 @@ describe('ApiMachineClient Codex fork RPCs', () => {
         });
     });
 
+    it('registers the read-only resume preflight RPC with bounded independent keys', async () => {
+        const preflightResumeSessions = vi.fn().mockResolvedValue({
+            type: 'success',
+            results: [{ type: 'eligible', sessionId: 'happy-existing' }],
+        });
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession: vi.fn(),
+            requestShutdown: vi.fn(),
+            preflightResumeSessions,
+        });
+        const dataEncryptionKey = Buffer.alloc(32, 7).toString('base64');
+
+        await expect(handlersFrom(client).get('machine-1:preflight-resume-sessions')?.({
+            sessions: [{
+                sessionId: 'happy-existing',
+                directory: '/tmp/project',
+                threadId: 'thread-1',
+                dataEncryptionKey,
+            }],
+        })).resolves.toEqual({
+            type: 'success',
+            results: [{ type: 'eligible', sessionId: 'happy-existing' }],
+        });
+        expect(preflightResumeSessions).toHaveBeenCalledWith({
+            sessions: [{
+                sessionId: 'happy-existing',
+                directory: '/tmp/project',
+                threadId: 'thread-1',
+                dataEncryptionKey,
+            }],
+        });
+
+        await expect(handlersFrom(client).get('machine-1:preflight-resume-sessions')?.({
+            sessions: [],
+        })).rejects.toThrow('between 1 and 25');
+        await expect(handlersFrom(client).get('machine-1:preflight-resume-sessions')?.({
+            sessions: [{
+                sessionId: 'happy-existing',
+                directory: '/tmp/project',
+                threadId: 'thread-1',
+                dataEncryptionKey: 'not-a-key',
+            }],
+        })).rejects.toThrow('must decode to 32 bytes');
+        expect(preflightResumeSessions).toHaveBeenCalledOnce();
+    });
+
     it('keeps the legacy resume request shape compatible while the daemon derives its binding', async () => {
         const resumeSession = vi.fn().mockResolvedValue({
             type: 'resumeMaterialRequired',

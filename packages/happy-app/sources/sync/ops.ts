@@ -198,6 +198,42 @@ const ResumeSessionRpcResultSchema = z.discriminatedUnion('type', [
     }).strict(),
 ]);
 
+const PreflightResumeSessionInputSchema = z.object({
+    sessionId: z.string().min(1).max(256),
+    directory: z.string().min(1).max(8_192),
+    threadId: z.string().min(1).max(256),
+    dataEncryptionKey: z.string().min(1).max(128),
+}).strict();
+
+const PreflightResumeSessionResultSchema = z.discriminatedUnion('type', [
+    z.object({
+        type: z.literal('eligible'),
+        sessionId: z.string().min(1).max(256),
+    }).strict(),
+    z.object({
+        type: z.literal('alreadyActive'),
+        sessionId: z.string().min(1).max(256),
+    }).strict(),
+    z.object({
+        type: z.literal('pending'),
+        sessionId: z.string().min(1).max(256),
+        reason: z.enum(['relayUnavailable', 'providerUnavailable', 'externalThreadActive', 'gatewayRecovering']),
+    }).strict(),
+    z.object({
+        type: z.literal('ineligible'),
+        sessionId: z.string().min(1).max(256),
+        reason: z.enum(['threadUnavailable', 'invalidBinding']),
+    }).strict(),
+]);
+
+const PreflightResumeSessionsResponseSchema = z.object({
+    type: z.literal('success'),
+    results: z.array(PreflightResumeSessionResultSchema).max(25),
+}).strict();
+
+export type PreflightResumeSessionInput = z.infer<typeof PreflightResumeSessionInputSchema>;
+export type PreflightResumeSessionResult = z.infer<typeof PreflightResumeSessionResultSchema>;
+
 type ResumeSessionRpcRequest = {
     operationId: string;
     sessionId: string;
@@ -209,6 +245,7 @@ type ResumeSessionRpcRequest = {
 };
 
 const RESUME_SESSION_RPC_TIMEOUT_MS = 120_000;
+const RESUME_PREFLIGHT_RPC_TIMEOUT_MS = 30_000;
 
 // Options for spawning a session
 export interface SpawnSessionOptions {
@@ -367,6 +404,28 @@ export async function codexListRewindPoints(
             errorMessage: error instanceof Error ? error.message : 'Failed to list Codex rewind points',
         };
     }
+}
+
+export async function machinePreflightResumeSessions(options: {
+    machineId: string;
+    sessions: PreflightResumeSessionInput[];
+}): Promise<{ type: 'success'; results: PreflightResumeSessionResult[] }> {
+    const sessions = z.array(PreflightResumeSessionInputSchema).min(1).max(25).parse(options.sessions);
+    const response = PreflightResumeSessionsResponseSchema.parse(
+        await apiSocket.machineRPC<unknown, { sessions: PreflightResumeSessionInput[] }>(
+            options.machineId,
+            'preflight-resume-sessions',
+            { sessions },
+            { timeoutMs: RESUME_PREFLIGHT_RPC_TIMEOUT_MS },
+        ),
+    );
+    if (
+        response.results.length !== sessions.length
+        || response.results.some((result, index) => result.sessionId !== sessions[index]?.sessionId)
+    ) {
+        throw new Error('Resume preflight response did not match the request');
+    }
+    return response;
 }
 
 export async function machineResumeSession(options: ResumeSessionOptions & { model?: string; permissionMode?: string }): Promise<ResumeSessionResult> {

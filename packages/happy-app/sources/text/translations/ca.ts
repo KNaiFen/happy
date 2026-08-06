@@ -80,6 +80,7 @@ export const ca: TranslationStructure = {
         online: 'en línia',
         offline: 'fora de línia',
         recoverable: 'recuperable',
+        resumePending: 'pendent de verificació',
         archived: 'arxivada',
         lastSeen: ({ time }: { time: string }) => `vist per última vegada ${time}`,
         permissionRequired: 'permís requerit',
@@ -318,6 +319,7 @@ export const ca: TranslationStructure = {
         yesterday: 'Ahir',
         daysAgo: ({ count }: { count: number }) => `fa ${count} ${count === 1 ? 'dia' : 'dies'}`,
         viewAll: 'Veure totes les sessions',
+        resumePending: 'Pendents de verificació',
     },
 
     session: {
@@ -352,9 +354,6 @@ export const ca: TranslationStructure = {
         forkErrorMissingUuid: 'El punt de retrocés escollit ja no existeix a la sessió origen — prova a bifurcar sense truncar.',
         forkErrorMissingMetadata: 'Falten metadades de la sessió necessàries per bifurcar.',
         forkErrorGeneric: 'No s\'ha pogut bifurcar la sessió.',
-        followUpMode: 'Mode de seguiment',
-        followUpQueue: 'En cua',
-        followUpSteer: 'Guiar',
     },
 
     commandPalette: {
@@ -419,6 +418,7 @@ export const ca: TranslationStructure = {
         viewMachineSubtitle: 'Veure detalls de la màquina i sessions',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: 'S\'està verificant si aquesta sessió es pot reprendre.',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

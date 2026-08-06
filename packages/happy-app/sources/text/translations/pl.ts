@@ -91,6 +91,7 @@ export const pl: TranslationStructure = {
         online: 'online',
         offline: 'offline',
         recoverable: 'można wznowić',
+        resumePending: 'oczekuje na weryfikację',
         archived: 'zarchiwizowana',
         lastSeen: ({ time }: { time: string }) => `ostatnio widziano ${time}`,
         permissionRequired: 'wymagane uprawnienie',
@@ -335,6 +336,7 @@ export const pl: TranslationStructure = {
         yesterday: 'Wczoraj',
         daysAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'dzień', few: 'dni', many: 'dni' })} temu`,
         viewAll: 'Zobacz wszystkie sesje',
+        resumePending: 'Oczekujące na weryfikację',
     },
 
     session: {
@@ -369,9 +371,6 @@ export const pl: TranslationStructure = {
         forkErrorMissingUuid: 'Wybrany punkt cofnięcia nie istnieje już w sesji źródłowej — spróbuj rozwidlić bez przycinania.',
         forkErrorMissingMetadata: 'Brak metadanych sesji wymaganych do rozwidlenia.',
         forkErrorGeneric: 'Nie udało się rozwidlić sesji.',
-        followUpMode: 'Tryb kolejnej wiadomości',
-        followUpQueue: 'Kolejka',
-        followUpSteer: 'Pokieruj',
     },
 
     commandPalette: {
@@ -436,6 +435,7 @@ export const pl: TranslationStructure = {
         viewMachineSubtitle: 'Zobacz szczegóły maszyny i sesje',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: 'Trwa sprawdzanie, czy tę sesję można wznowić.',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

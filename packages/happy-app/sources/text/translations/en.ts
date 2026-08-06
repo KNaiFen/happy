@@ -95,6 +95,7 @@ export const en: TranslationStructure = {
         online: 'online',
         offline: 'offline',
         recoverable: 'recoverable',
+        resumePending: 'waiting for verification',
         archived: 'archived',
         lastSeen: ({ time }: { time: string }) => `last seen ${time}`,
         permissionRequired: 'permission required',
@@ -332,6 +333,7 @@ export const en: TranslationStructure = {
         yesterday: 'Yesterday',
         daysAgo: ({ count }: { count: number }) => `${count} ${count === 1 ? 'day' : 'days'} ago`,
         viewAll: 'View all sessions',
+        resumePending: 'Waiting for verification',
     },
 
     session: {
@@ -366,9 +368,6 @@ export const en: TranslationStructure = {
         forkErrorMissingUuid: 'The chosen rewind point is no longer present in the source session — try forking without truncation.',
         forkErrorMissingMetadata: 'Missing session metadata required to fork.',
         forkErrorGeneric: 'Failed to fork the session.',
-        followUpMode: 'Follow-up mode',
-        followUpQueue: 'Queue',
-        followUpSteer: 'Steer',
     },
 
     commandPalette: {
@@ -433,6 +432,7 @@ export const en: TranslationStructure = {
         viewMachineSubtitle: 'View machine details and sessions',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: 'Resume availability is being verified.',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

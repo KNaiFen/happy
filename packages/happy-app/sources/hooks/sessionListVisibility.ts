@@ -1,18 +1,39 @@
-import type { SessionListViewItem } from '@/sync/storage';
+import type {
+    ResumeEligibilityEntry,
+    SessionListViewItem,
+} from '@/sync/storage';
 
 export function buildVisibleSessionListViewData(
     data: SessionListViewItem[],
     hideArchivedSessions: boolean,
+    resumeEligibilityBySessionId: Record<string, ResumeEligibilityEntry | undefined>,
 ): SessionListViewItem[] {
     const result: SessionListViewItem[] = [];
     const activeGroup = data.find((item) => item.type === 'active-sessions');
     if (activeGroup) result.push(activeGroup);
 
-    const recoverable = selectHistoryItems(
+    const eligible = selectHistoryItems(
         data,
-        (item) => !item.session.active && item.session.archivedAt === null,
+        (item) => (
+            !item.session.active
+            && item.session.archivedAt === null
+            && resumeEligibilityBySessionId[item.session.id]?.state === 'eligible'
+        ),
     );
-    result.push(...recoverable);
+    result.push(...eligible);
+
+    const pending = data.flatMap((item) => (
+        item.type === 'session'
+        && !item.session.active
+        && item.session.archivedAt === null
+        && resumeEligibilityBySessionId[item.session.id]?.state !== 'eligible'
+        && resumeEligibilityBySessionId[item.session.id]?.state !== 'ineligible'
+            ? [item.session]
+            : []
+    ));
+    if (pending.length > 0) {
+        result.push({ type: 'resume-pending', sessions: pending });
+    }
 
     const archived = selectHistoryItems(
         data,
@@ -34,7 +55,11 @@ function selectHistoryItems(
     let pendingHeader: Extract<SessionListViewItem, { type: 'header' }> | null = null;
     let pendingProject: Extract<SessionListViewItem, { type: 'project-group' }> | null = null;
     for (const item of data) {
-        if (item.type === 'active-sessions' || item.type === 'archive-toggle') {
+        if (
+            item.type === 'active-sessions'
+            || item.type === 'resume-pending'
+            || item.type === 'archive-toggle'
+        ) {
             continue;
         }
 

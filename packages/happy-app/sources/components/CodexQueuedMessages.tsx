@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Modal } from '@/modal';
+import { MobileGlassSurface } from '@/components/MobileGlass';
 import {
     sessionCancelCodexQueuedMessage,
     sessionSteerCodexQueuedMessage,
@@ -18,6 +19,13 @@ import {
     View,
 } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import {
+    CODEX_QUEUED_MESSAGE_OVERLAP,
+    CODEX_QUEUED_MESSAGE_TOP_INSET,
+    resolveCodexQueuedMessageStack,
+    resolveCodexQueuedMessageStackHeight,
+    resolveCodexQueuedMessageStackInitialOffset,
+} from './codexQueuedMessageStack';
 
 type QueueActionKind = 'edit' | 'steer' | 'remove';
 type QueueAction = { commandId: string; type: QueueActionKind } | null;
@@ -32,10 +40,13 @@ export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props
     sessionId: string;
     messages: CodexV4QueuedMessage[];
     canSteer: boolean;
+    glassEnabled?: boolean;
+    compactMobileComposer?: boolean;
 }) {
     const { theme } = useUnistyles();
     const [action, setAction] = React.useState<QueueAction>(null);
     const [menuMessage, setMenuMessage] = React.useState<CodexV4QueuedMessage | null>(null);
+    const scrollRef = React.useRef<ScrollView>(null);
 
     const performAction = React.useCallback(async (
         message: CodexV4QueuedMessage,
@@ -89,25 +100,46 @@ export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props
     const steerLabel = t('session.queuedMessageSteer');
     const removeLabel = t('session.queuedMessageRemove');
     const moreLabel = t('session.queuedMessageMore');
-    const visibleRows = Math.min(props.messages.length, 3);
-    const scrollHeight = visibleRows * 48 + Math.max(0, visibleRows - 1) * 4 + 2;
+    const stackedMessages = resolveCodexQueuedMessageStack(props.messages);
+    const scrollHeight = resolveCodexQueuedMessageStackHeight(props.messages.length);
+    const initialScrollOffset = resolveCodexQueuedMessageStackInitialOffset(props.messages.length);
+    const anchorEarliestMessages = React.useCallback(() => {
+        scrollRef.current?.scrollTo({ y: initialScrollOffset, animated: false });
+    }, [initialScrollOffset]);
 
     return (
         <>
             <ScrollView
+                ref={scrollRef}
                 testID="codex-queued-message-dock"
                 style={[styles.scroll, { height: scrollHeight }]}
                 contentContainerStyle={styles.content}
+                contentOffset={{ x: 0, y: initialScrollOffset }}
+                onContentSizeChange={anchorEarliestMessages}
                 showsVerticalScrollIndicator={props.messages.length > 3}
                 keyboardShouldPersistTaps="handled"
             >
-                {props.messages.map((message) => {
+                {stackedMessages.map((layer) => {
+                    const message = layer.message;
                     const activeType = action?.commandId === message.commandId ? action.type : null;
                     const disabled = action !== null;
                     const steerDisabled = disabled || !props.canSteer;
                     const preview = message.text.trim() || t('session.queuedAttachment');
                     return (
-                        <View key={message.commandId} style={styles.message} testID={`codex-queued-message-${message.commandId}`}>
+                        <MobileGlassSurface
+                            key={message.commandId}
+                            enabled={props.glassEnabled}
+                            nativeEffect
+                            intensity={86}
+                            style={[
+                                styles.message,
+                                props.glassEnabled && styles.messageGlass,
+                                props.compactMobileComposer && styles.messageCompactMobile,
+                                layer.overlapsPrevious && styles.messageOverlap,
+                                { zIndex: layer.zIndex },
+                            ]}
+                            testID={`codex-queued-message-${message.commandId}`}
+                        >
                             <Text
                                 accessibilityLabel={preview}
                                 style={styles.text}
@@ -172,7 +204,7 @@ export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props
                                     <Ionicons name="ellipsis-horizontal" size={20} color={theme.colors.textSecondary} />
                                 </Pressable>
                             </View>
-                        </View>
+                        </MobileGlassSurface>
                     );
                 })}
             </ScrollView>
@@ -257,26 +289,37 @@ const styles = StyleSheet.create((theme) => ({
         flexGrow: 0,
     },
     content: {
-        gap: 4,
-        paddingTop: 1,
-        paddingBottom: 1,
+        paddingTop: CODEX_QUEUED_MESSAGE_TOP_INSET,
     },
     message: {
-        minHeight: 48,
+        height: 52,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
         paddingLeft: 12,
         paddingRight: 4,
-        borderRadius: 8,
+        borderTopLeftRadius: Platform.select({ default: 16, android: 20 }),
+        borderTopRightRadius: Platform.select({ default: 16, android: 20 }),
         borderWidth: 1,
         borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surfaceHigh,
-        shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.12,
-        shadowRadius: 5,
-        elevation: 3,
+        backgroundColor: theme.colors.input.background,
+        overflow: 'hidden',
+    },
+    messageGlass: {
+        backgroundColor: Platform.select({
+            ios: 'transparent',
+            android: theme.colors.glass.backgroundStrong,
+            default: theme.colors.input.background,
+        }),
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: theme.colors.glass.border,
+    },
+    messageCompactMobile: {
+        borderTopLeftRadius: 30,
+        borderTopRightRadius: 30,
+    },
+    messageOverlap: {
+        marginTop: -CODEX_QUEUED_MESSAGE_OVERLAP,
     },
     text: {
         flex: 1,

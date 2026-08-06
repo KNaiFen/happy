@@ -266,6 +266,7 @@ export const MachineMetadataSchema = z.object({
     resumeSupport: z.object({
         rpcAvailable: z.boolean(),
         codexThreadHistoryRpcAvailable: z.boolean().optional(),
+        preflightRpcAvailable: z.boolean().optional(),
         requiresSameMachine: z.boolean(),
         detectedAt: z.number(),
     }).optional(),

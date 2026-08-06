@@ -71,7 +71,7 @@ describe('resolveResumeSessionMaterial', () => {
       machineId: 'machine-1',
       dataEncryptionKey: encodeBase64(new Uint8Array(31).fill(7)),
       loadSnapshot,
-    })).resolves.toMatchObject({ type: 'error' });
+    })).resolves.toMatchObject({ type: 'error', kind: 'invalidBinding' });
     expect(loadSnapshot).not.toHaveBeenCalled();
 
     await expect(resolveResumeSessionMaterial({
@@ -81,7 +81,23 @@ describe('resolveResumeSessionMaterial', () => {
       loadSnapshot,
     })).resolves.toEqual({
       type: 'error',
+      kind: 'invalidBinding',
       errorMessage: 'The Happy session does not belong to this active machine.',
+    });
+  });
+
+  it('keeps Relay lookup failures distinct from terminal binding failures', async () => {
+    const loadSnapshot = vi.fn().mockRejectedValue(new Error('relay unavailable'));
+
+    await expect(resolveResumeSessionMaterial({
+      sessionId: 'session-1',
+      machineId: 'machine-1',
+      dataEncryptionKey: encodeBase64(new Uint8Array(32).fill(7)),
+      loadSnapshot,
+    })).resolves.toEqual({
+      type: 'error',
+      kind: 'unavailable',
+      errorMessage: 'The Happy session snapshot is temporarily unavailable.',
     });
   });
 });

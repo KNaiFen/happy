@@ -82,6 +82,7 @@ export const ja: TranslationStructure = {
         online: 'オンライン',
         offline: 'オフライン',
         recoverable: '再開可能',
+        resumePending: '確認待ち',
         archived: 'アーカイブ済み',
         lastSeen: ({ time }: { time: string }) => `最終アクセス: ${time}`,
         permissionRequired: '権限が必要です',
@@ -319,6 +320,7 @@ export const ja: TranslationStructure = {
         yesterday: '昨日',
         daysAgo: ({ count }: { count: number }) => `${count}日前`,
         viewAll: 'すべてのセッションを表示',
+        resumePending: '再開可否を確認中',
     },
 
     session: {
@@ -353,9 +355,6 @@ export const ja: TranslationStructure = {
         forkErrorMissingUuid: '選んだ巻き戻しポイントがソースセッションに存在しません — 切り詰めなしのフォークをお試しください。',
         forkErrorMissingMetadata: 'フォークに必要なセッションのメタデータがありません。',
         forkErrorGeneric: 'セッションのフォークに失敗しました。',
-        followUpMode: '追加入力のモード',
-        followUpQueue: 'キュー',
-        followUpSteer: '指示',
     },
 
     commandPalette: {
@@ -420,6 +419,7 @@ export const ja: TranslationStructure = {
         viewMachineSubtitle: 'マシンの詳細とセッションを表示',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: 'このセッションを再開できるか確認しています。',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

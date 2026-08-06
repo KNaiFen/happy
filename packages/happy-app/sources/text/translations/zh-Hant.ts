@@ -81,6 +81,7 @@ export const zhHant: TranslationStructure = {
         online: '線上',
         offline: '離線',
         recoverable: '可恢復',
+        resumePending: '等待驗證',
         archived: '已封存',
         lastSeen: ({ time }: { time: string }) => `最後活躍時間 ${time}`,
         permissionRequired: '需要權限',
@@ -318,6 +319,7 @@ export const zhHant: TranslationStructure = {
         yesterday: '昨天',
         daysAgo: ({ count }: { count: number }) => `${count} 天前`,
         viewAll: '查看所有工作階段',
+        resumePending: '待驗證',
     },
 
     session: {
@@ -352,9 +354,6 @@ export const zhHant: TranslationStructure = {
         forkErrorMissingUuid: '選定的回退點已不存在於來源會話中 — 請嘗試不截斷地分叉。',
         forkErrorMissingMetadata: '缺少分叉所需的會話元資料。',
         forkErrorGeneric: '分叉會話失敗。',
-        followUpMode: '後續訊息模式',
-        followUpQueue: '排隊',
-        followUpSteer: '引導',
     },
 
     commandPalette: {
@@ -419,6 +418,7 @@ export const zhHant: TranslationStructure = {
         viewMachineSubtitle: '查看裝置詳情和工作階段',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: '正在驗證此工作階段是否可以恢復。',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

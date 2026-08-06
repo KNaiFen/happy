@@ -79,6 +79,7 @@ export const en = {
         online: 'online',
         offline: 'offline',
         recoverable: 'recoverable',
+        resumePending: 'waiting for verification',
         archived: 'archived',
         lastSeen: ({ time }: { time: string }) => `last seen ${time}`,
         permissionRequired: 'permission required',
@@ -331,6 +332,7 @@ export const en = {
         yesterday: 'Yesterday',
         daysAgo: ({ count }: { count: number }) => `${count} ${count === 1 ? 'day' : 'days'} ago`,
         viewAll: 'View all sessions',
+        resumePending: 'Waiting for verification',
     },
 
     session: {
@@ -349,9 +351,6 @@ export const en = {
         queuedMessageMore: 'More queued-message actions',
         queuedMessageActionFailed: "Couldn't update the queued message. Its status may have changed; try again.",
         queuedAttachment: 'Queued attachment',
-        followUpMode: 'Follow-up mode',
-        followUpQueue: 'Queue',
-        followUpSteer: 'Steer',
         // Fork / duplicate / rewind flow
         forkAction: 'Fork session',
         forkSubtitle: 'Continue in a new session with the same context',
@@ -433,6 +432,7 @@ export const en = {
         viewMachineSubtitle: 'View machine details and sessions',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: 'Resume availability is being verified.',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',

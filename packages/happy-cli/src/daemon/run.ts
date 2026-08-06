@@ -24,7 +24,7 @@ import type { StopSessionResult } from '@/api/apiMachine';
 import { cleanupDaemonState, isDaemonRunningForCurrentProfile, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
 import { statSync } from 'fs';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { projectPath } from '@/projectPath';
 import { parseTmuxSessionIdentifier, formatTmuxSessionIdentifier } from '@/utils/tmux';
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
@@ -43,7 +43,6 @@ import { buildDaemonSpawnPlan } from './spawnPlan';
 import { createSessionMetadata } from '@/utils/createSessionMetadata';
 import {
   CodexThreadHistoryService,
-  type CodexThreadHistorySummary,
 } from '@/codex/codexThreadHistory';
 import {
   CodexThreadOpenCoordinator,
@@ -78,6 +77,8 @@ import {
   decodeIndependentSessionKey,
   resolveResumeSessionMaterial,
 } from './resumeSessionMaterial';
+import { preflightResumeSessions } from './preflightResumeSessions';
+import { validateSessionThreadBinding } from './validateSessionThreadBinding';
 
 function resolveGatewayPermissionMode(
   value: string | undefined,
@@ -573,7 +574,9 @@ export async function startDaemon(): Promise<void> {
           });
           if (material.type === 'resumeMaterialRequired') return material;
           if (material.type === 'error') {
-            return { type: 'blocked', reason: 'invalidBinding' };
+            return material.kind === 'unavailable'
+              ? { type: 'error', error: 'operationFailed' }
+              : { type: 'blocked', reason: 'invalidBinding' };
           }
           tracked = installSessionSnapshot(material.snapshot);
           snapshotRefreshed = true;
@@ -817,27 +820,6 @@ export async function startDaemon(): Promise<void> {
     const apiMachine = api.machineSyncClient(machine);
     const codexThreadHistory = new CodexThreadHistoryService();
 
-    const validateSessionThreadBinding = (
-      snapshot: MachineSessionSnapshot,
-      thread: CodexThreadHistorySummary,
-    ): void => {
-      if (snapshot.originMachineId !== machineId || snapshot.machineDeletedAt !== null) {
-        throw new Error('The Happy session does not belong to this active machine');
-      }
-      if (snapshot.metadata.flavor !== 'codex') {
-        throw new Error('The Happy session is not a Codex session');
-      }
-      if (snapshot.metadata.machineId !== machineId) {
-        throw new Error('The Happy session metadata belongs to a different machine');
-      }
-      if (snapshot.metadata.codexThreadId !== thread.threadId) {
-        throw new Error('The Happy session is bound to a different Codex thread');
-      }
-      if (resolve(snapshot.metadata.path) !== resolve(thread.cwd)) {
-        throw new Error('The Happy session is bound to a different directory');
-      }
-    };
-
     const resumeFailureToOpenResult = (
       result: Exclude<ResumeSessionResult, { type: 'success' }>,
     ): CodexOpenThreadResult => {
@@ -899,9 +881,9 @@ export async function startDaemon(): Promise<void> {
           });
         } catch {
           return {
-            type: 'blocked',
-            reason: 'invalidBinding',
-            errorMessage: 'The Happy session could not be verified with its per-session encryption key.',
+            type: 'error',
+            errorCode: 'operationFailed',
+            errorMessage: 'The Happy session snapshot is temporarily unavailable.',
           };
         }
         if (!snapshot) {
@@ -919,7 +901,7 @@ export async function startDaemon(): Promise<void> {
           };
         }
         try {
-          validateSessionThreadBinding(snapshot, thread);
+          validateSessionThreadBinding({ machineId, snapshot, thread });
         } catch {
           return {
             type: 'blocked',
@@ -1025,7 +1007,7 @@ export async function startDaemon(): Promise<void> {
           hasIndependentDataKey: true,
         };
         try {
-          validateSessionThreadBinding(snapshot, thread);
+          validateSessionThreadBinding({ machineId, snapshot, thread });
         } catch {
           return {
             type: 'blocked',
@@ -1114,7 +1096,9 @@ export async function startDaemon(): Promise<void> {
             });
             if (material.type === 'resumeMaterialRequired') return material;
             if (material.type === 'error') {
-              return { type: 'blocked', reason: 'invalidBinding' };
+              return material.kind === 'unavailable'
+                ? { type: 'error', error: 'operationFailed' }
+                : { type: 'blocked', reason: 'invalidBinding' };
             }
             tracked = installSessionSnapshot(material.snapshot);
           }
@@ -1165,6 +1149,12 @@ export async function startDaemon(): Promise<void> {
     apiMachine.setRPCHandlers({
       spawnSession,
       resumeSession,
+      preflightResumeSessions: (request) => preflightResumeSessions(request, {
+        machineId,
+        loadSnapshot: (input) => api.getMachineSessionSnapshot(input),
+        inspectThread: (directory, threadId) => codexThreadHistory.inspect(directory, threadId),
+        inspectGateway: (input) => inspectVerifiedGatewayForSession(input),
+      }),
       listCodexThreads: (request) => codexThreadHistory.list(request),
       openCodexThread: (request: CodexOpenThreadRequest) => codexThreadOpen.open(request),
       stopSession,

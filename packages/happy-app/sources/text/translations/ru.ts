@@ -292,6 +292,7 @@ export const ru: TranslationStructure = {
         yesterday: 'Вчера',
         daysAgo: ({ count }: { count: number }) => `${count} ${plural({ count, one: 'день', few: 'дня', many: 'дней' })} назад`,
         viewAll: 'Посмотреть все сессии',
+        resumePending: 'Ожидают проверки',
     },
 
     server: {
@@ -352,6 +353,7 @@ export const ru: TranslationStructure = {
         viewMachineSubtitle: 'Посмотреть детали машины и сессии',
         resumeSession: 'Resume Session',
         resumeSessionSubtitle: 'Resume this session on the same machine',
+        resumeSessionPendingVerification: 'Проверяется, можно ли возобновить этот сеанс.',
         resumeSessionSameMachineOnly: 'This session can only be resumed on the same machine it started on.',
         resumeSessionMachineOffline: 'This machine is offline. Resume is only available while it is online.',
         resumeSessionNeedsHappyAgent: 'Resume is unavailable on this machine. Run `happy-agent auth login` to enable it.',
@@ -453,6 +455,7 @@ export const ru: TranslationStructure = {
         online: 'online',
         offline: 'offline',
         recoverable: 'можно возобновить',
+        resumePending: 'ожидает проверки',
         archived: 'в архиве',
         lastSeen: ({ time }: { time: string }) => `в сети ${time}`,
         permissionRequired: 'требуется разрешение',
@@ -500,9 +503,6 @@ export const ru: TranslationStructure = {
         forkErrorMissingUuid: 'Выбранная точка отката больше не существует в исходной сессии — попробуйте форк без обрезки.',
         forkErrorMissingMetadata: 'Не хватает метаданных сессии для форка.',
         forkErrorGeneric: 'Не удалось форкнуть сессию.',
-        followUpMode: 'Режим следующего сообщения',
-        followUpQueue: 'В очередь',
-        followUpSteer: 'Направить',
     },
 
     commandPalette: {

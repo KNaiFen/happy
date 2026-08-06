@@ -325,4 +325,86 @@ describe('codex fork ops', () => {
         })).rejects.toThrow('read-only');
         expect(machineRPC).not.toHaveBeenCalled();
     });
+
+    it('strictly validates ordered resume preflight results', async () => {
+        machineRPC.mockResolvedValue({
+            type: 'success',
+            results: [
+                { type: 'eligible', sessionId: 'session-1' },
+                {
+                    type: 'pending',
+                    sessionId: 'session-2',
+                    reason: 'relayUnavailable',
+                },
+            ],
+        });
+        const { machinePreflightResumeSessions } = await import('./ops');
+        const sessions = [
+            {
+                sessionId: 'session-1',
+                directory: '/tmp/project',
+                threadId: 'thread-1',
+                dataEncryptionKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+            },
+            {
+                sessionId: 'session-2',
+                directory: '/tmp/project',
+                threadId: 'thread-2',
+                dataEncryptionKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+            },
+        ];
+
+        await expect(machinePreflightResumeSessions({
+            machineId: 'machine-1',
+            sessions,
+        })).resolves.toEqual({
+            type: 'success',
+            results: [
+                { type: 'eligible', sessionId: 'session-1' },
+                {
+                    type: 'pending',
+                    sessionId: 'session-2',
+                    reason: 'relayUnavailable',
+                },
+            ],
+        });
+        expect(machineRPC).toHaveBeenCalledWith(
+            'machine-1',
+            'preflight-resume-sessions',
+            { sessions },
+            { timeoutMs: 30_000 },
+        );
+    });
+
+    it('rejects malformed or reordered resume preflight results', async () => {
+        const { machinePreflightResumeSessions } = await import('./ops');
+        const sessions = [{
+            sessionId: 'session-1',
+            directory: '/tmp/project',
+            threadId: 'thread-1',
+            dataEncryptionKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+        }];
+        machineRPC.mockResolvedValueOnce({
+            type: 'success',
+            results: [{ type: 'eligible', sessionId: 'other-session' }],
+        });
+
+        await expect(machinePreflightResumeSessions({
+            machineId: 'machine-1',
+            sessions,
+        })).rejects.toThrow('did not match');
+
+        machineRPC.mockResolvedValueOnce({
+            type: 'success',
+            results: [{
+                type: 'eligible',
+                sessionId: 'session-1',
+                dataEncryptionKey: 'must-not-be-accepted',
+            }],
+        });
+        await expect(machinePreflightResumeSessions({
+            machineId: 'machine-1',
+            sessions,
+        })).rejects.toThrow();
+    });
 });
