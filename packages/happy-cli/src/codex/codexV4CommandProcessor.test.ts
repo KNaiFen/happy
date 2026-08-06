@@ -17,6 +17,7 @@ class FakeStore {
     readonly statuses = new Map<string, SyncV4CommandJournalStatus>();
     readonly commands = new Map<string, CodexCommandEntityV4>();
     readonly transitions: CodexCommandResultEntityV4[] = [];
+    readonly cancellationBatches: CodexCommandResultEntityV4[][] = [];
 
     getCommandStatus(commandId: string): SyncV4CommandJournalStatus | undefined {
         return this.statuses.get(commandId);
@@ -67,6 +68,30 @@ class FakeStore {
         this.commands.set(replacementCommand.commandId, replacementCommand);
         this.statuses.set(replacementCommand.commandId, 'received');
         this.transitions.push(previousResult, replacementResult);
+        const mutation = (index: number): SyncMutationV4 => ({
+            mutationId: `mutation-${index}`,
+            producerId: 'producer-1',
+            entityId: `opaque-result-${index}`,
+            entityType: 'codex.commandResult',
+            revision: index,
+            op: 'upsert',
+            ciphertext: 'ciphertext',
+        });
+        return [mutation(this.transitions.length - 1), mutation(this.transitions.length)];
+    }
+
+    async publishCommandCancellation(
+        queuedCommand: CodexCommandEntityV4,
+        queuedResult: CodexCommandResultEntityV4,
+        cancellationCommand: CodexCommandEntityV4,
+        cancellationResult: CodexCommandResultEntityV4,
+    ): Promise<[SyncMutationV4, SyncMutationV4]> {
+        this.commands.set(queuedCommand.commandId, queuedCommand);
+        this.statuses.set(queuedCommand.commandId, 'cancelled');
+        this.commands.set(cancellationCommand.commandId, cancellationCommand);
+        this.statuses.set(cancellationCommand.commandId, 'succeeded');
+        this.transitions.push(queuedResult, cancellationResult);
+        this.cancellationBatches.push([queuedResult, cancellationResult]);
         const mutation = (index: number): SyncMutationV4 => ({
             mutationId: `mutation-${index}`,
             producerId: 'producer-1',
@@ -518,6 +543,169 @@ describe('CodexV4CommandProcessor', () => {
         expect(store.statuses.get(original.commandId)).toBe('succeeded');
         expect(store.statuses.get(replacement.commandId)).toBe('failed');
         expect(execute).toHaveBeenCalledTimes(1);
+        processor.close();
+    });
+
+    it('atomically cancels a received queue entry without invoking the provider', async () => {
+        const store = new FakeStore();
+        const execute = vi.fn(async () => ({ threadId: 'thread-1', turnId: 'turn-1' }));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+            isTurnActive: () => true,
+        });
+        const queued = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+            bindingGeneration: 7,
+        });
+        const cancellation = command({
+            providerId: 'command-cancel',
+            commandId: 'command-cancel',
+            clientUserMessageId: 'command-cancel',
+            command: 'turn.queue.cancel',
+            payload: {},
+            replacesCommandId: queued.commandId,
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+            bindingGeneration: 7,
+            createdAt: 200,
+            updatedAt: 200,
+        });
+
+        await processor.handle(event(queued));
+        await processor.handle(event(cancellation));
+        await processor.handle(event(cancellation));
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(store.statuses.get(queued.commandId)).toBe('cancelled');
+        expect(store.statuses.get(cancellation.commandId)).toBe('succeeded');
+        expect(store.cancellationBatches).toHaveLength(1);
+        expect(store.cancellationBatches[0]).toMatchObject([
+            { commandId: queued.commandId, status: 'cancelled', reason: 'queueCancelled' },
+            {
+                commandId: cancellation.commandId,
+                status: 'succeeded',
+                result: { cancelledCommandId: queued.commandId },
+            },
+        ]);
+        processor.close();
+    });
+
+    it('cancels a durable queue entry before the processor marks it received', async () => {
+        const store = new FakeStore();
+        const queued = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+            bindingGeneration: 7,
+        });
+        store.commands.set(queued.commandId, queued);
+        const cancellation = command({
+            providerId: 'command-cancel-early',
+            commandId: 'command-cancel-early',
+            clientUserMessageId: 'command-cancel-early',
+            command: 'turn.queue.cancel',
+            payload: {},
+            replacesCommandId: queued.commandId,
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+            bindingGeneration: 7,
+            createdAt: 200,
+            updatedAt: 200,
+        });
+        const execute = vi.fn(async () => ({}));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+        });
+
+        await processor.handle(event(cancellation));
+        await processor.handle(event(queued));
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(store.statuses.get(queued.commandId)).toBe('cancelled');
+        expect(store.statuses.get(cancellation.commandId)).toBe('succeeded');
+        expect(store.cancellationBatches).toHaveLength(1);
+        processor.close();
+    });
+
+    it('rejects cancellation after a queue entry has been claimed', async () => {
+        const store = new FakeStore();
+        const queued = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+        });
+        store.commands.set(queued.commandId, queued);
+        store.statuses.set(queued.commandId, 'executing');
+        const cancellation = command({
+            providerId: 'command-cancel-late',
+            commandId: 'command-cancel-late',
+            clientUserMessageId: 'command-cancel-late',
+            command: 'turn.queue.cancel',
+            payload: {},
+            replacesCommandId: queued.commandId,
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+        });
+        const execute = vi.fn(async () => ({}));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+        });
+
+        await processor.handle(event(cancellation));
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(store.statuses.get(queued.commandId)).toBe('executing');
+        expect(store.statuses.get(cancellation.commandId)).toBe('failed');
+        expect(store.cancellationBatches).toHaveLength(0);
+        processor.close();
+    });
+
+    it('rejects cancellation with mismatched queue identity or a non-empty payload', async () => {
+        const store = new FakeStore();
+        const queued = command({
+            command: 'turn.queue',
+            queueEntryId: 'queue-1',
+            queuedAt: 100,
+            bindingGeneration: 7,
+        });
+        store.commands.set(queued.commandId, queued);
+        store.statuses.set(queued.commandId, 'received');
+        const execute = vi.fn(async () => ({}));
+        const processor = new CodexV4CommandProcessor({
+            store,
+            execute,
+            reconcile: async () => ({ action: 'pending' }),
+            reconcileIntervalMs: 0,
+            isTurnActive: () => true,
+        });
+        const invalid = command({
+            providerId: 'command-cancel-invalid',
+            commandId: 'command-cancel-invalid',
+            clientUserMessageId: 'command-cancel-invalid',
+            command: 'turn.queue.cancel',
+            payload: { text: '' },
+            replacesCommandId: queued.commandId,
+            queueEntryId: 'other-queue',
+            queuedAt: 100,
+            bindingGeneration: 7,
+        });
+
+        await processor.handle(event(invalid));
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(store.statuses.get(queued.commandId)).toBe('received');
+        expect(store.statuses.get(invalid.commandId)).toBe('failed');
         processor.close();
     });
 });

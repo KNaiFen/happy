@@ -142,7 +142,7 @@ describe('CodexThreadHistoryService', () => {
         });
 
         client.readThread.mockResolvedValueOnce({ thread: thread({ cwd: '/tmp/other' }) });
-        await expect(service.inspect('/tmp/project', 'thread-1')).rejects.toThrow('different directory');
+        await expect(service.inspect('/tmp/project', 'thread-1')).rejects.toThrow('does not match');
         await service.close();
     });
 });

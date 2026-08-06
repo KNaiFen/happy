@@ -169,6 +169,21 @@ describe('Codex Sync v4 entity schemas', () => {
       error: 'Queued message replaced',
       reason: 'commandReplaced',
     })).toMatchObject({ status: 'cancelled', reason: 'commandReplaced' });
+    expect(CodexCommandResultEntityV4Schema.parse({
+      schemaVersion: 1,
+      entityType: 'codex.commandResult',
+      providerId: 'command-1\0cancelled',
+      createdAt: 10,
+      updatedAt: 13,
+      commandId: 'command-1',
+      threadId: 'thread-1',
+      turnId: null,
+      status: 'cancelled',
+      providerRequestId: null,
+      result: null,
+      error: 'Queued message cancelled',
+      reason: 'queueCancelled',
+    })).toMatchObject({ status: 'cancelled', reason: 'queueCancelled' });
   });
 
   it('does not define a raw reasoning part type', () => {

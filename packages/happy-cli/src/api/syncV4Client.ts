@@ -600,6 +600,74 @@ export class SyncV4Client {
         return mutations;
     }
 
+    async publishCommandCancellation(
+        queuedCommand: CodexCommandEntityV4,
+        queuedResult: CodexCommandResultEntityV4,
+        cancellationCommand: CodexCommandEntityV4,
+        cancellationResult: CodexCommandResultEntityV4,
+    ): Promise<[SyncMutationV4, SyncMutationV4]> {
+        const canonicalQueued = CodexCommandResultEntityV4Schema.parse(queuedResult);
+        const canonicalCancellation = CodexCommandResultEntityV4Schema.parse(cancellationResult);
+        const generation = this.lifecycleGeneration;
+        this.assertCurrentGeneration(generation);
+        const mutations = await this.publishLock.inLock(async () => {
+            const createMutation = async (result: CodexCommandResultEntityV4): Promise<SyncMutationV4> => {
+                this.assertCurrentGeneration(generation);
+                const entityId = await this.crypto.opaqueEntityId(result.entityType, result.providerId);
+                const revision = this.journal.nextRevision(entityId);
+                const aad = {
+                    sessionId: this.sessionId,
+                    entityId,
+                    entityType: result.entityType,
+                    revision,
+                    op: "upsert" as const,
+                };
+                return SyncMutationV4Schema.parse({
+                    mutationId: randomUUID(),
+                    producerId: this.producerId,
+                    entityId,
+                    entityType: result.entityType,
+                    revision,
+                    op: aad.op,
+                    ciphertext: await this.crypto.encryptEntity(aad, result),
+                });
+            };
+            const queuedMutation = await createMutation(canonicalQueued);
+            const cancellationMutation = await createMutation(canonicalCancellation);
+            this.assertCurrentGeneration(generation);
+            await this.journal.appendCommandTransitionBatch([
+                {
+                    commandId: queuedCommand.commandId,
+                    status: "cancelled",
+                    mutation: queuedMutation,
+                    command: queuedCommand,
+                },
+                {
+                    commandId: cancellationCommand.commandId,
+                    status: "succeeded",
+                    mutation: cancellationMutation,
+                    command: cancellationCommand,
+                },
+            ]);
+            return [queuedMutation, cancellationMutation] as [SyncMutationV4, SyncMutationV4];
+        });
+        for (const [command, state] of [
+            [queuedCommand, "cancelled"],
+            [cancellationCommand, "succeeded"],
+        ] as const) {
+            this.recordDiagnostic({
+                level: "debug",
+                event: "request",
+                phase: "changed",
+                source: "command",
+                commandHash: syncV4DiagnosticHash(command.commandId),
+                state,
+            });
+        }
+        if (this.started) this.sendSync.invalidate();
+        return mutations;
+    }
+
     async publishProviderRequestTransition(
         request: CodexRequestEntityV4,
         state: SyncV4ProviderRequestJournalState = request.status === "pending"

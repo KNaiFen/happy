@@ -1,7 +1,6 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
 import { View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, TouchableWithoutFeedback } from 'react-native';
-import { Image } from 'expo-image';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
 import type { AttachmentPreview } from '@/sync/attachmentTypes';
 import { generateThumbhash } from '@/utils/thumbhash';
@@ -36,6 +35,8 @@ import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
 import { CodexFollowUpModeSelector } from './CodexFollowUpModeSelector';
+import { CodexQueuedMessages } from './CodexQueuedMessages';
+import type { CodexV4QueuedMessage } from '@/sync/codexV4Projection';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -98,6 +99,7 @@ interface AgentInputProps {
     followUpMode?: 'queue' | 'steer';
     canSteerFollowUp?: boolean;
     onFollowUpModeChange?: (mode: 'queue' | 'steer') => void;
+    queuedMessages?: CodexV4QueuedMessage[];
     minHeight?: number;
     zenMode?: boolean;
     /** Image attachments waiting to be sent (expImageUpload feature). */
@@ -304,15 +306,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingHorizontal: 0,
     },
     mobileActionButtonsContainer: {
-        height: 42,
+        height: 44,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 2,
     },
     mobileIconButton: {
-        width: 42,
-        height: 42,
-        borderRadius: 21,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
@@ -320,8 +322,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     mobileModeButton: {
         flex: 1,
         minWidth: 0,
-        height: 40,
-        borderRadius: 20,
+        height: 44,
+        borderRadius: 22,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
@@ -332,8 +334,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     mobileEffortButton: {
         width: 64,
         flexShrink: 0,
-        height: 40,
-        borderRadius: 20,
+        height: 44,
+        borderRadius: 22,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-start',
@@ -358,6 +360,38 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         gap: 8,
         flex: 1,
         overflow: 'hidden',
+    },
+    desktopActionButtonsRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+        marginLeft: 8,
+    },
+    desktopModeButton: {
+        maxWidth: 152,
+        height: 32,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingHorizontal: 6,
+        borderRadius: 16,
+    },
+    desktopModeText: {
+        flexShrink: 1,
+        color: theme.colors.textSecondary,
+        fontSize: 12,
+        lineHeight: 16,
+        ...Typography.default(),
+    },
+    desktopIconButton: {
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 16,
+    },
+    desktopStopButton: {
+        backgroundColor: theme.colors.fab.background,
     },
     actionButton: {
         flexDirection: 'row',
@@ -384,9 +418,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginLeft: 8,
     },
     mobilePrimaryButton: {
-        width: 42,
-        height: 42,
-        borderRadius: 21,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
         marginLeft: 1,
         backgroundColor: 'transparent',
         borderWidth: 1,
@@ -415,6 +449,14 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     sendButtonInnerPressed: {
         opacity: 0.7,
+    },
+    followUpDock: {
+        zIndex: 1,
+        marginHorizontal: 8,
+        marginBottom: 0,
+    },
+    followUpDockMode: {
+        alignItems: 'flex-end',
     },
 }));
 
@@ -722,6 +764,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         && (isSendBlocked
             ? hasComposerContent
             : hasComposerContent || !!props.onMicPress);
+    const desktopCanPressPrimaryAction = shouldShowStopButton
+        ? !isAborting && !!props.onAbort
+        : desktopCanPressSendButton;
     const canPressSendButton = compactMobileComposer
         ? mobileCanPressSendButton
         : desktopCanPressSendButton;
@@ -1159,32 +1204,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             </Pressable>
                         )}
 
-                        {props.onAbort && (
-                            <Shaker ref={shakerRef}>
-                                <Pressable
-                                    style={(p) => ({
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        borderRadius: Platform.select({ default: 16, android: 20 }),
-                                        paddingHorizontal: 8,
-                                        paddingVertical: 6,
-                                        justifyContent: 'center',
-                                        height: 32,
-                                        opacity: p.pressed ? 0.7 : 1,
-                                    })}
-                                    hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                    onPress={handleAbortPress}
-                                    disabled={isAborting}
-                                >
-                                    {isAborting ? (
-                                        <ActivityIndicator size="small" color={theme.colors.button.secondary.tint} />
-                                    ) : (
-                                        <Octicons name="stop" size={16} color={theme.colors.button.secondary.tint} />
-                                    )}
-                                </Pressable>
-                            </Shaker>
-                        )}
-
                         <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
 
                         {props.onPickImages && (
@@ -1213,54 +1232,112 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         )}
                     </View>}
 
-                    <View
-                        style={[
-                            styles.sendButton,
-                            isSendBlocked
-                                ? styles.sendButtonLocked
-                                : (hasText || props.isSending || (props.onMicPress && !props.isMicActive))
-                                    ? styles.sendButtonActive
-                                    : styles.sendButtonInactive,
-                        ]}
-                    >
-                        <Pressable
-                            style={(p) => ({
-                                width: '100%',
-                                height: '100%',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                opacity: p.pressed ? 0.7 : 1,
-                            })}
-                            hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                            onPress={handleSendPress}
-                            disabled={!desktopCanPressSendButton}
-                        >
-                            {props.isSending ? (
-                                <ActivityIndicator size="small" color={theme.colors.button.primary.tint} />
-                            ) : isSendBlocked ? (
-                                <Ionicons name="lock-closed" size={15} color={theme.colors.textSecondary} />
-                            ) : hasText ? (
-                                <Octicons
-                                    name="arrow-up"
-                                    size={16}
-                                    color={theme.colors.button.primary.tint}
-                                    style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
-                                />
-                            ) : props.onMicPress && !props.isMicActive ? (
-                                <Image
-                                    source={require('@/assets/images/icon-voice-white.png')}
-                                    style={{ width: 24, height: 24 }}
-                                    tintColor={theme.colors.button.primary.tint}
-                                />
-                            ) : (
-                                <Octicons
-                                    name="arrow-up"
-                                    size={16}
-                                    color={theme.colors.button.primary.tint}
-                                    style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
-                                />
-                            )}
-                        </Pressable>
+                    <View style={styles.desktopActionButtonsRight}>
+                        {!props.zenMode && (canOpenModelPicker || !!modelLabel) && (
+                            <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={t('agentInput.model.title')}
+                                accessibilityState={{ disabled: !canOpenModelPicker }}
+                                disabled={!canOpenModelPicker}
+                                hitSlop={6}
+                                onPress={handleModelPress}
+                                style={({ pressed }) => [
+                                    styles.desktopModeButton,
+                                    pressed && canOpenModelPicker && styles.actionButtonPressed,
+                                    !canOpenModelPicker && { opacity: 0.58 },
+                                ]}
+                            >
+                                <Ionicons name="flash" size={15} color={theme.colors.textSecondary} />
+                                <Text style={styles.desktopModeText} numberOfLines={1}>{modelLabel}</Text>
+                            </Pressable>
+                        )}
+                        {!props.zenMode && (canOpenEffortPicker || !!effortLabel) && (
+                            <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={t('agentInput.effort.title')}
+                                accessibilityState={{ disabled: !canOpenEffortPicker }}
+                                disabled={!canOpenEffortPicker}
+                                hitSlop={6}
+                                onPress={handleEffortPress}
+                                style={({ pressed }) => [
+                                    styles.desktopModeButton,
+                                    { maxWidth: 92 },
+                                    pressed && canOpenEffortPicker && styles.actionButtonPressed,
+                                    !canOpenEffortPicker && { opacity: 0.58 },
+                                ]}
+                            >
+                                <Text style={styles.desktopModeText} numberOfLines={1}>{effortLabel ?? t('agentInput.effort.title')}</Text>
+                            </Pressable>
+                        )}
+                        {props.onMicPress && (
+                            <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel="Voice"
+                                accessibilityState={{ disabled: props.isSendDisabled }}
+                                disabled={props.isSendDisabled}
+                                hitSlop={6}
+                                onPress={handleMicrophonePress}
+                                style={({ pressed }) => [
+                                    styles.desktopIconButton,
+                                    pressed && !props.isSendDisabled && styles.actionButtonPressed,
+                                    props.isSendDisabled && { opacity: 0.45 },
+                                ]}
+                            >
+                                <Ionicons name={props.isMicActive ? 'mic' : 'mic-outline'} size={19} color={theme.colors.textSecondary} />
+                            </Pressable>
+                        )}
+                        <Shaker ref={shakerRef}>
+                            <View
+                                style={[
+                                    styles.sendButton,
+                                    isSendBlocked
+                                        ? styles.sendButtonLocked
+                                        : shouldShowStopButton
+                                            ? styles.desktopStopButton
+                                            : (hasComposerContent || (props.onMicPress && !props.isMicActive))
+                                                ? styles.sendButtonActive
+                                                : styles.sendButtonInactive,
+                                ]}
+                            >
+                                <Pressable
+                                    testID="agent-input-send"
+                                    style={(p) => ({
+                                        width: '100%',
+                                        height: '100%',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        opacity: p.pressed ? 0.7 : 1,
+                                    })}
+                                    hitSlop={6}
+                                    onPress={shouldShowStopButton ? handleAbortPress : handleSendPress}
+                                    disabled={!desktopCanPressPrimaryAction}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={shouldShowStopButton ? 'Stop' : 'Send'}
+                                >
+                                    {isAborting ? (
+                                        <ActivityIndicator size="small" color={theme.colors.fab.icon} />
+                                    ) : shouldShowStopButton ? (
+                                        <Octicons name="stop" size={15} color={theme.colors.fab.icon} />
+                                    ) : isSendBlocked ? (
+                                        <Ionicons name="lock-closed" size={15} color={theme.colors.textSecondary} />
+                                    ) : hasComposerContent ? (
+                                        <Octicons
+                                            name="arrow-up"
+                                            size={16}
+                                            color={theme.colors.button.primary.tint}
+                                            style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
+                                        />
+                                    ) : (
+                                        <Octicons
+                                            name="arrow-up"
+                                            size={16}
+                                            color={theme.colors.button.primary.tint}
+                                            style={{ marginTop: Platform.OS === 'web' ? 2 : 0 }}
+                                        />
+                                    )}
+                                </Pressable>
+                            </View>
+                        </Shaker>
                     </View>
                 </View>
             </View>
@@ -1324,7 +1401,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </Pressable>
     );
 
-    const desktopSettingsOverlay = !compactMobileComposer && openPicker === 'permission' ? (
+    const desktopSettingsOverlay = !compactMobileComposer && openPicker ? (
         <>
             <TouchableWithoutFeedback onPress={closePicker}>
                 <View style={styles.overlayBackdrop} />
@@ -1748,6 +1825,27 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onPathClick={props.onPathClick}
                 />
 
+                {(props.followUpMode && props.onFollowUpModeChange) || (props.sessionId && (props.queuedMessages?.length ?? 0) > 0) ? (
+                    <View style={styles.followUpDock} testID="codex-follow-up-dock">
+                        {props.followUpMode && props.onFollowUpModeChange ? (
+                            <View style={styles.followUpDockMode}>
+                                <CodexFollowUpModeSelector
+                                    value={props.followUpMode}
+                                    canSteer={props.canSteerFollowUp === true}
+                                    onChange={handleFollowUpModePress}
+                                />
+                            </View>
+                        ) : null}
+                        {props.sessionId && props.queuedMessages && props.queuedMessages.length > 0 ? (
+                            <CodexQueuedMessages
+                                sessionId={props.sessionId}
+                                messages={props.queuedMessages}
+                                canSteer={props.canSteerFollowUp === true}
+                            />
+                        ) : null}
+                    </View>
+                ) : null}
+
                 {/* Box 2: Action Area (Input + Send) */}
                 <Shaker ref={sendBlockShakerRef}>
                     <View style={[
@@ -1771,13 +1869,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             onRemove={props.onRemoveImage ?? (() => {})}
                         />
                     )}
-                    {props.followUpMode && props.onFollowUpModeChange ? (
-                        <CodexFollowUpModeSelector
-                            value={props.followUpMode}
-                            canSteer={props.canSteerFollowUp === true}
-                            onChange={handleFollowUpModePress}
-                        />
-                    ) : null}
                     {/* Input field */}
                     <View style={[
                         styles.inputContainer,

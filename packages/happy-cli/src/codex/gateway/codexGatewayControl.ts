@@ -6,6 +6,58 @@ import type { CodexGatewayDescriptor } from './codexGatewayState';
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 
+export type CodexGatewayControlOperationErrorCode =
+    | 'threadUnavailable'
+    | 'conflict'
+    | 'operationFailed'
+    | 'outcomeUnknown';
+
+type CodexGatewayControlWireErrorCode =
+    | CodexGatewayControlOperationErrorCode
+    | 'invalidRequest'
+    | 'bodyTooLarge'
+    | 'methodNotAllowed'
+    | 'unauthorized'
+    | 'notFound';
+
+const CONTROL_ERROR_CODES = new Set<CodexGatewayControlWireErrorCode>([
+    'threadUnavailable',
+    'conflict',
+    'operationFailed',
+    'outcomeUnknown',
+    'invalidRequest',
+    'bodyTooLarge',
+    'methodNotAllowed',
+    'unauthorized',
+    'notFound',
+]);
+
+export class CodexGatewayControlOperationError extends Error {
+    constructor(readonly code: CodexGatewayControlOperationErrorCode) {
+        super(`Codex Gateway operation failed (${code})`);
+        this.name = 'CodexGatewayControlOperationError';
+    }
+}
+
+export class CodexGatewayControlRequestError extends Error {
+    constructor(
+        readonly code: CodexGatewayControlWireErrorCode,
+        readonly status: number,
+    ) {
+        super(status > 0
+            ? `Gateway control request failed (${status})`
+            : 'Gateway control request outcome is unknown');
+        this.name = 'CodexGatewayControlRequestError';
+    }
+}
+
+export function isCodexGatewayControlOutcomeUnknown(error: unknown): boolean {
+    return (
+        error instanceof CodexGatewayControlOperationError
+        || error instanceof CodexGatewayControlRequestError
+    ) && error.code === 'outcomeUnknown';
+}
+
 const NormalExitSchema = z.object({
     attachmentId: z.string().uuid(),
     nonce: z.string().min(32).max(512),
@@ -127,10 +179,8 @@ export async function startCodexGatewayControlServer(options: {
             sendJson(response, 200, { ok: true, result: result ?? null });
         } catch (error) {
             options.onError?.();
-            const status = error instanceof ControlBodyTooLargeError ? 413 : 400;
-            sendJson(response, status, {
-                error: error instanceof ControlBodyTooLargeError ? 'bodyTooLarge' : 'invalidRequest',
-            });
+            const failure = classifyControlServerError(error);
+            sendJson(response, failure.status, { error: failure.code });
         }
     });
     await listen(server, options);
@@ -158,35 +208,96 @@ export async function callCodexGatewayControl<T>(options: {
         throw new Error('Codex Gateway control endpoint is unavailable');
     }
     const body = Buffer.from(JSON.stringify(options.body ?? {}), 'utf8');
-    const response = await new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
-        const request = httpRequest({
-            method: 'POST',
-            path: options.path,
-            ...(options.descriptor.controlSocketPath
-                ? { socketPath: options.descriptor.controlSocketPath }
-                : { hostname: '127.0.0.1', port: options.descriptor.controlPort ?? undefined }),
-            headers: {
-                authorization: `Bearer ${options.token}`,
-                'content-type': 'application/json',
-                'content-length': String(body.length),
-            },
-            timeout: options.timeoutMs ?? 5_000,
-        }, (incoming) => {
-            const chunks: Buffer[] = [];
-            incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
-            incoming.on('end', () => resolve({
-                status: incoming.statusCode ?? 500,
-                body: Buffer.concat(chunks),
-            }));
+    let response: { status: number; body: Buffer };
+    try {
+        response = await new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
+            const request = httpRequest({
+                method: 'POST',
+                path: options.path,
+                ...(options.descriptor.controlSocketPath
+                    ? { socketPath: options.descriptor.controlSocketPath }
+                    : { hostname: '127.0.0.1', port: options.descriptor.controlPort ?? undefined }),
+                headers: {
+                    authorization: `Bearer ${options.token}`,
+                    'content-type': 'application/json',
+                    'content-length': String(body.length),
+                },
+                timeout: options.timeoutMs ?? 5_000,
+            }, (incoming) => {
+                const chunks: Buffer[] = [];
+                incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
+                incoming.on('end', () => resolve({
+                    status: incoming.statusCode ?? 500,
+                    body: Buffer.concat(chunks),
+                }));
+            });
+            request.on('timeout', () => request.destroy(
+                new CodexGatewayControlRequestError('outcomeUnknown', 0),
+            ));
+            request.on('error', reject);
+            request.end(body);
         });
-        request.on('timeout', () => request.destroy(new Error('Gateway control request timed out')));
-        request.on('error', reject);
-        request.end(body);
-    });
-    if (response.status !== 200) throw new Error(`Gateway control request failed (${response.status})`);
-    const parsed = JSON.parse(response.body.toString('utf8')) as { ok?: boolean; result?: T };
-    if (!parsed.ok) throw new Error('Gateway control response was invalid');
+    } catch (error) {
+        if (error instanceof CodexGatewayControlRequestError) throw error;
+        throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
+    }
+    if (response.status !== 200) {
+        throw new CodexGatewayControlRequestError(
+            parseControlResponseError(response.body, response.status),
+            response.status,
+        );
+    }
+    let parsed: { ok?: boolean; result?: T };
+    try {
+        parsed = JSON.parse(response.body.toString('utf8')) as { ok?: boolean; result?: T };
+    } catch {
+        throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
+    }
+    if (!parsed.ok) throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
     return parsed.result as T;
+}
+
+function classifyControlServerError(error: unknown): {
+    status: 400 | 404 | 409 | 413 | 502;
+    code: CodexGatewayControlWireErrorCode;
+} {
+    if (error instanceof ControlBodyTooLargeError) return { status: 413, code: 'bodyTooLarge' };
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+        return { status: 400, code: 'invalidRequest' };
+    }
+    if (error instanceof CodexGatewayControlOperationError) {
+        switch (error.code) {
+            case 'threadUnavailable': return { status: 404, code: error.code };
+            case 'conflict': return { status: 409, code: error.code };
+            case 'operationFailed':
+            case 'outcomeUnknown':
+                return { status: 502, code: error.code };
+        }
+    }
+    return { status: 502, code: 'operationFailed' };
+}
+
+function parseControlResponseError(
+    body: Buffer,
+    status: number,
+): CodexGatewayControlWireErrorCode {
+    try {
+        const parsed = JSON.parse(body.toString('utf8')) as { error?: unknown };
+        if (
+            typeof parsed.error === 'string'
+            && CONTROL_ERROR_CODES.has(parsed.error as CodexGatewayControlWireErrorCode)
+        ) {
+            return parsed.error as CodexGatewayControlWireErrorCode;
+        }
+    } catch {
+        // The status code still determines a stable local category.
+    }
+    if (status === 400) return 'invalidRequest';
+    if (status === 401) return 'unauthorized';
+    if (status === 404) return 'notFound';
+    if (status === 409) return 'conflict';
+    if (status === 413) return 'bodyTooLarge';
+    return 'operationFailed';
 }
 
 function validBearerToken(header: string | undefined, expected: string): boolean {

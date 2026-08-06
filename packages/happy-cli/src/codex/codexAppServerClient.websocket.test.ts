@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     CodexAppServerClient,
     CodexRpcOutcomeUnknownError,
+    isCodexThreadUnavailableRpcResponse,
 } from './codexAppServerClient';
 import { connectCodexAppServerWebSocket } from './codexAppServerWebSocket';
 
@@ -171,6 +172,48 @@ describe('CodexAppServerClient external WebSocket transport', () => {
 
         await expect(client.subscribeThreadIfMaterialized('thread-fresh'))
             .rejects.toThrow('thread/resume failed (code=-32600)');
+    });
+
+    it('recognizes only the exact thread lookup failure as unavailable', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-codex-client-ws-'));
+        const socketPath = join(root, 'provider.sock');
+        const provider = await startProvider(socketPath, (socket, message) => {
+            if (message.method === 'initialize') {
+                socket.send(JSON.stringify({ id: message.id, result: { userAgent: 'test' } }));
+            }
+            if (message.method === 'thread/read') {
+                const params = message.params as { threadId?: unknown } | undefined;
+                socket.send(JSON.stringify({
+                    id: message.id,
+                    error: {
+                        code: -32600,
+                        message: params?.threadId === 'thread-missing'
+                            ? 'no rollout found for thread id thread-missing'
+                            : 'provider temporarily unavailable',
+                    },
+                }));
+            }
+        });
+        cleanups.push(async () => {
+            await provider.close();
+            await rm(root, { recursive: true, force: true });
+        });
+
+        const client = new CodexAppServerClient(
+            undefined,
+            { major: 0, minor: 145, patch: 0 },
+            { webSocketEndpoint: { socketPath } },
+        );
+        cleanups.push(async () => client.disconnect());
+        await client.connect();
+
+        const missing = await client.readThread({ threadId: 'thread-missing' })
+            .catch((error: unknown) => error);
+        const providerFailure = await client.readThread({ threadId: 'thread-other' })
+            .catch((error: unknown) => error);
+
+        expect(isCodexThreadUnavailableRpcResponse(missing, 'thread-missing')).toBe(true);
+        expect(isCodexThreadUnavailableRpcResponse(providerFailure, 'thread-other')).toBe(false);
     });
 
     it('does not offer compression on loopback WebSocket endpoints', async () => {

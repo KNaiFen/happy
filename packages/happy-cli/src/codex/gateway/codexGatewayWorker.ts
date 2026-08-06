@@ -9,7 +9,11 @@ import { logger } from '@/ui/logger';
 import { scopeCredentialsToCurrentRelay } from '@/ui/auth';
 import { AsyncLock } from '@/utils/lock';
 import { configuration } from '@/configuration';
-import { CodexAppServerClient, CodexRpcOutcomeUnknownError } from '../codexAppServerClient';
+import {
+    CodexAppServerClient,
+    classifyCodexRpcFailure,
+    isCodexThreadUnavailableRpcResponse,
+} from '../codexAppServerClient';
 import {
     assertMinimumCodexCliVersion,
     readCodexCliVersion,
@@ -26,6 +30,7 @@ import {
     type CodexGatewayRootRuntimeFactoryOptions,
 } from './codexGatewayCoordinator';
 import {
+    CodexGatewayControlOperationError,
     startCodexGatewayControlServer,
     type CodexGatewayOpenRootInput,
     type CodexGatewayOpenRootResult,
@@ -296,6 +301,7 @@ async function runCodexGatewayWorkerInternal(
     let preserveProviderEndpoint = false;
     const rootOpenLock = new AsyncLock();
     const cancelledRootOpenOperations = new Set<string>();
+    const indeterminateRootStartOperations = new Set<string>();
     const rootOpenThreadIds = new Map<string, string>();
 
     const terminal = new CodexGatewayAttachmentManager({
@@ -782,13 +788,13 @@ async function runCodexGatewayWorkerInternal(
 
     function assertRootOpenNotCancelled(operationId: string): void {
         if (cancelledRootOpenOperations.has(operationId)) {
-            throw new Error('Codex Gateway root open was cancelled');
+            throw new CodexGatewayControlOperationError('conflict');
         }
     }
 
     function assertRootOperationMatchesGateway(operationId: string): void {
         if (gatewayBootstrapOperationId && gatewayBootstrapOperationId !== operationId) {
-            throw new Error('Codex Gateway root operation does not match the descriptor');
+            throw new CodexGatewayControlOperationError('conflict');
         }
     }
 
@@ -802,7 +808,7 @@ async function runCodexGatewayWorkerInternal(
             });
         }
         rootOpenThreadIds.delete(operationId);
-        throw new Error('Codex Gateway root open was cancelled');
+        throw new CodexGatewayControlOperationError('conflict');
     }
 
     async function relinquishHeadlessRoot(threadId: string): Promise<boolean> {
@@ -817,20 +823,23 @@ async function runCodexGatewayWorkerInternal(
         input: CodexGatewayOpenRootInput,
     ): Promise<CodexGatewayOpenRootResult> {
         if (gatewayOrigin !== 'app') {
-            throw new Error('Root control is only available for App-origin Gateways');
+            throw new CodexGatewayControlOperationError('conflict');
         }
-        if (stopping) throw new Error('Codex Gateway is stopping');
+        if (stopping) throw new CodexGatewayControlOperationError('conflict');
         assertRootOperationMatchesGateway(input.operationId);
         assertRootOpenNotCancelled(input.operationId);
+        if (indeterminateRootStartOperations.has(input.operationId)) {
+            throw new CodexGatewayControlOperationError('outcomeUnknown');
+        }
         const privateResume = input.action === 'resume' ? gatewayResumeBootstrap : null;
         if (gatewayResumeBootstrap && input.action !== 'resume') {
-            throw new Error('This Codex Gateway is reserved for its private resume bootstrap');
+            throw new CodexGatewayControlOperationError('conflict');
         }
         if (
             privateResume
             && gatewayBootstrapOperationId !== input.operationId
         ) {
-            throw new Error('Codex Gateway private resume operation does not match the descriptor');
+            throw new CodexGatewayControlOperationError('conflict');
         }
         if (privateResume && (
             input.threadId !== null
@@ -842,7 +851,7 @@ async function runCodexGatewayWorkerInternal(
             || input.forkedFromMessageId !== null
             || input.isSideChat
         )) {
-            throw new Error('Private resume material must not be sent through Gateway control');
+            throw new CodexGatewayControlOperationError('conflict');
         }
         const effectiveInput: CodexGatewayOpenRootInput = privateResume
             ? {
@@ -858,11 +867,11 @@ async function runCodexGatewayWorkerInternal(
                 cwd: input.cwd ?? gatewayCwd,
             };
         if (effectiveInput.action === 'resume' && !effectiveInput.threadId) {
-            throw new Error('Codex thread ID is required for resume');
+            throw new CodexGatewayControlOperationError('conflict');
         }
         const effectiveCwd = effectiveInput.cwd ?? gatewayCwd;
         if (resolve(effectiveCwd) !== resolve(gatewayCwd)) {
-            throw new Error('Root control working directory does not match the Gateway');
+            throw new CodexGatewayControlOperationError('conflict');
         }
         const activeCoordinator = requireCoordinator();
         const currentPrivateBinding = privateResume
@@ -874,118 +883,139 @@ async function runCodexGatewayWorkerInternal(
             currentPrivateBinding?.sessionId
             && currentPrivateBinding.sessionId !== privateResume?.happySessionId
         ) {
-            throw new Error('Codex Gateway private resume session identity changed');
+            throw new CodexGatewayControlOperationError('conflict');
         }
         const existing = privateResume ? null : journal.bootstrap(input.operationId);
         let bridgeStartedNewThread = false;
         let threadId: string;
-        if (currentPrivateBinding && privateResume) {
-            threadId = privateResume.threadId;
-        } else if (existing) {
-            await journal.recordBootstrap({
-                ...bootstrapRecordInput(effectiveInput, existing.resolvedThreadId, gatewayCwd),
-                state: existing.state,
-                updatedAt: Date.now(),
-            });
-            threadId = existing.resolvedThreadId;
-        } else {
-            const policy = resolveCodexExecutionPolicy(effectiveInput.permissionMode, false);
-            let releaseResumeLease = false;
-            if (effectiveInput.action === 'resume') {
-                const requestedThreadId = effectiveInput.threadId!;
-                rootOpenThreadIds.set(input.operationId, requestedThreadId);
-                assertRootOpenNotCancelled(input.operationId);
-                const owner = await leases.owner(requestedThreadId);
-                await leases.acquire(requestedThreadId, options.gatewayId);
-                releaseResumeLease = owner !== options.gatewayId;
-                await abortCancelledRootOpen(input.operationId, requestedThreadId);
-            }
-            try {
-                assertRootOpenNotCancelled(input.operationId);
-                const opened = effectiveInput.action === 'start'
-                    ? await client.startThread({
-                        cwd: effectiveCwd,
-                        model: effectiveInput.model ?? undefined,
-                        approvalPolicy: policy.approvalPolicy,
-                        sandbox: policy.sandbox,
-                    })
-                    : await client.resumeThread({
-                        threadId: effectiveInput.threadId!,
-                        cwd: effectiveCwd,
-                        model: effectiveInput.model ?? undefined,
-                        approvalPolicy: policy.approvalPolicy,
-                        sandbox: policy.sandbox,
-                        emitSnapshot: false,
-                    });
-                threadId = opened.threadId;
-                rootOpenThreadIds.set(input.operationId, threadId);
-                await abortCancelledRootOpen(input.operationId, threadId);
-                if (privateResume && threadId !== privateResume.threadId) {
-                    throw new Error('Codex provider resumed a different thread identity');
-                }
-                bridgeStartedNewThread = effectiveInput.action === 'start';
-            } catch (error) {
-                if (releaseResumeLease && !(error instanceof CodexRpcOutcomeUnknownError)) {
-                    await leases.release(effectiveInput.threadId!, options.gatewayId).catch(() => false);
-                    rootOpenThreadIds.delete(input.operationId);
-                }
-                throw error;
-            }
-            if (!privateResume) {
-                const accepted = {
-                    ...bootstrapRecordInput(effectiveInput, threadId, gatewayCwd),
-                    state: 'providerAccepted' as const,
+        let providerAccepted = Boolean(currentPrivateBinding || existing);
+        try {
+            if (currentPrivateBinding && privateResume) {
+                threadId = privateResume.threadId;
+            } else if (existing) {
+                await journal.recordBootstrap({
+                    ...bootstrapRecordInput(effectiveInput, existing.resolvedThreadId, gatewayCwd),
+                    state: existing.state,
                     updatedAt: Date.now(),
-                };
-                await journal.recordBootstrap(accepted);
-                rootSessionConfigs.set(threadId, rootConfigFromBootstrap(accepted));
+                });
+                threadId = existing.resolvedThreadId;
+            } else {
+                const policy = resolveCodexExecutionPolicy(effectiveInput.permissionMode, false);
+                let releaseResumeLease = false;
+                if (effectiveInput.action === 'resume') {
+                    const requestedThreadId = effectiveInput.threadId!;
+                    rootOpenThreadIds.set(input.operationId, requestedThreadId);
+                    assertRootOpenNotCancelled(input.operationId);
+                    const owner = await leases.owner(requestedThreadId);
+                    await leases.acquire(requestedThreadId, options.gatewayId);
+                    releaseResumeLease = owner !== options.gatewayId;
+                    await abortCancelledRootOpen(input.operationId, requestedThreadId);
+                }
+                try {
+                    assertRootOpenNotCancelled(input.operationId);
+                    const opened = effectiveInput.action === 'start'
+                        ? await client.startThread({
+                            cwd: effectiveCwd,
+                            model: effectiveInput.model ?? undefined,
+                            approvalPolicy: policy.approvalPolicy,
+                            sandbox: policy.sandbox,
+                        })
+                        : await client.resumeThread({
+                            threadId: effectiveInput.threadId!,
+                            cwd: effectiveCwd,
+                            model: effectiveInput.model ?? undefined,
+                            approvalPolicy: policy.approvalPolicy,
+                            sandbox: policy.sandbox,
+                            emitSnapshot: false,
+                        });
+                    threadId = opened.threadId;
+                    providerAccepted = true;
+                    rootOpenThreadIds.set(input.operationId, threadId);
+                    await abortCancelledRootOpen(input.operationId, threadId);
+                    if (privateResume && threadId !== privateResume.threadId) {
+                        throw new Error('Codex provider resumed a different thread identity');
+                    }
+                    bridgeStartedNewThread = effectiveInput.action === 'start';
+                } catch (error) {
+                    if (error instanceof CodexGatewayControlOperationError) throw error;
+                    const failure = classifyCodexRpcFailure(error);
+                    if (failure === 'outcomeUnknown' && effectiveInput.action === 'start') {
+                        indeterminateRootStartOperations.add(input.operationId);
+                    }
+                    if (releaseResumeLease && failure !== 'outcomeUnknown') {
+                        await leases.release(effectiveInput.threadId!, options.gatewayId).catch(() => false);
+                        rootOpenThreadIds.delete(input.operationId);
+                    }
+                    throw new CodexGatewayControlOperationError(
+                        failure === 'outcomeUnknown'
+                            ? 'outcomeUnknown'
+                            : effectiveInput.action === 'resume'
+                                && isCodexThreadUnavailableRpcResponse(error, effectiveInput.threadId!)
+                                ? 'threadUnavailable'
+                                : 'operationFailed',
+                    );
+                }
+                if (!privateResume) {
+                    const accepted = {
+                        ...bootstrapRecordInput(effectiveInput, threadId, gatewayCwd),
+                        state: 'providerAccepted' as const,
+                        updatedAt: Date.now(),
+                    };
+                    await journal.recordBootstrap(accepted);
+                    rootSessionConfigs.set(threadId, rootConfigFromBootstrap(accepted));
+                }
             }
-        }
 
-        await abortCancelledRootOpen(input.operationId, threadId);
-        const bound = await activeCoordinator.bindRoot(threadId, {
-            subscription: effectiveInput.action === 'start'
-                ? bridgeStartedNewThread
-                    ? 'bridgeStartedNewThread'
-                    : 'deferredNewThread'
-                : 'resume',
-        });
-        await abortCancelledRootOpen(input.operationId, threadId);
-        if (effectiveInput.action === 'start' && !bridgeStartedNewThread) {
-            try {
-                await activeCoordinator.subscribeMaterializedRoot(threadId);
-            } catch (error) {
-                await persistWorkerError(error);
-                throw error;
-            }
-        }
-        syncPendingFreshSubscriptions();
-        if (!privateResume) {
-            await journal.recordBootstrap({
-                ...bootstrapRecordInput(effectiveInput, threadId, gatewayCwd),
-                state: 'bound',
-                updatedAt: Date.now(),
+            await abortCancelledRootOpen(input.operationId, threadId);
+            const bound = await activeCoordinator.bindRoot(threadId, {
+                subscription: effectiveInput.action === 'start'
+                    ? bridgeStartedNewThread
+                        ? 'bridgeStartedNewThread'
+                        : 'deferredNewThread'
+                    : 'resume',
             });
+            await abortCancelledRootOpen(input.operationId, threadId);
+            if (effectiveInput.action === 'start' && !bridgeStartedNewThread) {
+                try {
+                    await activeCoordinator.subscribeMaterializedRoot(threadId);
+                } catch (error) {
+                    await persistWorkerError(error);
+                    throw error;
+                }
+            }
+            syncPendingFreshSubscriptions();
+            if (!privateResume) {
+                await journal.recordBootstrap({
+                    ...bootstrapRecordInput(effectiveInput, threadId, gatewayCwd),
+                    state: 'bound',
+                    updatedAt: Date.now(),
+                });
+            }
+            await materializeDeferredRoots();
+            await syncDescriptorBindings({ clearRootBindingError: true });
+            await abortCancelledRootOpen(input.operationId, threadId);
+            const current = activeCoordinator.bindingSnapshot().find((binding) => (
+                binding.threadId === threadId && binding.role === 'current'
+            ));
+            const sessionId = current?.sessionId ?? bound.sessionId;
+            if (!sessionId) {
+                throw new Error('Happy relay is unavailable after the Codex thread was accepted');
+            }
+            if (privateResume && sessionId !== privateResume.happySessionId) {
+                throw new Error('Codex Gateway resumed a different Happy session identity');
+            }
+            return {
+                gatewayId: options.gatewayId,
+                threadId,
+                sessionId,
+                generation: current?.generation ?? bound.generation,
+            };
+        } catch (error) {
+            if (error instanceof CodexGatewayControlOperationError) throw error;
+            throw new CodexGatewayControlOperationError(
+                providerAccepted ? 'outcomeUnknown' : 'operationFailed',
+            );
         }
-        await materializeDeferredRoots();
-        await syncDescriptorBindings({ clearRootBindingError: true });
-        await abortCancelledRootOpen(input.operationId, threadId);
-        const current = activeCoordinator.bindingSnapshot().find((binding) => (
-            binding.threadId === threadId && binding.role === 'current'
-        ));
-        const sessionId = current?.sessionId ?? bound.sessionId;
-        if (!sessionId) {
-            throw new Error('Happy relay is unavailable after the Codex thread was accepted');
-        }
-        if (privateResume && sessionId !== privateResume.happySessionId) {
-            throw new Error('Codex Gateway resumed a different Happy session identity');
-        }
-        return {
-            gatewayId: options.gatewayId,
-            threadId,
-            sessionId,
-            generation: current?.generation ?? bound.generation,
-        };
     }
 
     async function materializeDeferredRoots(): Promise<void> {

@@ -11,6 +11,7 @@ import {
 import { storage } from '@/sync/storage';
 import { Message } from '@/sync/typesMessage';
 import { VOICE_CONFIG } from '../voiceConfig';
+import { voiceLog } from '../voiceLog';
 
 /**
  * Centralized voice assistant hooks for multi-session context updates.
@@ -69,7 +70,7 @@ function flushPendingPrompts() {
  */
 function sendContext(update: string | null | undefined) {
     if (VOICE_CONFIG.ENABLE_DEBUG_LOGGING) {
-        console.log('🎤 Voice: sendContext:', update);
+        voiceLog('context.dispatch', { hasPayload: Boolean(update) });
     }
     if (!update) return;
     const voice = getVoiceSession();
@@ -83,7 +84,7 @@ function sendContext(update: string | null | undefined) {
  */
 function sendPrompt(update: string | null | undefined) {
     if (VOICE_CONFIG.ENABLE_DEBUG_LOGGING) {
-        console.log('🎤 Voice: sendPrompt:', update);
+        voiceLog('prompt.dispatch', { hasPayload: Boolean(update) });
     }
     if (!update) return;
     const voice = getVoiceSession();
@@ -188,7 +189,7 @@ export const voiceHooks = {
      */
     onVoiceStarted(sessionId: string): string {
         if (VOICE_CONFIG.ENABLE_DEBUG_LOGGING) {
-            console.log('🎤 Voice session started for:', sessionId);
+            voiceLog('hooks.started');
         }
         shownSessions.clear();
         pendingPrompts = [];
@@ -224,7 +225,7 @@ export const voiceHooks = {
      */
     onVoiceStopped() {
         if (VOICE_CONFIG.ENABLE_DEBUG_LOGGING) {
-            console.log('🎤 Voice session stopped');
+            voiceLog('hooks.stopped');
         }
         shownSessions.clear();
         pendingPrompts = [];

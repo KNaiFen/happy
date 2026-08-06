@@ -1,4 +1,9 @@
-import type { CodexThreadHistorySummary } from './codexThreadHistory';
+import { CodexRpcOutcomeUnknownError } from './codexAppServerClient';
+import {
+    CodexThreadBindingError,
+    CodexThreadUnavailableError,
+    type CodexThreadHistorySummary,
+} from './codexThreadHistory';
 
 export interface CodexThreadOpenDefaults {
     permissionMode?: string;
@@ -14,6 +19,7 @@ export interface CodexThreadBindingInput {
 export interface CodexOpenThreadRequest {
     directory: string;
     threadId: string;
+    operationId?: string;
     binding?: CodexThreadBindingInput;
     externalDataEncryptionKey?: string;
     defaults?: CodexThreadOpenDefaults;
@@ -31,11 +37,17 @@ export type CodexOpenThreadResult =
     }
     | {
         type: 'blocked';
-        reason: 'externalThreadActive' | 'legacySession' | 'invalidBinding';
+        reason:
+            | 'threadUnavailable'
+            | 'externalThreadActive'
+            | 'gatewayRecovering'
+            | 'legacySession'
+            | 'invalidBinding';
         errorMessage: string;
     }
     | {
         type: 'error';
+        errorCode: 'operationFailed' | 'outcomeUnknown';
         errorMessage: string;
     };
 
@@ -74,16 +86,17 @@ export class CodexThreadOpenCoordinator {
     open(request: CodexOpenThreadRequest): Promise<CodexOpenThreadResult> {
         const threadId = request.threadId?.trim();
         if (!threadId) {
-            return Promise.resolve({ type: 'error', errorMessage: 'threadId is required' });
+            return Promise.resolve({
+                type: 'error',
+                errorCode: 'operationFailed',
+                errorMessage: 'The Codex thread could not be opened.',
+            });
         }
         const current = this.inFlight.get(threadId);
         if (current) return current;
 
         const pending = this.openOnce({ ...request, threadId })
-            .catch((error): CodexOpenThreadResult => ({
-                type: 'error',
-                errorMessage: error instanceof Error ? error.message : 'Failed to open Codex thread',
-            }))
+            .catch((error): CodexOpenThreadResult => classifyOpenFailure(error))
             .finally(() => {
                 if (this.inFlight.get(threadId) === pending) {
                     this.inFlight.delete(threadId);
@@ -111,6 +124,7 @@ export class CodexThreadOpenCoordinator {
         if (!request.externalDataEncryptionKey) {
             return {
                 type: 'error',
+                errorCode: 'operationFailed',
                 errorMessage: 'A per-session encryption key is required for an external Codex thread',
             };
         }
@@ -121,6 +135,7 @@ export class CodexThreadOpenCoordinator {
         ) {
             return {
                 type: 'error',
+                errorCode: 'operationFailed',
                 errorMessage: 'Codex permission, model, and effort defaults are required for an external thread',
             };
         }
@@ -129,4 +144,33 @@ export class CodexThreadOpenCoordinator {
             thread,
         );
     }
+}
+
+function classifyOpenFailure(error: unknown): CodexOpenThreadResult {
+    if (error instanceof CodexThreadUnavailableError) {
+        return {
+            type: 'blocked',
+            reason: 'threadUnavailable',
+            errorMessage: 'The selected Codex thread is no longer available on this machine.',
+        };
+    }
+    if (error instanceof CodexThreadBindingError) {
+        return {
+            type: 'blocked',
+            reason: 'invalidBinding',
+            errorMessage: 'The selected Codex thread no longer matches this Happy session.',
+        };
+    }
+    if (error instanceof CodexRpcOutcomeUnknownError) {
+        return {
+            type: 'error',
+            errorCode: 'outcomeUnknown',
+            errorMessage: 'The Codex operation outcome is not yet known. Retry after the Gateway state refreshes.',
+        };
+    }
+    return {
+        type: 'error',
+        errorCode: 'operationFailed',
+        errorMessage: 'The Codex thread could not be opened.',
+    };
 }

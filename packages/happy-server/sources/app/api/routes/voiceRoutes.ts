@@ -2,7 +2,12 @@ import { z } from "zod";
 import * as crypto from "crypto";
 import { VoiceConversationResponseSchema, VoiceUsageResponseSchema } from "@slopus/happy-wire";
 import { type Fastify } from "../types";
-import { log } from "@/utils/log";
+import {
+    voiceConversationBucket,
+    voiceServerLog,
+    voiceStatusClass,
+    voiceUsageBucket,
+} from "./voiceLog";
 
 const VOICE_FREE_LIMIT_SECONDS = 1200;  // 20 minutes free tier per 30 days (~$0.76 cost)
 const VOICE_HARD_LIMIT_SECONDS = 18000; // 5 hours absolute cap per 30 days (even with subscription)
@@ -12,6 +17,10 @@ const VOICE_EXTRA_LIMIT_PUBLIC_IDS = new Set([
     "cmp66x5u018d9wz0unf56tp07",
 ]);
 const ELEVEN_LABS_API = "https://api.elevenlabs.io/v1/convai";
+
+type VoiceUsageResult =
+    | { ok: true; usedSeconds: number; conversationCount: number }
+    | { ok: false };
 
 function getVoiceHardLimitSeconds(userId: string): number {
     if (VOICE_EXTRA_LIMIT_PUBLIC_IDS.has(userId)) {
@@ -42,30 +51,42 @@ function deriveElevenUserId(happyUserId: string): string {
 async function getVoiceUsage(
     elevenLabsApiKey: string,
     elevenUserId: string,
-): Promise<{ usedSeconds: number; conversationCount: number }> {
+): Promise<VoiceUsageResult> {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString();
 
-    // Query across all agents — usage is per-user, not per-agent
-    const res = await fetch(
-        `${ELEVEN_LABS_API}/conversations?user_id=${elevenUserId}&created_after=${thirtyDaysAgo}&page_size=100`,
-        { headers: { "xi-api-key": elevenLabsApiKey } }
-    );
+    try {
+        // Query across all agents — usage is per-user, not per-agent
+        const res = await fetch(
+            `${ELEVEN_LABS_API}/conversations?user_id=${elevenUserId}&created_after=${thirtyDaysAgo}&page_size=100`,
+            { headers: { "xi-api-key": elevenLabsApiKey } }
+        );
 
-    if (!res.ok) {
-        log({ module: 'voice' }, `ElevenLabs conversations query failed: ${res.status}`);
-        return { usedSeconds: 0, conversationCount: 0 };
+        if (!res.ok) {
+            voiceServerLog("provider.usage.failed", {
+                outcome: "failed",
+                reason: "provider-error",
+                statusClass: voiceStatusClass(res.status),
+            });
+            return { ok: false };
+        }
+
+        const data = (await res.json()) as {
+            conversations?: Array<{ call_duration_secs: number }>;
+        };
+
+        const conversations = data.conversations || [];
+        let usedSeconds = 0;
+        for (const c of conversations) {
+            usedSeconds += c.call_duration_secs ?? 0;
+        }
+        return { ok: true, usedSeconds, conversationCount: conversations.length };
+    } catch {
+        voiceServerLog("provider.usage.failed", {
+            outcome: "failed",
+            reason: "provider-error",
+        });
+        return { ok: false };
     }
-
-    const data = (await res.json()) as {
-        conversations?: Array<{ call_duration_secs: number }>;
-    };
-
-    const conversations = data.conversations || [];
-    let usedSeconds = 0;
-    for (const c of conversations) {
-        usedSeconds += c.call_duration_secs ?? 0;
-    }
-    return { usedSeconds, conversationCount: conversations.length };
 }
 
 async function hasActiveSubscription(userId: string): Promise<boolean> {
@@ -83,12 +104,20 @@ async function hasActiveSubscription(userId: string): Promise<boolean> {
             }
         );
         if (!response.ok) {
-            log({ module: 'voice' }, `RevenueCat check failed for ${userId}: ${response.status}`);
+            voiceServerLog("provider.subscription.failed", {
+                outcome: "failed",
+                reason: "provider-error",
+                statusClass: voiceStatusClass(response.status),
+            });
             return false;
         }
         const data = (await response.json()) as { items?: Array<{ entitlement_id: string }> };
         return (data.items?.length ?? 0) > 0;
     } catch {
+        voiceServerLog("provider.subscription.failed", {
+            outcome: "failed",
+            reason: "provider-error",
+        });
         return false;
     }
 }
@@ -103,13 +132,14 @@ export function voiceRoutes(app: Fastify) {
             response: {
                 200: VoiceConversationResponseSchema,
                 500: z.object({ error: z.string() }),
+                502: z.object({ error: z.string() }),
             },
         },
     }, async (request, reply) => {
         const userId = request.userId;
         const { agentId } = request.body;
 
-        log({ module: 'voice' }, `Voice token request from user ${userId}`);
+        voiceServerLog("credentials.requested");
 
         const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
         if (!elevenLabsApiKey) {
@@ -123,11 +153,22 @@ export function voiceRoutes(app: Fastify) {
         const hardLimitSeconds = getVoiceHardLimitSeconds(userId);
 
         // Check usage from ElevenLabs directly
-        const { usedSeconds, conversationCount } = await getVoiceUsage(elevenLabsApiKey, elevenUserId);
-        log({ module: 'voice' }, `User ${userId}: ${usedSeconds}s used, ${conversationCount} convos (free=${VOICE_FREE_LIMIT_SECONDS}s, hard=${hardLimitSeconds}s)`);
+        const usage = await getVoiceUsage(elevenLabsApiKey, elevenUserId);
+        if (!usage.ok) {
+            return reply.code(502).send({ error: 'Failed to get voice usage' });
+        }
+        const { usedSeconds, conversationCount } = usage;
+        voiceServerLog("credentials.evaluated", {
+            usageBucket: voiceUsageBucket(usedSeconds, VOICE_FREE_LIMIT_SECONDS, hardLimitSeconds),
+            conversationBucket: voiceConversationBucket(conversationCount),
+        });
 
         // Conversation count cap — we can only track 100 per query (ElevenLabs page_size limit)
         if (conversationCount >= VOICE_MAX_CONVERSATIONS) {
+            voiceServerLog("credentials.blocked", {
+                outcome: "blocked",
+                reason: "conversation-limit",
+            });
             return reply.send({
                 allowed: false as const,
                 reason: 'voice_conversation_limit_reached' as const,
@@ -139,6 +180,10 @@ export function voiceRoutes(app: Fastify) {
 
         // Hard cap — normally 5 hours, with account-specific credits applied.
         if (usedSeconds >= hardLimitSeconds) {
+            voiceServerLog("credentials.blocked", {
+                outcome: "blocked",
+                reason: "hard-limit",
+            });
             return reply.send({
                 allowed: false as const,
                 reason: 'voice_hard_limit_reached' as const,
@@ -151,8 +196,12 @@ export function voiceRoutes(app: Fastify) {
         // Free tier — 1 hour, then need subscription
         if (usedSeconds >= VOICE_FREE_LIMIT_SECONDS) {
             const subscribed = await hasActiveSubscription(userId);
-            log({ module: 'voice' }, `User ${userId}: subscription check = ${subscribed}`);
+            voiceServerLog("subscription.checked", { subscribed });
             if (!subscribed) {
+                voiceServerLog("credentials.blocked", {
+                    outcome: "blocked",
+                    reason: "subscription-required",
+                });
                 return reply.send({
                     allowed: false as const,
                     reason: 'subscription_required' as const,
@@ -171,7 +220,11 @@ export function voiceRoutes(app: Fastify) {
             );
 
             if (!tokenRes.ok) {
-                log({ module: 'voice' }, `Failed to get conversation token for user ${userId}: ${tokenRes.status}`);
+                voiceServerLog("provider.token.failed", {
+                    outcome: "failed",
+                    reason: "provider-error",
+                    statusClass: voiceStatusClass(tokenRes.status),
+                });
                 return reply.code(500).send({ error: 'Failed to get voice credentials' });
             }
 
@@ -182,11 +235,14 @@ export function voiceRoutes(app: Fastify) {
             const conversationId = (jwtPayload.video?.room || '').match(/(conv_[a-zA-Z0-9]+)/)?.[0];
 
             if (!conversationId) {
-                log({ module: 'voice' }, `No conversation_id in JWT for user ${userId}`);
+                voiceServerLog("provider.token.invalid", {
+                    outcome: "failed",
+                    reason: "provider-error",
+                });
                 return reply.code(500).send({ error: 'Failed to get conversation ID' });
             }
 
-            log({ module: 'voice' }, `Voice token issued for user ${userId}, conv=${conversationId}`);
+            voiceServerLog("credentials.issued", { outcome: "success" });
             return reply.send({
                 allowed: true as const,
                 conversationToken,
@@ -196,8 +252,11 @@ export function voiceRoutes(app: Fastify) {
                 usedSeconds,
                 limitSeconds: usedSeconds >= VOICE_FREE_LIMIT_SECONDS ? hardLimitSeconds : VOICE_FREE_LIMIT_SECONDS,
             });
-        } catch (error) {
-            log({ module: 'voice' }, `ElevenLabs request error for user ${userId}: ${error}`);
+        } catch {
+            voiceServerLog("credentials.request.failed", {
+                outcome: "failed",
+                reason: "provider-error",
+            });
             return reply.code(500).send({ error: 'Failed to get voice credentials' });
         }
     });
@@ -212,6 +271,7 @@ export function voiceRoutes(app: Fastify) {
             response: {
                 200: VoiceUsageResponseSchema,
                 500: z.object({ error: z.string() }),
+                502: z.object({ error: z.string() }),
             },
         },
     }, async (request, reply) => {
@@ -226,10 +286,14 @@ export function voiceRoutes(app: Fastify) {
         const hardLimitSeconds = getVoiceHardLimitSeconds(userId);
 
         try {
-            const [{ usedSeconds, conversationCount }, subscribed] = await Promise.all([
+            const [usage, subscribed] = await Promise.all([
                 getVoiceUsage(elevenLabsApiKey, elevenUserId),
                 hasActiveSubscription(userId),
             ]);
+            if (!usage.ok) {
+                return reply.code(502).send({ error: 'Failed to get voice usage' });
+            }
+            const { usedSeconds, conversationCount } = usage;
             return reply.send({
                 usedSeconds,
                 limitSeconds: subscribed ? hardLimitSeconds : VOICE_FREE_LIMIT_SECONDS,
@@ -237,8 +301,11 @@ export function voiceRoutes(app: Fastify) {
                 conversationLimit: VOICE_MAX_CONVERSATIONS,
                 elevenUserId,
             });
-        } catch (error) {
-            log({ module: 'voice' }, `Failed to get voice usage for user ${userId}: ${error}`);
+        } catch {
+            voiceServerLog("usage.request.failed", {
+                outcome: "failed",
+                reason: "provider-error",
+            });
             return reply.code(500).send({ error: 'Failed to get voice usage' });
         }
     });

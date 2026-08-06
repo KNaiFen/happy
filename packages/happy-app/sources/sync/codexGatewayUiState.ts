@@ -36,6 +36,12 @@ export interface CodexGatewayUiState {
     phase: CodexGatewayDisplayPhase | null;
 }
 
+export function shouldShowCodexGatewayLifecycle(
+    session: Pick<Session, 'active' | 'archivedAt'>,
+): boolean {
+    return session.active && session.archivedAt === null;
+}
+
 export function resolveCodexGatewayUiState(options: {
     session: Pick<Session, 'metadata'>;
     runtime: CodexGatewayRuntimeView | null | undefined;

@@ -62,11 +62,18 @@ const CodexOpenThreadResultSchema = z.discriminatedUnion('type', [
     }),
     z.object({
         type: z.literal('blocked'),
-        reason: z.enum(['externalThreadActive', 'legacySession', 'invalidBinding']),
+        reason: z.enum([
+            'threadUnavailable',
+            'externalThreadActive',
+            'gatewayRecovering',
+            'legacySession',
+            'invalidBinding',
+        ]),
         errorMessage: z.string().min(1).max(8_192),
     }),
     z.object({
         type: z.literal('error'),
+        errorCode: z.enum(['operationFailed', 'outcomeUnknown']),
         errorMessage: z.string().min(1).max(8_192),
     }),
 ]);
@@ -328,10 +335,11 @@ async function callOpen(machineId: string, request: Record<string, unknown>): Pr
     try {
         const result: unknown = await apiSocket.machineRPC(machineId, 'codex-open-thread', request);
         return CodexOpenThreadResultSchema.parse(result);
-    } catch (error) {
+    } catch {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to open Codex thread',
+            errorCode: 'outcomeUnknown',
+            errorMessage: 'The Codex thread operation outcome is not yet known. Retry after the machine state refreshes.',
         };
     }
 }

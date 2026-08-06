@@ -71,7 +71,11 @@ const styles = StyleSheet.create((theme) => ({
 
 export default function MachineDetailScreen() {
     const { theme } = useUnistyles();
-    const { id: machineId } = useLocalSearchParams<{ id: string }>();
+    const {
+        id: machineId,
+        path: requestedPath,
+        resume: requestedResume,
+    } = useLocalSearchParams<{ id: string; path?: string; resume?: string }>();
     const router = useRouter();
     const sessions = useSessions();
     const defaultOverrides = useAgentDefaultOverrides();
@@ -80,8 +84,11 @@ export default function MachineDetailScreen() {
     const [isStoppingDaemon, setIsStoppingDaemon] = useState(false);
     const [isRenamingMachine, setIsRenamingMachine] = useState(false);
     const [isDeletingMachine, setIsDeletingMachine] = useState(false);
-    const [customPath, setCustomPath] = useState('');
+    const [customPath, setCustomPath] = useState(
+        typeof requestedPath === 'string' ? requestedPath : '',
+    );
     const inputRef = useRef<MultiTextInputHandle>(null);
+    const openedRequestedResumeRef = useRef(false);
     const resumeCoordinator = useKeyboardDismissCoordinator<'resume'>();
     const [showAllPaths, setShowAllPaths] = useState(false);
     // Variant D only
@@ -243,14 +250,14 @@ export default function MachineDetailScreen() {
         router.push('/new');
     };
 
-    const handleOpenPreviousSession = (): void => {
+    const openPreviousSession = (path: string): void => {
         if (!machine || !machineId || !isMachineOnline(machine)) return;
         if (resumeCoordinator.isPending('resume')) return;
         if (machine.metadata?.resumeSupport?.codexThreadHistoryRpcAvailable !== true) {
             Modal.alert(t('machine.resumeRequiresUpgradeTitle'), t('machine.resumeRequiresUpgradeMessage'));
             return;
         }
-        const directory = resolveAbsolutePath(customPath.trim(), machine.metadata?.homeDir);
+        const directory = resolveAbsolutePath(path.trim(), machine.metadata?.homeDir);
         resumeCoordinator.schedule(
             'resume',
             () => Modal.show({
@@ -264,6 +271,27 @@ export default function MachineDetailScreen() {
             () => inputRef.current?.blur(),
         );
     };
+    const handleOpenPreviousSession = (): void => openPreviousSession(customPath);
+
+    React.useEffect(() => {
+        if (typeof requestedPath !== 'string') return;
+        setCustomPath(requestedPath);
+        openedRequestedResumeRef.current = false;
+    }, [machineId, requestedPath, requestedResume]);
+
+    React.useEffect(() => {
+        if (
+            requestedResume !== '1'
+            || openedRequestedResumeRef.current
+            || !machine
+            || !machineId
+            || typeof requestedPath !== 'string'
+            || !requestedPath.trim()
+            || !isMachineOnline(machine)
+        ) return;
+        openedRequestedResumeRef.current = true;
+        openPreviousSession(requestedPath);
+    }, [machine, machineId, requestedPath, requestedResume]);
 
     if (!machine) {
         return (

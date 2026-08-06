@@ -17,6 +17,13 @@ import {
 
 type SessionUnarchiveClient = Pick<ApiClient, 'unarchiveSession'>;
 
+export class CodexGatewayResumeBlockedError extends Error {
+    constructor(readonly reason: 'gatewayRecovering') {
+        super('Codex Gateway resume is temporarily blocked');
+        this.name = 'CodexGatewayResumeBlockedError';
+    }
+}
+
 export function createCodexGatewayResumeBootstrap(
     input: CodexGatewayResumeBootstrap,
 ): CodexGatewayResumeBootstrap {
@@ -32,7 +39,7 @@ export async function resumeCodexGatewayHeadless(options: {
     const bootstrap = CodexGatewayResumeBootstrapSchema.parse(options.bootstrap);
     const inspected = await prepareCodexGatewayResume(options.api, bootstrap);
     if (inspected.state === 'recovering') {
-        throw new Error('The existing Codex Gateway is still recovering. Retry after it settles.');
+        throw new CodexGatewayResumeBlockedError('gatewayRecovering');
     }
     if (inspected.state === 'live') {
         const gateway = inspected.gateway!;

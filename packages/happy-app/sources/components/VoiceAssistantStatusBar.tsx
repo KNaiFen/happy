@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { stopRealtimeSession } from '@/realtime/RealtimeSession';
 import { useUnistyles } from 'react-native-unistyles';
 import { VoiceBars } from './VoiceBars';
+import { voiceLog } from '@/realtime/voiceLog';
 
 interface VoiceAssistantStatusBarProps {
     variant?: 'full' | 'sidebar';
@@ -70,8 +71,8 @@ export const VoiceAssistantStatusBar = React.memo(({ variant = 'full', style }: 
         if (realtimeStatus === 'connected' || realtimeStatus === 'connecting') {
             try {
                 await stopRealtimeSession();
-            } catch (error) {
-                console.error('Error stopping voice session:', error);
+            } catch {
+                voiceLog('session.stop.failed', { outcome: 'failed' }, 'error');
             }
         }
     };

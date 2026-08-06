@@ -2,7 +2,6 @@ import { AgentContentView } from '@/components/AgentContentView';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentInput } from '@/components/AgentInput';
-import { CodexQueuedMessages } from '@/components/CodexQueuedMessages';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -25,7 +24,8 @@ import { useDraft } from '@/hooks/useDraft';
 import { useImagePicker } from '@/hooks/useImagePicker';
 import { Modal } from '@/modal';
 import { voiceHooks } from '@/realtime/hooks/voiceHooks';
-import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
+import { getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
+import { voiceLog } from '@/realtime/voiceLog';
 import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat } from '@/sync/ops';
 import { archiveSession } from '@/sync/sessionArchiveCoordinator';
@@ -41,6 +41,7 @@ import {
 import {
     resolveCodexGatewayHandoffTarget,
     resolveCodexGatewayUiState,
+    shouldShowCodexGatewayLifecycle,
     type CodexGatewayDisplayPhase,
 } from '@/sync/codexGatewayUiState';
 import {
@@ -55,7 +56,7 @@ import { HappyError } from '@/utils/errors';
 import { Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
-import { tracking } from '@/track';
+import { trackVoiceSessionError, trackVoiceSessionStarted, trackVoiceSessionStopped } from '@/track';
 import { getVoiceMessageCount, getVoiceOnboardingPromptLoadCount } from '@/sync/persistence';
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
@@ -795,8 +796,17 @@ export function SessionViewLoaded({
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const sessionStatusBarDisplay = useSetting('sessionStatusBarDisplay');
     const experiments = useSetting('experiments');
-    const { canResume, resumeError, resumeSession, resumingSession } = useSessionQuickActions(session);
+    const {
+        canResume,
+        canOpenResumeAlternatives,
+        openResumeAlternatives,
+        resumeError,
+        resumeSession,
+        resumeSessionSubtitle,
+        resumingSession,
+    } = useSessionQuickActions(session);
     const isDisconnected = !sessionStatus.isConnected;
+    const showCodexGatewayLifecycle = shouldShowCodexGatewayLifecycle(session);
     const resumeCommandBlock = getResumeCommandBlock(session);
     const gatewayUiState = React.useMemo(() => resolveCodexGatewayUiState({
         session,
@@ -938,7 +948,7 @@ export function SessionViewLoaded({
     ), [sessionId]);
 
     const connectionStatus = React.useMemo(() => {
-        if (!isCodexV4Active) {
+        if (!isCodexV4Active || !showCodexGatewayLifecycle) {
             return {
                 text: sessionStatus.statusText,
                 color: sessionStatus.statusColor,
@@ -988,6 +998,7 @@ export function SessionViewLoaded({
             };
     }, [
         isCodexV4Active,
+        showCodexGatewayLifecycle,
         sessionStatus.statusText,
         sessionStatus.statusColor,
         sessionStatus.statusDotColor,
@@ -1060,35 +1071,24 @@ export function SessionViewLoaded({
         if (realtimeStatus === 'disconnected' || realtimeStatus === 'error') {
             try {
                 const initialPrompt = voiceHooks.onVoiceStarted(sessionId);
-                const conversationId = await startRealtimeSession(sessionId, initialPrompt);
-                if (conversationId) {
+                const voiceSessionId = await startRealtimeSession(sessionId, initialPrompt);
+                if (voiceSessionId) {
                     const hasPro = storage.getState().purchases.entitlements['pro'] ?? false;
-                    tracking?.capture('voice_session_started', {
-                        session_id: sessionId,
-                        elevenlabs_conversation_id: conversationId,
-                        has_pro: hasPro,
-                        onboarding_prompt_load_count: getVoiceOnboardingPromptLoadCount(),
-                        voice_message_count: getVoiceMessageCount(),
-                    });
+                    trackVoiceSessionStarted(
+                        hasPro,
+                        getVoiceOnboardingPromptLoadCount(),
+                        getVoiceMessageCount(),
+                    );
                 }
-            } catch (error) {
-                console.error('Failed to start realtime session:', error);
+            } catch {
+                voiceLog('session.start.failed', { outcome: 'failed' }, 'error');
                 Modal.alert(t('common.error'), t('errors.voiceSessionFailed'));
-                tracking?.capture('voice_session_error', {
-                    session_id: sessionId,
-                    elevenlabs_conversation_id: getCurrentVoiceConversationId(),
-                    error: error instanceof Error ? error.message : 'Unknown error',
-                });
+                trackVoiceSessionError();
             }
         } else if (realtimeStatus === 'connected') {
-            const conversationId = getCurrentVoiceConversationId();
             const durationSeconds = getCurrentVoiceSessionDurationSeconds();
             await stopRealtimeSession();
-            tracking?.capture('voice_session_stopped', {
-                session_id: sessionId,
-                elevenlabs_conversation_id: conversationId,
-                ...(durationSeconds !== undefined ? { duration_seconds: durationSeconds } : {}),
-            });
+            trackVoiceSessionStopped(durationSeconds);
 
             // Notify voice assistant about voice session stop
             voiceHooks.onVoiceStopped();
@@ -1153,6 +1153,11 @@ export function SessionViewLoaded({
         </>
     ) : null;
 
+    const codexQueuedMessages = React.useMemo(
+        () => codexV4QueuedMessages(codexV4Session),
+        [codexV4Session],
+    );
+
     const composer = isCodexReadOnly ? null : (
         <ChatComposer
             composerHandleRef={composerHandleRef}
@@ -1169,10 +1174,11 @@ export function SessionViewLoaded({
             onEffortLevelChange={updateEffortLevel}
             metadata={session.metadata}
             connectionStatus={connectionStatus}
-            blockSend={!sessionStatus.isConnected || !gatewayUiState.canSend}
+            blockSend={!showCodexGatewayLifecycle || !sessionStatus.isConnected || !gatewayUiState.canSend}
             onSend={handleSend}
             followUpMode={isCodexV4Active && isSessionExecuting ? codexFollowUpMode : undefined}
             canSteerFollowUp={canSteerCodexTurn}
+            queuedMessages={isCodexV4Active ? codexQueuedMessages : []}
             onFollowUpModeChange={isCodexV4Active && isSessionExecuting
                 ? setCodexFollowUpMode
                 : undefined}
@@ -1208,7 +1214,7 @@ export function SessionViewLoaded({
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <MachineDeletedHint />
         </CenteredInputWidth>
-    ) : isDisconnected ? (
+    ) : !showCodexGatewayLifecycle ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <InactiveSessionHint
                 archived={session.archivedAt !== null}
@@ -1217,16 +1223,15 @@ export function SessionViewLoaded({
                 resuming={resumingSession}
                 resumeError={resumeError}
                 onResume={resumeSession}
+                canOpenAlternatives={canOpenResumeAlternatives}
+                onOpenAlternatives={openResumeAlternatives}
+                resumeUnavailableMessage={resumeSessionSubtitle}
             />
         </CenteredInputWidth>
     ) : null;
 
     const showSessionStatusBar = sessionStatusBarDisplay === 'above' || sessionStatusBarDisplay === 'below';
     const sessionStatusBarPosition = sessionStatusBarDisplay === 'above' ? 'above' : 'below';
-    const codexQueuedMessages = React.useMemo(
-        () => codexV4QueuedMessages(codexV4Session),
-        [codexV4Session],
-    );
     const sessionStatusBar = showSessionStatusBar ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <SessionStatusBar
@@ -1263,15 +1268,6 @@ export function SessionViewLoaded({
                 </CenteredInputWidth>
             )}
             {sessionStatusBarPosition === 'above' ? sessionStatusBar : null}
-            {!isCodexReadOnly && codexQueuedMessages.length > 0 && (
-                <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
-                    <CodexQueuedMessages
-                        sessionId={sessionId}
-                        messages={codexQueuedMessages}
-                        canSteer={canSteerCodexTurn && isSessionExecuting}
-                    />
-                </CenteredInputWidth>
-            )}
             {composer}
             {sessionStatusBarPosition === 'below' ? sessionStatusBar : null}
         </>
@@ -1406,6 +1402,9 @@ function InactiveSessionHint(props: {
     resuming: boolean;
     resumeError: string | null;
     onResume: () => void;
+    canOpenAlternatives: boolean;
+    onOpenAlternatives: () => void;
+    resumeUnavailableMessage: string;
 }) {
     const { theme } = useUnistyles();
     const hintTextStyle = {
@@ -1431,6 +1430,11 @@ function InactiveSessionHint(props: {
                         {t('session.resumeFromTerminal')}
                     </Text>
                 )}
+                {!props.canResume && props.resumeUnavailableMessage ? (
+                    <Text accessibilityRole="alert" style={hintTextStyle}>
+                        {props.resumeUnavailableMessage}
+                    </Text>
+                ) : null}
             </View>
             {props.canResume ? (
                 <Pressable
@@ -1474,6 +1478,27 @@ function InactiveSessionHint(props: {
                 >
                     {props.resumeError}
                 </Text>
+            ) : null}
+            {props.canOpenAlternatives ? (
+                <Pressable
+                    onPress={props.onOpenAlternatives}
+                    accessibilityRole="button"
+                    style={({ pressed }) => ({
+                        minHeight: 44,
+                        marginHorizontal: 8,
+                        paddingHorizontal: 14,
+                        borderRadius: Platform.select({ web: 10, default: 18 }),
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: theme.colors.divider,
+                        backgroundColor: pressed ? theme.colors.surfacePressed : theme.colors.surfaceHigh,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                    })}
+                >
+                    <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '600' }}>
+                        {t('sessionInfo.resumeSessionBrowseDevice')}
+                    </Text>
+                </Pressable>
             ) : null}
         </View>
     );

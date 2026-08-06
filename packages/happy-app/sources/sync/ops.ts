@@ -21,6 +21,7 @@ import {
 import { isSessionMachineDeleted } from './sessionMachineAccess';
 import { assertSupportedExistingSession } from './sessionFlavor';
 import { encodeBase64 } from '@/encryption/base64';
+import { z } from 'zod';
 
 export type { SessionAgentModesPatch };
 
@@ -159,12 +160,49 @@ export type SpawnSessionResult =
     | { type: 'error'; errorMessage: string };
 
 type ResumeSessionRpcResult =
-    | SpawnSessionResult
+    | ResumeSessionResult
     | { type: 'resumeMaterialRequired'; sessionId: string };
+
+export type ResumeSessionBlockedReason =
+    | 'threadUnavailable'
+    | 'externalThreadActive'
+    | 'gatewayRecovering'
+    | 'invalidBinding';
+
+export type ResumeSessionResult =
+    | { type: 'success'; sessionId: string }
+    | { type: 'blocked'; reason: ResumeSessionBlockedReason }
+    | { type: 'error'; error: 'operationFailed' | 'outcomeUnknown' };
+
+const ResumeSessionRpcResultSchema = z.discriminatedUnion('type', [
+    z.object({
+        type: z.literal('success'),
+        sessionId: z.string().min(1).max(256),
+    }).strict(),
+    z.object({
+        type: z.literal('resumeMaterialRequired'),
+        sessionId: z.string().min(1).max(256),
+    }).strict(),
+    z.object({
+        type: z.literal('blocked'),
+        reason: z.enum([
+            'threadUnavailable',
+            'externalThreadActive',
+            'gatewayRecovering',
+            'invalidBinding',
+        ]),
+    }).strict(),
+    z.object({
+        type: z.literal('error'),
+        error: z.enum(['operationFailed', 'outcomeUnknown']),
+    }).strict(),
+]);
 
 type ResumeSessionRpcRequest = {
     operationId: string;
     sessionId: string;
+    directory: string;
+    threadId: string;
     model?: string;
     permissionMode?: string;
     dataEncryptionKey?: string;
@@ -222,6 +260,8 @@ export interface ResumeSessionOptions {
     operationId?: string;
     machineId: string;
     sessionId: string;
+    directory: string;
+    threadId: string;
 }
 
 // Exported session operation functions
@@ -329,40 +369,46 @@ export async function codexListRewindPoints(
     }
 }
 
-export async function machineResumeSession(options: ResumeSessionOptions & { model?: string; permissionMode?: string }): Promise<SpawnSessionResult> {
-    const { machineId, sessionId, model, permissionMode } = options;
+export async function machineResumeSession(options: ResumeSessionOptions & { model?: string; permissionMode?: string }): Promise<ResumeSessionResult> {
+    const { machineId, sessionId, directory, threadId, model, permissionMode } = options;
 
     try {
         assertSessionInteractionAllowed(sessionId);
+    } catch {
+        return { type: 'error', error: 'operationFailed' };
+    }
+    try {
         const operationId = options.operationId ?? sync.generateOperationId();
         const request: ResumeSessionRpcRequest = {
             operationId,
             sessionId,
+            directory,
+            threadId,
             model,
             permissionMode,
         };
-        let result = await apiSocket.machineRPC<ResumeSessionRpcResult, ResumeSessionRpcRequest>(
+        let result = ResumeSessionRpcResultSchema.parse(await apiSocket.machineRPC<unknown, ResumeSessionRpcRequest>(
             machineId,
             'resume-happy-session',
             request,
             { timeoutMs: RESUME_SESSION_RPC_TIMEOUT_MS },
-        );
+        ));
 
         if (result.type === 'resumeMaterialRequired') {
             if (result.sessionId !== sessionId) {
                 return {
-                    type: 'error',
-                    errorMessage: 'The daemon requested resume material for an unexpected Happy session.',
+                    type: 'blocked',
+                    reason: 'invalidBinding',
                 };
             }
             const key = sync.encryption.getIndependentSessionDataKey(sessionId);
             if (!key) {
                 return {
-                    type: 'error',
-                    errorMessage: 'This session has no independent resume key.',
+                    type: 'blocked',
+                    reason: 'invalidBinding',
                 };
             }
-            result = await apiSocket.machineRPC<ResumeSessionRpcResult, ResumeSessionRpcRequest>(
+            result = ResumeSessionRpcResultSchema.parse(await apiSocket.machineRPC<unknown, ResumeSessionRpcRequest>(
                 machineId,
                 'resume-happy-session',
                 {
@@ -370,25 +416,25 @@ export async function machineResumeSession(options: ResumeSessionOptions & { mod
                     dataEncryptionKey: encodeBase64(key, 'base64'),
                 },
                 { timeoutMs: RESUME_SESSION_RPC_TIMEOUT_MS },
-            );
+            ));
             if (result.type === 'resumeMaterialRequired') {
                 return {
-                    type: 'error',
-                    errorMessage: 'The daemon did not accept the session resume material.',
+                    type: 'blocked',
+                    reason: 'invalidBinding',
                 };
             }
         }
         if (result.type === 'success' && result.sessionId !== sessionId) {
             return {
-                type: 'error',
-                errorMessage: 'The daemon resumed a different Happy session.',
+                type: 'blocked',
+                reason: 'invalidBinding',
             };
         }
         return result;
-    } catch (error) {
+    } catch {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to resume session',
+            error: 'outcomeUnknown',
         };
     }
 }
@@ -702,6 +748,26 @@ export async function sessionUpdateCodexQueuedMessage(
             ? { bindingGeneration: commandBindingGeneration(queued.command) }
             : {}),
     }, undefined, text);
+}
+
+/** Cancel one CLI-owned follow-up before the Gateway claims it. */
+export async function sessionCancelCodexQueuedMessage(sessionId: string, id: string): Promise<void> {
+    assertSessionInteractionAllowed(sessionId);
+    const projection = storage.getState().codexV4Sessions[sessionId];
+    const queued = codexV4QueuedMessages(projection).find((message) => message.id === id);
+    if (!queued) throw new Error('Queued Codex message not found');
+    await sync.publishCodexV4Command(sessionId, {
+        command: 'turn.queue.cancel',
+        threadId: queued.command.threadId,
+        expectedTurnId: queued.command.expectedTurnId,
+        payload: {},
+        replacesCommandId: queued.command.commandId,
+        queueEntryId: queued.id,
+        queuedAt: queued.createdAt,
+        ...(commandBindingGeneration(queued.command) !== undefined
+            ? { bindingGeneration: commandBindingGeneration(queued.command) }
+            : {}),
+    });
 }
 
 /** Move one CLI-owned Codex follow-up into the currently active turn. */

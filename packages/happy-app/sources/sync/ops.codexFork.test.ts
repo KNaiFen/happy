@@ -84,6 +84,8 @@ describe('codex fork ops', () => {
             operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
             machineId: 'machine-1',
             sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
             model: 'gpt-5.6-sol',
         });
 
@@ -94,6 +96,8 @@ describe('codex fork ops', () => {
             {
                 operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
                 sessionId: 'happy-existing',
+                directory: '/tmp/project',
+                threadId: 'thread-existing',
                 model: 'gpt-5.6-sol',
                 permissionMode: undefined,
             },
@@ -117,6 +121,8 @@ describe('codex fork ops', () => {
         await expect(machineResumeSession({
             machineId: 'machine-1',
             sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
         })).resolves.toEqual({ type: 'success', sessionId: 'happy-existing' });
 
         expect(machineRPC).toHaveBeenCalledTimes(2);
@@ -146,10 +152,42 @@ describe('codex fork ops', () => {
         await expect(machineResumeSession({
             machineId: 'machine-1',
             sessionId: 'happy-existing',
-        })).resolves.toMatchObject({ type: 'error' });
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
+        })).resolves.toEqual({ type: 'blocked', reason: 'invalidBinding' });
 
         expect(machineRPC).toHaveBeenCalledOnce();
         expect(getIndependentSessionDataKey).not.toHaveBeenCalled();
+    });
+
+    it('preserves stable daemon outcomes and treats a lost RPC response as unknown', async () => {
+        getState.mockReturnValue({
+            sessions: {
+                'happy-existing': {
+                    metadata: { flavor: 'codex', codexSyncVersion: 4 },
+                },
+            },
+        });
+        machineRPC.mockResolvedValueOnce({
+            type: 'blocked',
+            reason: 'threadUnavailable',
+        }).mockRejectedValueOnce(new Error('transport lost'));
+
+        const { machineResumeSession } = await import('./ops');
+        const request = {
+            machineId: 'machine-1',
+            sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
+        };
+        await expect(machineResumeSession(request)).resolves.toEqual({
+            type: 'blocked',
+            reason: 'threadUnavailable',
+        });
+        await expect(machineResumeSession(request)).resolves.toEqual({
+            type: 'error',
+            error: 'outcomeUnknown',
+        });
     });
 
     it('forks a full Codex thread and spawns a Codex session resumed to the new thread', async () => {

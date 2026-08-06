@@ -40,9 +40,7 @@
 
 ## 活动计划
 
-- [Debian 13 amd64 Happy Relay 现场升级计划](./plans/debian13-amd64-relay-bundle.md)
-- [Tauri Desktop 云端打包计划](./plans/tauri-desktop-packaging.md)
-- [Voice 敏感日志收敛计划](./plans/voice-sensitive-logging-hardening.md)
+- [2026-08-06 安全、恢复与输入队列修复台账](./plans/2026-08-06-remediation-ledger.md)
 
 ## 审查记录
 
@@ -109,7 +107,9 @@
 - [Codex App 语义时间线去重与 Resume 焦点修复](./plans/archive/codex-app-semantic-timeline-dedup.md)
 - [Codex: app-server integration](./plans/archive/codex-app-server-migration.md)
 - [Happy CLI 独立版本命令修复计划](./plans/archive/codex-cli-standalone-version-fix.md)
+- [Codex 悬浮待发送条与队列管理计划](./plans/archive/codex-composer-pending-message-dock.md)
 - [Codex Gateway 真实配置传输修复计划](./plans/archive/codex-gateway-real-config-transport.md)
+- [Codex 首页旧会话恢复与状态回归修复计划](./plans/archive/codex-home-old-session-resume-state-regression.md)
 - [macOS Codex Gateway Socket Path 修复计划](./plans/archive/codex-macos-gateway-socket-path.md)
 - [Codex Model-Aware Reasoning Effort](./plans/archive/codex-model-aware-reasoning-effort.md)
 - [Codex 原生 TUI Gateway 实施计划](./plans/archive/codex-native-tui-gateway.md)
@@ -132,6 +132,7 @@
 - [Debian 13 amd64 Happy Relay 1.1.23 云端门禁归档](./plans/archive/debian13-amd64-relay-bundle-1.1.23-ci.md)
 - [Debian 13 amd64 Happy Relay 1.1.23 本地修复归档](./plans/archive/debian13-amd64-relay-bundle-1.1.23-local.md)
 - [Debian 13 amd64 Happy Relay 1.1.24 发布归档](./plans/archive/debian13-amd64-relay-bundle-1.1.24-release.md)
+- [Debian 13 amd64 Happy Relay 现场升级计划](./plans/archive/debian13-amd64-relay-bundle-1.1.40-field-upgrade.md)
 - [ElevenLabs Voice Usage Gating](./plans/archive/elevenlabs-voice-usage-gating.md)
 - [Experimental Chat File Links](./plans/archive/experimental-chat-file-links.md)
 - [Expo SDK 55 Upgrade](./plans/archive/expo-sdk-55-upgrade.md)
@@ -156,6 +157,8 @@
 - [New Session Right Sidebar Design](./plans/archive/superpowers/specs/2026-05-20-new-session-right-sidebar-design.md)
 - [Attachment Storage Diagnostics Design](./plans/archive/superpowers/specs/2026-06-10-attachment-storage-diagnostics-design.md)
 - [Codex Image Attachments Design](./plans/archive/superpowers/specs/2026-06-10-codex-image-attachments-design.md)
+- [Tauri Desktop 云端打包计划](./plans/archive/tauri-desktop-packaging-cancelled.md)
+- [Voice 敏感日志收敛计划](./plans/archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md)
 
 ## 通用历史归档
 

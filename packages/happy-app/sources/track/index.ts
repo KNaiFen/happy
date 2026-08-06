@@ -74,6 +74,44 @@ export function trackVoicePermissionResponse(allowed: boolean) {
     tracking?.capture('voice_permission_response', { allowed });
 }
 
+function voiceCountBand(count: unknown): 'none' | 'one' | 'few' | 'many' {
+    if (typeof count !== 'number' || !Number.isFinite(count)) return 'none';
+    if (count <= 0) return 'none';
+    if (count === 1) return 'one';
+    if (count < 10) return 'few';
+    return 'many';
+}
+
+function voiceDurationBand(seconds: unknown): 'under-1m' | '1-5m' | '5-20m' | '20m-plus' {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return 'under-1m';
+    if (seconds < 60) return 'under-1m';
+    if (seconds < 5 * 60) return '1-5m';
+    if (seconds < 20 * 60) return '5-20m';
+    return '20m-plus';
+}
+
+export function trackVoiceSessionStarted(
+    hasPro: boolean,
+    onboardingPromptLoadCount: number,
+    voiceMessageCount: number,
+) {
+    tracking?.capture('voice_session_started', {
+        has_pro: hasPro === true,
+        onboarding_prompt_band: voiceCountBand(onboardingPromptLoadCount),
+        voice_message_band: voiceCountBand(voiceMessageCount),
+    });
+}
+
+export function trackVoiceSessionError() {
+    tracking?.capture('voice_session_error');
+}
+
+export function trackVoiceSessionStopped(durationSeconds?: number) {
+    tracking?.capture('voice_session_stopped', durationSeconds === undefined
+        ? undefined
+        : { duration_band: voiceDurationBand(durationSeconds) });
+}
+
 /**
  * Paywall events
  */

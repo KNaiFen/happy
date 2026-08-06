@@ -124,6 +124,21 @@ class CodexRpcResponseError extends Error {
     }
 }
 
+export type CodexRpcFailureKind = 'response' | 'outcomeUnknown' | 'operationFailed';
+
+export function classifyCodexRpcFailure(error: unknown): CodexRpcFailureKind {
+    if (error instanceof CodexRpcOutcomeUnknownError) return 'outcomeUnknown';
+    if (error instanceof CodexRpcResponseError) return 'response';
+    return 'operationFailed';
+}
+
+export function isCodexThreadUnavailableRpcResponse(error: unknown, threadId: string): boolean {
+    return error instanceof CodexRpcResponseError
+        && (error.method === 'thread/read' || error.method === 'thread/resume')
+        && error.code === -32600
+        && error.providerMessage === `no rollout found for thread id ${threadId}`;
+}
+
 type PendingRequest = {
     resolve: (result: unknown) => void;
     reject: (error: Error) => void;
@@ -253,10 +268,7 @@ function isPaginatedThreadReadError(error: unknown): boolean {
 }
 
 function isUnmaterializedThreadResumeError(error: unknown, threadId: string): boolean {
-    return error instanceof CodexRpcResponseError
-        && error.method === 'thread/resume'
-        && error.code === -32600
-        && error.providerMessage === `no rollout found for thread id ${threadId}`;
+    return isCodexThreadUnavailableRpcResponse(error, threadId);
 }
 
 // Codex item ids are per-thread counters, so items from collab subagent

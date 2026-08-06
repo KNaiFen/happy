@@ -86,4 +86,5 @@ interrupt ACK 和经过一段时间都不能把 turn 标记为完成。child Cod
 [部署文档](deployment.md)。可交付 Server/镜像只由
 `.github/workflows/build-debian13-relay-release.yml` 构建；工作流验证 distroless、
 非 root、只读根文件系统、迁移/重启、secret 权限、SBOM 和 Critical 漏洞门禁。
-该工作流当前不验收语音 payload 日志脱敏；相关缺口与处理计划见[部署文档](deployment.md)。
+语音 payload 日志脱敏由 App/Server 的白名单 logger canary 和 monorepo CI 验收；部署
+workflow 维持镜像与运行时安全验证，详见[部署文档](deployment.md)。

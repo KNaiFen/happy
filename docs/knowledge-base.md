@@ -53,4 +53,4 @@
 
 ## 发布与制品
 
-发行版本、GitHub Actions 工作流与交付文件见 [发行矩阵](release-matrix.md)。普通本地验证只运行源码级检查；CLI、Android、Debian Relay、happy-agent、Web 和 Tauri 的可交付制品由云端工作流构建和验证。
+发行版本、GitHub Actions 工作流与交付文件见 [发行矩阵](release-matrix.md)。普通本地验证只运行源码级检查；CLI、Android、Debian Relay、happy-agent 和 Web 的可交付制品由云端工作流构建和验证。Tauri 仅保留 Rust 源码 CI，不建立正式发行、签名或公证轨道。
