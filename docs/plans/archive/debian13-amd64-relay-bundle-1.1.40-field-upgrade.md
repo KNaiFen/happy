@@ -2,7 +2,7 @@
 
 > **历史归档（2026-08-06）：** Relay `1.1.40` 已在现有服务器原目录完成升级，
 > 服务与其他会话正常。现场验收发现的首页旧会话恢复及状态展示问题属于 App/CLI
-> 缺陷，已转入 [旧会话恢复计划](../codex-home-old-session-resume-state-regression.md)。
+> 缺陷，已转入 [旧会话恢复归档](./codex-home-old-session-resume-state-regression.md)。
 
 ## 状态
 

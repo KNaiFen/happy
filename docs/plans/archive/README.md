@@ -12,6 +12,7 @@
 - [Codex: app-server integration](./codex-app-server-migration.md)
 - [Happy CLI 独立版本命令修复计划](./codex-cli-standalone-version-fix.md)
 - [Codex Gateway 真实配置传输修复计划](./codex-gateway-real-config-transport.md)
+- [Codex 首页旧会话恢复与状态回归修复计划](./codex-home-old-session-resume-state-regression.md)
 - [macOS Codex Gateway Socket Path 修复计划](./codex-macos-gateway-socket-path.md)
 - [Codex Model-Aware Reasoning Effort](./codex-model-aware-reasoning-effort.md)
 - [Codex 原生 TUI Gateway 实施计划](./codex-native-tui-gateway.md)
