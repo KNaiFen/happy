@@ -13,7 +13,9 @@ import {
     type CodexGatewayTuiRelay,
 } from './codexGatewayTuiRelay';
 import {
+    CodexGatewayControlRequestError,
     callCodexGatewayControl,
+    isCodexGatewayControlOutcomeUnknown,
     type CodexGatewayOpenRootInput,
     type CodexGatewayOpenRootResult,
 } from './codexGatewayControl';
@@ -165,6 +167,7 @@ async function launchCodexGatewayHeadlessLocked(
 ): Promise<CodexGatewayHeadlessLaunchResult> {
     let descriptor: CodexGatewayDescriptor;
     let secret: CodexGatewaySecret;
+    let createdGateway = false;
     const existing = (await listCodexGatewayDescriptors()).filter((candidate) => (
         candidate.origin === 'app'
         && candidate.bootstrapOperationId === operationId
@@ -194,6 +197,7 @@ async function launchCodexGatewayHeadlessLocked(
             bootstrapOperationId: operationId,
             resumeBootstrap: options.resumeBootstrap,
         });
+        createdGateway = true;
         secret = created.secret;
         spawnCodexGatewayWorker(created.descriptor, options.env);
         try {
@@ -213,6 +217,14 @@ async function launchCodexGatewayHeadlessLocked(
     }
 
     const protectedResume = options.action === 'resume' && options.resumeBootstrap !== undefined;
+    if (!createdGateway && options.action === 'start') {
+        const reconciled = verifiedHeadlessLaunchResult({
+            descriptor,
+            bootstrap: null,
+        });
+        if (reconciled) return reconciled;
+        throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
+    }
     const request: CodexGatewayOpenRootInput = {
         operationId,
         action: options.action,
@@ -227,18 +239,120 @@ async function launchCodexGatewayHeadlessLocked(
         forkedFromMessageId: protectedResume ? null : options.forkedFromMessageId ?? null,
         isSideChat: protectedResume ? false : options.isSideChat ?? false,
     };
-    const opened = await callCodexGatewayControl<CodexGatewayOpenRootResult>({
-        descriptor,
-        token: secret.controlToken,
-        path: '/root/open',
-        body: request,
-        timeoutMs: 30_000,
+    try {
+        const opened = await callCodexGatewayControl<CodexGatewayOpenRootResult>({
+            descriptor,
+            token: secret.controlToken,
+            path: '/root/open',
+            body: request,
+            timeoutMs: 30_000,
+        });
+        return {
+            ...opened,
+            pid: descriptor.pid,
+            descriptor,
+        };
+    } catch (error) {
+        if (isCodexGatewayControlOutcomeUnknown(error)) {
+            const reconciled = await reconcileHeadlessOpenOutcome({
+                descriptor,
+                secret,
+                bootstrap: options.resumeBootstrap ?? null,
+            });
+            if (reconciled) return reconciled;
+            throw error;
+        }
+        if (createdGateway) {
+            await cancelAndStopNewGateway({ descriptor, secret, operationId });
+        }
+        throw error;
+    }
+}
+
+async function reconcileHeadlessOpenOutcome(options: {
+    descriptor: CodexGatewayDescriptor;
+    secret: CodexGatewaySecret;
+    bootstrap: CodexGatewayResumeBootstrap | null;
+}): Promise<CodexGatewayHeadlessLaunchResult | null> {
+    const descriptorPath = codexGatewayPaths(options.descriptor.gatewayId).descriptorPath;
+    const persisted = await readCodexGatewayDescriptor(descriptorPath) ?? options.descriptor;
+    let latest: CodexGatewayDescriptor;
+    try {
+        const status = await callCodexGatewayControl<unknown>({
+            descriptor: persisted,
+            token: options.secret.controlToken,
+            path: '/status',
+            timeoutMs: 1_000,
+        });
+        latest = parseGatewayStatus(status, options.descriptor);
+    } catch {
+        return null;
+    }
+    if (
+        latest.state !== 'running'
+        || inspectCodexGatewayWorkerProcess({
+            pid: latest.pid,
+            gatewayId: latest.gatewayId,
+        }) !== 'expected'
+    ) {
+        return null;
+    }
+    return verifiedHeadlessLaunchResult({
+        descriptor: latest,
+        bootstrap: options.bootstrap,
     });
+}
+
+function verifiedHeadlessLaunchResult(options: {
+    descriptor: CodexGatewayDescriptor;
+    bootstrap: CodexGatewayResumeBootstrap | null;
+}): CodexGatewayHeadlessLaunchResult | null {
+    if (
+        options.descriptor.state !== 'running'
+        || inspectCodexGatewayWorkerProcess({
+            pid: options.descriptor.pid,
+            gatewayId: options.descriptor.gatewayId,
+        }) !== 'expected'
+    ) return null;
+    const binding = options.descriptor.current;
+    if (!binding?.sessionId) return null;
+    if (options.bootstrap && (
+        binding.threadId !== options.bootstrap.threadId
+        || binding.sessionId !== options.bootstrap.happySessionId
+    )) return null;
     return {
-        ...opened,
-        pid: descriptor.pid,
-        descriptor,
+        gatewayId: options.descriptor.gatewayId,
+        threadId: binding.threadId,
+        sessionId: binding.sessionId,
+        generation: binding.generation,
+        pid: options.descriptor.pid,
+        descriptor: options.descriptor,
     };
+}
+
+async function cancelAndStopNewGateway(options: {
+    descriptor: CodexGatewayDescriptor;
+    secret: CodexGatewaySecret;
+    operationId: string;
+}): Promise<void> {
+    await callCodexGatewayControl({
+        descriptor: options.descriptor,
+        token: options.secret.controlToken,
+        path: '/root/cancel',
+        body: { operationId: options.operationId },
+        timeoutMs: 1_000,
+    }).catch(() => undefined);
+
+    const latest = await readCodexGatewayDescriptor(
+        codexGatewayPaths(options.descriptor.gatewayId).descriptorPath,
+    ) ?? options.descriptor;
+    await callCodexGatewayControl({
+        descriptor: latest,
+        token: options.secret.controlToken,
+        path: '/stop',
+        body: { force: true },
+        timeoutMs: 1_000,
+    }).catch(() => undefined);
 }
 
 export async function ensureCodexGatewayRunning(options: {

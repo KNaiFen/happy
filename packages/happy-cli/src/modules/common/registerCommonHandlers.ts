@@ -150,9 +150,19 @@ export type SpawnSessionResult =
     | { type: 'requestToApproveDirectoryCreation'; directory: string }
     | { type: 'error'; errorMessage: string };
 
+export type ResumeSessionBlockedReason =
+    | 'threadUnavailable'
+    | 'externalThreadActive'
+    | 'gatewayRecovering'
+    | 'invalidBinding';
+
+export type ResumeSessionErrorCode = 'operationFailed' | 'outcomeUnknown';
+
 export type ResumeSessionResult =
-    | SpawnSessionResult
-    | { type: 'resumeMaterialRequired'; sessionId: string };
+    | { type: 'success'; sessionId: string }
+    | { type: 'resumeMaterialRequired'; sessionId: string }
+    | { type: 'blocked'; reason: ResumeSessionBlockedReason }
+    | { type: 'error'; error: ResumeSessionErrorCode };
 
 /**
  * Register all RPC handlers with the session

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     createFiles: vi.fn(),
     spawnHappyCLI: vi.fn(() => ({ pid: 1234, unref: vi.fn() })),
     callControl: vi.fn(),
+    workerIdentity: vi.fn(() => 'expected'),
     happyHomeDir: '',
 }));
 
@@ -26,7 +27,14 @@ vi.mock('@/daemon/sessionEnvironment', () => ({
 vi.mock('@/ui/auth', () => ({ authAndSetupMachineIfNeeded: vi.fn() }));
 vi.mock('@/utils/spawnHappyCLI', () => ({ spawnHappyCLI: mocks.spawnHappyCLI }));
 vi.mock('../codexCliVersion', () => ({ assertMinimumCodexCliVersion: vi.fn() }));
-vi.mock('./codexGatewayControl', () => ({ callCodexGatewayControl: mocks.callControl }));
+vi.mock('./codexGatewayControl', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('./codexGatewayControl')>()),
+    callCodexGatewayControl: mocks.callControl,
+}));
+vi.mock('./codexGatewayProcessIdentity', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('./codexGatewayProcessIdentity')>()),
+    inspectCodexGatewayWorkerProcess: mocks.workerIdentity,
+}));
 vi.mock('./codexGatewayState', async (importOriginal) => {
     const actual = await importOriginal<typeof import('./codexGatewayState')>();
     return {
@@ -48,6 +56,7 @@ import {
     launchCodexGatewayHeadless,
     waitForGatewayReady,
 } from './codexGatewayLauncher';
+import { CodexGatewayControlRequestError } from './codexGatewayControl';
 
 function descriptorFixture(overrides: Record<string, unknown> = {}) {
     return {
@@ -91,6 +100,7 @@ describe('Codex Gateway App bootstrap launcher', () => {
         mocks.happyHomeDir = mkdtempSync(join(tmpdir(), 'happy-gateway-launcher-'));
         mocks.descriptors = [];
         mocks.secret.resumeBootstrap = null;
+        mocks.workerIdentity.mockReturnValue('expected');
         mocks.createFiles.mockImplementation(async (options: {
             cwd: string;
             bootstrapOperationId: string;
@@ -113,12 +123,25 @@ describe('Codex Gateway App bootstrap launcher', () => {
                 return { ...mocks.descriptors[0], state: 'running', pid: 1234 };
             }
             if (options.path === '/root/open') {
-                return {
+                const result = {
                     gatewayId: mocks.secret.gatewayId,
                     threadId: 'thread-a',
                     sessionId: 'session-a',
                     generation: 1,
                 };
+                mocks.descriptors = [{
+                    ...mocks.descriptors[0],
+                    state: 'running',
+                    current: {
+                        threadId: result.threadId,
+                        sessionId: result.sessionId,
+                        generation: result.generation,
+                        role: 'current',
+                        title: null,
+                        changedAt: 2,
+                    },
+                }];
+                return result;
             }
             if (options.path === '/root/cancel') return { cancelled: true };
             if (options.path === '/stop') return { stopping: true };
@@ -155,9 +178,8 @@ describe('Codex Gateway App bootstrap launcher', () => {
         const opens = mocks.callControl.mock.calls
             .map(([request]) => request)
             .filter((request) => request.path === '/root/open');
-        expect(opens).toHaveLength(2);
+        expect(opens).toHaveLength(1);
         expect(opens.map((request) => request.body.operationId)).toEqual([
-            options.operationId,
             options.operationId,
         ]);
     });
@@ -181,7 +203,7 @@ describe('Codex Gateway App bootstrap launcher', () => {
         expect(mocks.spawnHappyCLI).toHaveBeenCalledOnce();
         expect(mocks.callControl.mock.calls
             .map(([request]) => request)
-            .filter((request) => request.path === '/root/open')).toHaveLength(2);
+            .filter((request) => request.path === '/root/open')).toHaveLength(1);
     });
 
     it('rejects parameter drift for a reused App operation before provider work', async () => {
@@ -245,21 +267,32 @@ describe('Codex Gateway App bootstrap launcher', () => {
         expect(JSON.stringify(request.body)).not.toContain(resumeBootstrap.dataEncryptionKey);
     });
 
-    it('preserves an accepted root after its response is lost and replays the result', async () => {
-        let openAttempts = 0;
+    it('leaves an indeterminate new root running for an idempotent retry', async () => {
+        let statusAttempts = 0;
         mocks.callControl.mockImplementation(async (options: { path: string }) => {
             if (options.path === '/status') {
-                return { ...mocks.descriptors[0], state: 'running', pid: 1234 };
+                statusAttempts += 1;
+                return {
+                    ...mocks.descriptors[0],
+                    state: 'running',
+                    pid: 1234,
+                    current: statusAttempts >= 3 ? mocks.descriptors[0]?.current ?? null : null,
+                };
             }
             if (options.path === '/root/open') {
-                openAttempts += 1;
-                if (openAttempts === 1) throw new Error('Gateway control response was lost');
-                return {
-                    gatewayId: mocks.secret.gatewayId,
-                    threadId: 'thread-a',
-                    sessionId: 'session-a',
-                    generation: 1,
-                };
+                mocks.descriptors = [{
+                    ...mocks.descriptors[0],
+                    state: 'running',
+                    current: {
+                        threadId: 'thread-a',
+                        sessionId: 'session-a',
+                        generation: 1,
+                        role: 'current',
+                        title: null,
+                        changedAt: 2,
+                    },
+                }];
+                throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
             }
             throw new Error(`Unexpected control path ${options.path}`);
         });
@@ -270,7 +303,9 @@ describe('Codex Gateway App bootstrap launcher', () => {
             env: {},
             action: 'start' as const,
         };
-        await expect(launchCodexGatewayHeadless(options)).rejects.toThrow('response was lost');
+        await expect(launchCodexGatewayHeadless(options)).rejects.toMatchObject({
+            code: 'outcomeUnknown',
+        });
         await expect(launchCodexGatewayHeadless(options)).resolves.toMatchObject({
             gatewayId: mocks.secret.gatewayId,
             sessionId: 'session-a',
@@ -280,10 +315,134 @@ describe('Codex Gateway App bootstrap launcher', () => {
             '/status',
             '/root/open',
             '/status',
-            '/root/open',
+            '/status',
         ]);
         expect(mocks.createFiles).toHaveBeenCalledOnce();
         expect(mocks.spawnHappyCLI).toHaveBeenCalledOnce();
+    });
+
+    it('reconciles a lost private resume response from the durable Gateway binding', async () => {
+        const resumeBootstrap = {
+            happySessionId: 'session-private',
+            dataEncryptionKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+            threadId: 'thread-private',
+            cwd: '/workspace/project',
+            model: null,
+            permissionMode: 'default' as const,
+            effortLevel: null,
+        };
+        mocks.callControl.mockImplementation(async (options: { path: string }) => {
+            if (options.path === '/status') {
+                return {
+                    ...mocks.descriptors[0],
+                    state: 'running',
+                    current: {
+                        threadId: 'thread-private',
+                        sessionId: 'session-private',
+                        generation: 4,
+                        role: 'current',
+                        title: null,
+                        changedAt: 2,
+                    },
+                };
+            }
+            if (options.path === '/root/open') {
+                throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
+            }
+            throw new Error(`Unexpected control path ${options.path}`);
+        });
+
+        await expect(launchCodexGatewayHeadless({
+            operationId: 'd94231c7-6601-483f-a8f3-92912d759423',
+            cwd: '/workspace/project',
+            env: {},
+            action: 'resume',
+            resumeBootstrap,
+        })).resolves.toMatchObject({
+            sessionId: 'session-private',
+            threadId: 'thread-private',
+            generation: 4,
+        });
+        expect(mocks.callControl.mock.calls.map(([request]) => request.path)).toEqual([
+            '/status',
+            '/root/open',
+            '/status',
+        ]);
+    });
+
+    it('keeps a lost private resume outcome unknown when the status snapshot cannot be verified', async () => {
+        const resumeBootstrap = {
+            happySessionId: 'session-private',
+            dataEncryptionKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+            threadId: 'thread-private',
+            cwd: '/workspace/project',
+            model: null,
+            permissionMode: 'default' as const,
+            effortLevel: null,
+        };
+        mocks.callControl.mockImplementation(async (options: { path: string }) => {
+            if (options.path === '/status') {
+                if (mocks.callControl.mock.calls.filter(([request]) => request.path === '/status').length === 1) {
+                    return { ...mocks.descriptors[0], state: 'running', pid: 1234 };
+                }
+                throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
+            }
+            if (options.path === '/root/open') {
+                mocks.descriptors = [{
+                    ...mocks.descriptors[0],
+                    current: {
+                        threadId: 'thread-private',
+                        sessionId: 'session-private',
+                        generation: 4,
+                        role: 'current',
+                        title: null,
+                        changedAt: 2,
+                    },
+                }];
+                throw new CodexGatewayControlRequestError('outcomeUnknown', 0);
+            }
+            throw new Error(`Unexpected control path ${options.path}`);
+        });
+
+        await expect(launchCodexGatewayHeadless({
+            operationId: 'd94231c7-6601-483f-a8f3-92912d759423',
+            cwd: '/workspace/project',
+            env: {},
+            action: 'resume',
+            resumeBootstrap,
+        })).rejects.toMatchObject({ code: 'outcomeUnknown' });
+        expect(mocks.callControl.mock.calls.map(([request]) => request.path)).toEqual([
+            '/status',
+            '/root/open',
+            '/status',
+        ]);
+    });
+
+    it('cancels and stops only a newly-created Gateway after an explicit root-open failure', async () => {
+        mocks.callControl.mockImplementation(async (options: { path: string }) => {
+            if (options.path === '/status') {
+                return { ...mocks.descriptors[0], state: 'running', pid: 1234 };
+            }
+            if (options.path === '/root/open') {
+                throw new CodexGatewayControlRequestError('threadUnavailable', 404);
+            }
+            if (options.path === '/root/cancel') return { cancelled: true };
+            if (options.path === '/stop') return { stopping: true };
+            throw new Error(`Unexpected control path ${options.path}`);
+        });
+
+        await expect(launchCodexGatewayHeadless({
+            operationId: 'd94231c7-6601-483f-a8f3-92912d759423',
+            cwd: '/workspace/project',
+            env: {},
+            action: 'start',
+        })).rejects.toMatchObject({ code: 'threadUnavailable', status: 404 });
+        expect(mocks.callControl.mock.calls.map(([request]) => request.path)).toEqual([
+            '/status',
+            '/root/open',
+            '/root/cancel',
+            '/stop',
+        ]);
     });
 
     it('restarts a stale descriptor with the same gateway identity', async () => {

@@ -137,11 +137,15 @@ describe('ApiMachineClient Codex fork RPCs', () => {
         const result = await handler?.({
             operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
             sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
             model: 'gpt-5.6-sol',
         });
         expect(result).toEqual({ type: 'success', sessionId: 'happy-existing' });
         expect(resumeSession).toHaveBeenCalledWith('happy-existing', {
             operationId: 'f24d3f6c-1ee8-4098-9cc0-a273c3b04f65',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
             model: 'gpt-5.6-sol',
             permissionMode: undefined,
             effort: undefined,
@@ -151,6 +155,8 @@ describe('ApiMachineClient Codex fork RPCs', () => {
         await expect(handler?.({
             operationId: 'not-a-uuid',
             sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
         })).rejects.toThrow('operationId must be a UUID');
         expect(resumeSession).toHaveBeenCalledOnce();
     });
@@ -179,12 +185,16 @@ describe('ApiMachineClient Codex fork RPCs', () => {
 
         await expect(handler?.({
             sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
         })).resolves.toEqual({
             type: 'resumeMaterialRequired',
             sessionId: 'happy-existing',
         });
         await expect(handler?.({
             sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
             dataEncryptionKey: 'resume-key',
         })).resolves.toEqual({ type: 'success', sessionId: 'happy-existing' });
         expect(resumeSession).toHaveBeenLastCalledWith('happy-existing', expect.objectContaining({
@@ -193,9 +203,69 @@ describe('ApiMachineClient Codex fork RPCs', () => {
 
         await expect(handler?.({
             sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
             dataEncryptionKey: 'x'.repeat(129),
         })).rejects.toThrow('dataEncryptionKey');
         expect(resumeSession).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns stable resume failures without turning them into encrypted RPC errors', async () => {
+        const resumeSession = vi.fn()
+            .mockResolvedValueOnce({ type: 'blocked', reason: 'threadUnavailable' })
+            .mockResolvedValueOnce({ type: 'error', error: 'outcomeUnknown' });
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            resumeSession,
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession: vi.fn(),
+            requestShutdown: vi.fn(),
+        });
+        const handler = handlersFrom(client).get('machine-1:resume-happy-session');
+        const request = {
+            sessionId: 'happy-existing',
+            directory: '/tmp/project',
+            threadId: 'thread-existing',
+        };
+
+        await expect(handler?.(request)).resolves.toEqual({
+            type: 'blocked',
+            reason: 'threadUnavailable',
+        });
+        await expect(handler?.(request)).resolves.toEqual({
+            type: 'error',
+            error: 'outcomeUnknown',
+        });
+    });
+
+    it('keeps the legacy resume request shape compatible while the daemon derives its binding', async () => {
+        const resumeSession = vi.fn().mockResolvedValue({
+            type: 'resumeMaterialRequired',
+            sessionId: 'happy-existing',
+        });
+        const { ApiMachineClient } = await import('./apiMachine');
+        const client = new ApiMachineClient('token', machineClient());
+        client.setRPCHandlers({
+            spawnSession: vi.fn(),
+            resumeSession,
+            listCodexThreads: vi.fn(),
+            openCodexThread: vi.fn(),
+            stopSession: vi.fn(),
+            requestShutdown: vi.fn(),
+        });
+        const handler = handlersFrom(client).get('machine-1:resume-happy-session');
+
+        await expect(handler?.({ sessionId: 'happy-existing' })).resolves.toEqual({
+            type: 'resumeMaterialRequired',
+            sessionId: 'happy-existing',
+        });
+        expect(resumeSession).toHaveBeenCalledWith('happy-existing', expect.objectContaining({
+            directory: undefined,
+            threadId: undefined,
+        }));
     });
 
     it('forwards encrypted Codex history list and open requests to daemon handlers', async () => {

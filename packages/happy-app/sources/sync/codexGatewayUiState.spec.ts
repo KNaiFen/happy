@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     resolveCodexGatewayHandoffTarget,
     resolveCodexGatewayUiState,
+    shouldShowCodexGatewayLifecycle,
     type CodexGatewayRuntimeView,
 } from './codexGatewayUiState';
 
@@ -11,9 +12,13 @@ function session(options: {
     role?: 'current' | 'draining' | 'inactive' | 'recovering';
     previousSessionId?: string;
     nextSessionId?: string;
+    active?: boolean;
+    archivedAt?: number | null;
 } = {}): any {
     return {
         id: options.id ?? 'source',
+        active: options.active ?? true,
+        archivedAt: options.archivedAt ?? null,
         metadata: {
             flavor: 'codex',
             codexSyncVersion: 4,
@@ -64,6 +69,12 @@ function runtime(overrides: Partial<CodexGatewayRuntimeView> = {}): CodexGateway
 }
 
 describe('Codex Gateway App state', () => {
+    it('only presents transient Gateway lifecycle for active, unarchived sessions', () => {
+        expect(shouldShowCodexGatewayLifecycle(session())).toBe(true);
+        expect(shouldShowCodexGatewayLifecycle(session({ active: false }))).toBe(false);
+        expect(shouldShowCodexGatewayLifecycle(session({ archivedAt: 10 }))).toBe(false);
+    });
+
     it('allows input only after the matching current generation is ready', () => {
         expect(resolveCodexGatewayUiState({
             session: session(),

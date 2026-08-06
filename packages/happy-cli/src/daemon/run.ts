@@ -58,10 +58,15 @@ import {
   launchCodexGatewayHeadless,
 } from '@/codex/gateway/codexGatewayLauncher';
 import {
+  CodexGatewayResumeBlockedError,
   createCodexGatewayResumeBootstrap,
   resumeCodexGatewayHeadless,
 } from '@/codex/gateway/codexGatewayResume';
-import { callCodexGatewayControl } from '@/codex/gateway/codexGatewayControl';
+import {
+  CodexGatewayControlRequestError,
+  callCodexGatewayControl,
+  isCodexGatewayControlOutcomeUnknown,
+} from '@/codex/gateway/codexGatewayControl';
 import { deriveCodexGatewayResumeSessionTag } from '@/codex/gateway/codexGatewayIdentity';
 import { retireVerifiedLegacyCodexAdapters } from './legacyCodexAdapterRetirement';
 import {
@@ -548,7 +553,7 @@ export async function startDaemon(): Promise<void> {
       return tracked;
     };
 
-    const resumeSession = async (happySessionId: string, options?: {
+    const resumeVerifiedSession = async (happySessionId: string, options?: {
       operationId?: string;
       model?: string;
       permissionMode?: string;
@@ -566,14 +571,17 @@ export async function startDaemon(): Promise<void> {
             dataEncryptionKey: options?.dataEncryptionKey,
             loadSnapshot: (input) => api.getMachineSessionSnapshot(input),
           });
-          if (material.type !== 'snapshot') return material;
+          if (material.type === 'resumeMaterialRequired') return material;
+          if (material.type === 'error') {
+            return { type: 'blocked', reason: 'invalidBinding' };
+          }
           tracked = installSessionSnapshot(material.snapshot);
           snapshotRefreshed = true;
         }
 
         const storedEncryption = tracked.encryption;
         if (!storedEncryption) {
-          return { type: 'error', errorMessage: `Session ${happySessionId} has no stored encryption data. Cannot resume.` };
+          return { type: 'blocked', reason: 'invalidBinding' };
         }
         if (!options?.skipSnapshotRefresh && !snapshotRefreshed) {
           let snapshot: MachineSessionSnapshot | null;
@@ -588,12 +596,12 @@ export async function startDaemon(): Promise<void> {
             return { type: 'resumeMaterialRequired', sessionId: happySessionId };
           }
           if (!snapshot) {
-            return { type: 'error', errorMessage: `Session ${happySessionId} is no longer available on this machine.` };
+            return { type: 'blocked', reason: 'invalidBinding' };
           }
           tracked = installSessionSnapshot(snapshot);
         }
         if (!tracked.happySessionMetadataFromLocalWebhook) {
-          return { type: 'error', errorMessage: `Session ${happySessionId} has no metadata. Cannot resume.` };
+          return { type: 'blocked', reason: 'invalidBinding' };
         }
         const metadata = tracked.happySessionMetadataFromLocalWebhook!;
         const encryption = tracked.encryption!;
@@ -604,10 +612,7 @@ export async function startDaemon(): Promise<void> {
           && metadata.codexThreadId
         ) {
           if (encryption.encryptionVariant !== 'dataKey') {
-            return {
-              type: 'error',
-              errorMessage: 'This Codex session does not have an independent Sync v4 data key.',
-            };
+            return { type: 'blocked', reason: 'invalidBinding' };
           }
           const permissionMode = resolveGatewayPermissionMode(
             options?.permissionMode ?? metadata.permissionMode ?? undefined,
@@ -631,10 +636,7 @@ export async function startDaemon(): Promise<void> {
             bootstrap,
           });
           if (launched.sessionId !== happySessionId) {
-            return {
-              type: 'error',
-              errorMessage: 'Codex Gateway resumed a different Happy session identity.',
-            };
+            return { type: 'blocked', reason: 'invalidBinding' };
           }
           tracked.startedBy = 'daemon';
           tracked.pid = launched.pid;
@@ -644,16 +646,24 @@ export async function startDaemon(): Promise<void> {
           return { type: 'success', sessionId: happySessionId };
         }
 
-        return {
-          type: 'error',
-          errorMessage: 'Only writable Codex Sync V4 sessions can be resumed.',
-        };
+        return { type: 'blocked', reason: 'invalidBinding' };
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : (error && typeof error === 'object' ? JSON.stringify(error) : String(error));
-        logger.debug(`[DAEMON RUN] Failed to resume session: ${errorMessage}`, error instanceof Error ? error.stack : undefined);
+        if (error instanceof CodexGatewayResumeBlockedError) {
+          return { type: 'blocked', reason: error.reason };
+        }
+        if (
+          error instanceof CodexGatewayControlRequestError
+          && error.code === 'threadUnavailable'
+        ) {
+          return { type: 'blocked', reason: 'threadUnavailable' };
+        }
+        const outcomeUnknown = isCodexGatewayControlOutcomeUnknown(error);
+        logger.debug('[DAEMON RUN] Resume session failed', {
+          errorKind: outcomeUnknown ? 'outcomeUnknown' : 'operationFailed',
+        });
         return {
           type: 'error',
-          errorMessage: `Failed to resume session: ${errorMessage}`,
+          error: outcomeUnknown ? 'outcomeUnknown' : 'operationFailed',
         };
       }
     };
@@ -828,6 +838,33 @@ export async function startDaemon(): Promise<void> {
       }
     };
 
+    const resumeFailureToOpenResult = (
+      result: Exclude<ResumeSessionResult, { type: 'success' }>,
+    ): CodexOpenThreadResult => {
+      if (result.type === 'resumeMaterialRequired') return result;
+      if (result.type === 'blocked') {
+        const reason = result.reason;
+        return {
+          type: 'blocked',
+          reason,
+          errorMessage: reason === 'threadUnavailable'
+            ? 'The selected Codex thread is no longer available on this machine.'
+            : reason === 'externalThreadActive'
+              ? 'The selected Codex thread is active outside Happy.'
+              : reason === 'gatewayRecovering'
+                ? 'The previous Happy Gateway is still recovering. Retry after it settles.'
+                : 'The Happy session binding could not be verified.',
+        };
+      }
+      return {
+        type: 'error',
+        errorCode: result.error,
+        errorMessage: result.error === 'outcomeUnknown'
+          ? 'The Codex operation outcome is not yet known. Retry after the Gateway state refreshes.'
+          : 'The Codex thread could not be opened.',
+      };
+    };
+
     const codexThreadOpen = new CodexThreadOpenCoordinator({
       inspect: (directory, threadId) => codexThreadHistory.inspect(directory, threadId),
       openExisting: async (request, thread): Promise<CodexOpenThreadResult> => {
@@ -883,11 +920,11 @@ export async function startDaemon(): Promise<void> {
         }
         try {
           validateSessionThreadBinding(snapshot, thread);
-        } catch (error) {
+        } catch {
           return {
             type: 'blocked',
             reason: 'invalidBinding',
-            errorMessage: error instanceof Error ? error.message : 'The Happy session binding is invalid.',
+            errorMessage: 'The Happy session binding is invalid.',
           };
         }
 
@@ -901,14 +938,15 @@ export async function startDaemon(): Promise<void> {
           gatewayState: gatewayInspection.state,
         });
         if (launchDecision === 'existing-active') {
-          const reconciled = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+          const reconciled = await resumeVerifiedSession(snapshot.id, {
+            operationId: request.operationId,
+            model: request.defaults?.modelMode,
+            permissionMode: request.defaults?.permissionMode,
+            effort: request.defaults?.effortLevel,
+            skipSnapshotRefresh: true,
+          });
           if (reconciled.type !== 'success') {
-            return {
-              type: 'error',
-              errorMessage: reconciled.type === 'error'
-                ? reconciled.errorMessage
-                : 'Unexpected directory approval request while reconciling a Codex session',
-            };
+            return resumeFailureToOpenResult(reconciled);
           }
           return {
             type: 'success',
@@ -918,7 +956,8 @@ export async function startDaemon(): Promise<void> {
         }
         if (launchDecision === 'process-transition') {
           return {
-            type: 'error',
+            type: 'blocked',
+            reason: 'gatewayRecovering',
             errorMessage: 'The previous Happy process is still shutting down. Retry after it exits.',
           };
         }
@@ -929,14 +968,15 @@ export async function startDaemon(): Promise<void> {
             errorMessage: 'The selected Codex thread is active outside the bound Happy process. Stop it before resuming from the App.',
           };
         }
-        const resumed = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+        const resumed = await resumeVerifiedSession(snapshot.id, {
+          operationId: request.operationId,
+          model: request.defaults?.modelMode,
+          permissionMode: request.defaults?.permissionMode,
+          effort: request.defaults?.effortLevel,
+          skipSnapshotRefresh: true,
+        });
         if (resumed.type !== 'success') {
-          return {
-            type: 'error',
-            errorMessage: resumed.type === 'error'
-              ? resumed.errorMessage
-              : 'Unexpected directory approval request while resuming a Codex session',
-          };
+          return resumeFailureToOpenResult(resumed);
         }
         return {
           type: 'success',
@@ -972,6 +1012,7 @@ export async function startDaemon(): Promise<void> {
         if (!created) {
           return {
             type: 'error',
+            errorCode: 'operationFailed',
             errorMessage: 'The Happy session could not be created while the relay is unavailable.',
           };
         }
@@ -985,11 +1026,11 @@ export async function startDaemon(): Promise<void> {
         };
         try {
           validateSessionThreadBinding(snapshot, thread);
-        } catch (error) {
+        } catch {
           return {
             type: 'blocked',
             reason: 'invalidBinding',
-            errorMessage: error instanceof Error ? error.message : 'The deterministic Happy session binding is invalid.',
+            errorMessage: 'The deterministic Happy session binding is invalid.',
           };
         }
         installSessionSnapshot(snapshot);
@@ -1002,14 +1043,15 @@ export async function startDaemon(): Promise<void> {
           gatewayState: gatewayInspection.state,
         });
         if (launchDecision === 'existing-active') {
-          const reconciled = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+          const reconciled = await resumeVerifiedSession(snapshot.id, {
+            operationId: request.operationId,
+            model: request.defaults?.modelMode,
+            permissionMode: request.defaults?.permissionMode,
+            effort: request.defaults?.effortLevel,
+            skipSnapshotRefresh: true,
+          });
           if (reconciled.type !== 'success') {
-            return {
-              type: 'error',
-              errorMessage: reconciled.type === 'error'
-                ? reconciled.errorMessage
-                : 'Unexpected directory approval request while reconciling a Codex thread',
-            };
+            return resumeFailureToOpenResult(reconciled);
           }
           return {
             type: 'success',
@@ -1026,18 +1068,20 @@ export async function startDaemon(): Promise<void> {
         }
         if (launchDecision === 'process-transition') {
           return {
-            type: 'error',
+            type: 'blocked',
+            reason: 'gatewayRecovering',
             errorMessage: 'The previous Happy process is still shutting down. Retry after it exits.',
           };
         }
-        const resumed = await resumeSession(snapshot.id, { skipSnapshotRefresh: true });
+        const resumed = await resumeVerifiedSession(snapshot.id, {
+          operationId: request.operationId,
+          model: request.defaults?.modelMode,
+          permissionMode: request.defaults?.permissionMode,
+          effort: request.defaults?.effortLevel,
+          skipSnapshotRefresh: true,
+        });
         if (resumed.type !== 'success') {
-          return {
-            type: 'error',
-            errorMessage: resumed.type === 'error'
-              ? resumed.errorMessage
-              : 'Unexpected directory approval request while attaching a Codex thread',
-          };
+          return resumeFailureToOpenResult(resumed);
         }
         return {
           type: 'success',
@@ -1046,6 +1090,76 @@ export async function startDaemon(): Promise<void> {
         };
       },
     });
+
+    const resumeSession = async (happySessionId: string, options?: {
+      operationId?: string;
+      directory?: string;
+      threadId?: string;
+      model?: string;
+      permissionMode?: string;
+      effort?: string;
+      dataEncryptionKey?: string;
+    }): Promise<ResumeSessionResult> => {
+      try {
+        let directory = options?.directory?.trim() || null;
+        let threadId = options?.threadId?.trim() || null;
+        if (!directory || !threadId) {
+          let tracked = findTrackedSessionById(happySessionId);
+          if (!tracked?.happySessionMetadataFromLocalWebhook) {
+            const material = await resolveResumeSessionMaterial({
+              sessionId: happySessionId,
+              machineId,
+              dataEncryptionKey: options?.dataEncryptionKey,
+              loadSnapshot: (input) => api.getMachineSessionSnapshot(input),
+            });
+            if (material.type === 'resumeMaterialRequired') return material;
+            if (material.type === 'error') {
+              return { type: 'blocked', reason: 'invalidBinding' };
+            }
+            tracked = installSessionSnapshot(material.snapshot);
+          }
+          const metadata = tracked.happySessionMetadataFromLocalWebhook;
+          directory ??= metadata?.path?.trim() || null;
+          threadId ??= metadata?.codexThreadId?.trim() || null;
+        }
+        if (!directory || !threadId) {
+          return { type: 'blocked', reason: 'invalidBinding' };
+        }
+        const opened = await codexThreadOpen.open({
+          directory,
+          threadId,
+          operationId: options?.operationId,
+          binding: {
+            sessionId: happySessionId,
+            ...(options?.dataEncryptionKey
+              ? { dataEncryptionKey: options.dataEncryptionKey }
+              : {}),
+          },
+          defaults: {
+            ...(options?.permissionMode ? { permissionMode: options.permissionMode } : {}),
+            ...(options?.model ? { modelMode: options.model } : {}),
+            ...(options?.effort ? { effortLevel: options.effort } : {}),
+          },
+        });
+        if (opened.type === 'success') {
+          return opened.sessionId === happySessionId
+            ? { type: 'success', sessionId: opened.sessionId }
+            : { type: 'blocked', reason: 'invalidBinding' };
+        }
+        if (opened.type === 'resumeMaterialRequired') return opened;
+        if (opened.type === 'blocked') {
+          return {
+            type: 'blocked',
+            reason: opened.reason === 'legacySession'
+              ? 'invalidBinding'
+              : opened.reason,
+          };
+        }
+        return { type: 'error', error: opened.errorCode };
+      } catch {
+        return { type: 'error', error: 'operationFailed' };
+      }
+    };
 
     // Set RPC handlers
     apiMachine.setRPCHandlers({

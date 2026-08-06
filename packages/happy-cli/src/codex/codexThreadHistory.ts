@@ -1,6 +1,9 @@
 import { resolve } from 'node:path';
 
-import { CodexAppServerClient } from './codexAppServerClient';
+import {
+    CodexAppServerClient,
+    isCodexThreadUnavailableRpcResponse,
+} from './codexAppServerClient';
 import type { Thread } from './protocol';
 import { AsyncLock } from '@/utils/lock';
 
@@ -44,6 +47,20 @@ export interface CodexThreadHistoryClient {
     disconnect(): Promise<void>;
     listThreads(opts: Parameters<CodexAppServerClient['listThreads']>[0]): ReturnType<CodexAppServerClient['listThreads']>;
     readThread(opts: Parameters<CodexAppServerClient['readThread']>[0]): ReturnType<CodexAppServerClient['readThread']>;
+}
+
+export class CodexThreadUnavailableError extends Error {
+    constructor() {
+        super('The selected Codex thread is no longer available');
+        this.name = 'CodexThreadUnavailableError';
+    }
+}
+
+export class CodexThreadBindingError extends Error {
+    constructor() {
+        super('The selected Codex thread does not match the requested Happy binding');
+        this.name = 'CodexThreadBindingError';
+    }
 }
 
 function normalizeDirectory(directory: string): string {
@@ -135,16 +152,25 @@ export class CodexThreadHistoryService {
             throw new Error('threadId is required');
         }
         return this.withClient(async (client) => {
-            const { thread } = await client.readThread({
-                threadId: threadId.trim(),
-                includeTurns: false,
-                emitSnapshot: false,
-            });
+            let response: Awaited<ReturnType<CodexThreadHistoryClient['readThread']>>;
+            try {
+                response = await client.readThread({
+                    threadId: threadId.trim(),
+                    includeTurns: false,
+                    emitSnapshot: false,
+                });
+            } catch (error) {
+                if (isCodexThreadUnavailableRpcResponse(error, threadId.trim())) {
+                    throw new CodexThreadUnavailableError();
+                }
+                throw error;
+            }
+            const { thread } = response;
             if (!isRootHistoryThread(thread)) {
-                throw new Error('The selected Codex thread is not a resumable root thread');
+                throw new CodexThreadBindingError();
             }
             if (resolve(thread.cwd) !== directory) {
-                throw new Error('The selected Codex thread belongs to a different directory');
+                throw new CodexThreadBindingError();
             }
             return summarizeThread(thread);
         });

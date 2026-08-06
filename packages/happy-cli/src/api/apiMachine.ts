@@ -99,6 +99,8 @@ type MachineRpcHandlers = {
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
     resumeSession?: (sessionId: string, options?: {
         operationId?: string;
+        directory?: string;
+        threadId?: string;
         model?: string;
         permissionMode?: string;
         effort?: string;
@@ -128,6 +130,15 @@ function requireBoundedNonEmptyString(value: unknown, name: string, maxLength: n
         throw new Error(`${name} must contain between 1 and ${maxLength} characters`);
     }
     return result;
+}
+
+function optionalBoundedNonEmptyString(
+    value: unknown,
+    name: string,
+    maxLength: number,
+): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    return requireBoundedNonEmptyString(value, name, maxLength);
 }
 
 function optionalUuidString(value: unknown, name: string): string | undefined {
@@ -163,6 +174,8 @@ export class ApiMachineClient {
     private rpcHandlerManager: RpcHandlerManager;
     private resumeSessionHandler: ((sessionId: string, options?: {
         operationId?: string;
+        directory?: string;
+        threadId?: string;
         model?: string;
         permissionMode?: string;
         effort?: string;
@@ -421,6 +434,8 @@ export class ApiMachineClient {
                 this.rpcHandlerManager.registerHandler(method, async (params: any) => {
                     const { model, permissionMode, effort } = params || {};
                     const sessionId = requireBoundedNonEmptyString(params?.sessionId, 'sessionId', 256);
+                    const directory = optionalBoundedNonEmptyString(params?.directory, 'directory', 8_192);
+                    const threadId = optionalBoundedNonEmptyString(params?.threadId, 'threadId', 256);
                     const operationId = optionalUuidString(params?.operationId, 'operationId');
                     const dataEncryptionKey = params?.dataEncryptionKey === undefined
                         ? undefined
@@ -433,21 +448,14 @@ export class ApiMachineClient {
 
                     const result = await handler(sessionId, {
                         operationId,
+                        directory,
+                        threadId,
                         model,
                         permissionMode,
                         effort,
                         dataEncryptionKey,
                     });
-                    switch (result.type) {
-                        case 'success':
-                            return { type: 'success', sessionId: result.sessionId };
-                        case 'resumeMaterialRequired':
-                            return result;
-                        case 'requestToApproveDirectoryCreation':
-                            return result;
-                        case 'error':
-                            throw new Error(result.errorMessage);
-                    }
+                    return result;
                 });
             }
             return;

@@ -167,7 +167,8 @@ vi.mock('./codexGatewayProxy', () => ({
         }
     },
 }));
-vi.mock('./codexGatewayControl', () => ({
+vi.mock('./codexGatewayControl', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('./codexGatewayControl')>()),
     startCodexGatewayControlServer: vi.fn(async (options: {
         handlers: import('./codexGatewayControl').CodexGatewayControlHandlers;
         socketPath?: string;
@@ -180,8 +181,17 @@ vi.mock('./codexGatewayControl', () => ({
         };
     }),
 }));
-vi.mock('../codexAppServerClient', () => ({
-    CodexRpcOutcomeUnknownError: class CodexRpcOutcomeUnknownError extends Error {},
+vi.mock('../codexAppServerClient', () => {
+    class MockCodexRpcOutcomeUnknownError extends Error {}
+    return {
+    CodexRpcOutcomeUnknownError: MockCodexRpcOutcomeUnknownError,
+    classifyCodexRpcFailure: (error: unknown) => (
+        error instanceof MockCodexRpcOutcomeUnknownError
+        || (error && typeof error === 'object' && 'rpcOutcomeUnknown' in error)
+            ? 'outcomeUnknown'
+            : 'operationFailed'
+    ),
+    isCodexThreadUnavailableRpcResponse: () => false,
     CodexAppServerClient: class {
         private connectionHandler: ((event: unknown) => void) | null = null;
         private connected = false;
@@ -260,7 +270,8 @@ vi.mock('../codexAppServerClient', () => ({
         async startThread() { return await mocks.startThread(); }
         async resumeThread(input: { threadId: string }) { return await mocks.resumeThread(input); }
     },
-}));
+    };
+});
 
 import {
     CodexGatewaySocketPathTooLongError,
@@ -1023,7 +1034,7 @@ describe('Codex Gateway worker composition', () => {
             ...openRootInput(),
             operationId,
         });
-        const openingExpectation = expect(opening).rejects.toThrow('root open was cancelled');
+        const openingExpectation = expect(opening).rejects.toMatchObject({ code: 'conflict' });
         await vi.waitFor(() => expect(mocks.startThread).toHaveBeenCalledOnce());
 
         await expect(mocks.controlHandlers!.cancelRoot({ operationId })).resolves.toEqual({
@@ -1033,6 +1044,44 @@ describe('Codex Gateway worker composition', () => {
         resolveStart({ threadId: 'thread-app', model: 'gpt-test' });
         await openingExpectation;
         expect(mocks.presenceClaims).toEqual([]);
+
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
+    it('does not repeat thread/start after the provider outcome becomes unknown', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const input = openRootInput();
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'app',
+            happyHomeDir,
+            runtimeRoot,
+            bootstrapOperationId: input.operationId,
+        });
+        mocks.startThread.mockRejectedValueOnce(Object.assign(
+            new Error('provider payload must stay private'),
+            { rpcOutcomeUnknown: true },
+        ));
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
+
+        await expect(mocks.controlHandlers!.openRoot(input))
+            .rejects.toMatchObject({ code: 'outcomeUnknown' });
+        await expect(mocks.controlHandlers!.openRoot(input))
+            .rejects.toMatchObject({ code: 'outcomeUnknown' });
+        expect(mocks.startThread).toHaveBeenCalledOnce();
 
         await mocks.controlHandlers!.stop({ force: true });
         await worker;
@@ -1087,7 +1136,7 @@ describe('Codex Gateway worker composition', () => {
             forkedFromMessageId: null,
             isSideChat: false,
         });
-        const openingExpectation = expect(opening).rejects.toThrow('root open was cancelled');
+        const openingExpectation = expect(opening).rejects.toMatchObject({ code: 'conflict' });
         await vi.waitFor(() => expect(mocks.resumeThread).toHaveBeenCalledOnce());
         const leases = new CodexGatewayThreadLeaseRegistry({
             happyHomeDir,
@@ -1189,9 +1238,9 @@ describe('Codex Gateway worker composition', () => {
         };
 
         await expect(mocks.controlHandlers!.openRoot(input))
-            .rejects.toThrow('relay is unavailable');
+            .rejects.toMatchObject({ code: 'outcomeUnknown' });
         await expect(mocks.controlHandlers!.openRoot(input))
-            .rejects.toThrow('relay is unavailable');
+            .rejects.toMatchObject({ code: 'outcomeUnknown' });
         expect(mocks.startThread).toHaveBeenCalledOnce();
         expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
             current: {
@@ -1241,7 +1290,8 @@ describe('Codex Gateway worker composition', () => {
             forkedFromMessageId: null,
             isSideChat: false,
         };
-        await expect(mocks.controlHandlers!.openRoot(input)).rejects.toThrow('relay is unavailable');
+        await expect(mocks.controlHandlers!.openRoot(input))
+            .rejects.toMatchObject({ code: 'outcomeUnknown' });
 
         await mocks.controlHandlers!.stop({ force: false });
         await worker;

@@ -189,9 +189,11 @@ describe('Codex queued message ops', () => {
         await expect(machineResumeSession({
             machineId: 'machine-1',
             sessionId: 'session-child',
+            directory: '/workspace',
+            threadId: 'thread-child',
         })).resolves.toMatchObject({
             type: 'error',
-            errorMessage: expect.stringContaining('read-only'),
+            error: 'operationFailed',
         });
         expect(sessionRPC).not.toHaveBeenCalled();
         expect(machineRPC).not.toHaveBeenCalled();

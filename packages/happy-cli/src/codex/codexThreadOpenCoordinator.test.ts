@@ -4,7 +4,11 @@ import {
     CodexThreadOpenCoordinator,
     resolveCodexBoundThreadLaunchDecision,
 } from './codexThreadOpenCoordinator';
-import type { CodexThreadHistorySummary } from './codexThreadHistory';
+import {
+    CodexThreadUnavailableError,
+    type CodexThreadHistorySummary,
+} from './codexThreadHistory';
+import { CodexRpcOutcomeUnknownError } from './codexAppServerClient';
 
 function summary(status: CodexThreadHistorySummary['status'] = 'idle'): CodexThreadHistorySummary {
     return {
@@ -116,6 +120,36 @@ describe('CodexThreadOpenCoordinator', () => {
             externalDataEncryptionKey: 'key',
         })).resolves.toMatchObject({ type: 'error' });
         expect(createExternal).not.toHaveBeenCalled();
+    });
+
+    it('exposes missing threads and indeterminate provider outcomes as stable results', async () => {
+        const unavailable = new CodexThreadOpenCoordinator({
+            inspect: vi.fn().mockRejectedValue(new CodexThreadUnavailableError()),
+            openExisting: vi.fn(),
+            createExternal: vi.fn(),
+        });
+        await expect(unavailable.open({
+            directory: '/tmp/project',
+            threadId: 'thread-1',
+            binding: { sessionId: 'happy-1' },
+        })).resolves.toEqual(expect.objectContaining({
+            type: 'blocked',
+            reason: 'threadUnavailable',
+        }));
+
+        const unknown = new CodexThreadOpenCoordinator({
+            inspect: vi.fn().mockRejectedValue(new CodexRpcOutcomeUnknownError('thread/read', 'lost response')),
+            openExisting: vi.fn(),
+            createExternal: vi.fn(),
+        });
+        await expect(unknown.open({
+            directory: '/tmp/project',
+            threadId: 'thread-2',
+            binding: { sessionId: 'happy-2' },
+        })).resolves.toEqual(expect.objectContaining({
+            type: 'error',
+            errorCode: 'outcomeUnknown',
+        }));
     });
 });
 

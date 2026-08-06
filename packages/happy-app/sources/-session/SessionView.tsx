@@ -42,6 +42,7 @@ import {
 import {
     resolveCodexGatewayHandoffTarget,
     resolveCodexGatewayUiState,
+    shouldShowCodexGatewayLifecycle,
     type CodexGatewayDisplayPhase,
 } from '@/sync/codexGatewayUiState';
 import {
@@ -796,8 +797,17 @@ export function SessionViewLoaded({
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const sessionStatusBarDisplay = useSetting('sessionStatusBarDisplay');
     const experiments = useSetting('experiments');
-    const { canResume, resumeError, resumeSession, resumingSession } = useSessionQuickActions(session);
+    const {
+        canResume,
+        canOpenResumeAlternatives,
+        openResumeAlternatives,
+        resumeError,
+        resumeSession,
+        resumeSessionSubtitle,
+        resumingSession,
+    } = useSessionQuickActions(session);
     const isDisconnected = !sessionStatus.isConnected;
+    const showCodexGatewayLifecycle = shouldShowCodexGatewayLifecycle(session);
     const resumeCommandBlock = getResumeCommandBlock(session);
     const gatewayUiState = React.useMemo(() => resolveCodexGatewayUiState({
         session,
@@ -939,7 +949,7 @@ export function SessionViewLoaded({
     ), [sessionId]);
 
     const connectionStatus = React.useMemo(() => {
-        if (!isCodexV4Active) {
+        if (!isCodexV4Active || !showCodexGatewayLifecycle) {
             return {
                 text: sessionStatus.statusText,
                 color: sessionStatus.statusColor,
@@ -989,6 +999,7 @@ export function SessionViewLoaded({
             };
     }, [
         isCodexV4Active,
+        showCodexGatewayLifecycle,
         sessionStatus.statusText,
         sessionStatus.statusColor,
         sessionStatus.statusDotColor,
@@ -1159,7 +1170,7 @@ export function SessionViewLoaded({
             onEffortLevelChange={updateEffortLevel}
             metadata={session.metadata}
             connectionStatus={connectionStatus}
-            blockSend={!sessionStatus.isConnected || !gatewayUiState.canSend}
+            blockSend={!showCodexGatewayLifecycle || !sessionStatus.isConnected || !gatewayUiState.canSend}
             onSend={handleSend}
             followUpMode={isCodexV4Active && isSessionExecuting ? codexFollowUpMode : undefined}
             canSteerFollowUp={canSteerCodexTurn}
@@ -1198,7 +1209,7 @@ export function SessionViewLoaded({
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <MachineDeletedHint />
         </CenteredInputWidth>
-    ) : isDisconnected ? (
+    ) : !showCodexGatewayLifecycle ? (
         <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
             <InactiveSessionHint
                 archived={session.archivedAt !== null}
@@ -1207,6 +1218,9 @@ export function SessionViewLoaded({
                 resuming={resumingSession}
                 resumeError={resumeError}
                 onResume={resumeSession}
+                canOpenAlternatives={canOpenResumeAlternatives}
+                onOpenAlternatives={openResumeAlternatives}
+                resumeUnavailableMessage={resumeSessionSubtitle}
             />
         </CenteredInputWidth>
     ) : null;
@@ -1396,6 +1410,9 @@ function InactiveSessionHint(props: {
     resuming: boolean;
     resumeError: string | null;
     onResume: () => void;
+    canOpenAlternatives: boolean;
+    onOpenAlternatives: () => void;
+    resumeUnavailableMessage: string;
 }) {
     const { theme } = useUnistyles();
     const hintTextStyle = {
@@ -1421,6 +1438,11 @@ function InactiveSessionHint(props: {
                         {t('session.resumeFromTerminal')}
                     </Text>
                 )}
+                {!props.canResume && props.resumeUnavailableMessage ? (
+                    <Text accessibilityRole="alert" style={hintTextStyle}>
+                        {props.resumeUnavailableMessage}
+                    </Text>
+                ) : null}
             </View>
             {props.canResume ? (
                 <Pressable
@@ -1464,6 +1486,27 @@ function InactiveSessionHint(props: {
                 >
                     {props.resumeError}
                 </Text>
+            ) : null}
+            {props.canOpenAlternatives ? (
+                <Pressable
+                    onPress={props.onOpenAlternatives}
+                    accessibilityRole="button"
+                    style={({ pressed }) => ({
+                        minHeight: 44,
+                        marginHorizontal: 8,
+                        paddingHorizontal: 14,
+                        borderRadius: Platform.select({ web: 10, default: 18 }),
+                        borderWidth: StyleSheet.hairlineWidth,
+                        borderColor: theme.colors.divider,
+                        backgroundColor: pressed ? theme.colors.surfacePressed : theme.colors.surfaceHigh,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                    })}
+                >
+                    <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '600' }}>
+                        {t('sessionInfo.resumeSessionBrowseDevice')}
+                    </Text>
+                </Pressable>
             ) : null}
         </View>
     );

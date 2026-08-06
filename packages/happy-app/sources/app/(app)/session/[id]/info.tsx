@@ -125,13 +125,18 @@ function SessionInfoContent({ session }: { session: Session }) {
     const sessionStatus = useSessionStatus(session);
     const isCodexReadOnly = session.metadata?.codexReadOnly === true;
     const {
+        canResume,
         canShowResume,
+        canOpenResumeAlternatives,
         canFork,
         forking,
         forkSession,
         openDuplicateSheet,
+        openResumeAlternatives,
+        resumeError,
         resumeSession,
         resumeSessionSubtitle,
+        resumingSession,
     } = useSessionQuickActions(session);
 
     // Check if CLI version is outdated
@@ -360,9 +365,19 @@ function SessionInfoContent({ session }: { session: Session }) {
                     {canShowResume && (
                         <Item
                             title={t('sessionInfo.resumeSession')}
-                            subtitle={resumeSessionSubtitle}
+                            subtitle={resumeError ?? resumeSessionSubtitle}
                             icon={<Ionicons name="play-circle-outline" size={29} color="#007AFF" />}
-                            onPress={resumeSession}
+                            onPress={canResume ? resumeSession : undefined}
+                            disabled={!canResume || resumingSession}
+                            loading={resumingSession}
+                        />
+                    )}
+                    {canOpenResumeAlternatives && (
+                        <Item
+                            title={t('sessionInfo.resumeSessionBrowseDevice')}
+                            subtitle={t('sessionInfo.resumeSessionBrowseDeviceSubtitle')}
+                            icon={<Ionicons name="time-outline" size={29} color="#007AFF" />}
+                            onPress={openResumeAlternatives}
                         />
                     )}
                     {canFork && (

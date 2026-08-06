@@ -2,7 +2,14 @@ import * as React from 'react';
 import { useHappyAction } from '@/hooks/useHappyAction';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
-import { machineResumeSession, sessionKill, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
+import {
+    machineResumeSession,
+    sessionKill,
+    sessionSetAgentModes,
+    forkAndSpawn,
+    type ForkSource,
+    type ResumeSessionBlockedReason,
+} from '@/sync/ops';
 import { archiveSession as archiveSessionAuthoritatively } from '@/sync/sessionArchiveCoordinator';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useIsSessionMachineDeleted, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
@@ -63,6 +70,14 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
             message: '',
         };
     }
+    if (session.active && session.archivedAt === null) {
+        return {
+            canResume: false,
+            canShowResume: false,
+            subtitle: '',
+            message: '',
+        };
+    }
 
     const machineId = session.metadata?.machineId;
     if (!machineId) {
@@ -96,6 +111,16 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
         };
     }
 
+    if (machine.metadata?.resumeSupport?.rpcAvailable !== true) {
+        const message = t('sessionInfo.resumeSessionRequiresUpgrade');
+        return {
+            canResume: false,
+            canShowResume: true,
+            subtitle: message,
+            message,
+        };
+    }
+
     if (!isMachineOnline(machine)) {
         return {
             canResume: false,
@@ -111,6 +136,21 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
         subtitle: t('sessionInfo.resumeSessionSubtitle'),
         message: t('sessionInfo.resumeSessionSubtitle'),
     };
+}
+
+function resumeBlockedMessage(reason: ResumeSessionBlockedReason): string {
+    switch (reason) {
+        case 'threadUnavailable': return t('sessionInfo.resumeSessionThreadUnavailable');
+        case 'externalThreadActive': return t('sessionInfo.resumeSessionExternalThreadActive');
+        case 'gatewayRecovering': return t('sessionInfo.resumeSessionGatewayRecovering');
+        case 'invalidBinding': return t('sessionInfo.resumeSessionInvalidBinding');
+    }
+}
+
+function resumeErrorMessage(error: 'operationFailed' | 'outcomeUnknown'): string {
+    return error === 'outcomeUnknown'
+        ? t('sessionInfo.resumeSessionOutcomeUnknown')
+        : t('sessionInfo.resumeSessionOperationFailed');
 }
 
 export function useSessionQuickActions(
@@ -134,6 +174,7 @@ export function useSessionQuickActions(
         fingerprint: string;
     } | null>(null);
     const [resumeError, setResumeError] = React.useState<string | null>(null);
+    const [resumeBlockedReason, setResumeBlockedReason] = React.useState<ResumeSessionBlockedReason | null>(null);
     const devModeEnabled = useLocalSetting('devModeEnabled');
     const expThreadActions = useSetting('expResumeSession');
     const resumeAvailability = React.useMemo(
@@ -186,12 +227,21 @@ export function useSessionQuickActions(
 
     const [resumingSession, performResume] = useHappyAction(async () => {
         setResumeError(null);
+        setResumeBlockedReason(null);
         if (!resumeAvailability.canResume) {
             throw new HappyError(resumeAvailability.message, false);
         }
 
         if (!machineId) {
             throw new HappyError(t('sessionInfo.resumeSessionMissingMachine'), false);
+        }
+        const directory = session.metadata?.path;
+        const threadId = session.metadata?.codexThreadId;
+        if (!directory || !threadId) {
+            const message = t('sessionInfo.resumeSessionInvalidBinding');
+            setResumeError(message);
+            setResumeBlockedReason('invalidBinding');
+            throw new HappyError(message, false);
         }
 
         const modeMeta = resolveMessageModeMeta(session, {
@@ -200,6 +250,8 @@ export function useSessionQuickActions(
         const operationFingerprint = JSON.stringify({
             machineId,
             sessionId: session.id,
+            directory,
+            threadId,
             model: modeMeta.model ?? null,
             permissionMode: modeMeta.permissionMode,
         });
@@ -213,6 +265,8 @@ export function useSessionQuickActions(
             operationId: pendingResumeOperationRef.current.id,
             machineId,
             sessionId: session.id,
+            directory,
+            threadId,
             model: modeMeta.model ?? undefined,
             permissionMode: modeMeta.permissionMode,
         });
@@ -234,11 +288,18 @@ export function useSessionQuickActions(
                 navigateToSession(result.sessionId);
                 return;
             }
-            case 'requestToApproveDirectoryCreation':
-                throw new HappyError(t('sessionInfo.resumeSessionUnexpectedDirectoryPrompt'), false);
+            case 'blocked': {
+                const message = resumeBlockedMessage(result.reason);
+                setResumeBlockedReason(result.reason);
+                setResumeError(message);
+                throw new HappyError(message, false);
+            }
             case 'error':
-                setResumeError(result.errorMessage);
-                throw new HappyError(result.errorMessage, false);
+                {
+                    const message = resumeErrorMessage(result.error);
+                    setResumeError(message);
+                    throw new HappyError(message, false);
+                }
         }
     });
 
@@ -289,6 +350,14 @@ export function useSessionQuickActions(
         performResume();
     }, [performResume]);
 
+    const openResumeAlternatives = React.useCallback(() => {
+        const directory = session.metadata?.path;
+        if (!machineId || !directory) return;
+        router.push(`/machine/${encodeURIComponent(machineId)}?path=${encodeURIComponent(directory)}&resume=1`);
+    }, [machineId, router, session.metadata?.path]);
+    const canOpenResumeAlternatives = resumeBlockedReason === 'threadUnavailable'
+        && Boolean(machineId && session.metadata?.path);
+
     // Fork the Codex thread without truncation. The source row stays untouched.
     const [forking, performFork] = useHappyAction(async () => {
         if (!canFork) {
@@ -323,7 +392,7 @@ export function useSessionQuickActions(
             { id: 'details', icon: 'information-circle-outline', label: t('profile.details'), onPress: openDetails },
         ];
 
-        if (resumeAvailability.canShowResume) {
+        if (resumeAvailability.canResume) {
             items.push({ id: 'resume', icon: 'play-circle-outline', label: t('sessionInfo.resumeSession'), onPress: resumeSession });
         }
 
@@ -364,7 +433,7 @@ export function useSessionQuickActions(
         isCodexReadOnly,
         openDetails,
         openDuplicateSheet,
-        resumeAvailability.canShowResume,
+        resumeAvailability.canResume,
         resumeSession,
         stopGateway,
     ]);
@@ -398,6 +467,9 @@ export function useSessionQuickActions(
         openDuplicateSheet,
         resumeSession,
         resumeError,
+        resumeBlockedReason,
+        canOpenResumeAlternatives,
+        openResumeAlternatives,
         resumeSessionSubtitle: resumeAvailability.subtitle,
         resumingSession,
         stopGateway,
