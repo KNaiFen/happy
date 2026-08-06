@@ -137,7 +137,10 @@ describe('Codex Gateway unified resume', () => {
             api: { unarchiveSession: mocks.unarchiveSession } as any,
             bootstrap,
             env: {},
-        })).rejects.toThrow('still recovering');
+        })).rejects.toMatchObject({
+            name: 'CodexGatewayResumeBlockedError',
+            reason: 'gatewayRecovering',
+        });
         expect(mocks.launchHeadless).not.toHaveBeenCalled();
     });
 
