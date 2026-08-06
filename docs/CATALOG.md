@@ -38,10 +38,6 @@
 - [ADR-003: Make Codex the only active default provider](./decisions/ADR-003-codex-only-provider.md)
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
 
-## 活动计划
-
-- [2026-08-06 安全、恢复与输入队列修复台账](./plans/2026-08-06-remediation-ledger.md)
-
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
@@ -100,6 +96,7 @@
 
 ## 计划归档
 
+- [2026-08-06 安全、恢复与输入队列修复台账](./plans/archive/2026-08-06-remediation-ledger.md)
 - [Agent SDK Upgrade + Plan Mode Fix + Integration Tests](./plans/archive/agent-sdk-upgrade-plan-mode-fix.md)
 - [Agent Testing Layers](./plans/archive/agent-testing-layers.md)
 - [CLI V3 Messages API Migration (happy-cli)](./plans/archive/cli-v3-messages-api.md)
