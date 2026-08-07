@@ -7,6 +7,7 @@
 - [2026-08-06 安全、恢复与输入队列修复台账](./2026-08-06-remediation-ledger.md)
 - [Agent SDK Upgrade + Plan Mode Fix + Integration Tests](./agent-sdk-upgrade-plan-mode-fix.md)
 - [Agent Testing Layers](./agent-testing-layers.md)
+- [App 排队消息堆栈与会话恢复资格实施计划](./app-queue-stack-and-resume-eligibility.md)
 - [CLI V3 Messages API Migration (happy-cli)](./cli-v3-messages-api.md)
 - [Codex Agent 指令与 Claude 遗留清理计划](./codex-agent-instructions-migration.md)
 - [Codex App 语义时间线去重与 Resume 焦点修复](./codex-app-semantic-timeline-dedup.md)

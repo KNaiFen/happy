@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：进行中。
+- 当前状态：已完成，2026-08-07 归档。
 - 建立日期：2026-08-06。
 - 实施分支：`fix/app-queue-resume-eligibility`，基线为
   `origin/main@0a8e48f90af400ce67c42fd92dee36436cd16b08`。
@@ -13,6 +13,24 @@
   patch 触发全新的发布工作流。
 - 完成条件：本计划的代码、源码级测试、翻译、视觉验收、文档检查、独立审查、
   云端 App/CLI 工作流和制品交付全部完成后，移入 `docs/plans/archive/`。
+
+## 完成证据
+
+- 功能实现位于 `7aedfa2bb3418bf5c44885597419529e194f483c`；移动 field 场景与删除
+  Queue/Steer selector 对齐的测试修复位于
+  `54d5f9e1f9c0669136efbfbc1d1b932e056d808c`。
+- 首次 `1.11.34` / `1.4.45` 发布 run 处于 GitHub Actions 控制面矛盾状态：REST 保持
+  `queued`，取消接口称已完成，重跑接口称仍运行，强制取消返回 HTTP 409。按版本不可重用
+  规则，`41cacb9f7712733bf656c55537fee114aedad133` 将 App/CLI 各升一个无行为差异的
+  patch，以正常 push trigger 完成新一轮发布。
+- 新发布提交的文档 `31157313080`、CLI `31157313037`、Android
+  `31157313054`、monorepo CI `31157313304` 和官方 Codex API 36 field E2E
+  `31157313339` 均成功，且全部绑定到 `41cacb9f`。
+- `happy-1.4.46.tgz` 已下载至 `dist/release-artifacts` 并验证 package metadata、无脚本
+  安装、`--version`、Codex 命令帮助以及 macOS ARM64 `rg` / `difftastic` 归档；外层
+  SHA-256 为 `15e8f74a6a2fbbbaab07e32672775acaf3cbcf76cadb28e3bda3a81912aeea0e`。
+- Android Artifact 为 `happy-app-1.11.35-android-arm64-v8a-no-ota`（ID
+  `8986175326`）；按交付规则不下载 APK 到本机。
 
 ## 问题与设计依据
 
@@ -196,8 +214,8 @@ provider 原文或异常堆栈。
 - [x] 编写并接受 ADR-005，更新文档入口和包 patch 版本。
 - [x] 完成源码级测试、类型检查、翻译、文档、安全和 diff 验证。
 - [x] 完成桌面/移动、浅色/深色、1/2/3/4+ 条队列的 Playwright 截图验收。
-- [ ] 提交、对齐 `origin/main`、推送 `origin/main` 并等待 App/CLI 云端工作流。
-- [ ] CLI 成功后下载并验证 `happy-1.4.46.tgz`；Android 只交付 Artifact URL。
+- [x] 提交、对齐 `origin/main`、推送 `origin/main` 并等待 App/CLI 云端工作流。
+- [x] CLI 成功后下载并验证 `happy-1.4.46.tgz`；Android 只交付 Artifact URL。
 
 ## 验证矩阵
 
