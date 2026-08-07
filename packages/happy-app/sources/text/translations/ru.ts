@@ -483,6 +483,7 @@ export const ru: TranslationStructure = {
         statusBarPathTitle: 'Рабочая директория',
         queuedMessageEdit: 'Изменить сообщение в очереди',
         queuedMessageSteer: 'Отправить в активный ход',
+        queuedMessageSteerCompact: 'Вести',
         queuedMessageRemove: 'Удалить сообщение из очереди',
         queuedMessageMore: 'Другие действия с сообщением в очереди',
         queuedMessageActionFailed: 'Не удалось обновить сообщение в очереди. Возможно, его статус изменился. Повторите попытку.',

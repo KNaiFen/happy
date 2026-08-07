@@ -35,6 +35,7 @@ import { resolveMobileSendButtonVisuals } from './mobileSendButtonVisuals';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordinator';
 import { CodexQueuedMessages } from './CodexQueuedMessages';
+import { CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET } from './codexQueuedMessageStack';
 import type { CodexV4QueuedMessage } from '@/sync/codexV4Projection';
 
 interface AgentInputProps {
@@ -448,8 +449,14 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         opacity: 0.7,
     },
     followUpDock: {
-        zIndex: 1,
+        zIndex: 0,
         marginBottom: 0,
+        paddingHorizontal: CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET,
+        overflow: 'visible',
+    },
+    composerLayer: {
+        position: 'relative',
+        zIndex: 1,
     },
 }));
 
@@ -1820,13 +1827,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 messages={props.queuedMessages}
                                 canSteer={props.canSteerFollowUp === true}
                                 glassEnabled={glassEnabled}
-                                compactMobileComposer={compactMobileComposer}
                             />
                         ) : null}
                     </View>
                 ) : null}
 
                 {/* Box 2: Action Area (Input + Send) */}
+                <View style={styles.composerLayer}>
                 <Shaker ref={sendBlockShakerRef}>
                     <View style={[
                         glassEnabled && styles.unifiedPanelShadow,
@@ -2048,6 +2055,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </MobileGlassSurface>
                     </View>
                 </Shaker>
+                </View>
             </View>
         </View>
     );

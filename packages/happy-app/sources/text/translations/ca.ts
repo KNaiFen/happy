@@ -334,6 +334,7 @@ export const ca: TranslationStructure = {
         statusBarPathTitle: 'Directori de treball',
         queuedMessageEdit: 'Edita el missatge en cua',
         queuedMessageSteer: 'Envia al torn actiu',
+        queuedMessageSteerCompact: 'Guia',
         queuedMessageRemove: 'Elimina el missatge en cua',
         queuedMessageMore: 'Més accions del missatge en cua',
         queuedMessageActionFailed: "No s'ha pogut actualitzar el missatge en cua. És possible que n'hagi canviat l'estat; torna-ho a provar.",

@@ -351,6 +351,7 @@ export const pl: TranslationStructure = {
         statusBarPathTitle: 'Katalog roboczy',
         queuedMessageEdit: 'Edytuj wiadomość w kolejce',
         queuedMessageSteer: 'Wyślij do aktywnej tury',
+        queuedMessageSteerCompact: 'Steruj',
         queuedMessageRemove: 'Usuń wiadomość z kolejki',
         queuedMessageMore: 'Więcej działań dla wiadomości w kolejce',
         queuedMessageActionFailed: 'Nie udało się zaktualizować wiadomości w kolejce. Jej stan mógł się zmienić; spróbuj ponownie.',

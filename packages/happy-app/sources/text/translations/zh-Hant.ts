@@ -334,6 +334,7 @@ export const zhHant: TranslationStructure = {
         statusBarPathTitle: '工作目錄',
         queuedMessageEdit: '編輯排隊訊息',
         queuedMessageSteer: '傳送到目前回合',
+        queuedMessageSteerCompact: '引導',
         queuedMessageRemove: '移除排隊訊息',
         queuedMessageMore: '更多排隊訊息操作',
         queuedMessageActionFailed: '無法更新排隊訊息。其狀態可能已變更，請再試一次。',

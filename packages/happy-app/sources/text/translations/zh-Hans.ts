@@ -335,6 +335,7 @@ export const zhHans: TranslationStructure = {
         statusBarPathTitle: '工作目录',
         queuedMessageEdit: '编辑排队消息',
         queuedMessageSteer: '发送到当前轮次',
+        queuedMessageSteerCompact: '引导',
         queuedMessageRemove: '移除排队消息',
         queuedMessageMore: '更多排队消息操作',
         queuedMessageActionFailed: '无法更新排队消息。其状态可能已更改，请重试。',

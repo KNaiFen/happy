@@ -334,6 +334,7 @@ export const es: TranslationStructure = {
         statusBarPathTitle: 'Directorio de trabajo',
         queuedMessageEdit: 'Editar mensaje en cola',
         queuedMessageSteer: 'Enviar al turno activo',
+        queuedMessageSteerCompact: 'Guiar',
         queuedMessageRemove: 'Eliminar mensaje en cola',
         queuedMessageMore: 'Más acciones del mensaje en cola',
         queuedMessageActionFailed: 'No se pudo actualizar el mensaje en cola. Es posible que su estado haya cambiado; inténtalo de nuevo.',

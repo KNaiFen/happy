@@ -335,6 +335,7 @@ export const ja: TranslationStructure = {
         statusBarPathTitle: '作業ディレクトリ',
         queuedMessageEdit: 'キュー内のメッセージを編集',
         queuedMessageSteer: '実行中のターンに送信',
+        queuedMessageSteerCompact: '誘導',
         queuedMessageRemove: 'キュー内のメッセージを削除',
         queuedMessageMore: 'キュー内メッセージのその他の操作',
         queuedMessageActionFailed: 'キュー内のメッセージを更新できませんでした。状態が変わった可能性があります。もう一度お試しください。',

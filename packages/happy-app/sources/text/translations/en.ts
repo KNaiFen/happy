@@ -348,6 +348,7 @@ export const en: TranslationStructure = {
         statusBarPathTitle: 'Working directory',
         queuedMessageEdit: 'Edit queued message',
         queuedMessageSteer: 'Send to active turn',
+        queuedMessageSteerCompact: 'Steer',
         queuedMessageRemove: 'Remove queued message',
         queuedMessageMore: 'More queued-message actions',
         queuedMessageActionFailed: "Couldn't update the queued message. Its status may have changed; try again.",

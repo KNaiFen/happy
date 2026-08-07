@@ -333,6 +333,7 @@ export const pt: TranslationStructure = {
         statusBarPathTitle: 'Diretório de trabalho',
         queuedMessageEdit: 'Editar mensagem na fila',
         queuedMessageSteer: 'Enviar para o turno ativo',
+        queuedMessageSteerCompact: 'Guiar',
         queuedMessageRemove: 'Remover mensagem da fila',
         queuedMessageMore: 'Mais ações da mensagem na fila',
         queuedMessageActionFailed: 'Não foi possível atualizar a mensagem na fila. O status pode ter mudado; tente novamente.',
