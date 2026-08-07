@@ -84,24 +84,8 @@ tags:
 - assertNotVisible: Used 2 tools
 - takeScreenshot: codex-live-single-mcp
 
-- extendedWaitUntil:
-    visible:
-      text: Queue
-      checked: true
-    timeout: 30000
-- assertVisible:
-    text: Steer
-    enabled: true
-- tapOn:
-    text: Steer
-    enabled: true
-- assertVisible:
-    text: Steer
-    checked: true
-- tapOn: Queue
-- assertVisible:
-    text: Queue
-    checked: true
+- assertNotVisible: Queue
+- assertNotVisible: Steer
 
 - tapOn:
     id: agent-input-message
