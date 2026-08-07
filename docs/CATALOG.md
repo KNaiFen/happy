@@ -39,10 +39,6 @@
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 
-## 活动计划
-
-- [App 排队消息连续堆叠与锚定菜单实施计划](./plans/app-queue-dock-and-anchored-menu.md)
-
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
@@ -104,6 +100,7 @@
 - [2026-08-06 安全、恢复与输入队列修复台账](./plans/archive/2026-08-06-remediation-ledger.md)
 - [Agent SDK Upgrade + Plan Mode Fix + Integration Tests](./plans/archive/agent-sdk-upgrade-plan-mode-fix.md)
 - [Agent Testing Layers](./plans/archive/agent-testing-layers.md)
+- [App 排队消息连续堆叠与锚定菜单实施计划](./plans/archive/app-queue-dock-and-anchored-menu.md)
 - [App 排队消息堆栈与会话恢复资格实施计划](./plans/archive/app-queue-stack-and-resume-eligibility.md)
 - [CLI V3 Messages API Migration (happy-cli)](./plans/archive/cli-v3-messages-api.md)
 - [Codex Agent 指令与 Claude 遗留清理计划](./plans/archive/codex-agent-instructions-migration.md)

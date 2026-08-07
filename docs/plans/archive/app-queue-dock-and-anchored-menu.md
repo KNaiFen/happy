@@ -2,12 +2,12 @@
 
 ## 状态
 
-- 当前状态：进行中，首个云端 App 校验已暴露并修复 Pressable ref 的跨 React 类型副本推导问题；等待 `1.11.37` 提交、推送和干净云端环境的 Actions 验收。
+- 当前状态：已完成。实现与云端发行验收于 2026-08-07 完成；真机外观抽查已转入本机 `open-items`，不阻塞已发布实现的归档。
 - 建立日期：2026-08-07。
 - 实施分支：`fix/app-queue-resume-eligibility`。
 - 基线：`origin/main@ff784dcfd24e617d59d555380296bbd40e91c8da`。
 - 目标版本：`packages/happy-app` `1.11.37`。`1.11.36` 已进入并失败于云端 TypeScript 校验，不能复用。
-- 关联决策：恢复资格的产品边界以 [ADR-005](../decisions/ADR-005-daemon-resume-eligibility-preflight.md) 为准；本计划只改 App 的队列呈现和队列操作菜单，不放宽恢复资格判断。
+- 关联决策：恢复资格的产品边界以 [ADR-005](../../decisions/ADR-005-daemon-resume-eligibility-preflight.md) 为准；本计划只改 App 的队列呈现和队列操作菜单，不放宽恢复资格判断。
 
 ## 背景与现场依据
 
@@ -159,6 +159,8 @@ height = visibleRows == 0 ? 0 : 40 + (visibleRows - 1) * 29
 - 重新启动独立服务时，Metro 又因 macOS watcher 上限返回 `EMFILE`；已有的失败进程经过 cwd 确认属于本 worktree，但系统拒绝停止该进程的权限请求，未绕过该限制。
 - 因此本机只把 `tsc`、Vitest、翻译比较和 docs 检查作为有效证据。运行时队列视觉、键盘跟随和原生 safe-area 必须由干净 checkout 的 GitHub Actions 或可用真机现场复核。
 - `1.11.36` 的 Android 工作流 `31177409566` 在云端 `tsc --noEmit` 失败：`React.ComponentRef<typeof Pressable>` 推导为 `never`，使 ref 及 `measureInWindow` 回调类型不兼容。修复改用仅描述 `measureInWindow` 的结构化接口；该版本已运行，不得重用。
+- `1.11.37` 的 Android 工作流 [`31177983021`](https://github.com/KNaiFen/happy/actions/runs/31177983021) 在提交 `7b4465f8` 上成功：版本检测、完整 App TypeScript、全量 App Vitest、Android 项目/manifest/签名校验、ARM64 APK 构建、版本/SDK/OTA/签名/16KB 对齐校验与上传均通过。Artifact 为 `happy-app-1.11.37-android-arm64-v8a-no-ota`（ID `8994215782`，69,831,411 bytes）。
+- GitHub Actions 验证构建与制品契约，但不会渲染队列 UI；本机 Metro 不可用时不将空白页面作为视觉证据。0/1/4/5+、主题、键盘和边缘菜单的真机抽查已转入 `.agents/open-items.md`。
 
 ### 命令门槛
 
@@ -176,14 +178,14 @@ pnpm docs:check
 
 本机缺少全局 `pnpm` 时，使用仓库已有的 package-local binary 做等价源码检查，并在最终验证报告中列出实际命令；不以本地发行构建替代 Actions 证据。
 
-## 当前未完成项
+## 完成记录
 
 - [x] 连续堆叠几何与队列操作菜单实现。
 - [x] 锚定定位 helper 与边缘边界测试。
 - [x] App 类型检查与目标测试通过（使用 package-local binary 复核：Vitest `4` 文件/`46` 项、`tsc --noEmit --incremental false`）。
 - [x] 首次调整 `happy-app` 到 `1.11.36` 并完成翻译比较；新增紧凑引导短标签已覆盖全部支持 locale。
 - [x] 运行 `docs:sync`/`docs:check`，确认生成索引只包含已暂存快照。
-- [ ] 完成干净环境的 Web/原生现场截图和 0/1/4/5+、主题、键盘、边缘菜单验收（本机阻塞原因见上）。
 - [x] 完成 findings-first code review，已修复引导短标签撑破操作触控区的问题。
-- [ ] 提交 Pressable ref 类型修复与 `1.11.37`，推送 `origin/main`，等待并记录匹配 Actions 终态。
-- [ ] 成功后更新计划状态并移入 `docs/plans/archive/`。
+- [x] 修复 Pressable ref 类型、将已运行失败的 `1.11.36` 前进到 `1.11.37`，并推送 `origin/main`。
+- [x] Android 工作流 `31177983021` 成功，Artifact `happy-app-1.11.37-android-arm64-v8a-no-ota` 已上传。
+- [x] 将无法在本机完成的真机视觉抽查转入 `.agents/open-items.md`；本计划只保留已完成的工程与发行证据。
