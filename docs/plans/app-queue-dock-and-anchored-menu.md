@@ -2,11 +2,11 @@
 
 ## 状态
 
-- 当前状态：进行中，代码、源码验证、翻译比较、文档索引与独立审查已完成；等待提交、推送和干净云端环境的 Actions 验收。
+- 当前状态：进行中，首个云端 App 校验已暴露并修复 Pressable ref 的跨 React 类型副本推导问题；等待 `1.11.37` 提交、推送和干净云端环境的 Actions 验收。
 - 建立日期：2026-08-07。
 - 实施分支：`fix/app-queue-resume-eligibility`。
 - 基线：`origin/main@ff784dcfd24e617d59d555380296bbd40e91c8da`。
-- 目标版本：`packages/happy-app` `1.11.36`。
+- 目标版本：`packages/happy-app` `1.11.37`。`1.11.36` 已进入并失败于云端 TypeScript 校验，不能复用。
 - 关联决策：恢复资格的产品边界以 [ADR-005](../decisions/ADR-005-daemon-resume-eligibility-preflight.md) 为准；本计划只改 App 的队列呈现和队列操作菜单，不放宽恢复资格判断。
 
 ## 背景与现场依据
@@ -130,7 +130,7 @@ height = visibleRows == 0 ? 0 : 40 + (visibleRows - 1) * 29
 - `sources/components/anchoredActionMenuPlacement.ts`：纯定位计算，禁止依赖 React Native 或窗口副作用。
 - `sources/components/AgentInput.tsx`：队列 dock 与 composer 前景层级、横向内缩和溢出边界。
 - `sources/components/*.test.ts`：几何和定位边界；协议与 projection 现有测试继续作为回归门槛。
-- `packages/happy-app/package.json`：行为变更 patch 版本 `1.11.36`。
+- `packages/happy-app/package.json`：行为变更 patch 版本 `1.11.37`。
 - `docs/plans/`：本计划在全部检查完成前保持活动；完成后移入 archive 并保留证据。
 
 ## 验证矩阵
@@ -158,6 +158,7 @@ height = visibleRows == 0 ? 0 : 40 + (visibleRows - 1) * 29
 - 2026-08-07 已用 Playwright 打开隔离 worktree 的 Expo Web 服务。Metro 返回 HTTP 500，原因为 worktree 的 pnpm 符号链接布局下无法解析 `expo-router/entry`；页面未挂载，不能用空白截图为队列视觉背书。
 - 重新启动独立服务时，Metro 又因 macOS watcher 上限返回 `EMFILE`；已有的失败进程经过 cwd 确认属于本 worktree，但系统拒绝停止该进程的权限请求，未绕过该限制。
 - 因此本机只把 `tsc`、Vitest、翻译比较和 docs 检查作为有效证据。运行时队列视觉、键盘跟随和原生 safe-area 必须由干净 checkout 的 GitHub Actions 或可用真机现场复核。
+- `1.11.36` 的 Android 工作流 `31177409566` 在云端 `tsc --noEmit` 失败：`React.ComponentRef<typeof Pressable>` 推导为 `never`，使 ref 及 `measureInWindow` 回调类型不兼容。修复改用仅描述 `measureInWindow` 的结构化接口；该版本已运行，不得重用。
 
 ### 命令门槛
 
@@ -180,9 +181,9 @@ pnpm docs:check
 - [x] 连续堆叠几何与队列操作菜单实现。
 - [x] 锚定定位 helper 与边缘边界测试。
 - [x] App 类型检查与目标测试通过（使用 package-local binary 复核：Vitest `4` 文件/`46` 项、`tsc --noEmit --incremental false`）。
-- [x] 调整 `happy-app` 到 `1.11.36` 并完成翻译比较；新增紧凑引导短标签已覆盖全部支持 locale。
+- [x] 首次调整 `happy-app` 到 `1.11.36` 并完成翻译比较；新增紧凑引导短标签已覆盖全部支持 locale。
 - [x] 运行 `docs:sync`/`docs:check`，确认生成索引只包含已暂存快照。
 - [ ] 完成干净环境的 Web/原生现场截图和 0/1/4/5+、主题、键盘、边缘菜单验收（本机阻塞原因见上）。
 - [x] 完成 findings-first code review，已修复引导短标签撑破操作触控区的问题。
-- [ ] 提交中文 commit、推送 `origin/main`，等待并记录匹配 Actions 终态。
+- [ ] 提交 Pressable ref 类型修复与 `1.11.37`，推送 `origin/main`，等待并记录匹配 Actions 终态。
 - [ ] 成功后更新计划状态并移入 `docs/plans/archive/`。

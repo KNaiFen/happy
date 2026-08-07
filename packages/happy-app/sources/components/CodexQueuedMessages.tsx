@@ -37,8 +37,9 @@ import {
 
 type QueueActionKind = 'edit' | 'steer' | 'remove';
 type QueueAction = { commandId: string; type: QueueActionKind } | null;
-type Measurable = Pick<React.ComponentRef<typeof Pressable>, 'measureInWindow'>;
-type PressableRef = React.ComponentRef<typeof Pressable>;
+type Measurable = {
+    measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void;
+};
 
 function setWebTitle(node: unknown, title: string) {
     if (Platform.OS === 'web' && node) {
@@ -49,7 +50,7 @@ function setWebTitle(node: unknown, title: string) {
 function QueueActionButton(props: {
     accessibilityLabel: string;
     busy?: boolean;
-    buttonRef?: React.Ref<PressableRef>;
+    buttonRef?: (node: Measurable | null) => void;
     children: React.ReactNode;
     disabled: boolean;
     onPress: () => void;
