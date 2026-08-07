@@ -6,8 +6,11 @@
 - 建立日期：2026-08-06。
 - 实施分支：`fix/app-queue-resume-eligibility`，基线为
   `origin/main@0a8e48f90af400ce67c42fd92dee36436cd16b08`。
-- 目标版本：Android App `1.11.34`、CLI `1.4.45`；Wire、Server、Relay 和
+- 目标版本：Android App `1.11.35`、CLI `1.4.46`；Wire、Server、Relay 和
   happy-agent 不改版本。
+- 发布重试：`1.11.34` / `1.4.45` 的 GitHub Actions run 在取消、重跑和强制取消接口
+  上返回相互矛盾的控制面状态，无法安全复用。按版本不可复用规则，以无行为差异的下一
+  patch 触发全新的发布工作流。
 - 完成条件：本计划的代码、源码级测试、翻译、视觉验收、文档检查、独立审查、
   云端 App/CLI 工作流和制品交付全部完成后，移入 `docs/plans/archive/`。
 
@@ -194,7 +197,7 @@ provider 原文或异常堆栈。
 - [x] 完成源码级测试、类型检查、翻译、文档、安全和 diff 验证。
 - [x] 完成桌面/移动、浅色/深色、1/2/3/4+ 条队列的 Playwright 截图验收。
 - [ ] 提交、对齐 `origin/main`、推送 `origin/main` 并等待 App/CLI 云端工作流。
-- [ ] CLI 成功后下载并验证 `happy-1.4.45.tgz`；Android 只交付 Artifact URL。
+- [ ] CLI 成功后下载并验证 `happy-1.4.46.tgz`；Android 只交付 Artifact URL。
 
 ## 验证矩阵
 
