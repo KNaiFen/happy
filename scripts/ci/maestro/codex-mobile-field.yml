@@ -97,13 +97,13 @@ tags:
     id: agent-input-send
 - extendedWaitUntil:
     visible:
-      id: codex-queued-message-more
+      id: "codex-queued-message-more-.*"
     timeout: 30000
 - assertVisible: Send to active turn
 - assertVisible: Remove queued message
 - assertVisible: Q
 - tapOn:
-    id: codex-queued-message-more
+    id: "codex-queued-message-more-.*"
 - extendedWaitUntil:
     visible: Edit queued message
     timeout: 30000
