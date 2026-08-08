@@ -2,12 +2,42 @@
 
 ## 状态
 
-- 当前状态：进行中。
+- 当前状态：本地实现、源码验证与两轮独立审查完成；等待推送及云端验收。
 - 建立日期：2026-08-08。
 - 实施分支：`fix/codex-request-resolution`。
 - 基线：`origin/main@01a2278c033e279da1ca0a52cefdbfb6746a1b15`。
 - 目标版本：`packages/happy-app` `1.11.40`；CLI 保持 `1.4.46`，Wire 保持 `0.1.8`。
 - 权威边界：[ADR-001](../decisions/ADR-001-codex-sync-v4.md) 规定命令不可变、未知结果不可重放和 provider request ID 精确绑定；[权限解析](../permission-resolution.md) 规定 pending request 必须由持久 Sync v4 实体恢复，传输中断不代表请求完成。
+
+## 实施进度（2026-08-08）
+
+本地实现已经覆盖本计划定义的完整行为边界：
+
+- App 的当前 provider 命令从选中 thread 的 runtime projection 取得 Gateway generation；中央发布入口会在已有 Gateway、命令却缺 generation 时于持久 outbox 前拒绝。队列 edit/cancel/steer 仍保留原命令 generation。
+- 请求交互状态改为由 `codex.request`、`codex.command` 和 `codex.commandResult` 纯投影得到，并以 `(threadId, requestId)` 为唯一关联键。七态、确定性最新 attempt、request 终态优先和增量 affected 重投影均已实现。
+- 普通问答、MCP elicitation 与审批都从持久 attempt 恢复选择、提交中、等待确认、可重试失败、结果未知与不可用状态。`request.resolve` 命令及结果不会生成独立控制卡。
+- 命令已经写入持久 outbox、但本地乐观投影失败时，App 将本次提交视为 `outcomeUnknown` 并锁住重复操作；只有明确发生在持久化前的失败才恢复重试。
+- 等待用户回答的请求不再显示普通工具 spinner 或持续增长的 elapsed timer；非请求工具的运行外观不变。
+- Android Field E2E 已改为在 MCP elicitation pending 且 `Q` 已进入 durable queue 时杀死 App；恢复流从原请求卡片恢复选择并提交。独立 provider sentinel 证明 `Q` 真正到达 provider，最终解密 Sync v4 snapshot 证明 runtime connected/idle、pending count 为零、所有 request 非 pending 且所有 turn completed。
+- `happy-app` 已从 `1.11.39` 提升到尚未运行过发布工作流的 `1.11.40`；CLI `1.4.46` 与 Wire `0.1.8` 未变。
+
+当前本地实现审查基点为 `5d299098`。两轮 findings-first 独立审查均已完成；首轮发现并修复了 `request.resolve` 带 `displayText` 时的独立消息投影、持久化后投影失败时的重复提交风险、`Q` 未被 provider 实质证明以及 turn 终态验收不足。修正后的第二轮 App 安全边界与 Android E2E 审查均无 Critical 或 Important finding。
+
+## 本地验证证据（2026-08-08）
+
+| 验证面 | 结果 |
+| --- | --- |
+| App 定向 Vitest | 9 个文件，125/125 通过。 |
+| CLI 定向 Vitest | 5 个文件，142/142 通过。 |
+| Responses fixture Vitest | 1 个文件，9/9 通过；旧默认工具和新 elicitation/queued follow-up 分支均覆盖。 |
+| TypeScript | `happy-app` 与 `happy` 的 `tsc --noEmit` 均通过。 |
+| Android fixture 类型 | 使用临时独立 tsconfig 编译通过；临时文件已删除。 |
+| 静态格式与语法 | Android E2E shell、MCP Node 脚本和两份 Maestro YAML 均通过解析；`git diff --check` 通过。 |
+| 本地化 | 10 个 locale 均为 857 个 key；结构一致，报告中的未翻译字符串均为既存项。 |
+| 知识库 | 150 份 Markdown/MDX 同步检查通过。 |
+| 独立复审 | 修正后 App 目标测试 6 个 spec、110 tests 通过；CLI executor 22 tests 通过；App 与 Android E2E 均无 Critical/Important finding。 |
+
+按项目云端构建边界，本地没有构建 Android APK、官方 Codex、CLI 制品、Web bundle 或 Tauri。它们必须由下述精确 GitHub Actions 对推送后的提交完成验收。
 
 ## 现场与根因
 
@@ -272,13 +302,16 @@ pnpm docs:check
 
 ## 执行步骤
 
-- [ ] 建立详细活动计划并通过 docs 同步检查。
-- [ ] 完成 generation helper、直接命令补齐和中央缺失校验。
-- [ ] 完成七态纯投影、thread-scoped 索引与内部控制卡抑制。
-- [ ] 改造三个请求交互组件与 ToolView，更新全部 locale。
-- [ ] 补齐 App/CLI 单测与组件级行为测试。
-- [ ] 扩展真实 MCP elicitation Android Field E2E。
-- [ ] 提升 App patch 版本并执行全部本地源码检查。
-- [ ] 完成 findings-first 独立审查并修复全部 blocking findings。
-- [ ] 更新当前文档、归档本计划、运行 docs:sync/docs:check。
-- [ ] 分步中文提交，推送 `origin/main`，监控全部 Actions 并交付 Artifact URL。
+- [x] 建立详细活动计划并通过 docs 同步检查。
+- [x] 完成 generation helper、直接命令补齐和中央缺失校验。
+- [x] 完成七态纯投影、thread-scoped 索引与内部控制卡抑制。
+- [x] 改造三个请求交互组件与 ToolView，更新全部 locale。
+- [x] 补齐 App/CLI 单测与组件级行为测试。
+- [x] 扩展真实 MCP elicitation Android Field E2E。
+- [x] 提升 App patch 版本并执行全部本地源码检查。
+- [x] 完成两轮 findings-first 独立审查并修复全部 blocking findings。
+- [x] 更新当前文档并运行本地 `docs:sync` / `docs:check`。
+- [x] 将本地实现、测试和版本变更拆分为中文提交。
+- [ ] 推送当前 HEAD 到 `origin/main`，确认 Documentation、Monorepo CI、Android Release 与 Official Codex API 36 Field E2E 都针对精确 HEAD 成功。
+- [ ] 记录 workflow run ID、URL、成功结论和 Android Artifact URL，将本计划标记完成并移入 `docs/plans/archive/`。
+- [ ] 对归档文档提交再次运行知识库检查、推送并确认最终文档 HEAD 的必需检查。
