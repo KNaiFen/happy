@@ -942,8 +942,193 @@ describe('Codex v4 projection', () => {
             tool: {
                 name: 'AskUserQuestion',
                 permission: { id: 'elicitation-1', status: 'pending' },
+                requestInteraction: { state: 'awaitingInput' },
             },
         }]);
+    });
+
+    it('reprojects request resolution attempts into the source card without control cards', () => {
+        const request: CodexRequestEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.request',
+            providerId: 'elicitation-durable',
+            createdAt: 12,
+            updatedAt: 12,
+            requestId: 'request-durable',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            itemId: null,
+            requestType: 'toolUserInput',
+            status: 'pending',
+            title: 'MCP input',
+            prompt: 'Choose a value',
+            options: { requestMethod: 'mcpServer/elicitation/request' },
+            response: null,
+            resolvedAt: null,
+        };
+        const response = { action: 'accept', content: { choice: 'resume' } };
+        const firstCommand: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'resolve-first',
+            createdAt: 20,
+            updatedAt: 20,
+            commandId: 'resolve-first',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-1',
+            command: 'request.resolve',
+            payload: { requestId: 'request-durable', response },
+            clientUserMessageId: 'resolve-first',
+            replacesCommandId: null,
+            bindingGeneration: 1,
+        };
+        const firstFailure: CodexCommandResultEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'resolve-first-result',
+            createdAt: 21,
+            updatedAt: 21,
+            commandId: 'resolve-first',
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            status: 'cancelled',
+            providerRequestId: null,
+            result: null,
+            error: 'binding superseded',
+            reason: 'bindingSuperseded',
+        };
+        let projection = apply(createCodexV4Projection(), request);
+        expect(projection.messages[0]).toMatchObject({
+            tool: { requestInteraction: { state: 'awaitingInput' } },
+        });
+
+        projection = apply(projection, firstCommand);
+        expect(projection.messages[0]).toMatchObject({
+            tool: {
+                requestInteraction: {
+                    state: 'submitting',
+                    commandId: 'resolve-first',
+                    response,
+                },
+            },
+        });
+
+        projection = apply(projection, firstFailure);
+        expect(projection.messages).toHaveLength(1);
+        expect(projection.messages[0]).toMatchObject({
+            id: 'codex-v4:request:elicitation-durable',
+            tool: {
+                name: 'AskUserQuestion',
+                requestInteraction: {
+                    state: 'retryableError',
+                    error: 'binding superseded',
+                },
+            },
+        });
+
+        projection = applyCodexV4ProjectionUpdate(projection, {
+            entity: { ...firstFailure, updatedAt: 22 },
+            revision: 2,
+            op: 'delete',
+        });
+        expect(projection.messages[0]).toMatchObject({
+            tool: { requestInteraction: { state: 'submitting', commandId: 'resolve-first' } },
+        });
+        projection = apply(projection, { ...firstFailure, updatedAt: 23 }, 3);
+        expect(projection.messages[0]).toMatchObject({
+            tool: { requestInteraction: { state: 'retryableError' } },
+        });
+
+        const retryCommand: CodexCommandEntityV4 = {
+            ...firstCommand,
+            providerId: 'resolve-retry',
+            createdAt: 30,
+            updatedAt: 30,
+            commandId: 'resolve-retry',
+            clientUserMessageId: 'resolve-retry',
+            bindingGeneration: 2,
+        };
+        projection = apply(projection, retryCommand);
+        expect(projection.messages[0]).toMatchObject({
+            tool: { requestInteraction: { state: 'submitting', commandId: 'resolve-retry' } },
+        });
+
+        projection = apply(projection, {
+            ...firstFailure,
+            providerId: 'resolve-retry-result',
+            createdAt: 31,
+            updatedAt: 31,
+            commandId: 'resolve-retry',
+            status: 'succeeded',
+            error: null,
+            reason: null,
+        });
+        expect(projection.messages[0]).toMatchObject({
+            tool: { requestInteraction: { state: 'awaitingConfirmation' } },
+        });
+
+        projection = apply(projection, {
+            ...request,
+            status: 'accepted',
+            response,
+            resolvedAt: 32,
+            updatedAt: 32,
+        }, 2);
+        expect(projection.messages[0]).toMatchObject({
+            tool: {
+                state: 'completed',
+                requestInteraction: { state: 'settled', response },
+            },
+        });
+    });
+
+    it('isolates reused request ids by thread in the projection indexes', () => {
+        const requestForThread = (threadId: string): CodexRequestEntityV4 => ({
+            schemaVersion: 1,
+            entityType: 'codex.request',
+            providerId: `request-${threadId}`,
+            createdAt: threadId === 'thread-1' ? 10 : 11,
+            updatedAt: threadId === 'thread-1' ? 10 : 11,
+            requestId: 'request-reused',
+            threadId,
+            turnId: null,
+            itemId: null,
+            requestType: 'toolUserInput',
+            status: 'pending',
+            title: null,
+            prompt: 'Choose',
+            options: {},
+            response: null,
+            resolvedAt: null,
+        });
+        const secondThreadCommand: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'resolve-thread-2',
+            createdAt: 12,
+            updatedAt: 12,
+            commandId: 'resolve-thread-2',
+            threadId: 'thread-2',
+            expectedTurnId: null,
+            command: 'request.resolve',
+            payload: { requestId: 'request-reused', response: { answers: {} } },
+            clientUserMessageId: 'resolve-thread-2',
+            replacesCommandId: null,
+        };
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: requestForThread('thread-1'), revision: 1, op: 'upsert' },
+            { entity: requestForThread('thread-2'), revision: 1, op: 'upsert' },
+            { entity: secondThreadCommand, revision: 1, op: 'upsert' },
+        ]);
+        const states = Object.fromEntries(projection.messages.map((message) => [
+            message.id,
+            message.kind === 'tool-call' ? message.tool.requestInteraction?.state : null,
+        ]));
+
+        expect(states).toEqual({
+            'codex-v4:request:request-thread-1': 'awaitingInput',
+            'codex-v4:request:request-thread-2': 'submitting',
+        });
     });
 
     it('links a delegation item to its isolated child Happy session', () => {

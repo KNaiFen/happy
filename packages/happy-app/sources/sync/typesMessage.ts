@@ -7,6 +7,22 @@ export type CodexMessageOrder = {
     codexEventSequence?: number;
 };
 
+export type CodexRequestInteractionState =
+    | 'awaitingInput'
+    | 'submitting'
+    | 'awaitingConfirmation'
+    | 'retryableError'
+    | 'outcomeUnknown'
+    | 'unavailable'
+    | 'settled';
+
+export type CodexRequestInteraction = {
+    state: CodexRequestInteractionState;
+    commandId: string | null;
+    response: unknown;
+    error: string | null;
+};
+
 export type ToolCall = {
     name: string;
     state: 'running' | 'completed' | 'error';
@@ -16,6 +32,7 @@ export type ToolCall = {
     completedAt: number | null;
     description: string | null;
     result?: any;
+    requestInteraction?: CodexRequestInteraction;
     permission?: {
         id: string;
         status: 'pending' | 'approved' | 'denied' | 'canceled';

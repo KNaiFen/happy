@@ -14,6 +14,11 @@ import type {
 } from '@slopus/happy-wire';
 import type { Message, ToolCall, ToolCallMessage } from './typesMessage';
 import type { CodexV4RegistrySyncState } from './codexV4ClientRegistry';
+import {
+    codexRequestKey,
+    codexRequestResolutionKey,
+    deriveCodexRequestInteraction,
+} from './codexRequestInteraction';
 
 type EntityOfType<T extends CodexEntityType> = Extract<CodexEntityV4, { entityType: T }>;
 
@@ -27,8 +32,11 @@ interface CodexV4ProjectionIndexes {
     itemProviderIdsByTurn: Record<string, string[]>;
     partProviderIdsByItem: Record<string, string[]>;
     requestProviderIdsByItem: Record<string, string[]>;
+    requestProviderIdsByRequestKey: Record<string, string[]>;
+    requestResolutionCommandProviderIdsByRequestKey: Record<string, string[]>;
     relationProviderIdsByItem: Record<string, string[]>;
     commandProviderIdByCommandId: Record<string, string>;
+    requestKeyByResolutionCommandId: Record<string, string>;
     commandProviderIdsByClientId: Record<string, string[]>;
     commandResultProviderIdsByCommandId: Record<string, string[]>;
     providerUserItemProviderIdsByClientId: Record<string, string[]>;
@@ -177,8 +185,11 @@ function createProjectionIndexes(): CodexV4ProjectionIndexes {
         itemProviderIdsByTurn: {},
         partProviderIdsByItem: {},
         requestProviderIdsByItem: {},
+        requestProviderIdsByRequestKey: {},
+        requestResolutionCommandProviderIdsByRequestKey: {},
         relationProviderIdsByItem: {},
         commandProviderIdByCommandId: {},
+        requestKeyByResolutionCommandId: {},
         commandProviderIdsByClientId: {},
         commandResultProviderIdsByCommandId: {},
         providerUserItemProviderIdsByClientId: {},
@@ -434,6 +445,8 @@ type GroupIndexName =
     | 'itemProviderIdsByTurn'
     | 'partProviderIdsByItem'
     | 'requestProviderIdsByItem'
+    | 'requestProviderIdsByRequestKey'
+    | 'requestResolutionCommandProviderIdsByRequestKey'
     | 'relationProviderIdsByItem'
     | 'commandProviderIdsByClientId'
     | 'commandResultProviderIdsByCommandId'
@@ -443,7 +456,8 @@ type GroupIndexName =
 type DirectIndexName =
     | 'turnProviderIdByKey'
     | 'itemProviderIdByKey'
-    | 'commandProviderIdByCommandId';
+    | 'commandProviderIdByCommandId'
+    | 'requestKeyByResolutionCommandId';
 
 class ProjectionIndexBuilder {
     private readonly groupChanges = new Map<GroupIndexName, Map<string, Set<string>>>();
@@ -606,6 +620,15 @@ function collectAffectedOwners(
         }
         case 'codex.command':
             affected.commands.add(entity.providerId);
+            {
+                const requestKey = codexRequestResolutionKey(entity);
+                if (requestKey) {
+                    for (const providerId of indexes.getGroup(
+                        'requestProviderIdsByRequestKey',
+                        requestKey,
+                    )) affected.requests.add(providerId);
+                }
+            }
             for (const providerId of indexes.getGroup(
                 'commandResultProviderIdsByCommandId',
                 entity.commandId,
@@ -618,6 +641,16 @@ function collectAffectedOwners(
         case 'codex.commandResult':
             affected.commandResults.add(entity.providerId);
             {
+                const requestKey = indexes.getDirect(
+                    'requestKeyByResolutionCommandId',
+                    entity.commandId,
+                );
+                if (requestKey) {
+                    for (const providerId of indexes.getGroup(
+                        'requestProviderIdsByRequestKey',
+                        requestKey,
+                    )) affected.requests.add(providerId);
+                }
                 const commandProviderId = indexes.getDirect(
                     'commandProviderIdByCommandId',
                     entity.commandId,
@@ -675,6 +708,11 @@ function addEntityToIndexes(entity: CodexEntityV4, indexes: ProjectionIndexBuild
             );
             return;
         case 'codex.request':
+            indexes.addGroup(
+                'requestProviderIdsByRequestKey',
+                codexRequestKey(entity.threadId, entity.requestId),
+                entity.providerId,
+            );
             if (entity.turnId !== null && entity.itemId !== null) {
                 indexes.addGroup(
                     'requestProviderIdsByItem',
@@ -686,6 +724,21 @@ function addEntityToIndexes(entity: CodexEntityV4, indexes: ProjectionIndexBuild
         case 'codex.command':
             indexes.setDirect('commandProviderIdByCommandId', entity.commandId, entity.providerId);
             indexes.addGroup('commandProviderIdsByClientId', entity.clientUserMessageId, entity.providerId);
+            {
+                const requestKey = codexRequestResolutionKey(entity);
+                if (requestKey) {
+                    indexes.setDirect(
+                        'requestKeyByResolutionCommandId',
+                        entity.commandId,
+                        requestKey,
+                    );
+                    indexes.addGroup(
+                        'requestResolutionCommandProviderIdsByRequestKey',
+                        requestKey,
+                        entity.providerId,
+                    );
+                }
+            }
             if (entity.replacesCommandId) {
                 indexes.addGroup(
                     'replacementCommandProviderIdsByCommandId',
@@ -746,6 +799,11 @@ function removeEntityFromIndexes(entity: CodexEntityV4, indexes: ProjectionIndex
             );
             return;
         case 'codex.request':
+            indexes.removeGroup(
+                'requestProviderIdsByRequestKey',
+                codexRequestKey(entity.threadId, entity.requestId),
+                entity.providerId,
+            );
             if (entity.turnId !== null && entity.itemId !== null) {
                 indexes.removeGroup(
                     'requestProviderIdsByItem',
@@ -759,6 +817,19 @@ function removeEntityFromIndexes(entity: CodexEntityV4, indexes: ProjectionIndex
                 indexes.setDirect('commandProviderIdByCommandId', entity.commandId, null);
             }
             indexes.removeGroup('commandProviderIdsByClientId', entity.clientUserMessageId, entity.providerId);
+            {
+                const requestKey = codexRequestResolutionKey(entity);
+                if (requestKey) {
+                    if (indexes.getDirect('requestKeyByResolutionCommandId', entity.commandId) === requestKey) {
+                        indexes.setDirect('requestKeyByResolutionCommandId', entity.commandId, null);
+                    }
+                    indexes.removeGroup(
+                        'requestResolutionCommandProviderIdsByRequestKey',
+                        requestKey,
+                        entity.providerId,
+                    );
+                }
+            }
             if (entity.replacesCommandId) {
                 indexes.removeGroup(
                     'replacementCommandProviderIdsByCommandId',
@@ -812,11 +883,19 @@ function indexMembership(entity: CodexEntityV4): string[] {
         case 'codex.part':
             return [itemKey(entity.threadId, entity.turnId, entity.itemId)];
         case 'codex.request':
-            return [entity.turnId !== null && entity.itemId !== null
-                ? itemKey(entity.threadId, entity.turnId, entity.itemId)
-                : ''];
+            return [
+                codexRequestKey(entity.threadId, entity.requestId),
+                entity.turnId !== null && entity.itemId !== null
+                    ? itemKey(entity.threadId, entity.turnId, entity.itemId)
+                    : '',
+            ];
         case 'codex.command':
-            return [entity.commandId, entity.clientUserMessageId, entity.replacesCommandId ?? ''];
+            return [
+                entity.commandId,
+                entity.clientUserMessageId,
+                entity.replacesCommandId ?? '',
+                codexRequestResolutionKey(entity) ?? '',
+            ];
         case 'codex.commandResult':
             return [entity.commandId];
         case 'codex.relation':
@@ -840,6 +919,29 @@ function projectAffectedMessages(
 ): Message[] {
     const affectedMessageIds = new Set<string>();
     const projected: Message[] = [];
+
+    for (const providerId of affected.commands) {
+        const command = entities['codex.command'][providerId];
+        const requestKey = command ? codexRequestResolutionKey(command) : null;
+        if (!requestKey) continue;
+        for (const requestProviderId of indexes.requestProviderIdsByRequestKey[requestKey] ?? []) {
+            affected.requests.add(requestProviderId);
+        }
+    }
+    for (const providerId of affected.commandResults) {
+        const result = entities['codex.commandResult'][providerId];
+        const commandProviderId = result
+            ? indexes.commandProviderIdByCommandId[result.commandId]
+            : undefined;
+        const command = commandProviderId
+            ? entities['codex.command'][commandProviderId]
+            : undefined;
+        const requestKey = command ? codexRequestResolutionKey(command) : null;
+        if (!requestKey) continue;
+        for (const requestProviderId of indexes.requestProviderIdsByRequestKey[requestKey] ?? []) {
+            affected.requests.add(requestProviderId);
+        }
+    }
 
     for (const providerId of affected.items) {
         affectedMessageIds.add(itemMessageId(providerId));
@@ -867,6 +969,8 @@ function projectAffectedMessages(
             turnProviderId ? entities['codex.turn'][turnProviderId] : undefined,
             relation ?? undefined,
             requests,
+            entities,
+            indexes,
         );
         if (message) projected.push(message);
     }
@@ -882,7 +986,7 @@ function projectAffectedMessages(
                 ? entities['codex.item'][parentItemProviderId]
                 : undefined;
             if (!parentItem || request.requestType === 'toolUserInput') {
-                projected.push(projectRequestMessage(request, parentItem));
+                projected.push(projectRequestMessage(request, parentItem, entities, indexes));
             }
         }
     }
@@ -1056,6 +1160,7 @@ function shouldProjectCommandResult(
     result: CodexCommandResultEntityV4,
     command: CodexCommandEntityV4 | undefined,
 ): boolean {
+    if (command?.command === 'request.resolve') return false;
     if (command?.command === 'turn.queue') {
         const status = commandResultStatus(result);
         return status === 'failed'
@@ -1104,6 +1209,8 @@ function projectItem(
     turn: CodexTurnEntityV4 | undefined,
     relation: CodexRelationEntityV4 | undefined,
     requests: CodexRequestEntityV4[],
+    entities: CodexV4EntityBuckets,
+    indexes: CodexV4ProjectionIndexes,
 ): Message | null {
     const itemType = item.itemType.toLowerCase();
     const createdAt = item.startedAt ?? item.createdAt;
@@ -1165,13 +1272,21 @@ function projectItem(
         return projectRequestMessage(
             pendingRequest,
             item,
+            entities,
+            indexes,
             itemMessageId(item.providerId),
             linkedRequests.filter((request) => request.status === 'pending').length,
         );
     }
     const latestRequest = newestEntity(linkedRequests);
     if (latestRequest && isRejectedRequest(latestRequest)) {
-        return projectRequestMessage(latestRequest, item, itemMessageId(item.providerId));
+        return projectRequestMessage(
+            latestRequest,
+            item,
+            entities,
+            indexes,
+            itemMessageId(item.providerId),
+        );
     }
 
     const tool = projectTool(item, parts, turn, relation);
@@ -1342,6 +1457,8 @@ function projectPermission(request: CodexRequestEntityV4 | undefined): ToolCall[
 function projectRequestMessage(
     request: CodexRequestEntityV4,
     parentItem: CodexItemEntityV4 | undefined,
+    entities: CodexV4EntityBuckets,
+    indexes: CodexV4ProjectionIndexes,
     messageId: string = requestMessageId(request.providerId),
     pendingRequestCount: number = 1,
 ): ToolCallMessage {
@@ -1350,6 +1467,14 @@ function projectRequestMessage(
         ? 'AskUserQuestion'
         : 'CodexApproval';
     const messageCreatedAt = parentItem?.startedAt ?? parentItem?.createdAt ?? request.createdAt;
+    const requestKey = codexRequestKey(request.threadId, request.requestId);
+    const commands = (indexes.requestResolutionCommandProviderIdsByRequestKey[requestKey] ?? [])
+        .map((providerId) => entities['codex.command'][providerId])
+        .filter((entry): entry is CodexCommandEntityV4 => Boolean(entry));
+    const commandResults = commands.flatMap((command) => (
+        indexes.commandResultProviderIdsByCommandId[command.commandId] ?? []
+    ).map((providerId) => entities['codex.commandResult'][providerId])
+        .filter((entry): entry is CodexCommandResultEntityV4 => Boolean(entry)));
     return {
         kind: 'tool-call',
         id: messageId,
@@ -1375,6 +1500,11 @@ function projectRequestMessage(
                 ? null
                 : request.resolvedAt ?? request.updatedAt,
             description: request.title,
+            requestInteraction: deriveCodexRequestInteraction({
+                request,
+                commands,
+                commandResults,
+            }),
             permission: projectPermission(request),
         },
         ...(parentItem ? projectItemOrder(parentItem) : {}),
