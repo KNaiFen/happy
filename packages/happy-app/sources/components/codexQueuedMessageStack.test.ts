@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-    CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS,
     CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET,
+    CODEX_QUEUED_MESSAGE_JOIN_DEPTH,
     resolveCodexQueuedMessageStack,
     resolveCodexQueuedMessageStackHeight,
     resolveCodexQueuedMessageStackInitialOffset,
@@ -20,8 +20,8 @@ describe('resolveCodexQueuedMessageStack', () => {
     });
 
     it('caps the viewport at four 40dp layers with a 29dp visual step', () => {
-        expect(CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS).toBe(30);
         expect(CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET).toBe(14);
+        expect(CODEX_QUEUED_MESSAGE_JOIN_DEPTH).toBe(20);
         expect(resolveCodexQueuedMessageStackHeight(0)).toBe(0);
         expect(resolveCodexQueuedMessageStackHeight(1)).toBe(40);
         expect(resolveCodexQueuedMessageStackHeight(2)).toBe(69);

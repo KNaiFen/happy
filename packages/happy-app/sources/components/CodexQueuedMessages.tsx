@@ -25,8 +25,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { AnchoredMenuRect } from './anchoredActionMenuPlacement';
 import {
-    CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS,
-    CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET,
     CODEX_QUEUED_MESSAGE_JOIN_DEPTH,
     CODEX_QUEUED_MESSAGE_HEIGHT,
     CODEX_QUEUED_MESSAGE_OVERLAP,
@@ -244,13 +242,6 @@ export const CodexQueuedMessages = React.memo(function CodexQueuedMessages(props
                 style={[styles.stack, { height: scrollHeight }]}
                 testID="codex-queued-message-dock"
             >
-                <View
-                    pointerEvents="none"
-                    style={[
-                        styles.composerJoinBridge,
-                        props.glassEnabled && styles.composerJoinBridgeGlass,
-                    ]}
-                />
                 <MobileGlassSurface
                     enabled={props.glassEnabled}
                     nativeEffect
@@ -408,24 +399,6 @@ const styles = StyleSheet.create((theme) => ({
             default: theme.colors.input.background,
         }),
         borderColor: theme.colors.glass.border,
-    },
-    composerJoinBridge: {
-        position: 'absolute',
-        top: '100%',
-        right: -CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET,
-        left: -CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET,
-        height: CODEX_QUEUED_MESSAGE_JOIN_DEPTH,
-        backgroundColor: theme.colors.input.background,
-        zIndex: 0,
-    },
-    composerJoinBridgeGlass: {
-        borderTopLeftRadius: CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS,
-        borderTopRightRadius: CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS,
-        backgroundColor: Platform.select({
-            ios: 'transparent',
-            android: theme.colors.glass.backgroundStrong,
-            default: theme.colors.input.background,
-        }),
     },
     message: {
         height: CODEX_QUEUED_MESSAGE_HEIGHT,
