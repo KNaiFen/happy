@@ -57,7 +57,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 11;
+    schemaVersion: 12;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -79,6 +79,7 @@ interface FieldDiagnostic {
     sessionDataKeyDecryptable: boolean | null;
     sessionMetadataDecryptable: boolean | null;
     sessionMetadataCodexV4: boolean | null;
+    sessionPermissionModeDefault: boolean | null;
     sessionActive: boolean | null;
     v4LifecycleCompleted: boolean;
 }
@@ -174,7 +175,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 11,
+        schemaVersion: 12,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -196,13 +197,14 @@ async function main(): Promise<void> {
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
+        sessionPermissionModeDefault: null,
         sessionActive: null,
         v4LifecycleCompleted: false,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 11,
+            schemaVersion: 12,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -224,6 +226,7 @@ async function main(): Promise<void> {
             sessionDataKeyDecryptable: null,
             sessionMetadataDecryptable: null,
             sessionMetadataCodexV4: null,
+            sessionPermissionModeDefault: null,
             sessionActive: null,
             v4LifecycleCompleted: false,
         });
@@ -255,7 +258,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 11,
+        schemaVersion: 12,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -277,6 +280,7 @@ async function main(): Promise<void> {
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
+        sessionPermissionModeDefault: null,
         sessionActive: null,
         v4LifecycleCompleted: false,
     });
@@ -310,8 +314,7 @@ async function seedOfficialCodexHistory(): Promise<string> {
         await codex.connect();
         const started = await codex.startThread({
             cwd: homedir(),
-            // Official Codex auto-declines non-empty MCP forms under `never`.
-            approvalPolicy: 'on-request',
+            approvalPolicy: 'never',
             sandbox: 'read-only',
         });
         const completed = await codex.sendTurnAndWait('resume-history-from-android-e2e', {
@@ -547,7 +550,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 11,
+        schemaVersion: 12,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -569,6 +572,7 @@ async function verifyFieldRoundTrip(
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
+        sessionPermissionModeDefault: null,
         sessionActive: null,
         v4LifecycleCompleted: false,
     };
@@ -617,6 +621,7 @@ async function verifyFieldRoundTrip(
             diagnostic.sessionDataKeyDecryptable = sessionCrypto.dataKeyDecryptable;
             diagnostic.sessionMetadataDecryptable = sessionCrypto.metadataDecryptable;
             diagnostic.sessionMetadataCodexV4 = sessionCrypto.metadataCodexV4;
+            diagnostic.sessionPermissionModeDefault = sessionCrypto.permissionModeDefault;
             diagnostic.sessionActive = session.active === true;
 
             const v3Response = await fetch(
@@ -670,6 +675,7 @@ async function verifyFieldRoundTrip(
                 && provider?.mcpToolOutputObserved === true
                 && provider?.mcpChoiceAccepted === true
                 && provider?.queuedFollowUpObserved === true
+                && diagnostic.sessionPermissionModeDefault === true
                 && diagnostic.v4LifecycleCompleted
             );
             await persistDiagnostic();
@@ -706,6 +712,7 @@ async function verifyFieldRoundTrip(
             sessionDataKeyDecryptable: diagnostic.sessionDataKeyDecryptable,
             sessionMetadataDecryptable: diagnostic.sessionMetadataDecryptable,
             sessionMetadataCodexV4: diagnostic.sessionMetadataCodexV4,
+            sessionPermissionModeDefault: diagnostic.sessionPermissionModeDefault,
             sessionActive: diagnostic.sessionActive,
             v4LifecycleCompleted: diagnostic.v4LifecycleCompleted,
             verifiedAt: Date.now(),
@@ -721,6 +728,7 @@ async function inspectSessionCrypto(
     dataKeyDecryptable: boolean;
     metadataDecryptable: boolean;
     metadataCodexV4: boolean;
+    permissionModeDefault: boolean;
     sessionKey: Uint8Array | null;
     threadId: string | null;
 }> {
@@ -732,6 +740,7 @@ async function inspectSessionCrypto(
             dataKeyDecryptable: false,
             metadataDecryptable: false,
             metadataCodexV4: false,
+            permissionModeDefault: false,
             sessionKey: null,
             threadId: null,
         };
@@ -743,6 +752,7 @@ async function inspectSessionCrypto(
             dataKeyDecryptable: false,
             metadataDecryptable: false,
             metadataCodexV4: false,
+            permissionModeDefault: false,
             sessionKey: null,
             threadId: null,
         };
@@ -765,6 +775,7 @@ async function inspectSessionCrypto(
             dataKeyDecryptable: false,
             metadataDecryptable: false,
             metadataCodexV4: false,
+            permissionModeDefault: false,
             sessionKey: null,
             threadId: null,
         };
@@ -783,6 +794,7 @@ async function inspectSessionCrypto(
         metadataDecryptable: metadataRecord !== null,
         metadataCodexV4: metadataRecord?.flavor === 'codex'
             && metadataRecord.codexSyncVersion === 4,
+        permissionModeDefault: metadataRecord?.permissionMode === 'default',
         sessionKey: new Uint8Array(dataKey),
         threadId: typeof metadataRecord?.codexThreadId === 'string'
             ? metadataRecord.codexThreadId

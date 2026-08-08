@@ -62,6 +62,20 @@ tags:
     timeout: 60000
 - assertVisible: Official Codex source E2E response
 
+- assertVisible: yolo
+- tapOn:
+    # The Android native settings trigger is a Compose menu without a stable
+    # accessibility node. This is its fixed slot in the compact composer row
+    # on the pinned Pixel 7 profile.
+    point: "21%,93%"
+- extendedWaitUntil:
+    visible: default permissions
+    timeout: 15000
+- tapOn: default permissions
+- extendedWaitUntil:
+    notVisible: yolo
+    timeout: 15000
+
 - tapOn:
     id: agent-input-message
 - setClipboard: H

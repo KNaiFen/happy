@@ -104,7 +104,7 @@ for _ in $(seq 1 600); do
         throw new Error("Invalid mobile field verification marker");
       }
       if (
-        diagnostics.schemaVersion !== 11
+        diagnostics.schemaVersion !== 12
         || diagnostics.phase !== "verified"
         || diagnostics.machineRegistered !== true
         || diagnostics.sessionObserved !== true
@@ -122,6 +122,7 @@ for _ in $(seq 1 600); do
         || diagnostics.sessionDataKeyDecryptable !== true
         || diagnostics.sessionMetadataDecryptable !== true
         || diagnostics.sessionMetadataCodexV4 !== true
+        || diagnostics.sessionPermissionModeDefault !== true
         || diagnostics.sessionActive !== true
         || diagnostics.v4LifecycleCompleted !== true
         || result.officialCodexVersion !== diagnostics.officialCodexVersion
@@ -138,6 +139,7 @@ for _ in $(seq 1 600); do
         || result.sessionDataKeyDecryptable !== true
         || result.sessionMetadataDecryptable !== true
         || result.sessionMetadataCodexV4 !== true
+        || result.sessionPermissionModeDefault !== true
         || result.sessionActive !== true
         || result.v4LifecycleCompleted !== true
         || result.retiredV3MessageRouteStatus !== diagnostics.retiredV3MessageRouteStatus
