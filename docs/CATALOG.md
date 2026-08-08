@@ -39,6 +39,10 @@
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 
+## 活动计划
+
+- [Codex 请求回答可靠性与重启恢复实施计划](./plans/codex-request-resolution-recovery.md)
+
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
