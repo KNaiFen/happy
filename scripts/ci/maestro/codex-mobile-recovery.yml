@@ -54,6 +54,8 @@ tags:
     timeout: 60000
 - assertVisible: Resume after restart
 - assertNotVisible: Waiting for you
+- assertNotVisible: CodexControlCommand
+- assertNotVisible: request.resolve
 - extendedWaitUntil:
     notVisible:
       id: codex-queued-message-dock
@@ -63,6 +65,11 @@ tags:
     direction: DOWN
     timeout: 150000
 - assertVisible: Official Codex MCP E2E response
+- scrollUntilVisible:
+    element: Official Codex queued follow-up E2E response
+    direction: DOWN
+    timeout: 150000
+- assertVisible: Official Codex queued follow-up E2E response
 - assertNotVisible: CodexControlCommand
 - assertNotVisible: request.resolve
 - scrollUntilVisible:

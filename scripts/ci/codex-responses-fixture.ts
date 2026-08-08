@@ -14,6 +14,7 @@ export const OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL = 'Official Codex MCP E2E resp
 export const OFFICIAL_CODEX_TOOL_SENTINEL = 'HAPPY_OFFICIAL_CODEX_TOOL_OK';
 export const OFFICIAL_CODEX_MCP_SENTINEL = 'MCP single-card field verification';
 export const OFFICIAL_CODEX_MCP_CHOICE_SENTINEL = 'MCP restart-safe field choice accepted';
+export const OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL = 'Official Codex queued follow-up E2E response';
 export const OFFICIAL_CODEX_FIELD_MCP_SERVER = 'field_e2e';
 export const OFFICIAL_CODEX_FIELD_MCP_TOOL = 'record_field_event';
 export const OFFICIAL_CODEX_FIELD_ELICITATION_TOOL = 'collect_field_choice';
@@ -39,6 +40,7 @@ export interface CodexResponsesFixtureSnapshot {
     mcpToolCallCount: number;
     mcpToolOutputObserved: boolean;
     mcpChoiceAccepted: boolean;
+    queuedFollowUpObserved: boolean;
     toolNames: string[];
     instructionSentinelObserved: boolean;
     requestShapes: RequestShape[];
@@ -50,6 +52,7 @@ export interface CodexResponsesFixtureOptions {
     fixtureMcpToolName?:
         | typeof OFFICIAL_CODEX_FIELD_MCP_TOOL
         | typeof OFFICIAL_CODEX_FIELD_ELICITATION_TOOL;
+    expectedQueuedFollowUpText?: string;
     mcpFollowupDelayMs?: number;
 }
 
@@ -88,6 +91,7 @@ export async function startCodexResponsesFixture(
         mcpToolCallCount: 0,
         mcpToolOutputObserved: false,
         mcpChoiceAccepted: false,
+        queuedFollowUpObserved: false,
         toolNames: [],
         instructionSentinelObserved: false,
         requestShapes: [],
@@ -253,6 +257,20 @@ async function handleRequest(
             completedTool.isFixtureMcp
                 ? OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL
                 : OFFICIAL_CODEX_RESPONSE_SENTINEL,
+        );
+        return;
+    }
+
+    if (
+        options.expectedQueuedFollowUpText
+        && state.mcpChoiceAccepted
+        && hasExactUserInputText(body, options.expectedQueuedFollowUpText)
+    ) {
+        state.queuedFollowUpObserved = true;
+        await writeFinalResponse(
+            response,
+            state.requestCount,
+            OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL,
         );
         return;
     }
@@ -538,6 +556,20 @@ function collectInputTypes(body: unknown): string[] {
     return body.input
         .map((item) => isRecord(item) && typeof item.type === 'string' ? item.type : 'unknown')
         .sort();
+}
+
+function hasExactUserInputText(body: unknown, expected: string): boolean {
+    if (!isRecord(body) || !Array.isArray(body.input)) return false;
+    return body.input.some((item) => {
+        if (!isRecord(item) || item.type !== 'message' || item.role !== 'user') return false;
+        if (typeof item.content === 'string') return item.content === expected;
+        if (!Array.isArray(item.content)) return false;
+        return item.content.some((part) => (
+            isRecord(part)
+            && (part.type === 'input_text' || part.type === 'text')
+            && part.text === expected
+        ));
+    });
 }
 
 function findMatchingToolOutput(

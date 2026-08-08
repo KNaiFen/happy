@@ -15,7 +15,16 @@ import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import nacl from 'tweetnacl';
+import {
+    SyncSnapshotResponseV4Schema,
+    type CodexEntityV4,
+    type CodexRequestEntityV4,
+    type CodexRuntimeEntityV4,
+    type CodexTurnEntityV4,
+    type SyncEntitySnapshotV4,
+} from '@slopus/happy-wire';
 import { decrypt } from '../../packages/happy-cli/src/api/encryption';
+import { SyncV4Crypto as NodeSyncV4Crypto } from '../../packages/happy-cli/src/api/syncV4Crypto';
 import { deriveKey } from '../../packages/happy-cli/src/utils/deriveKey';
 import {
     OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
@@ -48,7 +57,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 10;
+    schemaVersion: 11;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -66,10 +75,12 @@ interface FieldDiagnostic {
     providerMcpToolCallCount: number;
     providerMcpToolOutputObserved: boolean;
     providerMcpChoiceAccepted: boolean;
+    providerQueuedFollowUpObserved: boolean;
     sessionDataKeyDecryptable: boolean | null;
     sessionMetadataDecryptable: boolean | null;
     sessionMetadataCodexV4: boolean | null;
     sessionActive: boolean | null;
+    v4LifecycleCompleted: boolean;
 }
 
 interface ManagedProcess {
@@ -114,6 +125,7 @@ async function main(): Promise<void> {
     responsesFixture = await startCodexResponsesFixture({
         preferFixtureMcpTool: true,
         fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
+        expectedQueuedFollowUpText: 'Q',
         mcpFollowupDelayMs: 90_000,
     });
     const codexHome = join(fixtureRoot, 'codex-home');
@@ -162,7 +174,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 10,
+        schemaVersion: 11,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -180,15 +192,17 @@ async function main(): Promise<void> {
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
         providerMcpChoiceAccepted: false,
+        providerQueuedFollowUpObserved: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
         sessionActive: null,
+        v4LifecycleCompleted: false,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 10,
+            schemaVersion: 11,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -206,10 +220,12 @@ async function main(): Promise<void> {
             providerMcpToolCallCount: 0,
             providerMcpToolOutputObserved: false,
             providerMcpChoiceAccepted: false,
+            providerQueuedFollowUpObserved: false,
             sessionDataKeyDecryptable: null,
             sessionMetadataDecryptable: null,
             sessionMetadataCodexV4: null,
             sessionActive: null,
+            v4LifecycleCompleted: false,
         });
     }
 
@@ -239,7 +255,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 10,
+        schemaVersion: 11,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -257,10 +273,12 @@ async function main(): Promise<void> {
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
         providerMcpChoiceAccepted: false,
+        providerQueuedFollowUpObserved: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
         sessionActive: null,
+        v4LifecycleCompleted: false,
     });
 
     console.log(`Mobile field fixture ready for machine ${hashForLog(machineId)}`);
@@ -528,7 +546,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 10,
+        schemaVersion: 11,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -546,10 +564,12 @@ async function verifyFieldRoundTrip(
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
         providerMcpChoiceAccepted: false,
+        providerQueuedFollowUpObserved: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
         sessionActive: null,
+        v4LifecycleCompleted: false,
     };
     let lastDiagnostic = '';
     const persistDiagnostic = async (): Promise<void> => {
@@ -563,6 +583,7 @@ async function verifyFieldRoundTrip(
         diagnostic.providerMcpToolCallCount = provider?.mcpToolCallCount ?? 0;
         diagnostic.providerMcpToolOutputObserved = provider?.mcpToolOutputObserved ?? false;
         diagnostic.providerMcpChoiceAccepted = provider?.mcpChoiceAccepted ?? false;
+        diagnostic.providerQueuedFollowUpObserved = provider?.queuedFollowUpObserved ?? false;
         const serialized = JSON.stringify(diagnostic);
         if (serialized === lastDiagnostic) return;
         lastDiagnostic = serialized;
@@ -609,42 +630,46 @@ async function verifyFieldRoundTrip(
                 'the Android round trip exposed the retired v3 message route',
             );
 
-            const snapshotResponse = await fetch(
-                `${serverUrl}/v4/sessions/${encodeURIComponent(session.id)}/snapshot?limit=100`,
-                {
-                    headers: {
-                        ...appHeaders(appToken),
-                        'X-Happy-Machine-Id': machineId,
-                    },
-                },
+            if (!sessionCrypto.sessionKey || !sessionCrypto.threadId) return false;
+            const snapshots = await fetchSessionSnapshot(
+                session.id,
+                appToken,
+                machineId,
             );
-            if (!snapshotResponse.ok) return false;
-            const snapshot = await snapshotResponse.json() as {
-                entities?: Array<{ entityType?: unknown }>;
-            };
+            if (!snapshots) return false;
+            const entities = await decryptSessionSnapshot(
+                session.id,
+                sessionCrypto.sessionKey,
+                snapshots,
+            );
             const counts = new Map<string, number>();
-            for (const entity of snapshot.entities ?? []) {
-                if (typeof entity.entityType !== 'string') continue;
+            for (const entity of entities) {
                 counts.set(entity.entityType, (counts.get(entity.entityType) ?? 0) + 1);
             }
             diagnostic.entityCounts = Object.fromEntries(
                 [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)),
             );
             diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 2;
+            diagnostic.v4LifecycleCompleted = hasCompletedRequestRecoveryLifecycle(
+                entities,
+                sessionCrypto.threadId,
+            );
             const provider = responsesFixture?.snapshot();
             diagnostic.cliRoundTripObserved = (
                 diagnostic.commandAccepted
                 && (counts.get('codex.thread') ?? 0) >= 1
                 && (counts.get('codex.runtime') ?? 0) >= 1
-                && (counts.get('codex.turn') ?? 0) >= 1
+                && (counts.get('codex.turn') ?? 0) >= 2
                 && (counts.get('codex.item') ?? 0) >= 2
                 && (counts.get('codex.part') ?? 0) >= 2
-                && (provider?.requestCount ?? 0) >= 4
+                && (provider?.requestCount ?? 0) >= 5
                 && provider?.toolOutputObserved === true
                 && (provider?.fixtureMcpOfferCount ?? 0) >= 1
                 && (provider?.mcpToolCallCount ?? 0) >= 1
                 && provider?.mcpToolOutputObserved === true
                 && provider?.mcpChoiceAccepted === true
+                && provider?.queuedFollowUpObserved === true
+                && diagnostic.v4LifecycleCompleted
             );
             await persistDiagnostic();
             if (!diagnostic.cliRoundTripObserved) return false;
@@ -676,10 +701,12 @@ async function verifyFieldRoundTrip(
             providerMcpToolCallCount: diagnostic.providerMcpToolCallCount,
             providerMcpToolOutputObserved: diagnostic.providerMcpToolOutputObserved,
             providerMcpChoiceAccepted: diagnostic.providerMcpChoiceAccepted,
+            providerQueuedFollowUpObserved: diagnostic.providerQueuedFollowUpObserved,
             sessionDataKeyDecryptable: diagnostic.sessionDataKeyDecryptable,
             sessionMetadataDecryptable: diagnostic.sessionMetadataDecryptable,
             sessionMetadataCodexV4: diagnostic.sessionMetadataCodexV4,
             sessionActive: diagnostic.sessionActive,
+            v4LifecycleCompleted: diagnostic.v4LifecycleCompleted,
             verifiedAt: Date.now(),
         }, null, 2),
         { encoding: 'utf8', mode: 0o600 },
@@ -693,6 +720,8 @@ async function inspectSessionCrypto(
     dataKeyDecryptable: boolean;
     metadataDecryptable: boolean;
     metadataCodexV4: boolean;
+    sessionKey: Uint8Array | null;
+    threadId: string | null;
 }> {
     if (
         typeof session.dataEncryptionKey !== 'string'
@@ -702,6 +731,8 @@ async function inspectSessionCrypto(
             dataKeyDecryptable: false,
             metadataDecryptable: false,
             metadataCodexV4: false,
+            sessionKey: null,
+            threadId: null,
         };
     }
 
@@ -711,6 +742,8 @@ async function inspectSessionCrypto(
             dataKeyDecryptable: false,
             metadataDecryptable: false,
             metadataCodexV4: false,
+            sessionKey: null,
+            threadId: null,
         };
     }
 
@@ -731,6 +764,8 @@ async function inspectSessionCrypto(
             dataKeyDecryptable: false,
             metadataDecryptable: false,
             metadataCodexV4: false,
+            sessionKey: null,
+            threadId: null,
         };
     }
 
@@ -747,7 +782,96 @@ async function inspectSessionCrypto(
         metadataDecryptable: metadataRecord !== null,
         metadataCodexV4: metadataRecord?.flavor === 'codex'
             && metadataRecord.codexSyncVersion === 4,
+        sessionKey: new Uint8Array(dataKey),
+        threadId: typeof metadataRecord?.codexThreadId === 'string'
+            ? metadataRecord.codexThreadId
+            : null,
     };
+}
+
+async function fetchSessionSnapshot(
+    sessionId: string,
+    appToken: string,
+    machineId: string,
+): Promise<SyncEntitySnapshotV4[] | null> {
+    const entities: SyncEntitySnapshotV4[] = [];
+    const seenEntityIds = new Set<string>();
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let highWatermark: number | null = null;
+    do {
+        const query = new URLSearchParams({ limit: '100' });
+        if (cursor) query.set('cursor', cursor);
+        const response = await fetch(
+            `${serverUrl}/v4/sessions/${encodeURIComponent(sessionId)}/snapshot?${query.toString()}`,
+            {
+                headers: {
+                    ...appHeaders(appToken),
+                    'X-Happy-Machine-Id': machineId,
+                },
+            },
+        );
+        if (!response.ok) return null;
+        const page = SyncSnapshotResponseV4Schema.parse(await response.json());
+        if (highWatermark === null) highWatermark = page.highWatermark;
+        assert.equal(page.highWatermark, highWatermark, 'Sync v4 snapshot watermark changed');
+        for (const entity of page.entities) {
+            assert.equal(seenEntityIds.has(entity.entityId), false, 'Sync v4 snapshot repeated an entity');
+            seenEntityIds.add(entity.entityId);
+            entities.push(entity);
+        }
+        cursor = page.nextCursor;
+        if (cursor) {
+            assert.equal(seenCursors.has(cursor), false, 'Sync v4 snapshot pagination stalled');
+            seenCursors.add(cursor);
+        }
+    } while (cursor);
+    return entities;
+}
+
+async function decryptSessionSnapshot(
+    sessionId: string,
+    sessionKey: Uint8Array,
+    snapshots: readonly SyncEntitySnapshotV4[],
+): Promise<CodexEntityV4[]> {
+    const crypto = await NodeSyncV4Crypto.create({ sessionId, sessionKey });
+    const entities: CodexEntityV4[] = [];
+    for (const snapshot of snapshots) {
+        if (snapshot.op !== 'upsert') continue;
+        entities.push(await crypto.decryptEntity({
+            sessionId,
+            entityId: snapshot.entityId,
+            entityType: snapshot.entityType,
+            revision: snapshot.revision,
+            op: snapshot.op,
+        }, snapshot.ciphertext));
+    }
+    return entities;
+}
+
+function hasCompletedRequestRecoveryLifecycle(
+    entities: readonly CodexEntityV4[],
+    threadId: string,
+): boolean {
+    const runtime = entities
+        .filter((entity): entity is CodexRuntimeEntityV4 => (
+            entity.entityType === 'codex.runtime' && entity.threadId === threadId
+        ))
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+    const turns = entities.filter((entity): entity is CodexTurnEntityV4 => (
+        entity.entityType === 'codex.turn' && entity.threadId === threadId
+    ));
+    const requests = entities.filter((entity): entity is CodexRequestEntityV4 => (
+        entity.entityType === 'codex.request' && entity.threadId === threadId
+    ));
+    return runtime?.connection === 'connected'
+        && runtime.execution.type === 'idle'
+        && runtime.statusUnknown === false
+        && runtime.pendingApprovalCount === 0
+        && runtime.pendingUserInputCount === 0
+        && turns.length >= 2
+        && turns.every((turn) => turn.status === 'completed' && turn.completedAt !== null)
+        && requests.every((request) => request.status !== 'pending');
 }
 
 function appHeaders(token: string): Record<string, string> {
