@@ -37,23 +37,23 @@ tags:
     direction: UP
     centerElement: true
     timeout: 60000
-- assertVisible: Waiting for you
+- assertVisible: '(?s).*Waiting for you.*'
 - assertVisible:
     id: codex-queued-message-dock
 - assertVisible: Q
 - tapOn:
-    text: Resume after restart
+    text: '(?s).+, Resume after restart.*'
     checked: false
 - assertVisible:
-    text: Resume after restart
+    text: '(?s).+, Resume after restart.*'
     checked: true
 - takeScreenshot: codex-elicitation-restored-and-selected
 - tapOn: Submit Answer
 - extendedWaitUntil:
-    visible: "Field choice:"
+    visible: '(?s).*Field choice:.*'
     timeout: 60000
-- assertVisible: Resume after restart
-- assertNotVisible: Waiting for you
+- assertVisible: '(?s).*Resume after restart.*'
+- assertNotVisible: '(?s).*Waiting for you.*'
 - assertNotVisible: CodexControlCommand
 - assertNotVisible: request.resolve
 - extendedWaitUntil:

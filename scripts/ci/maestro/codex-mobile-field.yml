@@ -94,9 +94,9 @@ tags:
     visible:
       text: Choose the restart-safe field option
     timeout: 60000
-- assertVisible: Waiting for you
+- assertVisible: '(?s).*Waiting for you.*'
 - assertVisible:
-    text: Resume after restart
+    text: '(?s).+, Resume after restart.*'
     checked: false
 - assertNotVisible: Used 2 tools
 - takeScreenshot: codex-live-pending-elicitation
