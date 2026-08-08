@@ -21,6 +21,7 @@ export type AnchoredActionMenuItem = {
     label: string;
     disabled?: boolean;
     destructive?: boolean;
+    selected?: boolean;
     onPress: () => void;
 };
 
@@ -113,7 +114,10 @@ export function AnchoredActionMenu(props: {
                                         key={item.id}
                                         accessibilityRole="button"
                                         accessibilityLabel={item.label}
-                                        accessibilityState={{ disabled: item.disabled }}
+                                        accessibilityState={{
+                                            disabled: item.disabled,
+                                            selected: item.selected,
+                                        }}
                                         disabled={item.disabled}
                                         onPress={item.onPress}
                                         style={({ pressed }) => [

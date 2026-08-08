@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { DropdownMenu, DropdownMenuItem } from '@expo/ui/jetpack-compose';
-import { fillMaxSize } from '@expo/ui/jetpack-compose/modifiers';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { AnchoredActionMenu } from './AnchoredActionMenu';
+import type { AnchoredActionMenuItem } from './AnchoredActionMenu';
+import type { AnchoredMenuRect } from './anchoredActionMenuPlacement';
 import type { NativeSettingsMenuProps } from './NativeSettingsMenu';
 
 const styles = StyleSheet.create({
@@ -16,43 +17,50 @@ export function NativeSettingsMenu({
     testID,
     flat = false,
 }: NativeSettingsMenuProps) {
-    const [expanded, setExpanded] = React.useState(false);
+    const triggerRef = React.useRef<View>(null);
+    const [anchor, setAnchor] = React.useState<AnchoredMenuRect | null>(null);
     const triggerLabel = accessibilityLabel ?? groups.map((group) => group.label).join(', ');
+    const closeMenu = React.useCallback(() => setAnchor(null), []);
+    const openMenu = React.useCallback(() => {
+        triggerRef.current?.measureInWindow((x, y, width, height) => {
+            if (width <= 0 || height <= 0) return;
+            setAnchor({ x, y, width, height });
+        });
+    }, []);
+    const items = React.useMemo<readonly AnchoredActionMenuItem[]>(() => (
+        groups.flatMap((group) => group.options.map((option) => ({
+            id: `${group.key}-${option.key}`,
+            icon: option.key === group.selectedKey ? 'checkmark' : 'ellipse-outline',
+            label: `${flat ? '' : `${group.label}: `}${option.label}`,
+            selected: option.key === group.selectedKey,
+            onPress: () => {
+                closeMenu();
+                group.onSelect(option.key);
+            },
+        })))
+    ), [closeMenu, flat, groups]);
 
     return (
         <View style={style}>
-            <DropdownMenu
-                expanded={expanded}
-                onDismissRequest={() => setExpanded(false)}
-                style={styles.fill}
-                modifiers={[fillMaxSize()]}
-            >
-                <DropdownMenu.Items>
-                    {groups.flatMap((group) => group.options.map((option) => (
-                        <DropdownMenuItem
-                            key={`${group.key}:${option.key}`}
-                            onClick={() => {
-                                setExpanded(false);
-                                group.onSelect(option.key);
-                            }}
-                        >
-                            <DropdownMenuItem.Text>
-                                {`${flat ? '' : `${group.label}: `}${option.key === group.selectedKey ? '✓ ' : ''}${option.label}`}
-                            </DropdownMenuItem.Text>
-                        </DropdownMenuItem>
-                    )))}
-                </DropdownMenu.Items>
-            </DropdownMenu>
             <Pressable
+                ref={triggerRef}
                 testID={testID}
-                onPress={() => setExpanded(true)}
+                onPress={openMenu}
                 style={styles.fill}
                 accessibilityRole="button"
                 accessibilityLabel={triggerLabel}
-                accessibilityState={{ expanded }}
+                accessibilityState={{ expanded: anchor !== null }}
             >
                 {children}
             </Pressable>
+            <AnchoredActionMenu
+                anchor={anchor}
+                glassEnabled={false}
+                items={items}
+                onClose={closeMenu}
+                testID={testID ? `${testID}-options` : undefined}
+                visible={anchor !== null}
+            />
         </View>
     );
 }

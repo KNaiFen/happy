@@ -2,11 +2,11 @@
 
 ## 状态
 
-- 当前状态：核心实现、源码验证与独立审查完成；云端 Field E2E 已确认 React Native trigger 不能可靠嵌入 Expo Compose 菜单，正在以 `1.11.44` 分离渲染层并等待精确 HEAD 验收。
+- 当前状态：核心实现、源码验证与独立审查完成；`1.11.44` 已证明可访问的 React Native trigger 无法可靠驱动同级 Expo Compose popup，正在以 `1.11.45` 将 Android 设置菜单统一到 React Native 锚定弹层并等待精确 HEAD 验收。
 - 建立日期：2026-08-08。
 - 实施分支：`fix/codex-request-resolution`。
 - 基线：`origin/main@01a2278c033e279da1ca0a52cefdbfb6746a1b15`。
-- 目标版本：`packages/happy-app` `1.11.44`；CLI 保持 `1.4.46`，Wire 保持 `0.1.8`。
+- 目标版本：`packages/happy-app` `1.11.45`；CLI 保持 `1.4.46`，Wire 保持 `0.1.8`。
 - 权威边界：[ADR-001](../decisions/ADR-001-codex-sync-v4.md) 规定命令不可变、未知结果不可重放和 provider request ID 精确绑定；[权限解析](../permission-resolution.md) 规定 pending request 必须由持久 Sync v4 实体恢复，传输中断不代表请求完成。
 
 ## 实施进度（2026-08-08）
@@ -19,7 +19,7 @@
 - 命令已经写入持久 outbox、但本地乐观投影失败时，App 将本次提交视为 `outcomeUnknown` 并锁住重复操作；只有明确发生在持久化前的失败才恢复重试。
 - 等待用户回答的请求不再显示普通工具 spinner 或持续增长的 elapsed timer；非请求工具的运行外观不变。
 - Android Field E2E 已改为在 MCP elicitation pending 且 `Q` 已进入 durable queue 时杀死 App；恢复流从原请求卡片恢复选择并提交。独立 provider sentinel 证明 `Q` 真正到达 provider，最终解密 Sync v4 snapshot 证明 runtime connected/idle、pending count 为零、所有 request 非 pending 且所有 turn completed。
-- `happy-app` 已从 `1.11.39` 提升到 `1.11.44`。`1.11.40` 至 `1.11.43` 的发布工作流都已经成功；对应 Field E2E 逐步暴露出菜单不可交互、缺少可定位 test tag、内部 Compose Box 尺寸与跨渲染器 trigger 投影问题。每次后续修复都使用新的 patch 版本。CLI `1.4.46` 与 Wire `0.1.8` 未变。
+- `happy-app` 已从 `1.11.39` 提升到 `1.11.45`。`1.11.40` 至 `1.11.44` 的发布工作流都已经成功；对应 Field E2E 逐步暴露出菜单不可交互、缺少可定位 test tag、内部 Compose Box 尺寸、跨渲染器 trigger 投影以及受控 popup 未挂载问题。每次后续修复都使用新的 patch 版本。CLI `1.4.46` 与 Wire `0.1.8` 未变。
 
 当前本地实现审查基点为 `5d299098`。两轮 findings-first 独立审查均已完成；首轮发现并修复了 `request.resolve` 带 `displayText` 时的独立消息投影、持久化后投影失败时的重复提交风险、`Q` 未被 provider 实质证明以及 turn 终态验收不足。修正后的第二轮 App 安全边界与 Android E2E 审查均无 Critical 或 Important finding。
 
@@ -29,11 +29,14 @@
 
 `1.11.43` 的 run `31271082264` 在同一断言等待到 fixture timeout 后失败；截图仍显示三个空白槽位，层级仍没有 Compose tag 或 React Native trigger。这证明问题不只是 Box 尺寸：在该 Expo functional Compose host 内嵌入 React Native `Pressable` 不能提供可靠的渲染、点击或 UiAutomator 语义。`1.11.44` 因而取消跨渲染器 trigger：外层 React Native `View` 保留原布局，Compose `DropdownMenu` 作为绝对填充的同级 popup anchor，只承载菜单项；另一个绝对填充的普通 React Native `Pressable` 作为上层同级节点渲染现有图标/文本并直接暴露 accessibility label、expanded state 与 `testID`。选择和系统 dismiss 仍由受控 `expanded` 收束，菜单选项行为不变。
 
+`1.11.44` 的精确 HEAD `f6fb01e5` 已通过 Documentation run `31273151982`、Monorepo CI run `31273152025` 和 Android Release run `31273151972`，但 Field E2E run `31273152069` 暴露了最后一层跨渲染器失败。UiAutomator 已能稳定看到 `agent-input-permission-menu`，节点 bounds 为 `[48,2180][164,2295]`、`clickable=true`，Maestro 也按层级点击了中心 `(106,2237)`；然而 15 秒后 Compose popup 仍未挂载，层级和截图都只有原输入区，没有 `default permissions`。这证明把 RN trigger 与 Compose popup 改为同级仍不能形成可靠的受控菜单。`1.11.45` 因而让 Android 设置菜单完全留在 React Native：trigger 通过 `measureInWindow` 获取真实矩形，复用现有 `AnchoredActionMenu` 的透明 Modal、安全区、键盘和上下方向避让；选项、关闭、选中状态、`testID` 与 accessibility 都在同一渲染树内，外层 44px/flex 布局和既有图标文字保持不变。
+
 ## 本地验证证据（2026-08-08）
 
 | 验证面 | 结果 |
 | --- | --- |
 | App 定向 Vitest | 9 个文件，125/125 通过。 |
+| Android 锚定菜单 | `1.11.45` 的 App `tsc --noEmit` 通过；锚定弹层方向、安全区与裁切 4/4 测试通过。 |
 | CLI 定向 Vitest | 5 个文件，142/142 通过。 |
 | Responses fixture Vitest | 1 个文件，9/9 通过；旧默认工具和新 elicitation/queued follow-up 分支均覆盖。 |
 | TypeScript | `happy-app` 与 `happy` 的 `tsc --noEmit` 均通过。 |
@@ -251,6 +254,7 @@ codex.request / codex.command / codex.commandResult mutation
 - `packages/happy-app/sources/sync/typesMessage.ts`：请求交互投影类型。
 - `packages/happy-app/sources/sync/codexV4Projection.ts`：thread-scoped 索引、七态推导、affected 重投影、控制卡抑制。
 - `packages/happy-app/sources/components/tools/ToolView.tsx` 及三个请求交互 view/footer：静态等待态、持久 submit/error/settled UI。
+- `packages/happy-app/sources/components/NativeSettingsMenu.android.tsx` 与 `AnchoredActionMenu.tsx`：Android 设置 trigger 的真实矩形测量、同渲染器弹层、视口避让与选中项可访问性。
 - `packages/happy-app/sources/text/translations/*.ts`：全部 locale 共享文案。
 - App/CLI 相关单测：generation、状态机、跨 thread、重复 attempt、重启恢复与 broker 前守卫。
 - `scripts/ci/codex-field-mcp-server.mjs`、Responses/Android fixture、Maestro flow 与 Field E2E 断言：真实 elicitation 重启链路。
