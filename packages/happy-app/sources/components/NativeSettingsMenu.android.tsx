@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { DropdownMenu, DropdownMenuItem } from '@expo/ui/jetpack-compose';
-import { testID as composeTestID } from '@expo/ui/jetpack-compose/modifiers';
+import { fillMaxSize, testID as composeTestID } from '@expo/ui/jetpack-compose/modifiers';
 import { Pressable, StyleSheet } from 'react-native';
 import type { NativeSettingsMenuProps } from './NativeSettingsMenu';
 
@@ -28,7 +28,10 @@ export function NativeSettingsMenu({
             expanded={expanded}
             onDismissRequest={() => setExpanded(false)}
             style={style}
-            modifiers={testID ? [composeTestID(testID)] : undefined}
+            modifiers={[
+                fillMaxSize(),
+                ...(testID ? [composeTestID(testID)] : []),
+            ]}
         >
             <DropdownMenu.Items>
                 {groups.flatMap((group) => group.options.map((option) => (
