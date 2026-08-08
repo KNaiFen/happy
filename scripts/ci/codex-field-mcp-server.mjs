@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 const fieldMarker = 'MCP single-card field verification';
 const fieldChoiceMarker = 'MCP restart-safe field choice accepted';
+const fieldElicitationTimeoutMs = 4 * 60_000;
 
 const server = new McpServer({
     name: 'Codex field E2E MCP',
@@ -40,21 +41,26 @@ server.registerTool('collect_field_choice', {
         openWorldHint: false,
     },
 }, async () => {
-    const result = await server.server.elicitInput({
-        mode: 'form',
-        message: 'Choose the restart-safe field option',
-        requestedSchema: {
-            type: 'object',
-            properties: {
-                choice: {
-                    type: 'string',
-                    title: 'Field choice',
-                    oneOf: [{ const: 'resume', title: 'Resume after restart' }],
+    // The field flow deliberately kills and relaunches the App before answering.
+    // Override the SDK's 60-second default so that the provider request survives recovery.
+    const result = await server.server.elicitInput(
+        {
+            mode: 'form',
+            message: 'Choose the restart-safe field option',
+            requestedSchema: {
+                type: 'object',
+                properties: {
+                    choice: {
+                        type: 'string',
+                        title: 'Field choice',
+                        oneOf: [{ const: 'resume', title: 'Resume after restart' }],
+                    },
                 },
+                required: ['choice'],
             },
-            required: ['choice'],
         },
-    });
+        { timeout: fieldElicitationTimeoutMs },
+    );
     const content = result?.content;
     const accepted = result?.action === 'accept'
         && content

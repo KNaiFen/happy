@@ -189,6 +189,53 @@ describe('official Codex Responses fixture', () => {
         assert.deepEqual(snapshot.toolNames, ['shell_command', elicitationTool]);
     });
 
+    it('does not unlock a queued follow-up when the elicitation output is rejected', async () => {
+        fixture = await startCodexResponsesFixture({
+            preferFixtureMcpTool: true,
+            fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
+            expectedQueuedFollowUpText: 'Q',
+        });
+        await warmFixture(fixture);
+        const elicitationTool = `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_ELICITATION_TOOL}`;
+
+        await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{ type: 'message', role: 'user' }],
+            tools: [{ type: 'function', name: elicitationTool }],
+        });
+        const rejected = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'function_call_output',
+                call_id: 'happy-official-codex-tool-call-2',
+                output: JSON.stringify({
+                    isError: true,
+                    content: [{
+                        type: 'text',
+                        text: 'MCP restart-safe field choice was not accepted',
+                    }],
+                }),
+            }],
+        });
+        expect(rejected).toContain(OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL);
+
+        const queuedFollowUp = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'Q' }],
+            }],
+        });
+        expect(queuedFollowUp).toContain(OFFICIAL_CODEX_RESPONSE_SENTINEL);
+        expect(queuedFollowUp).not.toContain(OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL);
+
+        const snapshot = fixture.snapshot();
+        assert.equal(snapshot.mcpToolOutputObserved, true);
+        assert.equal(snapshot.mcpChoiceAccepted, false);
+        assert.equal(snapshot.queuedFollowUpObserved, false);
+    });
+
     it.each([
         ['current', OFFICIAL_CODEX_FIELD_MCP_SERVER, `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_MCP_TOOL}`],
         ['prefixed', `mcp__${OFFICIAL_CODEX_FIELD_MCP_SERVER}`, `mcp__${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_MCP_TOOL}`],
