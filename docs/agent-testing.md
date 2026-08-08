@@ -29,6 +29,22 @@ approval round trips, tool ordering, child sessions, process restart, and
 snapshot recovery. Browser and Android field scenarios then verify the visible
 session flow, including a zero-machine first launch and the first Sync v4 reply.
 
+The Android API 36 field scenario also verifies request-response recovery with
+the source-built official Codex app-server and an MCP SDK server. The MCP tool
+opens a real form elicitation, the test queues a follow-up turn, and the App is
+killed while the request is still waiting for input. After relaunching the same
+session, the test verifies that the radio option starts unchecked, submits the
+selected value, observes the MCP's exact accepted-choice marker, consumes the
+queued turn, and receives the provider's final response. Fixture diagnostics
+must independently confirm that the expected choice reached the MCP tool; a
+generic tool output or a visible request card alone is not acceptance evidence.
+
+The recovered request must not show a running-tool timer, and a failed internal
+`request.resolve` command must not appear as a separate timeline card. The
+scenario retains the context-compaction and restored-history assertions after
+the recovered turn so request recovery cannot hide regressions in the remaining
+session timeline.
+
 ## Retained Agents
 
 Gemini, Agy, OpenClaw, and generic ACP runners keep their own focused tests.

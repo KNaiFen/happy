@@ -66,6 +66,41 @@ Transport loss never means approval, denial, or completion. Pending requests
 remain visible from the Sync v4 journal/snapshot until an authoritative result
 is synchronized.
 
+## Request Response Recovery
+
+The App derives each request card's interaction state from the durable
+`codex.request`, matching `request.resolve` commands, and their latest
+`codex.commandResult`. A response command belongs to a request only when both
+its `threadId` and `requestId` match. If several response attempts exist, the
+latest deterministic attempt is authoritative until the request itself reaches
+a terminal state.
+
+Submitting a response publishes a new immutable command with the selected
+session Gateway generation. If a current Gateway exists but the generation is
+missing, the App rejects the command before adding it to the outbox. The CLI
+still performs the final generation check before any provider-side effect;
+missing or stale generations are cancelled and may never be rebound to a newer
+Gateway.
+
+The durable interaction states have these user-visible consequences:
+
+- a pending request with no response attempt remains editable and shows a
+  static waiting-for-input state, without a tool spinner or elapsed timer;
+- a received, executing, or successfully delivered response attempt disables
+  duplicate submission while the App waits for the request's authoritative
+  terminal state;
+- a failed or cancelled attempt restores its submitted values and exposes an
+  in-card retry path;
+- an unknown or non-replayed result disables retry because replaying a
+  non-idempotent response could answer the provider twice; and
+- accepted, declined, cancelled, resolved, and provider-error request states
+  come only from the request entity, never from a local Promise or elapsed time.
+
+App restart, another client, journal replay, and snapshot replacement therefore
+reconstruct the same selection, progress, and error state. A failed
+`request.resolve` is rendered on the original request card rather than as a
+separate internal control-command card.
+
 ## Stable-v2 Boundary
 
 Happy can display observed permission-profile and collaboration-mode values,
