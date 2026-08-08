@@ -52,7 +52,7 @@ tags:
 - extendedWaitUntil:
     visible: '(?s).*Field choice:.*'
     timeout: 60000
-- assertVisible: '(?s).*Resume after restart.*'
+- assertVisible: resume
 - assertNotVisible: '(?s).*Waiting for you.*'
 - assertNotVisible: CodexControlCommand
 - assertNotVisible: request.resolve
