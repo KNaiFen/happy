@@ -1,7 +1,9 @@
 import type { CodexRequestInteraction, ToolCall } from '@/sync/typesMessage';
+import { AppSyncV4MutationPersistedError } from '@/sync/syncV4Client';
 import { describe, expect, it } from 'vitest';
 import {
     requestInteractionAllowsResponse,
+    requestResponseLocalFailure,
     shouldShowToolRunningTelemetry,
 } from './requestInteractionUi';
 
@@ -42,5 +44,14 @@ describe('request interaction UI policy', () => {
             ...tool(),
             state: 'completed',
         })).toBe(false);
+    });
+
+    it('keeps a response disabled when its durable local projection outcome is unknown', () => {
+        const failure = requestResponseLocalFailure(new AppSyncV4MutationPersistedError());
+
+        expect(failure).toBe('outcomeUnknown');
+        expect(requestInteractionAllowsResponse(interaction('awaitingInput'), true)).toBe(false);
+        expect(requestResponseLocalFailure(new Error('not persisted'))).toBe('retryable');
+        expect(requestInteractionAllowsResponse(interaction('awaitingInput'), false)).toBe(true);
     });
 });

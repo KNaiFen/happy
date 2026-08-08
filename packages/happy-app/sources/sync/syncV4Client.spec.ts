@@ -16,6 +16,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import {
     AppSyncV4Client,
+    AppSyncV4MutationPersistedError,
     AppSyncV4SessionReadOnlyError,
     AppSyncV4SnapshotRequiredError,
     type AppSyncV4AppliedEntity,
@@ -709,7 +710,7 @@ describe('AppSyncV4Client', () => {
             throw new Error('projection stopped');
         });
         await expect(beforeCrash.publishEntity(command('projection-crash')))
-            .rejects.toThrow('projection stopped');
+            .rejects.toBeInstanceOf(AppSyncV4MutationPersistedError);
         expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
 
         const recovered: AppSyncV4AppliedEntity[] = [];

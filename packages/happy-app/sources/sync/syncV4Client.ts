@@ -87,6 +87,13 @@ export class AppSyncV4SessionReadOnlyError extends Error {
     }
 }
 
+export class AppSyncV4MutationPersistedError extends Error {
+    constructor() {
+        super('Sync v4 mutation is durable but its local projection outcome is unknown');
+        this.name = 'AppSyncV4MutationPersistedError';
+    }
+}
+
 class AppSyncV4ProtocolError extends Error {
     constructor(message: string) {
         super(message);
@@ -556,14 +563,19 @@ export class AppSyncV4Client {
             });
             return nextMutations;
         });
-        await this.deliverEntitiesForGeneration(mutations.map((mutation, index) => ({
-            entity: canonicalEntries[index].entity,
-            source: 'cache' as const,
-            op: mutation.op,
-            revision: mutation.revision,
-            seq: null,
-        })), generation);
-        this.assertCurrentGeneration(generation);
+        try {
+            await this.deliverEntitiesForGeneration(mutations.map((mutation, index) => ({
+                entity: canonicalEntries[index].entity,
+                source: 'cache' as const,
+                op: mutation.op,
+                revision: mutation.revision,
+                seq: null,
+            })), generation);
+            this.assertCurrentGeneration(generation);
+        } catch {
+            if (this.started) this.sendSync.invalidate();
+            throw new AppSyncV4MutationPersistedError();
+        }
         if (this.started) this.sendSync.invalidate();
         return mutations;
     }

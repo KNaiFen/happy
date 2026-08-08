@@ -27,7 +27,11 @@ import { ToolSectionView } from '../ToolSectionView';
 import type { ToolViewProps } from './_all';
 import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 import { RequestInteractionNotice } from '../RequestInteractionNotice';
-import { requestInteractionAllowsResponse } from '../requestInteractionUi';
+import {
+    requestInteractionAllowsResponse,
+    requestResponseLocalFailure,
+    type RequestResponseLocalFailure,
+} from '../requestInteractionUi';
 
 export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, metadata, readOnly = false }) => {
     const { theme } = useUnistyles();
@@ -47,8 +51,9 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
         restoredMcpJson(parsed, attemptedResponse)
     ));
     const [submitting, setSubmitting] = React.useState<'accept' | 'cancel' | null>(null);
+    const [localSubmissionPending, setLocalSubmissionPending] = React.useState(false);
     const [legacySubmittedAction, setLegacySubmittedAction] = React.useState<'accept' | 'cancel' | null>(null);
-    const [localError, setLocalError] = React.useState(false);
+    const [localFailure, setLocalFailure] = React.useState<RequestResponseLocalFailure | null>(null);
     const response = React.useMemo(() => parseMcpElicitationResponse(tool.result), [tool.result]);
     const formContent = React.useMemo(
         () => parsed?.mode === 'form' ? serializeMcpElicitationValues(parsed.fields, values) : null,
@@ -61,7 +66,7 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
     const interactionReadOnly = readOnly || isCodexSessionReadOnly(metadata);
     const canInteract = !interactionReadOnly
         && tool.state === 'running'
-        && requestInteractionAllowsResponse(tool.requestInteraction)
+        && requestInteractionAllowsResponse(tool.requestInteraction, localSubmissionPending)
         && legacySubmittedAction === null;
     const canSubmit = parsed?.mode === 'url'
         || (parsed?.mode === 'form' && formContent !== null)
@@ -69,13 +74,16 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
 
     React.useEffect(() => {
         if (!tool.requestInteraction?.commandId) return;
+        setLocalSubmissionPending(false);
+        setLocalFailure(null);
         setValues(restoredMcpValues(fields, attemptedResponse));
         setJsonText(restoredMcpJson(parsed, attemptedResponse));
     }, [attemptedResponse, fields, parsed, tool.requestInteraction?.commandId]);
 
     const submit = React.useCallback(async () => {
         if (interactionReadOnly || !sessionId || !tool.permission?.id || !parsed || !canInteract || !canSubmit || submitting) return;
-        setLocalError(false);
+        setLocalFailure(null);
+        setLocalSubmissionPending(true);
         setSubmitting('accept');
         try {
             const content = parsed.mode === 'form'
@@ -84,10 +92,15 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
                     ? jsonContent ?? undefined
                     : undefined;
             await sessionAllow(sessionId, tool.permission.id, 'approved', content);
-            if (!tool.requestInteraction) setLegacySubmittedAction('accept');
-        } catch {
+            if (!tool.requestInteraction) {
+                setLegacySubmittedAction('accept');
+                setLocalSubmissionPending(false);
+            }
+        } catch (error) {
             console.error('Failed to submit MCP elicitation response');
-            setLocalError(true);
+            const failure = requestResponseLocalFailure(error);
+            setLocalFailure(failure);
+            if (failure === 'retryable') setLocalSubmissionPending(false);
         } finally {
             setSubmitting(null);
         }
@@ -95,14 +108,20 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
 
     const cancel = React.useCallback(async () => {
         if (interactionReadOnly || !sessionId || !tool.permission?.id || !canInteract || submitting) return;
-        setLocalError(false);
+        setLocalFailure(null);
+        setLocalSubmissionPending(true);
         setSubmitting('cancel');
         try {
             await sessionDeny(sessionId, tool.permission.id, 'abort');
-            if (!tool.requestInteraction) setLegacySubmittedAction('cancel');
-        } catch {
+            if (!tool.requestInteraction) {
+                setLegacySubmittedAction('cancel');
+                setLocalSubmissionPending(false);
+            }
+        } catch (error) {
             console.error('Failed to cancel MCP elicitation response');
-            setLocalError(true);
+            const failure = requestResponseLocalFailure(error);
+            setLocalFailure(failure);
+            if (failure === 'retryable') setLocalSubmissionPending(false);
         } finally {
             setSubmitting(null);
         }
@@ -164,7 +183,7 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
                 {parsed.message ? <Text style={styles.message}>{parsed.message}</Text> : null}
                 <RequestInteractionNotice
                     interaction={tool.requestInteraction}
-                    localError={localError}
+                    localFailure={localFailure}
                 />
                 {parsed.mode === 'form' ? parsed.fields.map((field) => (
                     <McpField

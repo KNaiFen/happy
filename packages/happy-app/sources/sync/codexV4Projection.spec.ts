@@ -977,7 +977,11 @@ describe('Codex v4 projection', () => {
             threadId: 'thread-1',
             expectedTurnId: 'turn-1',
             command: 'request.resolve',
-            payload: { requestId: 'request-durable', response },
+            payload: {
+                requestId: 'request-durable',
+                response,
+                displayText: 'must stay on the request card',
+            },
             clientUserMessageId: 'resolve-first',
             replacesCommandId: null,
             bindingGeneration: 1,
@@ -1003,6 +1007,7 @@ describe('Codex v4 projection', () => {
         });
 
         projection = apply(projection, firstCommand);
+        expect(projection.messages).toHaveLength(1);
         expect(projection.messages[0]).toMatchObject({
             tool: {
                 requestInteraction: {

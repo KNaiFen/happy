@@ -11,7 +11,11 @@ import { McpElicitationView } from './McpElicitationView';
 import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 import { parseToolUserInputAnswers } from '@/sync/toolUserInput';
 import { RequestInteractionNotice } from '../RequestInteractionNotice';
-import { requestInteractionAllowsResponse } from '../requestInteractionUi';
+import {
+    requestInteractionAllowsResponse,
+    requestResponseLocalFailure,
+    type RequestResponseLocalFailure,
+} from '../requestInteractionUi';
 
 interface QuestionOption {
     label: string;
@@ -186,11 +190,14 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
         selectionsFromAnswers(questions, attemptedAnswers)
     ));
     const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const [localSubmissionPending, setLocalSubmissionPending] = React.useState(false);
     const [legacySubmitted, setLegacySubmitted] = React.useState(false);
-    const [localError, setLocalError] = React.useState(false);
+    const [localFailure, setLocalFailure] = React.useState<RequestResponseLocalFailure | null>(null);
 
     React.useEffect(() => {
         if (!tool.requestInteraction?.commandId) return;
+        setLocalSubmissionPending(false);
+        setLocalFailure(null);
         setSelections(selectionsFromAnswers(questions, attemptedAnswers));
     }, [attemptedAnswers, questions, tool.requestInteraction?.commandId]);
 
@@ -202,7 +209,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
     const interactionReadOnly = readOnly || isCodexSessionReadOnly(metadata);
     const canInteract = !interactionReadOnly
         && isRunning
-        && requestInteractionAllowsResponse(tool.requestInteraction)
+        && requestInteractionAllowsResponse(tool.requestInteraction, localSubmissionPending)
         && !legacySubmitted;
     const isSettled = tool.requestInteraction
         ? tool.requestInteraction.state === 'settled'
@@ -216,7 +223,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
 
     const handleOptionToggle = React.useCallback((questionIndex: number, optionIndex: number, multiSelect: boolean) => {
         if (!canInteract) return;
-        setLocalError(false);
+        setLocalFailure(null);
 
         setSelections(prev => {
             const newMap = new Map(prev);
@@ -241,10 +248,18 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
     }, [canInteract]);
 
     const handleSubmit = React.useCallback(async () => {
-        if (interactionReadOnly || !canInteract || !sessionId || !allQuestionsAnswered || isSubmitting) return;
+        if (
+            interactionReadOnly
+            || !canInteract
+            || !sessionId
+            || !tool.permission?.id
+            || !allQuestionsAnswered
+            || isSubmitting
+        ) return;
 
         setIsSubmitting(true);
-        setLocalError(false);
+        setLocalSubmissionPending(true);
+        setLocalFailure(null);
 
         const answers: Record<string, string> = {};
         const codexAnswers: Record<string, { answers: string[] }> = {};
@@ -262,16 +277,19 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
         try {
             // AskUserQuestion expects answers to be returned as part of the tool input,
             // not as a follow-up plain text message.
-            if (tool.permission?.id) {
-                await sessionAllow(sessionId, tool.permission.id, 'approved', {
-                    answers,
-                    ...(Object.keys(codexAnswers).length > 0 ? { codexAnswers } : {}),
-                });
-                if (!tool.requestInteraction) setLegacySubmitted(true);
+            await sessionAllow(sessionId, tool.permission.id, 'approved', {
+                answers,
+                ...(Object.keys(codexAnswers).length > 0 ? { codexAnswers } : {}),
+            });
+            if (!tool.requestInteraction) {
+                setLegacySubmitted(true);
+                setLocalSubmissionPending(false);
             }
-        } catch {
+        } catch (error) {
             console.error('Failed to submit answer');
-            setLocalError(true);
+            const failure = requestResponseLocalFailure(error);
+            setLocalFailure(failure);
+            if (failure === 'retryable') setLocalSubmissionPending(false);
         } finally {
             setIsSubmitting(false);
         }
@@ -312,7 +330,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
             <View style={styles.container}>
                 <RequestInteractionNotice
                     interaction={tool.requestInteraction}
-                    localError={localError}
+                    localFailure={localFailure}
                 />
                 {questions.map((question, qIndex) => {
                     const selectedOptions = selections.get(qIndex) || new Set();

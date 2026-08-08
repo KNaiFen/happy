@@ -4,13 +4,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { CodexRequestInteraction } from '@/sync/typesMessage';
 import { t } from '@/text';
+import type { RequestResponseLocalFailure } from './requestInteractionUi';
 
 export const RequestInteractionNotice = React.memo(function RequestInteractionNotice(props: {
     interaction: CodexRequestInteraction | undefined;
-    localError?: boolean;
+    localFailure?: RequestResponseLocalFailure | null;
 }) {
     const { theme } = useUnistyles();
-    const content = noticeContent(props.interaction, props.localError === true);
+    const content = noticeContent(props.interaction, props.localFailure ?? null);
     if (!content) return null;
     return (
         <View style={styles.container} accessibilityRole="text">
@@ -29,9 +30,12 @@ export const RequestInteractionNotice = React.memo(function RequestInteractionNo
 
 function noticeContent(
     interaction: CodexRequestInteraction | undefined,
-    localError: boolean,
+    localFailure: RequestResponseLocalFailure | null,
 ): { message: string; detail: string | null; warning: boolean } | null {
-    if (localError) {
+    if (localFailure === 'outcomeUnknown') {
+        return { message: t('tools.requestResponse.outcomeUnknown'), detail: null, warning: true };
+    }
+    if (localFailure === 'retryable') {
         return { message: t('tools.requestResponse.submitFailed'), detail: null, warning: true };
     }
     switch (interaction?.state) {

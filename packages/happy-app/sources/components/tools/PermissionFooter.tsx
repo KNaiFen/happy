@@ -21,7 +21,11 @@ import { t } from '@/text';
 import { useIsTablet } from '@/utils/responsive';
 import type { CodexRequestInteraction } from '@/sync/typesMessage';
 import { RequestInteractionNotice } from './RequestInteractionNotice';
-import { requestInteractionAllowsResponse } from './requestInteractionUi';
+import {
+    requestInteractionAllowsResponse,
+    requestResponseLocalFailure,
+    type RequestResponseLocalFailure,
+} from './requestInteractionUi';
 
 interface PermissionActionButtonProps {
     label: string;
@@ -108,7 +112,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const { height: windowHeight } = useWindowDimensions();
     const [loadingButton, setLoadingButton] = useState<'allow' | 'abort' | null>(null);
     const [loadingForSession, setLoadingForSession] = useState(false);
-    const [localError, setLocalError] = useState(false);
+    const [localSubmissionPending, setLocalSubmissionPending] = useState(false);
+    const [localFailure, setLocalFailure] = useState<RequestResponseLocalFailure | null>(null);
     const isCodexV4 = metadata?.flavor === 'codex' && metadata.codexSyncVersion === 4;
     const isPending = permission.status === 'pending';
     const isApproved = permission.status === 'approved';
@@ -116,17 +121,27 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const isCodexApproved = isApproved && (permission.decision === 'approved' || !permission.decision);
     const isCodexApprovedForSession = isApproved && permission.decision === 'approved_for_session';
     const isCodexAborted = isDenied && permission.decision === 'abort';
-    const canRespond = isPending && requestInteractionAllowsResponse(requestInteraction);
+    const canRespond = isPending
+        && requestInteractionAllowsResponse(requestInteraction, localSubmissionPending);
+
+    useEffect(() => {
+        if (isPending && !requestInteraction?.commandId) return;
+        setLocalSubmissionPending(false);
+        setLocalFailure(null);
+    }, [isPending, requestInteraction?.commandId]);
 
     const handleApprove = async () => {
         if (!canRespond || loadingButton !== null || loadingForSession) return;
-        setLocalError(false);
+        setLocalFailure(null);
+        setLocalSubmissionPending(true);
         setLoadingButton('allow');
         try {
             await sessionAllow(sessionId, permission.id, 'approved');
-        } catch {
+        } catch (error) {
             console.error('Failed to approve Codex permission');
-            setLocalError(true);
+            const failure = requestResponseLocalFailure(error);
+            setLocalFailure(failure);
+            if (failure === 'retryable') setLocalSubmissionPending(false);
         } finally {
             setLoadingButton(null);
         }
@@ -134,13 +149,16 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
 
     const handleApproveForSession = async () => {
         if (!canRespond || loadingButton !== null || loadingForSession) return;
-        setLocalError(false);
+        setLocalFailure(null);
+        setLocalSubmissionPending(true);
         setLoadingForSession(true);
         try {
             await sessionAllow(sessionId, permission.id, 'approved_for_session');
-        } catch {
+        } catch (error) {
             console.error('Failed to approve Codex permission for session');
-            setLocalError(true);
+            const failure = requestResponseLocalFailure(error);
+            setLocalFailure(failure);
+            if (failure === 'retryable') setLocalSubmissionPending(false);
         } finally {
             setLoadingForSession(false);
         }
@@ -148,13 +166,16 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
 
     const handleAbort = async () => {
         if (!canRespond || loadingButton !== null || loadingForSession) return;
-        setLocalError(false);
+        setLocalFailure(null);
+        setLocalSubmissionPending(true);
         setLoadingButton('abort');
         try {
             await sessionDeny(sessionId, permission.id, 'abort');
-        } catch {
+        } catch (error) {
             console.error('Failed to stop Codex permission');
-            setLocalError(true);
+            const failure = requestResponseLocalFailure(error);
+            setLocalFailure(failure);
+            if (failure === 'retryable') setLocalSubmissionPending(false);
         } finally {
             setLoadingButton(null);
         }
@@ -232,7 +253,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
 
     return (
         <View style={styles.container}>
-            <RequestInteractionNotice interaction={requestInteraction} localError={localError} />
+            <RequestInteractionNotice interaction={requestInteraction} localFailure={localFailure} />
             <ScrollView
                 style={styles.optionsScroll}
                 contentContainerStyle={styles.buttonContainer}

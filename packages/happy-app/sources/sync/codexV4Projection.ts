@@ -1052,7 +1052,11 @@ function projectCommand(
     result: CodexCommandResultEntityV4 | undefined,
     hidden: boolean,
 ): Message | null {
-    if (hidden || command.command === 'turn.queue') return null;
+    if (
+        hidden
+        || command.command === 'turn.queue'
+        || command.command === 'request.resolve'
+    ) return null;
     const displayText = jsonObject(command.payload).displayText;
     if (typeof displayText !== 'string' || displayText.length === 0) return null;
     const threadId = result?.threadId ?? command.threadId;
