@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { AnchoredMenuRect } from './anchoredActionMenuPlacement';
 import {
+    CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS,
     CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET,
     CODEX_QUEUED_MESSAGE_JOIN_DEPTH,
     CODEX_QUEUED_MESSAGE_HEIGHT,
@@ -397,6 +398,7 @@ const styles = StyleSheet.create((theme) => ({
         borderRightWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.divider,
         backgroundColor: theme.colors.input.background,
+        overflow: 'hidden',
         zIndex: 0,
     },
     stackBackfillGlass: {
@@ -417,8 +419,10 @@ const styles = StyleSheet.create((theme) => ({
         zIndex: 0,
     },
     composerJoinBridgeGlass: {
+        borderTopLeftRadius: CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS,
+        borderTopRightRadius: CODEX_QUEUED_MESSAGE_COMPOSER_JOIN_RADIUS,
         backgroundColor: Platform.select({
-            ios: theme.colors.glass.overlay,
+            ios: 'transparent',
             android: theme.colors.glass.backgroundStrong,
             default: theme.colors.input.background,
         }),
@@ -446,11 +450,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     messageCapGlass: {
         borderColor: theme.colors.glass.border,
-        backgroundColor: Platform.select({
-            ios: theme.colors.glass.overlay,
-            android: theme.colors.glass.backgroundStrong,
-            default: theme.colors.input.background,
-        }),
+        backgroundColor: 'transparent',
     },
     messageContent: {
         flex: 1,
