@@ -2,11 +2,11 @@
 
 ## 状态
 
-- 当前状态：本地实现、源码验证与两轮独立审查完成；等待推送及云端验收。
+- 当前状态：核心实现、源码验证与独立审查完成；云端 Field E2E 发现并修复 Android Compose 菜单触发器不可交互，等待 `1.11.41` 精确 HEAD 验收。
 - 建立日期：2026-08-08。
 - 实施分支：`fix/codex-request-resolution`。
 - 基线：`origin/main@01a2278c033e279da1ca0a52cefdbfb6746a1b15`。
-- 目标版本：`packages/happy-app` `1.11.40`；CLI 保持 `1.4.46`，Wire 保持 `0.1.8`。
+- 目标版本：`packages/happy-app` `1.11.41`；CLI 保持 `1.4.46`，Wire 保持 `0.1.8`。
 - 权威边界：[ADR-001](../decisions/ADR-001-codex-sync-v4.md) 规定命令不可变、未知结果不可重放和 provider request ID 精确绑定；[权限解析](../permission-resolution.md) 规定 pending request 必须由持久 Sync v4 实体恢复，传输中断不代表请求完成。
 
 ## 实施进度（2026-08-08）
@@ -19,9 +19,11 @@
 - 命令已经写入持久 outbox、但本地乐观投影失败时，App 将本次提交视为 `outcomeUnknown` 并锁住重复操作；只有明确发生在持久化前的失败才恢复重试。
 - 等待用户回答的请求不再显示普通工具 spinner 或持续增长的 elapsed timer；非请求工具的运行外观不变。
 - Android Field E2E 已改为在 MCP elicitation pending 且 `Q` 已进入 durable queue 时杀死 App；恢复流从原请求卡片恢复选择并提交。独立 provider sentinel 证明 `Q` 真正到达 provider，最终解密 Sync v4 snapshot 证明 runtime connected/idle、pending count 为零、所有 request 非 pending 且所有 turn completed。
-- `happy-app` 已从 `1.11.39` 提升到尚未运行过发布工作流的 `1.11.40`；CLI `1.4.46` 与 Wire `0.1.8` 未变。
+- `happy-app` 已从 `1.11.39` 提升到 `1.11.41`。`1.11.40` 的发布工作流已经成功，后续 Android Field E2E 暴露出 Compose 菜单触发器为零尺寸且不可交互，因此修复必须使用新的 patch 版本；CLI `1.4.46` 与 Wire `0.1.8` 未变。
 
 当前本地实现审查基点为 `5d299098`。两轮 findings-first 独立审查均已完成；首轮发现并修复了 `request.resolve` 带 `displayText` 时的独立消息投影、持久化后投影失败时的重复提交风险、`Q` 未被 provider 实质证明以及 turn 终态验收不足。修正后的第二轮 App 安全边界与 Android E2E 审查均无 Critical 或 Important finding。
+
+云端验收继续发现了一个与请求恢复逻辑分离、但会阻断真实 Field 场景的 Android 交互缺陷：`@expo/ui` 的 Jetpack Compose `DropdownMenu` 不会自行切换 `expanded`，原 `NativeSettingsMenu.android` 又把尺寸只放在外层 React Native `View` 上，导致权限、模型和 effort 三个 native trigger 在无障碍树中的真实 bounds 为 `0×0`。Maestro 在 run `31263207407` 与 `31265563991` 分别点击第二槽位和第一槽位中心后，菜单都没有展开。修复将菜单改为受控 `expanded` 状态，把布局尺寸直接应用到 native `DropdownMenu`，并用全尺寸、带无障碍标签和稳定 testID 的 `Pressable` 触发展开；选择或系统 dismiss 后统一收起。Field flow 改为按 `agent-input-permission-menu` 点击，不再依赖设备像素坐标。
 
 ## 本地验证证据（2026-08-08）
 

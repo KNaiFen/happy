@@ -19,6 +19,8 @@ export type NativeSettingsMenuProps = {
     groups: NativeSettingsMenuGroup[];
     children: React.ReactNode;
     style?: StyleProp<ViewStyle>;
+    accessibilityLabel?: string;
+    testID?: string;
     /** Render all options directly in the root menu instead of nesting by group. */
     flat?: boolean;
 };

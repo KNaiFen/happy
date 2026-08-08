@@ -1903,7 +1903,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         {!props.zenMode && permissionSettingsGroups.length > 0 && (
                             useNativeSettingsMenus ? (
-                                <NativeSettingsMenu groups={permissionSettingsGroups} flat style={styles.mobileIconButton}>
+                                <NativeSettingsMenu
+                                    groups={permissionSettingsGroups}
+                                    flat
+                                    style={styles.mobileIconButton}
+                                    accessibilityLabel={t('agentInput.codexPermissionMode.title')}
+                                    testID="agent-input-permission-menu"
+                                >
                                     <View style={styles.mobileIconButton}>
                                         <Ionicons name="settings-outline" size={20} color={theme.colors.text} />
                                     </View>
@@ -1924,7 +1930,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         {!props.zenMode ? (
                             <>
                                 {useNativeSettingsMenus && modelSettingsGroup ? (
-                                    <NativeSettingsMenu groups={[modelSettingsGroup]} flat style={styles.mobileModeButton}>
+                                    <NativeSettingsMenu
+                                        groups={[modelSettingsGroup]}
+                                        flat
+                                        style={styles.mobileModeButton}
+                                        accessibilityLabel={t('agentInput.model.title')}
+                                        testID="agent-input-model-menu"
+                                    >
                                         <View style={styles.mobileModeButton}>
                                             {renderModelValue()}
                                         </View>
@@ -1947,7 +1959,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                                 {effortSettingsGroup && (
                                     useNativeSettingsMenus ? (
-                                        <NativeSettingsMenu groups={[effortSettingsGroup]} flat style={styles.mobileEffortButton}>
+                                        <NativeSettingsMenu
+                                            groups={[effortSettingsGroup]}
+                                            flat
+                                            style={styles.mobileEffortButton}
+                                            accessibilityLabel={t('agentInput.effort.title')}
+                                            testID="agent-input-effort-menu"
+                                        >
                                             <View style={styles.mobileEffortButton}>
                                                 {renderEffortValue()}
                                             </View>
