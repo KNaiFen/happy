@@ -17,6 +17,7 @@ import { formatMCPTitle } from './views/MCPToolView';
 import { t } from '@/text';
 import { getTerminalToolCommand, shouldRenderToolCardHeader } from '@/utils/toolDisplay';
 import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
+import { shouldShowToolRunningTelemetry } from './requestInteractionUi';
 
 interface ToolViewProps {
     metadata: Metadata | null;
@@ -78,6 +79,9 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
         if (typeof state === 'string' && state) {
             status = state;
         }
+    }
+    if (tool.requestInteraction) {
+        status = requestInteractionStatus(tool.requestInteraction.state);
     }
 
     // Handle optional title and function type
@@ -149,7 +153,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     } else {
         switch (tool.state) {
             case 'running':
-                if (!noStatus) {
+                if (!noStatus && shouldShowToolRunningTelemetry(tool)) {
                     statusIcon = <ActivityIndicator size="small" color={theme.colors.text} style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }} />;
                 }
                 break;
@@ -178,6 +182,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                     toolInput={tool.input}
                     metadata={props.metadata}
                     readOnly={readOnly}
+                    requestInteraction={tool.requestInteraction}
                 />
             )
             : null
@@ -195,7 +200,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                     <Text style={styles.compactCommandText} numberOfLines={1}>
                         {terminalCommand}
                     </Text>
-                    {tool.state === 'running' && (
+                    {shouldShowToolRunningTelemetry(tool) && (
                         <View style={styles.elapsedContainer}>
                             <ElapsedView from={tool.createdAt} />
                         </View>
@@ -218,7 +223,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                         </Text>
                     )}
                 </View>
-                {tool.state === 'running' && (
+                {shouldShowToolRunningTelemetry(tool) && (
                     <View style={styles.elapsedContainer}>
                         <ElapsedView from={tool.createdAt} />
                     </View>
@@ -263,6 +268,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                                 permissionFooter={isInlineCodexPatch ? renderPermissionFooter() : undefined}
                             />
                             {tool.state === 'error' && tool.result &&
+                                !tool.requestInteraction &&
                                 !(tool.permission && (tool.permission.status === 'denied' || tool.permission.status === 'canceled')) &&
                                 !hideDefaultError && (
                                     <ToolError message={String(tool.result)} />
@@ -273,6 +279,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
 
                 // Show error state if present (but not for denied/canceled permissions and not when hideDefaultError is true)
                 if (tool.state === 'error' && tool.result &&
+                    !tool.requestInteraction &&
                     !(tool.permission && (tool.permission.status === 'denied' || tool.permission.status === 'canceled')) &&
                     !isToolUseError) {
                     return (
@@ -309,6 +316,18 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
         </View>
     );
 });
+
+function requestInteractionStatus(state: NonNullable<ToolCall['requestInteraction']>['state']): string | null {
+    switch (state) {
+        case 'awaitingInput': return t('tools.requestResponse.awaitingInput');
+        case 'submitting': return t('tools.requestResponse.submitting');
+        case 'awaitingConfirmation': return t('tools.requestResponse.awaitingConfirmation');
+        case 'retryableError': return t('tools.requestResponse.retryableError');
+        case 'outcomeUnknown': return t('tools.requestResponse.outcomeUnknownStatus');
+        case 'unavailable': return t('tools.requestResponse.unavailableStatus');
+        case 'settled': return null;
+    }
+}
 
 function ElapsedView(props: { from: number }) {
     const { from } = props;

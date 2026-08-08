@@ -667,6 +667,17 @@ export const ru: TranslationStructure = {
             other: 'Другое',
             otherDescription: 'Введите свой ответ',
             otherPlaceholder: 'Введите ваш ответ...',
+        },
+        requestResponse: {
+            awaitingInput: 'Ожидание ответа',
+            submitting: 'Отправка',
+            awaitingConfirmation: 'Ожидание подтверждения',
+            retryableError: 'Ошибка отправки',
+            outcomeUnknownStatus: 'Результат неизвестен',
+            unavailableStatus: 'Недоступно',
+            submitFailed: 'Не удалось отправить ответ. Проверьте выбор и повторите попытку.',
+            outcomeUnknown: 'Возможно, Codex получил этот ответ. Дождитесь обновления запроса, прежде чем отвечать снова.',
+            unavailable: 'Этот запрос больше недоступен.',
         }
     },
 

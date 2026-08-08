@@ -649,6 +649,17 @@ export const en: TranslationStructure = {
             otherDescription: 'Type your own answer',
             otherPlaceholder: 'Type your answer...',
         },
+        requestResponse: {
+            awaitingInput: 'Waiting for you',
+            submitting: 'Submitting',
+            awaitingConfirmation: 'Confirming',
+            retryableError: 'Submission failed',
+            outcomeUnknownStatus: 'Result unknown',
+            unavailableStatus: 'Unavailable',
+            submitFailed: 'This response could not be submitted. Check your choice and try again.',
+            outcomeUnknown: 'Codex may have received this response. Wait for the request to update before responding again.',
+            unavailable: 'This request is no longer available.',
+        },
         desc: {
             terminalCmd: ({ cmd }: { cmd: string }) => `Terminal(cmd: ${cmd})`,
             searchPattern: ({ pattern }: { pattern: string }) => `Search(pattern: ${pattern})`,

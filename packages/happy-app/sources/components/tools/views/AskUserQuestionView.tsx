@@ -10,6 +10,8 @@ import { isMcpElicitationInput } from '@/sync/mcpElicitation';
 import { McpElicitationView } from './McpElicitationView';
 import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 import { parseToolUserInputAnswers } from '@/sync/toolUserInput';
+import { RequestInteractionNotice } from '../RequestInteractionNotice';
+import { requestInteractionAllowsResponse } from '../requestInteractionUi';
 
 interface QuestionOption {
     label: string;
@@ -173,14 +175,24 @@ const styles = StyleSheet.create((theme) => ({
 
 const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadata, readOnly = false }) => {
     const { theme } = useUnistyles();
-    const [selections, setSelections] = React.useState<Map<number, Set<number>>>(new Map());
-    const [isSubmitting, setIsSubmitting] = React.useState(false);
-    const [isSubmitted, setIsSubmitted] = React.useState(false);
-
-    // Parse input
     const input = tool.input as AskUserQuestionInput | undefined;
     const questions = input?.questions;
     const completedAnswers = React.useMemo(() => parseToolUserInputAnswers(tool.result), [tool.result]);
+    const attemptedAnswers = React.useMemo(
+        () => parseToolUserInputAnswers(tool.requestInteraction?.response),
+        [tool.requestInteraction?.response],
+    );
+    const [selections, setSelections] = React.useState<Map<number, Set<number>>>(() => (
+        selectionsFromAnswers(questions, attemptedAnswers)
+    ));
+    const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const [legacySubmitted, setLegacySubmitted] = React.useState(false);
+    const [localError, setLocalError] = React.useState(false);
+
+    React.useEffect(() => {
+        if (!tool.requestInteraction?.commandId) return;
+        setSelections(selectionsFromAnswers(questions, attemptedAnswers));
+    }, [attemptedAnswers, questions, tool.requestInteraction?.commandId]);
 
     if (!questions || !Array.isArray(questions) || questions.length === 0) {
         return null;
@@ -188,7 +200,13 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
 
     const isRunning = tool.state === 'running';
     const interactionReadOnly = readOnly || isCodexSessionReadOnly(metadata);
-    const canInteract = !interactionReadOnly && isRunning && !isSubmitted;
+    const canInteract = !interactionReadOnly
+        && isRunning
+        && requestInteractionAllowsResponse(tool.requestInteraction)
+        && !legacySubmitted;
+    const isSettled = tool.requestInteraction
+        ? tool.requestInteraction.state === 'settled'
+        : legacySubmitted || tool.state === 'completed';
 
     // Check if all questions have at least one selection
     const allQuestionsAnswered = questions.every((_, qIndex) => {
@@ -198,6 +216,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
 
     const handleOptionToggle = React.useCallback((questionIndex: number, optionIndex: number, multiSelect: boolean) => {
         if (!canInteract) return;
+        setLocalError(false);
 
         setSelections(prev => {
             const newMap = new Map(prev);
@@ -225,12 +244,7 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
         if (interactionReadOnly || !canInteract || !sessionId || !allQuestionsAnswered || isSubmitting) return;
 
         setIsSubmitting(true);
-
-        // HACK: Disable the form immediately by switching to the submitted view.
-        // Without this, users could edit their selections while the network calls
-        // are in flight, but those edits would be ignored since we've already
-        // captured the values above. TODO: Revisit this logic.
-        setIsSubmitted(true);
+        setLocalError(false);
 
         const answers: Record<string, string> = {};
         const codexAnswers: Record<string, { answers: string[] }> = {};
@@ -253,28 +267,33 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
                     answers,
                     ...(Object.keys(codexAnswers).length > 0 ? { codexAnswers } : {}),
                 });
+                if (!tool.requestInteraction) setLegacySubmitted(true);
             }
-        } catch (error) {
-            console.error('Failed to submit answer:', error);
+        } catch {
+            console.error('Failed to submit answer');
+            setLocalError(true);
         } finally {
             setIsSubmitting(false);
         }
-    }, [interactionReadOnly, canInteract, sessionId, questions, selections, allQuestionsAnswered, isSubmitting, tool.permission?.id]);
+    }, [interactionReadOnly, canInteract, sessionId, questions, selections, allQuestionsAnswered, isSubmitting, tool.permission?.id, tool.requestInteraction]);
 
     // Show submitted state
-    if (isSubmitted || tool.state === 'completed') {
+    if (isSettled) {
         return (
             <ToolSectionView>
                 <View style={styles.submittedContainer}>
                     {questions.map((q, qIndex) => {
+                        const persisted = q.id
+                            ? completedAnswers[q.id] ?? attemptedAnswers[q.id]
+                            : undefined;
                         const selected = selections.get(qIndex);
-                        const selectedLabels = selected
+                        const selectedLabels = persisted
+                            ? persisted.join(', ')
+                            : selected
                             ? Array.from(selected)
                                 .map(optIndex => q.options[optIndex]?.label)
                                 .filter(Boolean)
                                 .join(', ')
-                            : q.id && completedAnswers[q.id]
-                                ? completedAnswers[q.id].join(', ')
                             : '-';
                         return (
                             <View key={qIndex} style={styles.submittedItem}>
@@ -291,6 +310,10 @@ const ChoiceQuestionView = React.memo<ToolViewProps>(({ tool, sessionId, metadat
     return (
         <ToolSectionView>
             <View style={styles.container}>
+                <RequestInteractionNotice
+                    interaction={tool.requestInteraction}
+                    localError={localError}
+                />
                 {questions.map((question, qIndex) => {
                     const selectedOptions = selections.get(qIndex) || new Set();
 
@@ -376,3 +399,19 @@ export const AskUserQuestionView = React.memo<ToolViewProps>((props) => (
         ? <McpElicitationView {...props} />
         : <ChoiceQuestionView {...props} />
 ));
+
+function selectionsFromAnswers(
+    questions: Question[] | undefined,
+    answers: Record<string, string[]>,
+): Map<number, Set<number>> {
+    const selections = new Map<number, Set<number>>();
+    questions?.forEach((question, questionIndex) => {
+        if (!question.id || !answers[question.id]) return;
+        const selectedLabels = new Set(answers[question.id]);
+        const optionIndexes = question.options.flatMap((option, optionIndex) => (
+            selectedLabels.has(option.label) ? [optionIndex] : []
+        ));
+        if (optionIndexes.length > 0) selections.set(questionIndex, new Set(optionIndexes));
+    });
+    return selections;
+}

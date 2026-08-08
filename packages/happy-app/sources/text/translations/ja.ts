@@ -608,6 +608,17 @@ export const ja: TranslationStructure = {
             otherDescription: '自分の回答を入力',
             otherPlaceholder: '回答を入力...',
         },
+        requestResponse: {
+            awaitingInput: 'あなたの回答待ち',
+            submitting: '送信中',
+            awaitingConfirmation: '確認待ち',
+            retryableError: '送信に失敗',
+            outcomeUnknownStatus: '結果不明',
+            unavailableStatus: '利用不可',
+            submitFailed: 'この回答を送信できませんでした。選択内容を確認して、もう一度お試しください。',
+            outcomeUnknown: 'Codex がこの回答を受信した可能性があります。リクエストが更新されるまで、再送信せずにお待ちください。',
+            unavailable: 'このリクエストは利用できなくなりました。',
+        },
         multiEdit: {
             editNumber: ({ index, total }: { index: number; total: number }) => `編集 ${index}/${total}`,
             replaceAll: 'すべて置換',

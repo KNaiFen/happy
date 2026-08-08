@@ -26,15 +26,29 @@ import { openExternalUrl } from '@/utils/openExternalUrl';
 import { ToolSectionView } from '../ToolSectionView';
 import type { ToolViewProps } from './_all';
 import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
+import { RequestInteractionNotice } from '../RequestInteractionNotice';
+import { requestInteractionAllowsResponse } from '../requestInteractionUi';
 
 export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, metadata, readOnly = false }) => {
     const { theme } = useUnistyles();
     const parsed = React.useMemo(() => parseMcpElicitation(tool.input), [tool.input]);
-    const fields = parsed?.mode === 'form' ? parsed.fields : [];
-    const [values, setValues] = React.useState<McpElicitationValues>(() => initialMcpElicitationValues(fields));
-    const [jsonText, setJsonText] = React.useState(() => parsed?.mode === 'json' ? parsed.initialJson : '{}');
+    const fields = React.useMemo(
+        () => parsed?.mode === 'form' ? parsed.fields : [],
+        [parsed],
+    );
+    const attemptedResponse = React.useMemo(
+        () => parseMcpElicitationResponse(tool.requestInteraction?.response),
+        [tool.requestInteraction?.response],
+    );
+    const [values, setValues] = React.useState<McpElicitationValues>(() => (
+        restoredMcpValues(fields, attemptedResponse)
+    ));
+    const [jsonText, setJsonText] = React.useState(() => (
+        restoredMcpJson(parsed, attemptedResponse)
+    ));
     const [submitting, setSubmitting] = React.useState<'accept' | 'cancel' | null>(null);
-    const [submittedAction, setSubmittedAction] = React.useState<'accept' | 'cancel' | null>(null);
+    const [legacySubmittedAction, setLegacySubmittedAction] = React.useState<'accept' | 'cancel' | null>(null);
+    const [localError, setLocalError] = React.useState(false);
     const response = React.useMemo(() => parseMcpElicitationResponse(tool.result), [tool.result]);
     const formContent = React.useMemo(
         () => parsed?.mode === 'form' ? serializeMcpElicitationValues(parsed.fields, values) : null,
@@ -45,13 +59,23 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
         [jsonText, parsed],
     );
     const interactionReadOnly = readOnly || isCodexSessionReadOnly(metadata);
-    const canInteract = !interactionReadOnly && tool.state === 'running' && submittedAction === null;
+    const canInteract = !interactionReadOnly
+        && tool.state === 'running'
+        && requestInteractionAllowsResponse(tool.requestInteraction)
+        && legacySubmittedAction === null;
     const canSubmit = parsed?.mode === 'url'
         || (parsed?.mode === 'form' && formContent !== null)
         || (parsed?.mode === 'json' && jsonContent !== null);
 
+    React.useEffect(() => {
+        if (!tool.requestInteraction?.commandId) return;
+        setValues(restoredMcpValues(fields, attemptedResponse));
+        setJsonText(restoredMcpJson(parsed, attemptedResponse));
+    }, [attemptedResponse, fields, parsed, tool.requestInteraction?.commandId]);
+
     const submit = React.useCallback(async () => {
         if (interactionReadOnly || !sessionId || !tool.permission?.id || !parsed || !canInteract || !canSubmit || submitting) return;
+        setLocalError(false);
         setSubmitting('accept');
         try {
             const content = parsed.mode === 'form'
@@ -60,29 +84,41 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
                     ? jsonContent ?? undefined
                     : undefined;
             await sessionAllow(sessionId, tool.permission.id, 'approved', content);
-            setSubmittedAction('accept');
+            if (!tool.requestInteraction) setLegacySubmittedAction('accept');
+        } catch {
+            console.error('Failed to submit MCP elicitation response');
+            setLocalError(true);
         } finally {
             setSubmitting(null);
         }
-    }, [interactionReadOnly, canInteract, canSubmit, formContent, jsonContent, parsed, sessionId, submitting, tool.permission?.id]);
+    }, [interactionReadOnly, canInteract, canSubmit, formContent, jsonContent, parsed, sessionId, submitting, tool.permission?.id, tool.requestInteraction]);
 
     const cancel = React.useCallback(async () => {
         if (interactionReadOnly || !sessionId || !tool.permission?.id || !canInteract || submitting) return;
+        setLocalError(false);
         setSubmitting('cancel');
         try {
             await sessionDeny(sessionId, tool.permission.id, 'abort');
-            setSubmittedAction('cancel');
+            if (!tool.requestInteraction) setLegacySubmittedAction('cancel');
+        } catch {
+            console.error('Failed to cancel MCP elicitation response');
+            setLocalError(true);
         } finally {
             setSubmitting(null);
         }
-    }, [interactionReadOnly, canInteract, sessionId, submitting, tool.permission?.id]);
+    }, [interactionReadOnly, canInteract, sessionId, submitting, tool.permission?.id, tool.requestInteraction]);
 
     if (!parsed) return null;
-    if (submittedAction || tool.state === 'completed') {
-        const action = response?.action ?? submittedAction;
+    const isSettled = tool.requestInteraction
+        ? tool.requestInteraction.state === 'settled'
+        : legacySubmittedAction !== null || tool.state === 'completed';
+    if (isSettled) {
+        const action = response?.action ?? attemptedResponse?.action ?? legacySubmittedAction;
         const content = response?.action === 'accept'
             ? response.content
-            : submittedAction === 'accept'
+            : attemptedResponse?.action === 'accept'
+                ? attemptedResponse.content
+            : legacySubmittedAction === 'accept'
                 ? parsed.mode === 'form' ? formContent : parsed.mode === 'json' ? jsonContent : null
                 : null;
         const contentRecord = content && typeof content === 'object' && !Array.isArray(content)
@@ -126,6 +162,10 @@ export const McpElicitationView = React.memo<ToolViewProps>(({ tool, sessionId, 
         <ToolSectionView>
             <View style={styles.container}>
                 {parsed.message ? <Text style={styles.message}>{parsed.message}</Text> : null}
+                <RequestInteractionNotice
+                    interaction={tool.requestInteraction}
+                    localError={localError}
+                />
                 {parsed.mode === 'form' ? parsed.fields.map((field) => (
                     <McpField
                         key={field.key}
@@ -406,3 +446,42 @@ const styles = StyleSheet.create((theme) => ({
         opacity: 0.5,
     },
 }));
+
+function restoredMcpValues(
+    fields: McpElicitationField[],
+    response: ReturnType<typeof parseMcpElicitationResponse>,
+): McpElicitationValues {
+    const values = initialMcpElicitationValues(fields);
+    if (response?.action !== 'accept') return values;
+    const content = jsonObject(response.content);
+    for (const field of fields) {
+        const value = content[field.key];
+        if (field.kind === 'boolean' && typeof value === 'boolean') values[field.key] = value;
+        else if (field.kind === 'multi' && Array.isArray(value)) {
+            values[field.key] = value.filter((entry): entry is string => typeof entry === 'string');
+        } else if ((field.kind === 'number' || field.kind === 'integer') && typeof value === 'number') {
+            values[field.key] = String(value);
+        } else if (typeof value === 'string') values[field.key] = value;
+    }
+    return values;
+}
+
+function restoredMcpJson(
+    parsed: ReturnType<typeof parseMcpElicitation>,
+    response: ReturnType<typeof parseMcpElicitationResponse>,
+): string {
+    if (response?.action === 'accept' && response.content && typeof response.content === 'object') {
+        try {
+            return JSON.stringify(response.content, null, 2);
+        } catch {
+            // Fall through to the provider's initial JSON.
+        }
+    }
+    return parsed?.mode === 'json' ? parsed.initialJson : '{}';
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}

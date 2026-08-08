@@ -652,6 +652,17 @@ export const zhHans: TranslationStructure = {
             other: '其他',
             otherDescription: '输入您自己的答案',
             otherPlaceholder: '输入您的答案...',
+        },
+        requestResponse: {
+            awaitingInput: '等待你的回答',
+            submitting: '正在提交',
+            awaitingConfirmation: '等待确认',
+            retryableError: '提交失败',
+            outcomeUnknownStatus: '结果未知',
+            unavailableStatus: '不可用',
+            submitFailed: '未能提交此回答。请检查你的选择后重试。',
+            outcomeUnknown: 'Codex 可能已收到此回答。请等待请求状态更新，不要重复提交。',
+            unavailable: '此请求已不可用，无法再提交回答。',
         }
     },
 

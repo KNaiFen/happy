@@ -650,6 +650,17 @@ export const pt: TranslationStructure = {
             other: 'Outro',
             otherDescription: 'Digite sua própria resposta',
             otherPlaceholder: 'Digite sua resposta...',
+        },
+        requestResponse: {
+            awaitingInput: 'Aguardando sua resposta',
+            submitting: 'Enviando',
+            awaitingConfirmation: 'Aguardando confirmação',
+            retryableError: 'Falha no envio',
+            outcomeUnknownStatus: 'Resultado desconhecido',
+            unavailableStatus: 'Indisponível',
+            submitFailed: 'Não foi possível enviar esta resposta. Verifique sua seleção e tente novamente.',
+            outcomeUnknown: 'O Codex pode ter recebido esta resposta. Aguarde a atualização da solicitação antes de responder novamente.',
+            unavailable: 'Esta solicitação não está mais disponível.',
         }
     },
 

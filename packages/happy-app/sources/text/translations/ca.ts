@@ -651,6 +651,17 @@ export const ca: TranslationStructure = {
             other: 'Altres',
             otherDescription: 'Escriu la teva pròpia resposta',
             otherPlaceholder: 'Escriu la teva resposta...',
+        },
+        requestResponse: {
+            awaitingInput: 'Esperant la teva resposta',
+            submitting: 'Enviant',
+            awaitingConfirmation: 'Esperant confirmació',
+            retryableError: "Error d'enviament",
+            outcomeUnknownStatus: 'Resultat desconegut',
+            unavailableStatus: 'No disponible',
+            submitFailed: "No s'ha pogut enviar aquesta resposta. Revisa la selecció i torna-ho a provar.",
+            outcomeUnknown: "És possible que Codex hagi rebut aquesta resposta. Espera que s'actualitzi la sol·licitud abans de tornar a respondre.",
+            unavailable: 'Aquesta sol·licitud ja no està disponible.',
         }
     },
 

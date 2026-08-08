@@ -667,6 +667,17 @@ export const pl: TranslationStructure = {
             other: 'Inne',
             otherDescription: 'Wpisz własną odpowiedź',
             otherPlaceholder: 'Wpisz swoją odpowiedź...',
+        },
+        requestResponse: {
+            awaitingInput: 'Oczekiwanie na odpowiedź',
+            submitting: 'Wysyłanie',
+            awaitingConfirmation: 'Oczekiwanie na potwierdzenie',
+            retryableError: 'Nie udało się wysłać',
+            outcomeUnknownStatus: 'Wynik nieznany',
+            unavailableStatus: 'Niedostępne',
+            submitFailed: 'Nie udało się wysłać tej odpowiedzi. Sprawdź wybór i spróbuj ponownie.',
+            outcomeUnknown: 'Codex mógł otrzymać tę odpowiedź. Poczekaj na aktualizację żądania przed ponowną odpowiedzią.',
+            unavailable: 'To żądanie nie jest już dostępne.',
         }
     },
 

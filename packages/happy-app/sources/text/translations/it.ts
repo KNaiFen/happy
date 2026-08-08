@@ -605,6 +605,17 @@ export const it: TranslationStructure = {
             otherDescription: 'Scrivi la tua risposta',
             otherPlaceholder: 'Scrivi la tua risposta...',
         },
+        requestResponse: {
+            awaitingInput: 'In attesa della tua risposta',
+            submitting: 'Invio in corso',
+            awaitingConfirmation: 'In attesa di conferma',
+            retryableError: 'Invio non riuscito',
+            outcomeUnknownStatus: 'Esito sconosciuto',
+            unavailableStatus: 'Non disponibile',
+            submitFailed: 'Impossibile inviare questa risposta. Controlla la selezione e riprova.',
+            outcomeUnknown: "Codex potrebbe aver ricevuto questa risposta. Attendi l'aggiornamento della richiesta prima di rispondere di nuovo.",
+            unavailable: 'Questa richiesta non è più disponibile.',
+        },
         multiEdit: {
             editNumber: ({ index, total }: { index: number; total: number }) => `Modifica ${index} di ${total}`,
             replaceAll: 'Sostituisci tutto',

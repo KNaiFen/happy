@@ -635,6 +635,17 @@ export const zhHant: TranslationStructure = {
             otherDescription: '輸入您自己的答案',
             otherPlaceholder: '輸入您的答案...',
         },
+        requestResponse: {
+            awaitingInput: '等待你的回覆',
+            submitting: '正在提交',
+            awaitingConfirmation: '等待確認',
+            retryableError: '提交失敗',
+            outcomeUnknownStatus: '結果未知',
+            unavailableStatus: '無法使用',
+            submitFailed: '無法提交此回覆。請檢查你的選擇後再試一次。',
+            outcomeUnknown: 'Codex 可能已收到此回覆。請等待請求狀態更新，不要重複提交。',
+            unavailable: '此請求已無法使用，不能再提交回覆。',
+        },
         desc: {
             terminalCmd: ({ cmd }: { cmd: string }) => `終端機(命令: ${cmd})`,
             searchPattern: ({ pattern }: { pattern: string }) => `搜尋(模式: ${pattern})`,

@@ -19,6 +19,9 @@ import type { Metadata } from '@/sync/storageTypes';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { useIsTablet } from '@/utils/responsive';
+import type { CodexRequestInteraction } from '@/sync/typesMessage';
+import { RequestInteractionNotice } from './RequestInteractionNotice';
+import { requestInteractionAllowsResponse } from './requestInteractionUi';
 
 interface PermissionActionButtonProps {
     label: string;
@@ -90,14 +93,22 @@ interface PermissionFooterProps {
     toolInput?: unknown;
     metadata?: Metadata | null;
     readOnly?: boolean;
+    requestInteraction?: CodexRequestInteraction;
 }
 
-export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, sessionId, metadata, readOnly = false }) => {
+export const PermissionFooter: React.FC<PermissionFooterProps> = ({
+    permission,
+    sessionId,
+    metadata,
+    readOnly = false,
+    requestInteraction,
+}) => {
     const { theme } = useUnistyles();
     const isTablet = useIsTablet();
     const { height: windowHeight } = useWindowDimensions();
     const [loadingButton, setLoadingButton] = useState<'allow' | 'abort' | null>(null);
     const [loadingForSession, setLoadingForSession] = useState(false);
+    const [localError, setLocalError] = useState(false);
     const isCodexV4 = metadata?.flavor === 'codex' && metadata.codexSyncVersion === 4;
     const isPending = permission.status === 'pending';
     const isApproved = permission.status === 'approved';
@@ -105,38 +116,45 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
     const isCodexApproved = isApproved && (permission.decision === 'approved' || !permission.decision);
     const isCodexApprovedForSession = isApproved && permission.decision === 'approved_for_session';
     const isCodexAborted = isDenied && permission.decision === 'abort';
+    const canRespond = isPending && requestInteractionAllowsResponse(requestInteraction);
 
     const handleApprove = async () => {
-        if (!isPending || loadingButton !== null || loadingForSession) return;
+        if (!canRespond || loadingButton !== null || loadingForSession) return;
+        setLocalError(false);
         setLoadingButton('allow');
         try {
             await sessionAllow(sessionId, permission.id, 'approved');
         } catch {
             console.error('Failed to approve Codex permission');
+            setLocalError(true);
         } finally {
             setLoadingButton(null);
         }
     };
 
     const handleApproveForSession = async () => {
-        if (!isPending || loadingButton !== null || loadingForSession) return;
+        if (!canRespond || loadingButton !== null || loadingForSession) return;
+        setLocalError(false);
         setLoadingForSession(true);
         try {
             await sessionAllow(sessionId, permission.id, 'approved_for_session');
         } catch {
             console.error('Failed to approve Codex permission for session');
+            setLocalError(true);
         } finally {
             setLoadingForSession(false);
         }
     };
 
     const handleAbort = async () => {
-        if (!isPending || loadingButton !== null || loadingForSession) return;
+        if (!canRespond || loadingButton !== null || loadingForSession) return;
+        setLocalError(false);
         setLoadingButton('abort');
         try {
             await sessionDeny(sessionId, permission.id, 'abort');
         } catch {
             console.error('Failed to stop Codex permission');
+            setLocalError(true);
         } finally {
             setLoadingButton(null);
         }
@@ -214,6 +232,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
 
     return (
         <View style={styles.container}>
+            <RequestInteractionNotice interaction={requestInteraction} localError={localError} />
             <ScrollView
                 style={styles.optionsScroll}
                 contentContainerStyle={styles.buttonContainer}
@@ -224,7 +243,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                     label: t('common.yes'),
                     loading: loadingButton === 'allow',
                     onPress: handleApprove,
-                    disabled: !isPending || loadingButton !== null || loadingForSession,
+                    disabled: !canRespond || loadingButton !== null || loadingForSession,
                     buttonStyle: [styles.button, isCodexApproved && styles.buttonSelected, (isCodexAborted || isCodexApprovedForSession) && styles.buttonInactive],
                     textStyle: [styles.buttonText, isPending && styles.buttonTextAction, isCodexApproved && styles.buttonTextSelected],
                 })}
@@ -232,7 +251,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                     label: t('codex.permissions.yesForSession'),
                     loading: loadingForSession,
                     onPress: handleApproveForSession,
-                    disabled: !isPending || loadingButton !== null || loadingForSession,
+                    disabled: !canRespond || loadingButton !== null || loadingForSession,
                     buttonStyle: [styles.button, styles.buttonForSession, isCodexApprovedForSession && styles.buttonSelected, (isCodexAborted || isCodexApproved) && styles.buttonInactive],
                     textStyle: [styles.buttonText, isPending && styles.buttonTextForSession, isCodexApprovedForSession && styles.buttonTextSelected],
                     numberOfLines: 2,
@@ -241,7 +260,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                     label: t('codex.permissions.stopAndExplain'),
                     loading: loadingButton === 'abort',
                     onPress: handleAbort,
-                    disabled: !isPending || loadingButton !== null || loadingForSession,
+                    disabled: !canRespond || loadingButton !== null || loadingForSession,
                     buttonStyle: [styles.button, isCodexAborted && styles.buttonSelected, (isCodexApproved || isCodexApprovedForSession) && styles.buttonInactive],
                     textStyle: [styles.buttonText, isPending && styles.buttonTextAction, isCodexAborted && styles.buttonTextSelected],
                     numberOfLines: 2,
