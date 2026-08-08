@@ -22,7 +22,7 @@ import {
     type CodexRuntimeEntityV4,
     type CodexTurnEntityV4,
     type SyncEntitySnapshotV4,
-} from '@slopus/happy-wire';
+} from '../../packages/happy-wire/src';
 import { decrypt } from '../../packages/happy-cli/src/api/encryption';
 import { SyncV4Crypto as NodeSyncV4Crypto } from '../../packages/happy-cli/src/api/syncV4Crypto';
 import { deriveKey } from '../../packages/happy-cli/src/utils/deriveKey';
