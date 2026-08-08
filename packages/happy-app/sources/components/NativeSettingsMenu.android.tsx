@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { DropdownMenu, DropdownMenuItem } from '@expo/ui/jetpack-compose';
+import { testID as composeTestID } from '@expo/ui/jetpack-compose/modifiers';
 import { Pressable, StyleSheet } from 'react-native';
 import type { NativeSettingsMenuProps } from './NativeSettingsMenu';
 
@@ -27,6 +28,7 @@ export function NativeSettingsMenu({
             expanded={expanded}
             onDismissRequest={() => setExpanded(false)}
             style={style}
+            modifiers={testID ? [composeTestID(testID)] : undefined}
         >
             <DropdownMenu.Items>
                 {groups.flatMap((group) => group.options.map((option) => (
@@ -45,7 +47,6 @@ export function NativeSettingsMenu({
             </DropdownMenu.Items>
             <DropdownMenu.Trigger>
                 <Pressable
-                    testID={testID}
                     onPress={() => setExpanded(true)}
                     style={styles.trigger}
                     accessibilityRole="button"
