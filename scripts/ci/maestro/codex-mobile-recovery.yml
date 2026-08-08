@@ -93,10 +93,15 @@ tags:
 - hideKeyboard
 - tapOn:
     id: agent-input-send
-- extendedWaitUntil:
-    visible:
+- scrollUntilVisible:
+    # The recovered timeline can remain scrolled above the newest compact item;
+    # bring the virtualized divider into the hierarchy before asserting it.
+    element:
       id: codex-timeline-context-compaction
+    direction: DOWN
     timeout: 60000
+- assertVisible:
+    id: codex-timeline-context-compaction
 - assertNotVisible: CodexControlCommand
 - assertNotVisible: CodexCompact
 - scrollUntilVisible:
