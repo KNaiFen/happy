@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CodexCommandEntityV4, CodexTurnEntityV4 } from '@slopus/happy-wire';
+import type {
+    CodexCommandEntityV4,
+    CodexRuntimeEntityV4,
+    CodexThreadEntityV4,
+    CodexTurnEntityV4,
+} from '@slopus/happy-wire';
 import { createCodexV4Projection } from './codexV4Projection';
 
 const {
@@ -70,13 +75,19 @@ function queuedState(queueEntryId: string) {
         planRevision: 0,
         diffRevision: 0,
     } as CodexTurnEntityV4;
+    projection.thread = { threadId: 'thread-1' } as CodexThreadEntityV4;
+    projection.runtime = {
+        gateway: { generation: 11 },
+        execution: { type: 'active' },
+    } as unknown as CodexRuntimeEntityV4;
     return {
         sessions: {
             'session-1': {
                 metadata: {
-                    flavor: 'codex',
-                    codexSyncVersion: 4,
-                    codexCapabilities: { queueSteering: true },
+                        flavor: 'codex',
+                        codexSyncVersion: 4,
+                        codexThreadId: 'thread-1',
+                        codexCapabilities: { queueSteering: true },
                 },
             },
         },
@@ -162,6 +173,35 @@ describe('Codex queued message ops', () => {
             bindingGeneration: 7,
         });
         expect(sessionRPC).not.toHaveBeenCalled();
+    });
+
+    it('attaches the current Gateway generation to interrupt and goal commands', async () => {
+        getState.mockReturnValue(queuedState('queued-direct-controls'));
+        const { sessionAbort, sessionGoalAction } = await import('./ops');
+
+        await sessionAbort('session-1');
+        await sessionGoalAction('session-1', 'clear');
+        await sessionGoalAction('session-1', 'edit', 'finish the task');
+
+        expect(publishCodexV4Command).toHaveBeenNthCalledWith(1, 'session-1', {
+            command: 'turn.interrupt',
+            threadId: 'thread-1',
+            expectedTurnId: 'turn-active',
+            payload: { expectedTurnId: 'turn-active' },
+            bindingGeneration: 11,
+        });
+        expect(publishCodexV4Command).toHaveBeenNthCalledWith(2, 'session-1', {
+            command: 'goal.clear',
+            threadId: 'thread-1',
+            payload: {},
+            bindingGeneration: 11,
+        });
+        expect(publishCodexV4Command).toHaveBeenNthCalledWith(3, 'session-1', {
+            command: 'goal.set',
+            threadId: 'thread-1',
+            payload: { objective: 'finish the task' },
+            bindingGeneration: 11,
+        });
     });
 
     it('rejects every mutating operation for a provider-created child', async () => {
@@ -337,6 +377,7 @@ describe('Codex queued message ops', () => {
             },
             codexV4Sessions: {
                 'session-current': {
+                    runtime: { gateway: { generation: 13 } },
                     entities: {
                         'codex.request': {
                             old: {
@@ -372,6 +413,7 @@ describe('Codex queued message ops', () => {
                 requestId: 'request-reused',
                 response: { decision: 'accept' },
             },
+            bindingGeneration: 13,
         });
         expect(sessionRPC).not.toHaveBeenCalled();
     });

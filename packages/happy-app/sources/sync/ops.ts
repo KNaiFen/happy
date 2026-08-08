@@ -16,6 +16,7 @@ import {
     isCodexGatewaySession,
     isCodexSessionReadOnly,
     resolveCodexGatewayBinding,
+    resolveCodexV4GatewayGeneration,
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
@@ -776,11 +777,13 @@ export async function sessionAbort(sessionId: string): Promise<void> {
         }
         return;
     }
+    const bindingGeneration = resolveCodexV4GatewayGeneration(projection);
     await sync.publishCodexV4Command(sessionId, {
         command: 'turn.interrupt',
         threadId,
         expectedTurnId: activeTurn.turnId,
         payload: { expectedTurnId: activeTurn.turnId },
+        ...(bindingGeneration !== undefined ? { bindingGeneration } : {}),
     });
 }
 
@@ -920,16 +923,19 @@ export async function sessionGoalAction(
 ): Promise<void> {
     assertSessionInteractionAllowed(sessionId);
     const state = storage.getState();
+    const projection = state.codexV4Sessions[sessionId];
     const threadId = resolveCodexV4SessionCapabilities(
         state.sessions[sessionId]?.metadata,
-        state.codexV4Sessions[sessionId],
+        projection,
     ).ownedThreadId;
     if (!threadId) throw new Error('Codex thread is not available');
+    const bindingGeneration = resolveCodexV4GatewayGeneration(projection);
     if (action === 'clear') {
         await sync.publishCodexV4Command(sessionId, {
             command: 'goal.clear',
             threadId,
             payload: {},
+            ...(bindingGeneration !== undefined ? { bindingGeneration } : {}),
         });
         return;
     }
@@ -938,6 +944,7 @@ export async function sessionGoalAction(
             command: 'goal.set',
             threadId,
             payload: { objective },
+            ...(bindingGeneration !== undefined ? { bindingGeneration } : {}),
         });
         return;
     }
@@ -969,6 +976,7 @@ async function resolveCodexV4Request(
         ))
         : null;
     if (!request || request.status !== 'pending') throw new Error('Codex request is no longer pending');
+    const bindingGeneration = resolveCodexV4GatewayGeneration(projection);
     await sync.publishCodexV4Command(sessionId, {
         command: 'request.resolve',
         threadId: request.threadId,
@@ -977,6 +985,7 @@ async function resolveCodexV4Request(
             requestId,
             response: codexV4RequestResponse({ request, approved, decision, updatedInput }),
         },
+        ...(bindingGeneration !== undefined ? { bindingGeneration } : {}),
     });
 }
 

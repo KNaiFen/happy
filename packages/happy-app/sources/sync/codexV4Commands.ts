@@ -5,13 +5,10 @@ import {
     type CodexTurnEntityV4,
 } from '@slopus/happy-wire';
 import type { CodexV4Projection } from './codexV4Projection';
+import { resolveCodexV4GatewayGeneration } from './codexV4Capabilities';
 
 type CodexV4Json = CodexCommandEntityV4['payload'];
 type CodexV4JsonObject = { [key: string]: CodexV4Json };
-type GatewayRuntime = NonNullable<CodexV4Projection['runtime']> & {
-    gateway?: { generation: number };
-};
-
 export interface CodexV4CommandDraft {
     command: string;
     payload: CodexCommandEntityV4['payload'];
@@ -160,7 +157,7 @@ export function commandForCodexV4Input(options: {
     attachments?: CodexV4AttachmentReference[];
     followUpMode?: CodexV4FollowUpMode;
 }): CodexV4CommandDraft {
-    const bindingGeneration = (options.projection.runtime as GatewayRuntime | null)?.gateway?.generation;
+    const bindingGeneration = resolveCodexV4GatewayGeneration(options.projection);
     const threadId = options.threadId !== undefined
         ? options.threadId
         : options.projection.thread?.threadId ?? null;

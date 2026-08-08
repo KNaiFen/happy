@@ -1,5 +1,6 @@
 import type {
     CodexCommandEntityV4,
+    CodexRuntimeEntityV4,
     CodexThreadEntityV4,
     CodexTurnEntityV4,
 } from '@slopus/happy-wire';
@@ -12,6 +13,7 @@ import {
     codexV4CommandTargetThreadId,
     isCodexSessionReadOnly,
     resolveCodexGatewayBinding,
+    resolveCodexV4GatewayGeneration,
     resolveCodexV4SessionCapabilities,
 } from './codexV4Capabilities';
 
@@ -195,5 +197,29 @@ describe('Codex v4 App capabilities', () => {
             metadata: metadata(),
             projection: projection(),
         })).toThrow('expected turn');
+    });
+
+    it('requires an explicit generation once the projected Gateway exists', () => {
+        const current = projection();
+        current.runtime = {
+            gateway: { generation: 4 },
+        } as unknown as CodexRuntimeEntityV4;
+
+        expect(resolveCodexV4GatewayGeneration(current)).toBe(4);
+        expect(() => assertCodexV4CommandPublishAllowed({
+            command: command(),
+            metadata: metadata(),
+            projection: current,
+        })).toThrow('binding generation is required');
+        expect(() => assertCodexV4CommandPublishAllowed({
+            command: command({ bindingGeneration: 3 }),
+            metadata: metadata(),
+            projection: current,
+        })).not.toThrow();
+        expect(() => assertCodexV4CommandPublishAllowed({
+            command: command(),
+            metadata: metadata(),
+            projection: projection(),
+        })).not.toThrow();
     });
 });

@@ -104,6 +104,20 @@ export function resolveCodexV4SessionCapabilities(
     };
 }
 
+export function resolveCodexV4GatewayGeneration(
+    projection: CodexV4Projection | null | undefined,
+): number | undefined {
+    const runtime = projection?.runtime as (NonNullable<CodexV4Projection['runtime']> & {
+        gateway?: { generation?: unknown };
+    }) | null | undefined;
+    const generation = runtime?.gateway?.generation;
+    return typeof generation === 'number'
+        && Number.isSafeInteger(generation)
+        && generation >= 0
+        ? generation
+        : undefined;
+}
+
 export function assertCodexV4CommandPublishAllowed(options: {
     command: CodexCommandEntityV4;
     metadata: Metadata | null | undefined;
@@ -111,6 +125,13 @@ export function assertCodexV4CommandPublishAllowed(options: {
 }): void {
     const capabilities = resolveCodexV4SessionCapabilities(options.metadata, options.projection);
     assertCodexSessionWritable(options.metadata);
+
+    if (
+        resolveCodexV4GatewayGeneration(options.projection) !== undefined
+        && options.command.bindingGeneration === undefined
+    ) {
+        throw new Error('Codex Gateway binding generation is required for this command');
+    }
 
     const targetThreadId = codexV4CommandTargetThreadId(options.command);
     if (targetThreadId !== null) {

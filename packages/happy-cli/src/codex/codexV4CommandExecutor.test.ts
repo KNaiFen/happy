@@ -209,6 +209,58 @@ describe('CodexV4CommandExecutor', () => {
         });
     });
 
+    it('checks the binding before direct control and request side effects', async () => {
+        const client = fakeClient();
+        const requestBroker = {
+            resolve: vi.fn(async ({ requestId }: { requestId: string }) => ({ providerRequestId: requestId })),
+        };
+        const beforeProviderCall = vi.fn(() => {
+            throw new Error('binding superseded');
+        });
+        const guarded = executor(client, { beforeProviderCall, requestBroker });
+
+        await expect(guarded.execute(command('turn.interrupt', {}, {
+            expectedTurnId: 'turn-active',
+        }))).rejects.toThrow('binding superseded');
+        await expect(guarded.execute(command('goal.set', {
+            objective: 'finish',
+        }))).rejects.toThrow('binding superseded');
+        await expect(guarded.execute(command('goal.clear', {}))).rejects.toThrow('binding superseded');
+        await expect(guarded.execute(command('request.resolve', {
+            requestId: 'request-1',
+            response: { decision: 'accept' },
+        }))).rejects.toThrow('binding superseded');
+
+        expect(client.interruptTurnOnThread).not.toHaveBeenCalled();
+        expect(client.setGoal).not.toHaveBeenCalled();
+        expect(client.clearGoal).not.toHaveBeenCalled();
+        expect(requestBroker.resolve).not.toHaveBeenCalled();
+        expect(beforeProviderCall).toHaveBeenCalledTimes(4);
+    });
+
+    it('passes a valid request response to the broker after the binding check', async () => {
+        const client = fakeClient();
+        const requestBroker = {
+            resolve: vi.fn(async ({ requestId }: { requestId: string }) => ({ providerRequestId: requestId })),
+        };
+        const beforeProviderCall = vi.fn();
+
+        await expect(executor(client, { beforeProviderCall, requestBroker }).execute(command(
+            'request.resolve',
+            { requestId: 'request-1', response: { decision: 'accept' } },
+        ))).resolves.toEqual({
+            threadId: 'thread-1',
+            providerRequestId: 'request-1',
+        });
+
+        expect(beforeProviderCall).toHaveBeenCalledOnce();
+        expect(requestBroker.resolve).toHaveBeenCalledWith({
+            threadId: 'thread-1',
+            requestId: 'request-1',
+            response: { decision: 'accept' },
+        });
+    });
+
     it('reconciles turn submission through official UserMessage.clientId', async () => {
         const client = fakeClient({
             readThreadComplete: vi.fn(async () => ({
