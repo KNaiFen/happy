@@ -35,9 +35,17 @@ opens a real form elicitation, the test queues a follow-up turn, and the App is
 killed while the request is still waiting for input. After relaunching the same
 session, the test verifies that the radio option starts unchecked, submits the
 selected value, observes the MCP's exact accepted-choice marker, consumes the
-queued turn, and receives the provider's final response. Fixture diagnostics
-must independently confirm that the expected choice reached the MCP tool; a
-generic tool output or a visible request card alone is not acceptance evidence.
+queued turn, and receives a response sentinel dedicated to that queued input.
+Fixture diagnostics must independently confirm that the expected choice reached
+the MCP tool and that the exact queued message reached the Responses provider;
+a generic tool output, a disappearing queue dock, or a visible request card
+alone is not acceptance evidence.
+
+The fixture decrypts the final Sync v4 snapshot with the session data key. The
+field run passes only when the selected thread's runtime is connected and idle,
+has no pending approval or user-input count, every observed turn is completed,
+and no request remains pending. Visible streamed text before
+`response.completed` is therefore insufficient to prove turn completion.
 
 The recovered request must not show a running-tool timer, and a failed internal
 `request.resolve` command must not appear as a separate timeline card. The

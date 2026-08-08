@@ -82,6 +82,14 @@ still performs the final generation check before any provider-side effect;
 missing or stale generations are cancelled and may never be rebound to a newer
 Gateway.
 
+The App distinguishes failures before and after durable outbox persistence. A
+pre-persistence failure may restore the controls for an explicit retry. If the
+mutation is already durable but its local optimistic projection fails, the App
+shows an unknown outcome and keeps the controls disabled until journal replay,
+snapshot recovery, or synchronized command/request state becomes authoritative.
+It must not publish a second non-idempotent response merely because a local
+projection callback rejected.
+
 The durable interaction states have these user-visible consequences:
 
 - a pending request with no response attempt remains editable and shows a
@@ -99,7 +107,8 @@ The durable interaction states have these user-visible consequences:
 App restart, another client, journal replay, and snapshot replacement therefore
 reconstruct the same selection, progress, and error state. A failed
 `request.resolve` is rendered on the original request card rather than as a
-separate internal control-command card.
+separate internal control-command card; `request.resolve` commands remain hidden
+even if a legacy or malformed producer supplied `payload.displayText`.
 
 ## Stable-v2 Boundary
 
