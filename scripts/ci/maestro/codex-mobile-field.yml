@@ -65,9 +65,9 @@ tags:
 - assertVisible: yolo
 - tapOn:
     # The Android native settings trigger is a Compose menu without a stable
-    # accessibility node. This is its fixed slot in the compact composer row
-    # on the pinned Pixel 7 profile.
-    point: "21%,93%"
+    # accessibility node. Image upload is disabled in this fixture, so the
+    # permission gear is the first fixed slot in the pinned Pixel 7 composer.
+    point: "10%,93%"
 - extendedWaitUntil:
     visible: default permissions
     timeout: 15000
