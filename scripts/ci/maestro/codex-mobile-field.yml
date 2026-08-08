@@ -79,10 +79,14 @@ tags:
 
 - extendedWaitUntil:
     visible:
-      id: codex-mcp-tool-message
+      text: Choose the restart-safe field option
     timeout: 60000
+- assertVisible: Waiting for you
+- assertVisible:
+    text: Resume after restart
+    checked: false
 - assertNotVisible: Used 2 tools
-- takeScreenshot: codex-live-single-mcp
+- takeScreenshot: codex-live-pending-elicitation
 
 - assertNotVisible: Queue
 - assertNotVisible: Steer
@@ -112,83 +116,6 @@ tags:
 - takeScreenshot: codex-queued-follow-up
 - tapOn:
     id: codex-queued-message-menu-dismiss
-- extendedWaitUntil:
-    notVisible:
-      id: codex-queued-message-dock
-    timeout: 120000
-
-- scrollUntilVisible:
-    element: Official Codex MCP E2E response
-    direction: DOWN
-    timeout: 60000
-- assertVisible: Official Codex MCP E2E response
-- assertNotVisible: Used 2 tools
-- assertNotVisible: Plan mode with options
-- assertNotVisible: Based on this message, call
-- assertNotVisible: <happy-system>
-- takeScreenshot: codex-first-reply
-
-- tapOn:
-    id: agent-input-message
-- setClipboard: /compact
-- pasteText
-- hideKeyboard
-- tapOn:
-    id: agent-input-send
-- extendedWaitUntil:
-    visible:
-      id: codex-timeline-context-compaction
-    timeout: 60000
-- assertNotVisible: CodexControlCommand
-- assertNotVisible: CodexCompact
-- takeScreenshot: codex-context-compaction
-
-- pressKey: home
-- launchApp:
-    stopApp: false
-- extendedWaitUntil:
-    visible: New chat
-    timeout: 45000
-- extendedWaitUntil:
-    notVisible:
-      id: empty-main-new-session
-    timeout: 45000
-- runFlow:
-    when:
-      visible: Terminals
-    commands:
-      - tapOn: New chat
-- extendedWaitUntil:
-    notVisible: Terminals
-    timeout: 45000
-- extendedWaitUntil:
-    visible:
-      id: agent-input-message
-    timeout: 45000
-- runFlow:
-    when:
-      visible:
-        id: "com.google.android.inputmethod.latin:id/0_resource_name_obfuscated"
-    commands:
-      - hideKeyboard
-- scrollUntilVisible:
-    element:
-      id: codex-timeline-context-compaction
-    direction: DOWN
-    timeout: 60000
-- assertVisible:
-    id: codex-timeline-context-compaction
-- scrollUntilVisible:
-    element: Official Codex MCP E2E response
-    direction: UP
-    timeout: 60000
-- assertVisible: Official Codex MCP E2E response
-- assertNotVisible: Used 2 tools
-- assertNotVisible: CodexControlCommand
-- assertNotVisible: CodexCompact
-- assertNotVisible: Plan mode with options
-- assertNotVisible: Based on this message, call
-- assertNotVisible: <happy-system>
-
+- takeScreenshot: codex-pending-elicitation-with-queue
 - pressKey: home
 - killApp

@@ -6,8 +6,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
     OFFICIAL_CODEX_MCP_SENTINEL,
+    OFFICIAL_CODEX_MCP_CHOICE_SENTINEL,
     OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL,
     OFFICIAL_CODEX_RESPONSE_SENTINEL,
+    OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
     OFFICIAL_CODEX_FIELD_MCP_SERVER,
     OFFICIAL_CODEX_FIELD_MCP_TOOL,
     OFFICIAL_CODEX_TOOL_SENTINEL,
@@ -129,6 +131,49 @@ describe('official Codex Responses fixture', () => {
         assert.equal(snapshot.mcpToolCallCount, 1);
         assert.equal(snapshot.mcpToolOutputObserved, true);
         assert.deepEqual(snapshot.toolNames, ['shell_command', toolName]);
+    });
+
+    it('selects the configured elicitation tool and proves the accepted choice output', async () => {
+        fixture = await startCodexResponsesFixture({
+            preferFixtureMcpTool: true,
+            fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
+        });
+        await warmFixture(fixture);
+        const elicitationTool = `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_ELICITATION_TOOL}`;
+
+        const first = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{ type: 'message', role: 'user' }],
+            tools: [
+                {
+                    type: 'function',
+                    name: `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_MCP_TOOL}`,
+                },
+                { type: 'function', name: elicitationTool },
+            ],
+        });
+        expect(first).toContain(`\"name\":\"${elicitationTool}\"`);
+        expect(first).toContain('\"arguments\":\"{}\"');
+        expect(first).not.toContain(OFFICIAL_CODEX_MCP_SENTINEL);
+
+        const second = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'function_call_output',
+                call_id: 'happy-official-codex-tool-call-2',
+                output: JSON.stringify({
+                    content: [{ type: 'text', text: OFFICIAL_CODEX_MCP_CHOICE_SENTINEL }],
+                }),
+            }],
+        });
+        expect(second).toContain(OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL);
+
+        const snapshot = fixture.snapshot();
+        assert.equal(snapshot.fixtureMcpOfferCount, 1);
+        assert.equal(snapshot.mcpToolCallCount, 1);
+        assert.equal(snapshot.mcpToolOutputObserved, true);
+        assert.equal(snapshot.mcpChoiceAccepted, true);
+        assert.deepEqual(snapshot.toolNames, ['shell_command', elicitationTool]);
     });
 
     it.each([

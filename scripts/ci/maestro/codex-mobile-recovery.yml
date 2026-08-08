@@ -33,6 +33,39 @@ tags:
     commands:
       - hideKeyboard
 - scrollUntilVisible:
+    element: Choose the restart-safe field option
+    direction: UP
+    centerElement: true
+    timeout: 60000
+- assertVisible: Waiting for you
+- assertVisible:
+    id: codex-queued-message-dock
+- assertVisible: Q
+- tapOn:
+    text: Resume after restart
+    checked: false
+- assertVisible:
+    text: Resume after restart
+    checked: true
+- takeScreenshot: codex-elicitation-restored-and-selected
+- tapOn: Submit Answer
+- extendedWaitUntil:
+    visible: "Field choice:"
+    timeout: 60000
+- assertVisible: Resume after restart
+- assertNotVisible: Waiting for you
+- extendedWaitUntil:
+    notVisible:
+      id: codex-queued-message-dock
+    timeout: 150000
+- scrollUntilVisible:
+    element: Official Codex MCP E2E response
+    direction: DOWN
+    timeout: 150000
+- assertVisible: Official Codex MCP E2E response
+- assertNotVisible: CodexControlCommand
+- assertNotVisible: request.resolve
+- scrollUntilVisible:
     element:
       id: codex-mcp-tool-message
     direction: UP
@@ -43,9 +76,22 @@ tags:
 - extendedWaitUntil:
     # Maestro matches one accessibility text node. Tool output is a JSON node with newlines,
     # so require the marker anywhere in that visible node rather than assuming it is standalone.
-    visible: '(?s).*MCP single-card field verification.*'
+    visible: '(?s).*MCP restart-safe field choice accepted.*'
     timeout: 45000
 - back
+- tapOn:
+    id: agent-input-message
+- setClipboard: /compact
+- pasteText
+- hideKeyboard
+- tapOn:
+    id: agent-input-send
+- extendedWaitUntil:
+    visible:
+      id: codex-timeline-context-compaction
+    timeout: 60000
+- assertNotVisible: CodexControlCommand
+- assertNotVisible: CodexCompact
 - scrollUntilVisible:
     element: resume-history-from-android-e2e
     direction: UP
@@ -61,6 +107,9 @@ tags:
     direction: DOWN
     timeout: 45000
 - assertVisible: Official Codex source E2E response
+- assertNotVisible: Used 2 tools
+- assertNotVisible: CodexControlCommand
+- assertNotVisible: CodexCompact
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
 - assertNotVisible: <happy-system>

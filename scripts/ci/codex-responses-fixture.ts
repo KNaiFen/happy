@@ -13,8 +13,10 @@ export const OFFICIAL_CODEX_RESPONSE_SENTINEL = 'Official Codex source E2E respo
 export const OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL = 'Official Codex MCP E2E response';
 export const OFFICIAL_CODEX_TOOL_SENTINEL = 'HAPPY_OFFICIAL_CODEX_TOOL_OK';
 export const OFFICIAL_CODEX_MCP_SENTINEL = 'MCP single-card field verification';
+export const OFFICIAL_CODEX_MCP_CHOICE_SENTINEL = 'MCP restart-safe field choice accepted';
 export const OFFICIAL_CODEX_FIELD_MCP_SERVER = 'field_e2e';
 export const OFFICIAL_CODEX_FIELD_MCP_TOOL = 'record_field_event';
+export const OFFICIAL_CODEX_FIELD_ELICITATION_TOOL = 'collect_field_choice';
 
 const maximumRequestBytes = 8 * 1024 * 1024;
 const maximumDecodedRequestBytes = 32 * 1024 * 1024;
@@ -36,6 +38,7 @@ export interface CodexResponsesFixtureSnapshot {
     toolSearchOutputObserved: boolean;
     mcpToolCallCount: number;
     mcpToolOutputObserved: boolean;
+    mcpChoiceAccepted: boolean;
     toolNames: string[];
     instructionSentinelObserved: boolean;
     requestShapes: RequestShape[];
@@ -44,6 +47,9 @@ export interface CodexResponsesFixtureSnapshot {
 export interface CodexResponsesFixtureOptions {
     expectedInstructionSentinel?: string;
     preferFixtureMcpTool?: boolean;
+    fixtureMcpToolName?:
+        | typeof OFFICIAL_CODEX_FIELD_MCP_TOOL
+        | typeof OFFICIAL_CODEX_FIELD_ELICITATION_TOOL;
     mcpFollowupDelayMs?: number;
 }
 
@@ -81,11 +87,15 @@ export async function startCodexResponsesFixture(
         toolSearchOutputObserved: false,
         mcpToolCallCount: 0,
         mcpToolOutputObserved: false,
+        mcpChoiceAccepted: false,
         toolNames: [],
         instructionSentinelObserved: false,
         requestShapes: [],
     };
-    const pendingTools = new Map<string, { isFixtureMcp: boolean }>();
+    const pendingTools = new Map<string, {
+        isFixtureMcp: boolean;
+        expectsChoice: boolean;
+    }>();
     const pendingToolSearches = new Set<string>();
     const server = createServer((request, response) => {
         void handleRequest(
@@ -187,7 +197,7 @@ async function handleRequest(
     response: ServerResponse,
     state: CodexResponsesFixtureSnapshot,
     options: CodexResponsesFixtureOptions,
-    pendingTools: Map<string, { isFixtureMcp: boolean }>,
+    pendingTools: Map<string, { isFixtureMcp: boolean; expectsChoice: boolean }>,
     pendingToolSearches: Set<string>,
 ): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
@@ -215,6 +225,12 @@ async function handleRequest(
         state.toolOutputObserved = true;
         state.toolOutputCount += 1;
         if (completedTool.isFixtureMcp) state.mcpToolOutputObserved = true;
+        if (
+            completedTool.expectsChoice
+            && containsString(completedTool.output, OFFICIAL_CODEX_MCP_CHOICE_SENTINEL)
+        ) {
+            state.mcpChoiceAccepted = true;
+        }
     }
     const completedToolSearch = findMatchingToolSearchOutput(body, pendingToolSearches);
     if (completedToolSearch) {
@@ -255,11 +271,15 @@ async function handleRequest(
         const callId = state.toolNames.length === 0
             ? toolCallId
             : `${toolCallId}-${state.toolNames.length + 1}`;
-        const isFixtureMcp = isFixtureMcpTool(selectedTool);
-        pendingTools.set(callId, { isFixtureMcp });
+        const isFixtureMcp = isFixtureMcpTool(selectedTool, options);
+        pendingTools.set(callId, {
+            isFixtureMcp,
+            expectsChoice: isFixtureMcp
+                && fixtureMcpToolName(options) === OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
+        });
         state.toolNames.push(canonicalToolName(selectedTool));
         if (isFixtureMcp) state.mcpToolCallCount += 1;
-        writeEvents(response, toolCallEvents(callId, selectedTool));
+        writeEvents(response, toolCallEvents(callId, selectedTool, options));
         response.end();
         return;
     }
@@ -267,7 +287,7 @@ async function handleRequest(
     // Keep the seed history turn on the deterministic shell path. Tool search is
     // reserved for the later App-driven turn, after that warm-up has completed.
     if (state.toolNames.length === 0) {
-        pendingTools.set(toolCallId, { isFixtureMcp: false });
+        pendingTools.set(toolCallId, { isFixtureMcp: false, expectsChoice: false });
         state.toolNames.push('shell_command');
         writeEvents(response, toolCallEvents(toolCallId, { name: 'shell_command' }));
         response.end();
@@ -312,9 +332,12 @@ function toolSearchEvents(callId: string): Array<Record<string, unknown>> {
 function toolCallEvents(
     callId: string,
     tool: OfferedTool,
+    options: CodexResponsesFixtureOptions = {},
 ): Array<Record<string, unknown>> {
-    const argumentsJson = JSON.stringify(isFixtureMcpTool(tool)
-        ? { marker: OFFICIAL_CODEX_MCP_SENTINEL }
+    const argumentsJson = JSON.stringify(isFixtureMcpTool(tool, options)
+        ? fixtureMcpToolName(options) === OFFICIAL_CODEX_FIELD_MCP_TOOL
+            ? { marker: OFFICIAL_CODEX_MCP_SENTINEL }
+            : {}
         : {
             command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
             workdir: null,
@@ -519,8 +542,8 @@ function collectInputTypes(body: unknown): string[] {
 
 function findMatchingToolOutput(
     body: unknown,
-    pendingTools: Map<string, { isFixtureMcp: boolean }>,
-): { callId: string; isFixtureMcp: boolean } | null {
+    pendingTools: Map<string, { isFixtureMcp: boolean; expectsChoice: boolean }>,
+): { callId: string; isFixtureMcp: boolean; expectsChoice: boolean; output: unknown } | null {
     if (!isRecord(body) || !Array.isArray(body.input)) return null;
     for (const item of body.input) {
         if (
@@ -531,7 +554,7 @@ function findMatchingToolOutput(
             continue;
         }
         const pending = pendingTools.get(item.call_id);
-        if (pending) return { callId: item.call_id, ...pending };
+        if (pending) return { callId: item.call_id, output: item.output, ...pending };
     }
     return null;
 }
@@ -568,10 +591,10 @@ function selectFixtureMcpTool(
     options: CodexResponsesFixtureOptions,
 ): OfferedTool | null {
     const offeredTools = [...collectOfferedTools(body), ...discoveredTools];
-    state.fixtureMcpOfferCount += offeredTools.filter(isFixtureMcpTool).length;
+    state.fixtureMcpOfferCount += offeredTools.filter((tool) => isFixtureMcpTool(tool, options)).length;
     state.namespaceToolOfferCount += offeredTools.filter((tool) => tool.namespace).length;
     if (options.preferFixtureMcpTool && state.mcpToolCallCount === 0) {
-        const fixtureMcp = offeredTools.find(isFixtureMcpTool);
+        const fixtureMcp = offeredTools.find((tool) => isFixtureMcpTool(tool, options));
         if (fixtureMcp) return fixtureMcp;
     }
     return null;
@@ -628,18 +651,26 @@ function canonicalToolName(tool: OfferedTool): string {
     return `${tool.namespace}${separator}${tool.name}`;
 }
 
-function isFixtureMcpTool(tool: OfferedTool): boolean {
+function isFixtureMcpTool(
+    tool: OfferedTool,
+    options: CodexResponsesFixtureOptions,
+): boolean {
     const name = tool.name.toLowerCase();
+    const expectedToolName = fixtureMcpToolName(options).toLowerCase();
     if (tool.namespace) {
         const namespace = tool.namespace.toLowerCase().replace(/__$/, '');
-        return name === OFFICIAL_CODEX_FIELD_MCP_TOOL
+        return name === expectedToolName
             && (
                 namespace === OFFICIAL_CODEX_FIELD_MCP_SERVER
                 || namespace === `mcp__${OFFICIAL_CODEX_FIELD_MCP_SERVER}`
             );
     }
-    return name === `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_MCP_TOOL}`
-        || name === `mcp__${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_MCP_TOOL}`;
+    return name === `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${expectedToolName}`
+        || name === `mcp__${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${expectedToolName}`;
+}
+
+function fixtureMcpToolName(options: CodexResponsesFixtureOptions): string {
+    return options.fixtureMcpToolName ?? OFFICIAL_CODEX_FIELD_MCP_TOOL;
 }
 
 function tomlString(value: string): string {

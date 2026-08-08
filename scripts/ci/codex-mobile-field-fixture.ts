@@ -18,6 +18,7 @@ import nacl from 'tweetnacl';
 import { decrypt } from '../../packages/happy-cli/src/api/encryption';
 import { deriveKey } from '../../packages/happy-cli/src/utils/deriveKey';
 import {
+    OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
     type CodexResponsesFixture,
     startCodexResponsesFixture,
     writeCodexResponsesConfig,
@@ -47,7 +48,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 9;
+    schemaVersion: 10;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -64,6 +65,7 @@ interface FieldDiagnostic {
     providerToolSearchOutputObserved: boolean;
     providerMcpToolCallCount: number;
     providerMcpToolOutputObserved: boolean;
+    providerMcpChoiceAccepted: boolean;
     sessionDataKeyDecryptable: boolean | null;
     sessionMetadataDecryptable: boolean | null;
     sessionMetadataCodexV4: boolean | null;
@@ -111,6 +113,7 @@ async function main(): Promise<void> {
     const codexVersion = configureOfficialCodexPath();
     responsesFixture = await startCodexResponsesFixture({
         preferFixtureMcpTool: true,
+        fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
         mcpFollowupDelayMs: 90_000,
     });
     const codexHome = join(fixtureRoot, 'codex-home');
@@ -159,7 +162,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 9,
+        schemaVersion: 10,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -176,6 +179,7 @@ async function main(): Promise<void> {
         providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
+        providerMcpChoiceAccepted: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
@@ -184,7 +188,7 @@ async function main(): Promise<void> {
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 9,
+            schemaVersion: 10,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -201,6 +205,7 @@ async function main(): Promise<void> {
             providerToolSearchOutputObserved: false,
             providerMcpToolCallCount: 0,
             providerMcpToolOutputObserved: false,
+            providerMcpChoiceAccepted: false,
             sessionDataKeyDecryptable: null,
             sessionMetadataDecryptable: null,
             sessionMetadataCodexV4: null,
@@ -234,7 +239,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 9,
+        schemaVersion: 10,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -251,6 +256,7 @@ async function main(): Promise<void> {
         providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
+        providerMcpChoiceAccepted: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
@@ -522,7 +528,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 9,
+        schemaVersion: 10,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -539,6 +545,7 @@ async function verifyFieldRoundTrip(
         providerToolSearchOutputObserved: false,
         providerMcpToolCallCount: 0,
         providerMcpToolOutputObserved: false,
+        providerMcpChoiceAccepted: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
@@ -555,6 +562,7 @@ async function verifyFieldRoundTrip(
         diagnostic.providerToolSearchOutputObserved = provider?.toolSearchOutputObserved ?? false;
         diagnostic.providerMcpToolCallCount = provider?.mcpToolCallCount ?? 0;
         diagnostic.providerMcpToolOutputObserved = provider?.mcpToolOutputObserved ?? false;
+        diagnostic.providerMcpChoiceAccepted = provider?.mcpChoiceAccepted ?? false;
         const serialized = JSON.stringify(diagnostic);
         if (serialized === lastDiagnostic) return;
         lastDiagnostic = serialized;
@@ -636,6 +644,7 @@ async function verifyFieldRoundTrip(
                 && (provider?.fixtureMcpOfferCount ?? 0) >= 1
                 && (provider?.mcpToolCallCount ?? 0) >= 1
                 && provider?.mcpToolOutputObserved === true
+                && provider?.mcpChoiceAccepted === true
             );
             await persistDiagnostic();
             if (!diagnostic.cliRoundTripObserved) return false;
@@ -666,6 +675,7 @@ async function verifyFieldRoundTrip(
             providerToolSearchOutputObserved: diagnostic.providerToolSearchOutputObserved,
             providerMcpToolCallCount: diagnostic.providerMcpToolCallCount,
             providerMcpToolOutputObserved: diagnostic.providerMcpToolOutputObserved,
+            providerMcpChoiceAccepted: diagnostic.providerMcpChoiceAccepted,
             sessionDataKeyDecryptable: diagnostic.sessionDataKeyDecryptable,
             sessionMetadataDecryptable: diagnostic.sessionMetadataDecryptable,
             sessionMetadataCodexV4: diagnostic.sessionMetadataCodexV4,
