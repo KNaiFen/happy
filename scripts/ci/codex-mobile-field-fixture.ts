@@ -310,7 +310,8 @@ async function seedOfficialCodexHistory(): Promise<string> {
         await codex.connect();
         const started = await codex.startThread({
             cwd: homedir(),
-            approvalPolicy: 'never',
+            // Official Codex auto-declines non-empty MCP forms under `never`.
+            approvalPolicy: 'on-request',
             sandbox: 'read-only',
         });
         const completed = await codex.sendTurnAndWait('resume-history-from-android-e2e', {
