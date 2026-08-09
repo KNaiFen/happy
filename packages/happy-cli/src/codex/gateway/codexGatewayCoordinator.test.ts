@@ -5,6 +5,7 @@ import type {
     CodexServerRequest,
 } from '../codexAppServerClient';
 import { CodexV4CommandCancelledError } from '../codexV4CommandProcessor';
+import { CodexV4NotificationRoutingError } from '../codexV4ThreadRouter';
 import type { ServerNotification, Thread } from '../protocol';
 import {
     CodexGatewayCoordinator,
@@ -337,7 +338,41 @@ describe('Codex Gateway coordinator', () => {
         expect(order).toEqual(['first.completed', 'second.completed']);
     });
 
-    it('reports a routed notification failure once without poisoning the serial queue', async () => {
+    it('keeps a later fatal notification out of an earlier barrier prefix', async () => {
+        const routeFailure = new Error('later notification route failed');
+        const harness = createHarness({ 'thread-root': thread('thread-root', 'idle') });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-root');
+        const runtime = harness.runtimes.get('thread-root')!;
+        let releaseFirst!: () => void;
+        let firstStarted!: () => void;
+        const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+        const firstObserved = new Promise<void>((resolve) => { firstStarted = resolve; });
+        runtime.onNotification = async (notification) => {
+            if (notification.method === 'thread/status/changed' && notification.params.status.type === 'active') {
+                firstStarted();
+                await firstGate;
+                return;
+            }
+            throw routeFailure;
+        };
+
+        harness.client.emitNotification(threadStatus('thread-root', 'active'));
+        await firstObserved;
+        const firstBarrier = harness.coordinator.awaitNotificationBarrier();
+        harness.client.emitNotification(threadStatus('thread-root', 'idle'));
+
+        releaseFirst();
+        await expect(firstBarrier).resolves.toBeUndefined();
+        await expect(harness.coordinator.awaitNotificationBarrier()).rejects.toBe(routeFailure);
+
+        runtime.onNotification = null;
+        harness.client.emitNotification(threadStatus('thread-root', 'active'));
+        await expect(harness.coordinator.flush()).resolves.toBeUndefined();
+        expect(runtime.notifications).toHaveLength(3);
+    });
+
+    it('reports a routed notification failure without poisoning the serial queue', async () => {
         const routeFailure = new Error('notification route failed');
         const errors: unknown[] = [];
         const harness = createHarness(
@@ -373,6 +408,36 @@ describe('Codex Gateway coordinator', () => {
         harness.client.emitNotification(threadStatus('thread-root', 'active'));
         await expect(harness.coordinator.flush()).resolves.toBeUndefined();
         expect(runtime.notifications).toHaveLength(3);
+    });
+
+    it('keeps a throwing error reporter from poisoning notification ordering', async () => {
+        const routeFailure = new Error('notification route failed');
+        const harness = createHarness(
+            { 'thread-root': thread('thread-root', 'idle') },
+            { onError: () => { throw new Error('diagnostic sink failed'); } },
+        );
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-root');
+        const runtime = harness.runtimes.get('thread-root')!;
+        runtime.onNotification = async (notification) => {
+            if (
+                notification.method === 'thread/status/changed'
+                && notification.params.status.type === 'active'
+            ) {
+                throw new CodexV4NotificationRoutingError(
+                    'thread-root',
+                    true,
+                    routeFailure,
+                );
+            }
+        };
+
+        harness.client.emitNotification(threadStatus('thread-root', 'active'));
+        harness.client.emitNotification(threadStatus('thread-root', 'idle'));
+
+        await expect(harness.coordinator.awaitNotificationBarrier()).resolves.toBeUndefined();
+        await expect(harness.coordinator.flush()).resolves.toBeUndefined();
+        expect(runtime.notifications).toHaveLength(2);
     });
 
     it('keeps a bridge lifecycle that arrives before a terminal root binding as subscription proof', async () => {

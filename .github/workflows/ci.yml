@@ -473,8 +473,11 @@ jobs:
       - name: Typecheck official Codex fixtures from source
         run: node node_modules/typescript/bin/tsc --project scripts/ci/tsconfig.codex-official.json
 
-      - name: Test Responses API fixture from source
-        run: node node_modules/vitest/vitest.mjs run scripts/ci/codex-responses-fixture.test.ts
+      - name: Test official Codex fixture helpers from source
+        run: >-
+          node node_modules/vitest/vitest.mjs run
+          scripts/ci/codex-responses-fixture.test.ts
+          scripts/ci/codex-mobile-field-command-correlation.test.ts
 
       - name: Download source-built official Codex
         uses: actions/download-artifact@v4

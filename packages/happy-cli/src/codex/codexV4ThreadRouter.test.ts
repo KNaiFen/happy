@@ -12,6 +12,7 @@ import type {
 import type { ServerNotification, Thread, ThreadGoal, ThreadItem } from './protocol';
 import type { CodexV4ChildThreadRoute } from './codexV4Migration';
 import {
+    CodexV4NotificationRoutingError,
     CodexV4ThreadRouter,
     type CodexV4SessionBinding,
 } from './codexV4ThreadRouter';
@@ -121,6 +122,17 @@ function binding(sessionId: string, initialMigrationState?: SyncV4MigrationJourn
     const persistCodexThreadRoute = vi.fn(async (route: SyncV4CodexThreadRoute) => {
         codexThreadRoutes.set(route.threadId, route);
     });
+    const persistCodexOrphan = vi.fn(async (threadId: string, notification: ServerNotification) => {
+        orphanSequence += 1;
+        const pending = {
+            notificationId: `00000000-0000-4000-8000-${orphanSequence.toString().padStart(12, '0')}`,
+            threadId,
+            notification,
+            receivedAt: orphanSequence,
+        } as unknown as SyncV4PendingCodexNotification;
+        pendingCodexNotifications.push(pending);
+        return pending;
+    });
     const value = {
         sessionId,
         sessionKey: new Uint8Array(32),
@@ -133,17 +145,7 @@ function binding(sessionId: string, initialMigrationState?: SyncV4MigrationJourn
             }),
             getPendingCodexNotifications: vi.fn(() => [...pendingCodexNotifications]),
             getCodexThreadRoutes: vi.fn(() => new Map(codexThreadRoutes)),
-            persistCodexOrphan: vi.fn(async (threadId: string, notification: ServerNotification) => {
-                orphanSequence += 1;
-                const pending = {
-                    notificationId: `00000000-0000-4000-8000-${orphanSequence.toString().padStart(12, '0')}`,
-                    threadId,
-                    notification,
-                    receivedAt: orphanSequence,
-                } as unknown as SyncV4PendingCodexNotification;
-                pendingCodexNotifications.push(pending);
-                return pending;
-            }),
+            persistCodexOrphan,
             completeCodexOrphan: vi.fn(async (notificationId: string) => {
                 const index = pendingCodexNotifications.findIndex((entry) => entry.notificationId === notificationId);
                 if (index >= 0) pendingCodexNotifications.splice(index, 1);
@@ -164,6 +166,7 @@ function binding(sessionId: string, initialMigrationState?: SyncV4MigrationJourn
         pendingCodexNotifications,
         codexThreadRoutes,
         persistCodexThreadRoute,
+        persistCodexOrphan,
     };
 }
 
@@ -513,7 +516,11 @@ describe('CodexV4ThreadRouter', () => {
                     modelContextWindow: 200_000,
                 },
             },
-        } as ServerNotification)).rejects.toThrow('persist before rollback');
+        } as ServerNotification)).rejects.toMatchObject({
+            name: 'CodexV4NotificationRoutingError',
+            durablyQueued: true,
+            diagnosticCause: expect.objectContaining({ message: 'persist before rollback' }),
+        });
         expect(root.pendingCodexNotifications).toHaveLength(1);
         root.mapper.order.length = 0;
 
@@ -547,11 +554,18 @@ describe('CodexV4ThreadRouter', () => {
         await expect(router.handleNotificationAsync({
             method: 'thread/started',
             params: { thread: snapshot },
-        } as ServerNotification)).rejects.toThrow('initial route failure');
+        } as ServerNotification)).rejects.toMatchObject({
+            name: 'CodexV4NotificationRoutingError',
+            durablyQueued: true,
+            diagnosticCause: expect.objectContaining({ message: 'initial route failure' }),
+        });
         root.mapper.notificationFailure = new Error('orphan replay failure');
 
-        await expect(router.reconcileRollbackSnapshot('thread-root', snapshot))
-            .rejects.toThrow('orphan replay failure');
+        await expect(router.reconcileRollbackSnapshot('thread-root', snapshot)).rejects.toMatchObject({
+            name: 'CodexV4NotificationRoutingError',
+            durablyQueued: true,
+            diagnosticCause: expect.objectContaining({ message: 'orphan replay failure' }),
+        });
         expect(root.mapper.rollbackSnapshots).toEqual([]);
         expect(root.mapper.flushCount).toBe(0);
         expect(root.pendingCodexNotifications).toHaveLength(1);
@@ -1802,12 +1816,51 @@ describe('CodexV4ThreadRouter', () => {
                 status: { type: 'active', activeFlags: [] },
             },
         } as ServerNotification;
-        router.handleNotification(notification);
-        await router.flush();
+        await expect(router.handleNotificationAsync(notification)).rejects.toMatchObject({
+            name: 'CodexV4NotificationRoutingError',
+            durablyQueued: true,
+            diagnosticCause: expect.objectContaining({ message: 'projection unavailable' }),
+        });
 
         expect(errors).toHaveLength(1);
+        expect(errors[0]).toBeInstanceOf(CodexV4NotificationRoutingError);
         expect(root.pendingCodexNotifications).toHaveLength(1);
         expect(root.pendingCodexNotifications[0].notification).toEqual(notification);
+        await router.close();
+    });
+
+    it('marks a bound notification unrecoverable when orphan persistence fails', async () => {
+        const root = binding('happy-root');
+        const errors: unknown[] = [];
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => thread('thread-root', null),
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+            onError: (error) => errors.push(error),
+        });
+        await router.registerRootThread('thread-root');
+        root.mapper.notificationFailure = new Error('projection unavailable');
+        root.persistCodexOrphan.mockRejectedValueOnce(new Error('orphan journal unavailable'));
+
+        const notification = {
+            method: 'thread/name/updated',
+            params: {
+                threadId: 'thread-root',
+                threadName: 'lost name',
+            },
+        } as ServerNotification;
+
+        await expect(router.handleNotificationAsync(notification)).rejects.toMatchObject({
+            name: 'CodexV4NotificationRoutingError',
+            durablyQueued: false,
+            diagnosticCause: expect.objectContaining({ message: 'orphan journal unavailable' }),
+            routingCause: expect.objectContaining({ message: 'projection unavailable' }),
+        });
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toBeInstanceOf(CodexV4NotificationRoutingError);
+        expect(root.pendingCodexNotifications).toHaveLength(0);
         await router.close();
     });
 

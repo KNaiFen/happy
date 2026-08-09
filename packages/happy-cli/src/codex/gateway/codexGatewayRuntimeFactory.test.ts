@@ -12,6 +12,7 @@ import {
     type CodexAppServerClient,
 } from '../codexAppServerClient';
 import { CodexV4CommandCancelledError } from '../codexV4CommandProcessor';
+import { CodexV4NotificationRoutingError } from '../codexV4ThreadRouter';
 import type { Thread } from '../protocol';
 import {
     CodexGatewayRuntimeFactory,
@@ -51,6 +52,17 @@ function thread(id = 'thread-a'): Thread {
         parentThreadId: null,
         status: { type: 'idle' },
         turns: [],
+    } as unknown as Thread;
+}
+
+function threadWithHistory(id = 'thread-a'): Thread {
+    return {
+        ...thread(id),
+        turns: [{
+            id: 'turn-history',
+            status: 'completed',
+            items: [],
+        }],
     } as unknown as Thread;
 }
 
@@ -164,6 +176,7 @@ function createHarness(options: {
         readThreadComplete: vi.fn(async ({ threadId }: { threadId: string }) => ({
             thread: threadId === 'thread-a' ? providerThread : thread(threadId),
         })),
+        rollbackThread: vi.fn(async () => ({ thread: thread() })),
         getGoal: vi.fn(async () => ({ goal: null })),
         startTurnOnThread: vi.fn(async (_threadId, text) => {
             order.push(`provider.turn:${text}`);
@@ -438,7 +451,36 @@ describe('CodexGatewayRuntimeFactory', () => {
         await runtime!.close();
     });
 
-    it('marks rollback result unknown when the notification barrier cannot be proven', async () => {
+    it('retries local rollback coordination after snapshot persistence fails without replaying the provider RPC', async () => {
+        const harness = createHarness();
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+        await runtime!.activate(thread());
+        vi.mocked(harness.client.readThreadComplete).mockResolvedValueOnce({
+            thread: threadWithHistory(),
+        });
+        vi.mocked(harness.sync.publishEntities)
+            .mockRejectedValueOnce(new Error('snapshot journal write failed'));
+
+        await harness.emit(command('thread.rollback', { allTurns: true }, {
+            commandId: 'command-clear-retry',
+            providerId: 'command-clear-retry',
+            clientUserMessageId: 'command-clear-retry',
+        }));
+
+        expect(harness.awaitNotificationBarrier).toHaveBeenCalledTimes(1);
+        expect(harness.commandStatuses.get('command-clear-retry')).toBe('succeeded');
+        expect(harness.client.readThreadComplete).toHaveBeenCalledTimes(1);
+        expect(harness.client.rollbackThread).toHaveBeenCalledTimes(1);
+        await runtime!.close();
+    });
+
+    it('marks rollback result unknown when the captured notification prefix is uncertain', async () => {
         const harness = createHarness();
         const runtime = await harness.factory.tryCreate({
             threadId: 'thread-a',
@@ -449,7 +491,9 @@ describe('CodexGatewayRuntimeFactory', () => {
         });
         await runtime!.activate(thread());
         const publishCount = vi.mocked(harness.sync.publishEntities).mock.calls.length;
-        harness.awaitNotificationBarrier.mockRejectedValueOnce(new Error('notification pipeline failed'));
+        harness.awaitNotificationBarrier.mockRejectedValueOnce(
+            new Error('notification pipeline failed'),
+        );
 
         await harness.emit(command('thread.rollback', { allTurns: true }, {
             commandId: 'command-clear-unknown',
@@ -458,7 +502,40 @@ describe('CodexGatewayRuntimeFactory', () => {
         }));
 
         expect(harness.commandStatuses.get('command-clear-unknown')).toBe('resultUnknown');
+        expect(harness.awaitNotificationBarrier).toHaveBeenCalledTimes(1);
         expect(vi.mocked(harness.sync.publishEntities)).toHaveBeenCalledTimes(publishCount);
+        await runtime!.close();
+    });
+
+    it('does not retry rollback after an undurable notification failure', async () => {
+        const harness = createHarness();
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+        await runtime!.activate(thread());
+        const fatal = new CodexV4NotificationRoutingError(
+            'thread-a',
+            false,
+            new Error('orphan journal unavailable'),
+        );
+        vi.mocked(harness.client.readThreadComplete).mockResolvedValueOnce({
+            thread: threadWithHistory(),
+        });
+        harness.awaitNotificationBarrier.mockRejectedValue(fatal);
+
+        await harness.emit(command('thread.rollback', { allTurns: true }, {
+            commandId: 'command-clear-undurable',
+            providerId: 'command-clear-undurable',
+            clientUserMessageId: 'command-clear-undurable',
+        }));
+
+        expect(harness.awaitNotificationBarrier).toHaveBeenCalledTimes(1);
+        expect(harness.commandStatuses.get('command-clear-undurable')).toBe('resultUnknown');
+        expect(harness.client.rollbackThread).toHaveBeenCalledTimes(1);
         await runtime!.close();
     });
 

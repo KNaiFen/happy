@@ -54,12 +54,15 @@ has no pending approval or user-input count, no decrypted thread has an
 `inProgress` turn, every observed turn has an authoritative terminal timestamp,
 and no request remains pending. Interrupted rollback history is valid terminal
 history; visible streamed text before `response.completed` is insufficient to
-prove turn completion. Diagnostic schema 14 separately records the post-clear
+prove turn completion. Diagnostic schema 15 separately records the post-clear
 provider sentinel, absence of `/clear` provider text, idle runtime,
-no-active-turn state, successful structured rollback command, and the exact
-post-clear text command paired with a succeeded result carrying the same command
-ID. The workflow starts the daemon through a packed and isolated npm CLI install,
-not the repository's `dist` entrypoint.
+no-active-turn state, and the exact post-clear text command paired with a
+succeeded result carrying the same command ID. For rollback it records the
+selected command ID, its payload-free terminal status and update time, plus a
+finite error kind that distinguishes missing, mismatched, nonterminal, failed,
+unknown, unreplayed, and cancelled evidence. The workflow starts the daemon
+through a packed and isolated npm CLI install, not the repository's `dist`
+entrypoint.
 
 The recovered request must not show a running-tool timer, and a failed internal
 `request.resolve` command must not appear as a separate timeline card. The

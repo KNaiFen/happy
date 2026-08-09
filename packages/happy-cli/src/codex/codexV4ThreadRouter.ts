@@ -101,6 +101,36 @@ class CodexRouteAwaitingRegistrationError extends Error {
     }
 }
 
+/**
+ * Identifies whether a failed notification still has a durable recovery copy.
+ * The Gateway barrier may continue past a durable orphan, but must reject when
+ * the notification was not persisted and therefore cannot be recovered later.
+ */
+export class CodexV4NotificationRoutingError extends Error {
+    readonly name = 'CodexV4NotificationRoutingError';
+
+    constructor(
+        readonly threadId: string,
+        readonly durablyQueued: boolean,
+        readonly diagnosticCause: unknown,
+        readonly routingCause: unknown = null,
+    ) {
+        super(durablyQueued
+            ? 'Codex notification was durably queued for recovery'
+            : 'Codex notification could not be durably queued for recovery');
+    }
+
+    get orphanPersisted(): boolean {
+        return this.durablyQueued;
+    }
+}
+
+export function isCodexV4NotificationRoutingError(
+    error: unknown,
+): error is CodexV4NotificationRoutingError {
+    return error instanceof CodexV4NotificationRoutingError;
+}
+
 export class CodexV4ThreadRouter {
     private readonly bindingsByThread = new Map<string, CodexV4SessionBinding>();
     private readonly bindingPromisesByThread = new Map<string, Promise<CodexV4SessionBinding>>();
@@ -229,7 +259,11 @@ export class CodexV4ThreadRouter {
                     .some((entry) => entry.threadId === threadId)
             ) {
                 this.threadsWithPendingOrphans.add(threadId);
-                await this.drainPendingNotifications(threadId);
+                try {
+                    await this.drainPendingNotifications(threadId);
+                } catch (error) {
+                    throw new CodexV4NotificationRoutingError(threadId, true, error);
+                }
             }
             await binding.mapper.reconcileRollbackSnapshot(snapshot);
             await binding.mapper.flush();
@@ -274,11 +308,17 @@ export class CodexV4ThreadRouter {
         const threadId = notificationThreadId(notification);
         if (!threadId) return;
         if (this.relinquishedChildThreads.has(threadId)) return;
+        let orphanPersisted = false;
         const task = async () => {
             const canonical = canonicalCodexNotificationForJournal(notification);
             if (this.provisionalRoutesByThread.has(threadId)) {
                 if (!canonical) return;
-                await this.persistOrphan(threadId, canonical);
+                try {
+                    await this.persistOrphan(threadId, canonical);
+                    orphanPersisted = true;
+                } catch (error) {
+                    throw new CodexV4NotificationRoutingError(threadId, false, error);
+                }
                 if (!this.provisionalRoutesByThread.has(threadId)) {
                     await this.drainPendingNotificationsAwaitingRegistration(threadId);
                 }
@@ -289,7 +329,12 @@ export class CodexV4ThreadRouter {
                 || this.threadsWithPendingOrphans.has(threadId)
             ) {
                 if (!canonical) return;
-                await this.persistOrphan(threadId, canonical);
+                try {
+                    await this.persistOrphan(threadId, canonical);
+                    orphanPersisted = true;
+                } catch (error) {
+                    throw new CodexV4NotificationRoutingError(threadId, false, error);
+                }
                 if (!this.orphanRetryTimers.has(threadId)) {
                     await this.drainPendingNotificationsAwaitingRegistration(threadId);
                 }
@@ -298,16 +343,35 @@ export class CodexV4ThreadRouter {
             try {
                 await this.routeNotification(notification, false, null);
             } catch (error) {
-                if (canonical) await this.persistOrphan(threadId, canonical);
+                if (canonical) {
+                    try {
+                        await this.persistOrphan(threadId, canonical);
+                        orphanPersisted = true;
+                    } catch (persistError) {
+                        throw new CodexV4NotificationRoutingError(
+                            threadId,
+                            false,
+                            persistError,
+                            error,
+                        );
+                    }
+                }
                 throw error;
             }
         };
         try {
             await this.enqueueThread(threadId, task);
         } catch (error) {
-            this.options.onError?.(error);
-            this.scheduleOrphanRetry(threadId);
-            throw error;
+            const routingError = isCodexV4NotificationRoutingError(error)
+                ? error
+                : new CodexV4NotificationRoutingError(threadId, orphanPersisted, error);
+            try {
+                this.options.onError?.(routingError);
+            } catch {
+                // Diagnostics must never replace the durable-routing outcome.
+            }
+            if (routingError.durablyQueued) this.scheduleOrphanRetry(threadId);
+            throw routingError;
         }
     }
 
