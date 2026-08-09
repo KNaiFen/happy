@@ -9,11 +9,16 @@ on:
       - "packages/happy-cli/**"
       - "packages/happy-app/**"
       - "scripts/ci/**"
+      - "scripts/postinstall.cjs"
+      - "patches/**"
+      - ".npmrc"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/codex-android-field-e2e.yml"
       - ".github/workflows/build-official-codex-source.yml"
+      - "!**/*.md"
+      - "!**/*.mdx"
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:

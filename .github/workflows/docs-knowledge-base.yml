@@ -2,6 +2,7 @@ name: Documentation knowledge base
 
 on:
   push:
+    branches: [main]
     paths:
       - "**/*.md"
       - "**/*.mdx"
@@ -11,6 +12,7 @@ on:
       - ".github/workflows/build-*-release.yml"
       - ".github/workflows/docs-knowledge-base.yml"
   pull_request:
+    branches: [main]
     paths:
       - "**/*.md"
       - "**/*.mdx"

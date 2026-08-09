@@ -2,32 +2,48 @@ name: CLI Smoke Test
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
       - 'packages/happy-cli/**'
       - 'packages/happy-server/**'
       - 'packages/happy-wire/**'
+      - 'scripts/ci/**'
+      - 'scripts/postinstall.cjs'
+      - 'patches/**'
+      - '.npmrc'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
       - '.github/workflows/cli-smoke-test.yml'
+      - '!**/*.md'
+      - '!**/*.mdx'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  smoke-test-linux:
+  prepare:
+    name: Build CLI smoke packages once
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [20, 24]
-
+    timeout-minutes: 20
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
 
     - name: Install pnpm
       uses: pnpm/action-setup@v6
+      with:
+        version: 10.11.0
 
-    - name: Setup Node.js ${{ matrix.node-version }}
+    - name: Setup Node.js
       uses: actions/setup-node@v7
       with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'pnpm'
+        node-version: 24
+        cache: pnpm
 
     - name: Install dependencies
       run: pnpm install --frozen-lockfile
@@ -37,26 +53,62 @@ jobs:
         pnpm --filter @slopus/happy-wire build
         pnpm --filter happy build
 
-    # `happy server` resolves the self-host runtime and bundled webapp from
-    # happy-server-self-host. The server package is JS/TS and lets npm install
-    # platform-specific dependencies such as Prisma and sharp normally.
+    # The server archive is only exercised on Linux. Building it in this Linux
+    # preparation job preserves the platform-specific Prisma/native dependency
+    # contract while avoiding duplicate builds for Node 20 and Node 24.
     - name: Generate Prisma client + bundle happy-server-self-host webapp
       run: |
         pnpm --filter happy-server-self-host generate
         pnpm --filter happy-server-self-host run bundle:webapp
 
-    - name: Pack packages
+    - name: Pack smoke archives
       run: |
-        pnpm --filter @slopus/happy-wire pack --pack-destination packages/happy-wire
-        pnpm --filter happy pack --pack-destination packages/happy-cli
-        pnpm --filter happy-server-self-host pack --pack-destination packages/happy-server
+        mkdir -p artifacts
+        pnpm --filter @slopus/happy-wire pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+        pnpm --filter happy pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+        pnpm --filter happy-server-self-host pack --pack-destination "$GITHUB_WORKSPACE/artifacts"
+        WIRE_VERSION="$(node -p "require('./packages/happy-wire/package.json').version")"
+        CLI_VERSION="$(node -p "require('./packages/happy-cli/package.json').version")"
+        SERVER_VERSION="$(node -p "require('./packages/happy-server/package.json').version")"
+        mv "artifacts/slopus-happy-wire-${WIRE_VERSION}.tgz" artifacts/happy-wire.tgz
+        mv "artifacts/happy-${CLI_VERSION}.tgz" artifacts/happy-cli.tgz
+        mv "artifacts/happy-server-self-host-${SERVER_VERSION}.tgz" artifacts/happy-server.tgz
+        test "$(find artifacts -maxdepth 1 -name '*.tgz' | wc -l)" -eq 3
+
+    - name: Upload smoke archives
+      uses: actions/upload-artifact@v4
+      with:
+        name: cli-smoke-packages
+        path: artifacts/*.tgz
+        if-no-files-found: error
+        retention-days: 1
+
+  smoke-test-linux:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        node-version: [20, 24]
+
+    steps:
+    - name: Download smoke archives
+      uses: actions/download-artifact@v4
+      with:
+        name: cli-smoke-packages
+        path: artifacts
+
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ matrix.node-version }}
 
     - name: Install packed packages globally
       run: |
-        WIRE_PACKAGE_FILE=$(ls packages/happy-wire/*.tgz)
-        HAPPY_PACKAGE_FILE=$(ls packages/happy-cli/*.tgz)
-        SERVER_PACKAGE_FILE=$(ls packages/happy-server/*.tgz)
-        npm install -g "./$WIRE_PACKAGE_FILE" "./$SERVER_PACKAGE_FILE" "./$HAPPY_PACKAGE_FILE"
+        test -f artifacts/happy-wire.tgz
+        test -f artifacts/happy-cli.tgz
+        test -f artifacts/happy-server.tgz
+        npm install -g artifacts/happy-wire.tgz artifacts/happy-server.tgz artifacts/happy-cli.tgz
 
     - name: Test binary execution
       run: |
@@ -110,41 +162,31 @@ jobs:
         echo "happy server smoke test passed (booted + Prisma query engine OK)"
 
   smoke-test-windows:
+    needs: prepare
     runs-on: windows-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         node-version: [20, 24]
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
-
-    - name: Install pnpm
-      uses: pnpm/action-setup@v6
+    - name: Download smoke archives
+      uses: actions/download-artifact@v4
+      with:
+        name: cli-smoke-packages
+        path: artifacts
 
     - name: Setup Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v7
       with:
         node-version: ${{ matrix.node-version }}
-        cache: 'pnpm'
-
-    - name: Install dependencies
-      run: pnpm install --frozen-lockfile
-
-    - name: Build packages
-      run: |
-        pnpm --filter @slopus/happy-wire build
-        pnpm --filter happy build
-
-    - name: Pack packages
-      run: |
-        pnpm --filter @slopus/happy-wire pack --pack-destination packages/happy-wire
-        pnpm --filter happy pack --pack-destination packages/happy-cli
 
     - name: Install packed package globally
       shell: cmd
       run: |
-        for %%w in (packages\happy-wire\*.tgz) do for %%f in (packages\happy-cli\*.tgz) do npm install -g "%%w" "%%f"
+        if not exist artifacts\happy-wire.tgz exit /b 1
+        if not exist artifacts\happy-cli.tgz exit /b 1
+        npm install -g artifacts\happy-wire.tgz artifacts\happy-cli.tgz
 
     - name: Debug npm global installation structure
       shell: cmd
