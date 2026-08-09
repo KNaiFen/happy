@@ -2,10 +2,13 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 仓库内实现已完成，等待 PR 云端验收）。
+- 当前状态：进行中（阶段 1 已由 PR 云端验收并合入 `main`，阶段 2 至阶段 5 未完成）。
 - 建立日期：2026-08-10。
 - 当前基线：`origin/main@4e2f7d981b8881bcec597b6b4ec3bc69c2e58ab4`。
 - 实施分支：`codex/kb-maintenance-20260810-actions`。
+- 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
+  `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
+  `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -50,9 +53,45 @@ GitHub API 同时确认：`main` 当前没有 branch protection，仓库 ruleset
 - [x] CLI Smoke 显式使用只读权限、PR 级并发取消和合理 job timeout。
 - [x] CLI Smoke 增加单一 prepare job；四个运行矩阵腿下载同一组固定文件名 npm 归档，不再重复 pnpm install、build、Prisma/runtime/Web bundle 和 pack。Linux 另以无源码 checkout 的临时项目同地安装三份 tgz，避免 server 源码 fallback 冒充归档验收。
 - [x] 所有工作流通过结构化 YAML 解析和 `actionlint v1.7.7` 静态检查。
-- [ ] PR Documentation、CLI Smoke 和 Required CI 在同一 head SHA 上成功，且分支 push 不产生重复 run。
+- [x] PR Documentation、CLI Smoke 和 Required CI 在同一 head SHA 上成功，且分支 push 不产生重复 run。
 
 阶段 1 的直接收益只计算已实施的保守范围：样本中的 9 个 branch push 合计 8,328 runner 秒（138.8 分钟）。等价 main tree 的 8,354 runner 秒仍保留；两者合计为上述 16,682 秒。直到阶段 3 建立强制 PR 门禁和同 SHA 全局 gate 后，main 重复才能安全消除；本阶段不以缺少 main 验收换取速度。
+
+阶段 1 的 PR 云端验收均针对同一 head SHA `580a64ba`：
+
+- Documentation [31336163611](https://github.com/KNaiFen/happy/actions/runs/31336163611)、
+  CLI Smoke [31336163603](https://github.com/KNaiFen/happy/actions/runs/31336163603) 和
+  Monorepo CI [31336163776](https://github.com/KNaiFen/happy/actions/runs/31336163776) 全部成功，
+  `Required CI gate` 成功；该 SHA 没有产生 `push` 事件的重复 run。
+- CLI Smoke 的 prepare 只运行一次并耗时 187 秒；Linux 20/24 分别耗时 67/61 秒，
+  Windows 20/24 分别耗时 174/161 秒。四个运行 job 均复用 prepare 生成的同一组归档。
+- 相比整改前的代表 run
+  [31330966223](https://github.com/KNaiFen/happy/actions/runs/31330966223)，Smoke 墙钟从
+  475 秒降至 368 秒，减少 107 秒（22.5%）；job runner 时间合计从 1,228 秒降至
+  650 秒，减少 578 秒（47.1%）。该结果只证明本次布局的实际收益，不外推为长期
+  P50/P90；长期结论仍需完成验收矩阵要求的至少 20 次重新采样。
+
+合并提交 `1bfc78994dede1a1ee4e65a9384db0d0350136f9` 的 main 验收结果：
+
+- Documentation [31336894548](https://github.com/KNaiFen/happy/actions/runs/31336894548) 成功。
+- Monorepo CI [31336894660](https://github.com/KNaiFen/happy/actions/runs/31336894660) 成功，
+  墙钟 1,033 秒、17 个 job 合计 2,100 runner 秒；Required CI gate 成功。TUI job
+  耗时 794 秒，其中真实 PTY 场景 708 秒，不能以删除场景作为优化手段。
+- Android Field [31336894628](https://github.com/KNaiFen/happy/actions/runs/31336894628) 未通过：
+  Official Codex 构建成功（114 秒），APK 构建和前三个 flow 成功（bootstrap 8 秒、App
+  surface 3 秒、round trip 1 分 26 秒），但 recovery flow 在 9 分 53 秒后因
+  `Waiting for you` 不可见失败。诊断 artifact
+  [9045060275](https://github.com/KNaiFen/happy/actions/runs/31336894628/artifacts/9045060275)
+  的 `field-diagnostics.json` 为 `rollbackCommandId=null`、
+  `rollbackCommandErrorKind=commandMissing`；fixture 日志记录 `fetch failed`，而 Relay
+  在失败前的快照请求均为 HTTP 200。该合并提交未修改 Field fixture 或 App 逻辑，故不把它
+  归因于阶段 1 的 path filter 修正，也不重试或放宽断言；它是阶段 4 的开放阻塞。现有 fixture
+  日志没有时间戳，尚不能证明 `fetch failed` 是首因还是失败清理的副作用；当前可确认的故障边界
+  只是 App 未恢复请求 UI，且快照中不存在 rollback command。
+
+同一 merge SHA 的 Field 与 Monorepo CI 仍分别执行了 114 秒和 109 秒的 Official Codex
+准备，合计 223 runner 秒，并因当前跨工作流并发组串行。这是阶段 2 不可变指纹与归档复用的
+当前量化基线，不应通过删除下游 app-server/TUI/Field 验收来回避。
 
 PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步由[专门活动计划](./happy-server-global-package-resolution.md)承接。
 
@@ -81,9 +120,16 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 - [ ] 对长期 queued、superseded 和超过 SLA 的 workflow 建立终止与告警规则，不把无 job 的 queued run 当作发行证据。
 - [ ] 对 Relay `cache-to: mode=max` 做受控 A/B；只有持续减少总 runner/wall time 时才保留最大导出。
 
+阶段 4 当前证据：Field recovery 在成功 run
+[31321425891](https://github.com/KNaiFen/happy/actions/runs/31321425891) 中曾于 5 分 52 秒完成，
+但在 merge SHA run [31336894628](https://github.com/KNaiFen/happy/actions/runs/31336894628)
+中出现上述 `fetch failed`/`commandMissing`。在修复并取得新的成功诊断前，不得将 Field 设为
+Required CI gate，也不得把取消、重试或延长等待当作修复。
+
 ### 阶段 5：供应链与外部验收
 
 - [ ] 将第三方 Action 固定到完整 commit SHA，并通过 Dependabot 或 Renovate 维护更新；先覆盖 release、artifact 和密钥相关路径。
+- [ ] 升级仍使用 Node.js 20 action runtime 的 artifact 等 Action；升级后保留上传、下载、摘要和失败诊断语义，不以强制运行兼容层作为长期完成状态。
 - [ ] 启用 Dependabot security updates、PR dependency review 与适用的 CodeQL/SAST；保留现有 secret scanning、push protection、Critical dependency audit 和 Relay Trivy/SBOM。
 - [ ] 在真实 ARM64 目标设备上安装生产签名 APK，验证升级安装、真实网络切换、relay reconnect 与关键 Codex 生命周期；保留精确 workflow、artifact 和设备证据。
 - [ ] 根据实际交付方式决定是否需要 GitHub Environment 审批、发布后健康检查和回滚；构建-only 工作流不得冒充生产部署。
@@ -124,9 +170,9 @@ git diff --cached --check
 
 ## 下一步
 
-1. 精确暂存计划与 workflow 源文件，生成并暂存知识库索引。
-2. 创建 PR，确认 branch push 不再双跑，等待同一 PR head 的 Documentation、CLI Smoke 和 Required CI。
-3. 第一阶段合并并取得 main 证据后，更新本计划的实际节省与 run URL，再开始阶段 2。
+1. 创建 docs-only 证据 PR，确认计划索引变更只触发 Documentation；合并前不触碰用户的 lockfile 或本机目录。
+2. 将 Field recovery 的 `fetch failed`/`commandMissing` 作为阶段 4 的首个实现任务，先增加可定位的请求/命令生命周期证据，再修复并取得独立 Field 成功 run。
+3. 在阶段 4 未稳定前，继续保留 Field 为非必需的外部验收；阶段 2 的 Official Codex 指纹和制品复用设计可与其并行，但不得以缓存命中替代验收。
 
 ## 完成条件
 
