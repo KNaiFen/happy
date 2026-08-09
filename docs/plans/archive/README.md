@@ -13,6 +13,7 @@
 - [Codex Agent 指令与 Claude 遗留清理计划](./codex-agent-instructions-migration.md)
 - [Codex App 语义时间线去重与 Resume 焦点修复](./codex-app-semantic-timeline-dedup.md)
 - [Codex: app-server integration](./codex-app-server-migration.md)
+- [Codex /clear 状态收敛与 Gateway 临时目录自愈实施计划](./codex-clear-gateway-recovery.md)
 - [Happy CLI 独立版本命令修复计划](./codex-cli-standalone-version-fix.md)
 - [Codex 悬浮待发送条与队列管理计划](./codex-composer-pending-message-dock.md)
 - [Codex Gateway 真实配置传输修复计划](./codex-gateway-real-config-transport.md)
