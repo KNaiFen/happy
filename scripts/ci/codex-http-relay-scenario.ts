@@ -24,6 +24,7 @@ import {
     type SyncMutationV4,
     type SyncV4DiagnosticRecord,
 } from '../../packages/happy-wire/src';
+import type { Thread, ThreadTokenUsage } from '../../packages/happy-cli/src/codex/protocol';
 import { io, type Socket } from 'socket.io-client';
 import nacl from 'tweetnacl';
 
@@ -63,6 +64,9 @@ const approvalReasonSecret = 'SYNCV4_APPROVAL_REASON_SECRET_556f9710';
 const childPromptSecret = 'SYNCV4_CHILD_PROMPT_SECRET_8d76b321';
 const unknownMethodSecret = 'private/unknown/method/SYNCV4_39b420d1';
 const modelSecret = 'private-model-SYNCV4-8d94d106';
+const rollbackTurnId = 'provider-rollback-turn-private-v4';
+const rollbackItemId = 'provider-rollback-item-private-v4';
+const rollbackHistoryText = 'rollback-history-preserved-private-v4';
 
 type ProjectionModule = typeof import(
     '../../packages/happy-app/sources/sync/codexV4Projection'
@@ -942,6 +946,8 @@ async function runHttpRelayScenario(): Promise<void> {
         process.env.HAPPY_CODEX_APP_SERVER_PATH = fakeCodexPath;
 
         const providerDeltaTimes: number[] = [];
+        let rollbackUsageNotifications = 0;
+        let rollbackMetadataNotifications = 0;
         codex = new CodexAppServerClient();
         codex.setDiagnosticSink(cliDiagnostics);
         codex.setProtocolTraceSink(protocolTrace);
@@ -1013,7 +1019,22 @@ async function runHttpRelayScenario(): Promise<void> {
                     providerDeltaTimes.push(performance.now());
                 }
             }
-            router!.handleNotification(notification);
+            const isRollbackUsage = (
+                notification.method === 'thread/tokenUsage/updated'
+                && notification.params.threadId === rootThreadId
+                && notification.params.turnId === rollbackTurnId
+            );
+            const isRollbackMetadata = (
+                notification.method === 'thread/started'
+                && notification.params.thread.id === rootThreadId
+                && notification.params.thread.turns.some((turn) => turn.id === rollbackTurnId)
+            );
+            void router!.handleNotificationAsync(notification)
+                .then(() => {
+                    if (isRollbackUsage) rollbackUsageNotifications += 1;
+                    if (isRollbackMetadata) rollbackMetadataNotifications += 1;
+                })
+                .catch(() => undefined);
         });
         codex.setServerRequestHandler((request) => router!.handleRequest(request));
         codex.setConnectionHandler((event) => router!.setConnection(event));
@@ -1218,6 +1239,46 @@ async function runHttpRelayScenario(): Promise<void> {
         const scaledEntityCount = Object.values(rootProjection.entities)
             .reduce((count, bucket) => count + Object.keys(bucket).length, 0);
         assert(scaledEntityCount >= 10_000);
+
+        rootMapper.importThread(rollbackHistoricalThread(root));
+        await rootMapper.flush();
+        await rootSyncClient.flushOutboundOnce();
+        await rootApp.client.pullChangesOnce();
+        assert.equal(rootApp.projection().runtime?.execution.type, 'active');
+
+        const rollback = await codex.rollbackThread({
+            threadId,
+            numTurns: 1,
+            emitSnapshot: false,
+        });
+        await router.reconcileRollbackSnapshot(threadId, rollback.thread);
+        await waitUntil(
+            () => rollbackUsageNotifications === 2 && rollbackMetadataNotifications === 2,
+            5_000,
+            'rollback late notifications',
+        );
+        await router.flush();
+        await rootSyncClient.flushOutboundOnce();
+        await rootApp.client.pullChangesOnce();
+
+        const rollbackProjection = rootApp.projection();
+        assert.equal(rollbackProjection.runtime?.execution.type, 'idle');
+        assert.equal(
+            codexCommandModule.findActiveCodexV4Turn(rollbackProjection, rootThreadId),
+            null,
+        );
+        const rolledBackTurn = Object.values(rollbackProjection.entities['codex.turn'])
+            .find((turn) => turn.threadId === rootThreadId && turn.turnId === rollbackTurnId);
+        const rolledBackItem = Object.values(rollbackProjection.entities['codex.item'])
+            .find((item) => item.threadId === rootThreadId && item.itemId === rollbackItemId);
+        assert.equal(rolledBackTurn?.status, 'interrupted');
+        assert.equal(rolledBackItem?.status, 'interrupted');
+        assert(Object.values(rollbackProjection.entities['codex.part']).some(
+            (part) => part.threadId === rootThreadId
+                && part.itemId === rollbackItemId
+                && part.content === rollbackHistoryText
+                && part.final,
+        ));
         if (routerErrors.length > 0) {
             const failure = routerErrors[0];
             const failedThreadId = objectRecord(failure).threadId;
@@ -1966,7 +2027,122 @@ function streamingScenario(cwd: string): Record<string, unknown> {
                     },
                 ],
             },
+            {
+                on: 'thread/rollback',
+                actions: [
+                    {
+                        type: 'notification',
+                        method: 'thread/tokenUsage/updated',
+                        params: {
+                            threadId: rootThreadId,
+                            turnId: rollbackTurnId,
+                            tokenUsage: rollbackTokenUsage(),
+                        },
+                    },
+                    {
+                        type: 'notification',
+                        method: 'thread/started',
+                        delayMs: 2,
+                        params: { thread: rollbackHistoricalThread(cwd) },
+                    },
+                    {
+                        type: 'response',
+                        delayMs: 10,
+                        result: { thread: rollbackAuthoritativeThread(cwd) },
+                    },
+                    {
+                        type: 'notification',
+                        method: 'thread/tokenUsage/updated',
+                        delayMs: 25,
+                        params: {
+                            threadId: rootThreadId,
+                            turnId: rollbackTurnId,
+                            tokenUsage: rollbackTokenUsage(),
+                        },
+                    },
+                    {
+                        type: 'notification',
+                        method: 'thread/started',
+                        delayMs: 30,
+                        params: { thread: rollbackHistoricalThread(cwd) },
+                    },
+                ],
+            },
         ],
+    };
+}
+
+function rollbackHistoricalThread(cwd: string): Thread {
+    return {
+        id: rootThreadId,
+        sessionId: 'provider-session-private-v4',
+        forkedFromId: null,
+        parentThreadId: null,
+        preview: rollbackHistoryText,
+        ephemeral: false,
+        modelProvider: 'openai',
+        createdAt: 1,
+        updatedAt: 9,
+        recencyAt: 9,
+        status: { type: 'active', activeFlags: [] },
+        path: null,
+        cwd,
+        cliVersion: '0.145.0',
+        source: 'appServer',
+        threadSource: null,
+        agentNickname: null,
+        agentRole: null,
+        gitInfo: null,
+        name: null,
+        turns: [{
+            id: rollbackTurnId,
+            items: [{
+                type: 'agentMessage',
+                id: rollbackItemId,
+                text: rollbackHistoryText,
+                phase: null,
+                memoryCitation: null,
+            }],
+            itemsView: 'full',
+            status: 'inProgress',
+            error: null,
+            startedAt: 9,
+            completedAt: null,
+            durationMs: null,
+        }],
+    };
+}
+
+function rollbackAuthoritativeThread(cwd: string): Thread {
+    return {
+        ...rollbackHistoricalThread(cwd),
+        preview: '',
+        status: { type: 'idle' },
+        updatedAt: 10,
+        recencyAt: 10,
+        turns: [],
+    };
+}
+
+function rollbackTokenUsage(): ThreadTokenUsage {
+    return {
+        total: {
+            totalTokens: 144,
+            inputTokens: 100,
+            cachedInputTokens: 20,
+            cacheWriteInputTokens: 0,
+            outputTokens: 44,
+            reasoningOutputTokens: 12,
+        },
+        last: {
+            totalTokens: 13,
+            inputTokens: 8,
+            cachedInputTokens: 2,
+            cacheWriteInputTokens: 0,
+            outputTokens: 5,
+            reasoningOutputTokens: 1,
+        },
+        modelContextWindow: 200_000,
     };
 }
 

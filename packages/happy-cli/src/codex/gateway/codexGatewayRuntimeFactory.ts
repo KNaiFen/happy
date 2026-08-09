@@ -129,6 +129,7 @@ export interface CodexGatewayRuntimeFactoryOptions {
     defaultEffort: ReasoningEffort;
     modelCapabilities: readonly CodexModelCapability[];
     terminalState(): CodexTerminalRuntimeProjection;
+    awaitNotificationBarrier(): Promise<void>;
     rootHandoff: CodexGatewayRootHandoffHooks;
     sandboxConfig?: SandboxConfig;
     skillCommands?: string[];
@@ -530,6 +531,9 @@ export class CodexGatewayRuntimeFactory {
                     }
                     const router = options.router();
                     try {
+                        if (command.command === 'thread.rollback') {
+                            await this.options.awaitNotificationBarrier();
+                        }
                         if (!options.readOnly && ROOT_HANDOFF_COMMANDS.has(command.command)) {
                             if (!outcome.threadId || options.generation === null) {
                                 throw new Error('Codex root handoff omitted its target binding');

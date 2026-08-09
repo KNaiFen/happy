@@ -152,6 +152,22 @@ function turn(id: string, status: Turn['status'], items: ThreadItem[] = []): Tur
     };
 }
 
+function tokenUsage(totalTokens: number) {
+    const breakdown = {
+        totalTokens,
+        inputTokens: totalTokens - 3,
+        cachedInputTokens: 2,
+        cacheWriteInputTokens: 0,
+        outputTokens: 3,
+        reasoningOutputTokens: 1,
+    };
+    return {
+        total: breakdown,
+        last: { ...breakdown, totalTokens: 7, inputTokens: 4 },
+        modelContextWindow: 200_000,
+    };
+}
+
 function notification(value: ServerNotification): ServerNotification {
     return value;
 }
@@ -552,6 +568,165 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.close();
     });
 
+    it('updates aggregate usage without synthesizing an unknown turn lifecycle', async () => {
+        const publisher = new RecordingPublisher();
+        const onTurnStateChanged = vi.fn();
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            onTurnStateChanged,
+        });
+        const usage = tokenUsage(21);
+
+        mapper.handleNotification(notification({
+            method: 'thread/tokenUsage/updated',
+            params: {
+                threadId: 'thread-usage',
+                turnId: 'turn-unknown',
+                tokenUsage: usage,
+            },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.thread')[0].tokenUsage).toEqual(usage);
+        expect(publisher.latest('codex.turn')).toEqual([]);
+        expect(mapper.activeTurnId('thread-usage')).toBeNull();
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'notLoaded' });
+        expect(onTurnStateChanged).not.toHaveBeenCalled();
+        await mapper.close();
+    });
+
+    it('keeps a known completed turn terminal when late usage arrives', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        const usage = tokenUsage(34);
+        mapper.importThread(thread('thread-completed-usage', [turn('turn-completed', 'completed')]));
+        await mapper.flush();
+
+        mapper.handleNotification(notification({
+            method: 'thread/tokenUsage/updated',
+            params: {
+                threadId: 'thread-completed-usage',
+                turnId: 'turn-completed',
+                tokenUsage: usage,
+            },
+        }));
+        await mapper.flush();
+
+        expect(publisher.latest('codex.turn')).toMatchObject([{
+            turnId: 'turn-completed',
+            status: 'completed',
+            completedAt: expect.any(Number),
+            usage: usage.last,
+        }]);
+        expect(mapper.activeTurnId('thread-completed-usage')).toBeNull();
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'idle' });
+        await mapper.close();
+    });
+
+    it('hydrates a not-loaded usage placeholder from its first metadata snapshot', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        mapper.handleNotification(notification({
+            method: 'thread/tokenUsage/updated',
+            params: {
+                threadId: 'thread-placeholder',
+                turnId: 'turn-live',
+                tokenUsage: tokenUsage(13),
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'thread/started',
+            params: {
+                thread: {
+                    ...thread('thread-placeholder', [turn('turn-live', 'inProgress')]),
+                    status: { type: 'active', activeFlags: [] },
+                },
+            },
+        }));
+        await mapper.flush();
+
+        expect(mapper.activeTurnId('thread-placeholder')).toBe('turn-live');
+        expect(publisher.latest('codex.turn')).toMatchObject([{
+            turnId: 'turn-live',
+            status: 'inProgress',
+        }]);
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({
+            type: 'active',
+            activeFlags: [],
+        });
+        await mapper.close();
+    });
+
+    it('hydrates a missing active turn after official thread status arrives first', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        mapper.handleNotification(notification({
+            method: 'thread/status/changed',
+            params: {
+                threadId: 'thread-status-first',
+                status: { type: 'active', activeFlags: [] },
+            },
+        }));
+        mapper.handleNotification(notification({
+            method: 'thread/started',
+            params: {
+                thread: {
+                    ...thread('thread-status-first', [turn('turn-status-first', 'inProgress')]),
+                    status: { type: 'active', activeFlags: [] },
+                },
+            },
+        }));
+        await mapper.flush();
+
+        expect(mapper.activeTurnId('thread-status-first')).toBe('turn-status-first');
+        expect(publisher.latest('codex.turn')).toMatchObject([{
+            turnId: 'turn-status-first',
+            status: 'inProgress',
+        }]);
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({
+            type: 'active',
+            activeFlags: [],
+        });
+        await mapper.close();
+    });
+
+    it('does not revive an idle thread from unknown usage and repeated stale metadata', async () => {
+        const publisher = new RecordingPublisher();
+        const mapper = new CodexSyncV4Mapper(publisher, { codexCliVersion: '0.145.0' });
+        mapper.importThread(thread('thread-stale-usage'));
+        await mapper.flush();
+
+        mapper.handleNotification(notification({
+            method: 'thread/tokenUsage/updated',
+            params: {
+                threadId: 'thread-stale-usage',
+                turnId: 'turn-stale',
+                tokenUsage: tokenUsage(55),
+            },
+        }));
+        const staleMetadata = notification({
+            method: 'thread/started',
+            params: {
+                thread: {
+                    ...thread('thread-stale-usage', [turn('turn-stale', 'inProgress')]),
+                    status: { type: 'active', activeFlags: [] },
+                },
+            },
+        });
+        mapper.handleNotification(staleMetadata);
+        mapper.handleNotification(staleMetadata);
+        await mapper.flush();
+
+        expect(mapper.activeTurnId('thread-stale-usage')).toBeNull();
+        expect(publisher.latest('codex.turn')).toEqual([]);
+        expect(publisher.latest('codex.thread')[0]).toMatchObject({
+            status: { type: 'idle' },
+            tokenUsage: tokenUsage(55),
+        });
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'idle' });
+        await mapper.close();
+    });
+
     it('projects lifecycle and streaming deltas into stable in-place entities', async () => {
         const publisher = new RecordingPublisher();
         let now = 1_800_000_000_000;
@@ -648,6 +823,7 @@ describe('CodexSyncV4Mapper', () => {
             type: 'active',
             activeFlags: [],
         });
+        expect(mapper.activeTurnId('thread-late')).toBe('turn-late');
 
         mapper.handleNotification(notification({
             method: 'turn/completed',
@@ -704,6 +880,14 @@ describe('CodexSyncV4Mapper', () => {
         }]);
 
         mapper.handleNotification(notification({
+            method: 'thread/tokenUsage/updated',
+            params: {
+                threadId: 'thread-clear',
+                turnId: 'turn-active',
+                tokenUsage: tokenUsage(89),
+            },
+        }));
+        mapper.handleNotification(notification({
             method: 'thread/started',
             params: {
                 thread: {
@@ -720,6 +904,7 @@ describe('CodexSyncV4Mapper', () => {
         expect(publisher.latest('codex.turn')).toMatchObject([{
             turnId: 'turn-active',
             status: 'interrupted',
+            usage: tokenUsage(89).last,
         }]);
         await mapper.close();
     });
@@ -759,6 +944,7 @@ describe('CodexSyncV4Mapper', () => {
 
         expect(publisher.latest('codex.thread')[0].status).toEqual({ type: 'systemError' });
         expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'systemError' });
+        expect(mapper.activeTurnId('thread-error')).toBeNull();
         await mapper.close();
     });
 

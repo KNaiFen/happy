@@ -9,6 +9,7 @@ import {
     OFFICIAL_CODEX_MCP_CHOICE_SENTINEL,
     OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL,
     OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL,
+    OFFICIAL_CODEX_POST_CLEAR_INPUT,
     OFFICIAL_CODEX_POST_CLEAR_SENTINEL,
     OFFICIAL_CODEX_RESPONSE_SENTINEL,
     OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
@@ -140,7 +141,7 @@ describe('official Codex Responses fixture', () => {
             preferFixtureMcpTool: true,
             fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
             expectedQueuedFollowUpText: 'Q',
-            expectedPostClearText: 'post-clear-from-android-e2e',
+            expectedPostClearText: OFFICIAL_CODEX_POST_CLEAR_INPUT,
         });
         await warmFixture(fixture);
         const elicitationTool = `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_ELICITATION_TOOL}`;
@@ -187,7 +188,7 @@ describe('official Codex Responses fixture', () => {
             input: [{
                 type: 'message',
                 role: 'user',
-                content: [{ type: 'input_text', text: 'post-clear-from-android-e2e' }],
+                content: [{ type: 'input_text', text: OFFICIAL_CODEX_POST_CLEAR_INPUT }],
             }],
         });
         expect(postClearFollowUp).toContain(OFFICIAL_CODEX_POST_CLEAR_SENTINEL);

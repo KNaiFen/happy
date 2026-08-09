@@ -30,15 +30,20 @@ import { SyncV4Crypto as NodeSyncV4Crypto } from '../../packages/happy-cli/src/a
 import { deriveKey } from '../../packages/happy-cli/src/utils/deriveKey';
 import {
     OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
+    OFFICIAL_CODEX_POST_CLEAR_INPUT,
     type CodexResponsesFixture,
     startCodexResponsesFixture,
     writeCodexResponsesConfig,
 } from './codex-responses-fixture';
+import { hasSucceededPostClearCommand } from './codex-mobile-field-command-correlation';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const serverRoot = join(repoRoot, 'packages', 'happy-server');
 const cliRoot = join(repoRoot, 'packages', 'happy-cli');
-const cliEntrypoint = join(cliRoot, 'dist', 'index.mjs');
+const cliEntrypoint = requiredAbsolutePath(
+    process.env.HAPPY_MOBILE_E2E_CLI_ENTRYPOINT,
+    'HAPPY_MOBILE_E2E_CLI_ENTRYPOINT',
+);
 const tsxEntrypoint = join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const fieldMcpServerEntrypoint = join(repoRoot, 'scripts', 'ci', 'codex-field-mcp-server.mjs');
 const appVersion = packageVersion(join(repoRoot, 'packages', 'happy-app', 'package.json'));
@@ -59,7 +64,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 13;
+    schemaVersion: 14;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -88,6 +93,7 @@ interface FieldDiagnostic {
     postClearRuntimeIdle: boolean;
     postClearHasNoActiveTurn: boolean;
     rollbackCommandSucceeded: boolean;
+    postClearCommandSucceeded: boolean;
     v4LifecycleCompleted: boolean;
 }
 
@@ -134,7 +140,7 @@ async function main(): Promise<void> {
         preferFixtureMcpTool: true,
         fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
         expectedQueuedFollowUpText: 'Q',
-        expectedPostClearText: 'post-clear-from-android-e2e',
+        expectedPostClearText: OFFICIAL_CODEX_POST_CLEAR_INPUT,
         mcpFollowupDelayMs: 90_000,
     });
     const codexHome = join(fixtureRoot, 'codex-home');
@@ -183,7 +189,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 13,
+        schemaVersion: 14,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -212,12 +218,13 @@ async function main(): Promise<void> {
         postClearRuntimeIdle: false,
         postClearHasNoActiveTurn: false,
         rollbackCommandSucceeded: false,
+        postClearCommandSucceeded: false,
         v4LifecycleCompleted: false,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 13,
+            schemaVersion: 14,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -246,6 +253,7 @@ async function main(): Promise<void> {
             postClearRuntimeIdle: false,
             postClearHasNoActiveTurn: false,
             rollbackCommandSucceeded: false,
+            postClearCommandSucceeded: false,
             v4LifecycleCompleted: false,
         });
     }
@@ -276,7 +284,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 13,
+        schemaVersion: 14,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -305,6 +313,7 @@ async function main(): Promise<void> {
         postClearRuntimeIdle: false,
         postClearHasNoActiveTurn: false,
         rollbackCommandSucceeded: false,
+        postClearCommandSucceeded: false,
         v4LifecycleCompleted: false,
     });
 
@@ -573,7 +582,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 13,
+        schemaVersion: 14,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -602,6 +611,7 @@ async function verifyFieldRoundTrip(
         postClearRuntimeIdle: false,
         postClearHasNoActiveTurn: false,
         rollbackCommandSucceeded: false,
+        postClearCommandSucceeded: false,
         v4LifecycleCompleted: false,
     };
     let lastDiagnostic = '';
@@ -692,6 +702,10 @@ async function verifyFieldRoundTrip(
                 entities,
                 sessionCrypto.threadId,
             );
+            diagnostic.postClearCommandSucceeded = hasSucceededPostClearCommand(
+                entities,
+                sessionCrypto.threadId,
+            );
             diagnostic.v4LifecycleCompleted = hasCompletedRequestRecoveryLifecycle(
                 entities,
                 sessionCrypto.threadId,
@@ -717,6 +731,7 @@ async function verifyFieldRoundTrip(
                 && diagnostic.postClearRuntimeIdle
                 && diagnostic.postClearHasNoActiveTurn
                 && diagnostic.rollbackCommandSucceeded
+                && diagnostic.postClearCommandSucceeded
                 && diagnostic.v4LifecycleCompleted
             );
             await persistDiagnostic();
@@ -760,6 +775,7 @@ async function verifyFieldRoundTrip(
             postClearRuntimeIdle: diagnostic.postClearRuntimeIdle,
             postClearHasNoActiveTurn: diagnostic.postClearHasNoActiveTurn,
             rollbackCommandSucceeded: diagnostic.rollbackCommandSucceeded,
+            postClearCommandSucceeded: diagnostic.postClearCommandSucceeded,
             v4LifecycleCompleted: diagnostic.v4LifecycleCompleted,
             verifiedAt: Date.now(),
         }, null, 2),

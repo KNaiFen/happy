@@ -64,6 +64,10 @@ compaction 使用原子替换。
 Socket.IO 只是唤醒提示；CLI 通过 changes polling 和 snapshot replay 保证恢复。RPC timeout、
 transport loss 或 interrupt ACK 只表示结果未知，不能结束 turn。
 
+Token usage 是统计信息，不是 turn 生命周期证据。未知 turn 的 usage 只更新 thread aggregate；
+它不能合成 `inProgress` turn 或写入 active map。已水合且非活动 thread 的 metadata 也不能导入
+未知 `inProgress` turn；首次 `notLoaded` 水合和正式 turn/item lifecycle 仍按稳定 v2 处理。
+
 ## 命令与控制
 
 - prompt/steer 通过稳定 RPC，并使用 command ID 关联 `clientUserMessageId`；
@@ -71,6 +75,9 @@ transport loss 或 interrupt ACK 只表示结果未知，不能结束 turn。
 - `/review` 映射 `review/start`；
 - `/clear` 映射 `thread/rollback`。RPC 返回的 thread 是权威命令结果，通过 Router 的 per-thread
   队列导入 mapper 并 flush 后才能发布 command success；它不会伪装成 `thread/started` metadata。
+  provider response 后先等待当时已入队的 Gateway notification prefix，Router 再先回放该 thread
+  的 persisted orphan，最后导入 rollback snapshot。barrier、orphan、snapshot 或 flush 失败都写
+  `resultUnknown`，不能写 succeeded。
   权威快照中已不存在的本地活动 turn/item 会收敛为 interrupted，已有历史 item/part 保留并最终化；
 - approval、user input 和 interrupt 都绑定预期 request/turn ID；
 - 非幂等控制在 RPC 结果未知时不会盲目重放；

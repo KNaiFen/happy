@@ -8,6 +8,8 @@
   "include": [
     "codex-official-app-server-scenario.ts",
     "codex-mobile-field-fixture.ts",
+    "codex-mobile-field-command-correlation.ts",
+    "codex-mobile-field-command-correlation.test.ts",
     "codex-responses-fixture.ts",
     "codex-responses-fixture.test.ts"
   ]

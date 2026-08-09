@@ -28,6 +28,10 @@ interface RecentGatewayNotification {
     observedAt: number;
 }
 
+interface NotificationBarrierBatch {
+    failure: { error: unknown } | null;
+}
+
 export type CodexGatewayBindingRole = 'current' | 'draining' | 'inactive' | 'recovering';
 
 export type CodexGatewayRootBindingPhase =
@@ -157,6 +161,7 @@ export class CodexGatewayCoordinator {
     private readonly pendingNotifications = new Map<string, PendingGatewayNotification[]>();
     private readonly recentNotificationSources = new Map<string, RecentGatewayNotification>();
     private readonly ownershipWaiters = new Map<string, Set<() => void>>();
+    private notificationBarrierBatch: NotificationBarrierBatch = { failure: null };
     private notificationPipeline: Promise<void> = Promise.resolve();
     private current: ManagedRoot | null = null;
     private generation: number;
@@ -201,6 +206,20 @@ export class CodexGatewayCoordinator {
     // They are projection input only; bridge lifecycle remains the subscription proof.
     observeTerminalNotification(notification: ServerNotification): void {
         this.enqueueNotification(notification, 'terminal');
+    }
+
+    async awaitNotificationBarrier(): Promise<void> {
+        const prefix = this.notificationPipeline;
+        const batch = this.notificationBarrierBatch;
+        this.notificationBarrierBatch = { failure: null };
+        let pipelineFailure: { error: unknown } | null = null;
+        try {
+            await prefix;
+        } catch (error) {
+            pipelineFailure = { error };
+        }
+        if (batch.failure) throw batch.failure.error;
+        if (pipelineFailure) throw pipelineFailure.error;
     }
 
     async connect(recovered = false): Promise<void> {
@@ -915,8 +934,10 @@ export class CodexGatewayCoordinator {
         notification: ServerNotification,
         source: CodexGatewayNotificationSource,
     ): void {
+        const barrierBatch = this.notificationBarrierBatch;
         const routed = this.notificationPipeline.then(() => this.routeNotification(notification, source));
         this.notificationPipeline = routed.catch((error) => {
+            barrierBatch.failure ??= { error };
             this.options.onError?.(error);
         });
     }
