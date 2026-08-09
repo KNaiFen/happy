@@ -44,6 +44,7 @@
 - [账户数据删除与保留契约实施计划](./plans/account-data-deletion-and-retention-contract.md)
 - [Codex rollback 后迟到通知重激活修复计划](./plans/codex-rollback-late-notification-race.md)
 - [GitHub Actions 提交与 PR 触发去重及发布门禁整改计划](./plans/github-actions-trigger-gate-remediation.md)
+- [Happy Server 全局安装解析契约修复计划](./plans/happy-server-global-package-resolution.md)
 - [Happy Server standalone Docker 路径修复计划](./plans/happy-server-standalone-docker-path.md)
 
 ## 审查记录

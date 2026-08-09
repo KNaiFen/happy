@@ -103,12 +103,12 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
 
-    - name: Install packed packages globally
+    - name: Install packed CLI globally
       run: |
         test -f artifacts/happy-wire.tgz
         test -f artifacts/happy-cli.tgz
         test -f artifacts/happy-server.tgz
-        npm install -g ./artifacts/happy-wire.tgz ./artifacts/happy-server.tgz ./artifacts/happy-cli.tgz
+        npm install -g ./artifacts/happy-wire.tgz ./artifacts/happy-cli.tgz
 
     - name: Test binary execution
       run: |
@@ -141,8 +141,15 @@ jobs:
 
     - name: Test packaged server (happy server)
       run: |
+        SERVER_INSTALL_ROOT="$(mktemp -d)"
+        npm install --prefix "$SERVER_INSTALL_ROOT" \
+          "$GITHUB_WORKSPACE/artifacts/happy-wire.tgz" \
+          "$GITHUB_WORKSPACE/artifacts/happy-server.tgz" \
+          "$GITHUB_WORKSPACE/artifacts/happy-cli.tgz"
+        HAPPY_BIN="$SERVER_INSTALL_ROOT/node_modules/.bin/happy"
+        test -x "$HAPPY_BIN"
         export HAPPY_HOME_DIR="$(mktemp -d)"
-        timeout 90s happy server --port 4505 --host 127.0.0.1 --no-persist --reset > /tmp/happy-server.log 2>&1 &
+        timeout 90s "$HAPPY_BIN" server --port 4505 --host 127.0.0.1 --no-persist --reset > /tmp/happy-server.log 2>&1 &
         SERVER_PID=$!
         UP=0
         for i in $(seq 1 60); do
