@@ -2,14 +2,15 @@
 
 ## 状态
 
-- 当前状态：核心实现、源码验证与独立审查完成；`1.11.44` 已证明可访问的 React Native trigger 无法可靠驱动同级 Expo Compose popup，正在以 `1.11.45` 将 Android 设置菜单统一到 React Native 锚定弹层并等待精确 HEAD 验收。
+- 当前状态：已完成。请求回答恢复实现、`1.11.45` Android 发布、官方 Codex Android Field E2E 与 Monorepo CI 均已通过；归档提交自身的 Documentation 检查见下方完成记录。
 - 建立日期：2026-08-08。
 - 实施分支：`fix/codex-request-resolution`。
 - 基线：`origin/main@01a2278c033e279da1ca0a52cefdbfb6746a1b15`。
 - 目标版本：`packages/happy-app` `1.11.45`；CLI 保持 `1.4.46`，Wire 保持 `0.1.8`。
-- 权威边界：[ADR-001](../decisions/ADR-001-codex-sync-v4.md) 规定命令不可变、未知结果不可重放和 provider request ID 精确绑定；[权限解析](../permission-resolution.md) 规定 pending request 必须由持久 Sync v4 实体恢复，传输中断不代表请求完成。
+- 最终实现 HEAD：`e25cbd7185b255ca82a076bbc82510c45c1acce3`；Android `1.11.45` 发布 HEAD：`e558f8a1337490adf941466bd56b838d85b83808`。后续四个提交只修正 Field fixture/验收，不改变 App 发布源码，因此不复用或提升已经成功发布的 `1.11.45`。
+- 权威边界：[ADR-001](../../decisions/ADR-001-codex-sync-v4.md) 规定命令不可变、未知结果不可重放和 provider request ID 精确绑定；[权限解析](../../permission-resolution.md) 规定 pending request 必须由持久 Sync v4 实体恢复，传输中断不代表请求完成。
 
-## 实施进度（2026-08-08）
+## 实施进度（2026-08-09）
 
 本地实现已经覆盖本计划定义的完整行为边界：
 
@@ -21,7 +22,7 @@
 - Android Field E2E 已改为在 MCP elicitation pending 且 `Q` 已进入 durable queue 时杀死 App；恢复流从原请求卡片恢复选择并提交。独立 provider sentinel 证明 `Q` 真正到达 provider，最终解密 Sync v4 snapshot 证明 runtime connected/idle、pending count 为零、所有 request 非 pending 且所有 turn completed。
 - `happy-app` 已从 `1.11.39` 提升到 `1.11.45`。`1.11.40` 至 `1.11.44` 的发布工作流都已经成功；对应 Field E2E 逐步暴露出菜单不可交互、缺少可定位 test tag、内部 Compose Box 尺寸、跨渲染器 trigger 投影以及受控 popup 未挂载问题。每次后续修复都使用新的 patch 版本。CLI `1.4.46` 与 Wire `0.1.8` 未变。
 
-当前本地实现审查基点为 `5d299098`。两轮 findings-first 独立审查均已完成；首轮发现并修复了 `request.resolve` 带 `displayText` 时的独立消息投影、持久化后投影失败时的重复提交风险、`Q` 未被 provider 实质证明以及 turn 终态验收不足。修正后的第二轮 App 安全边界与 Android E2E 审查均无 Critical 或 Important finding。
+本地实现审查基点为 `5d299098`，最终云端验收基点为 `e25cbd71`。两轮 findings-first 独立审查均已完成；首轮发现并修复了 `request.resolve` 带 `displayText` 时的独立消息投影、持久化后投影失败时的重复提交风险、`Q` 未被 provider 实质证明以及 turn 终态验收不足。修正后的第二轮 App 安全边界与 Android E2E 审查均无 Critical 或 Important finding。
 
 云端验收继续发现了一个与请求恢复逻辑分离、但会阻断真实 Field 场景的 Android 交互缺陷：`@expo/ui` 的 Jetpack Compose `DropdownMenu` 不会自行切换 `expanded`，原 `NativeSettingsMenu.android` 又把尺寸只放在外层 React Native `View` 上，导致权限、模型和 effort 三个 native trigger 在无障碍树中的真实 bounds 为 `0×0`。Maestro 在 run `31263207407` 与 `31265563991` 分别点击第二槽位和第一槽位中心后，菜单都没有展开。修复将菜单改为受控 `expanded` 状态，把布局尺寸直接应用到 native `DropdownMenu`，并用全尺寸 `Pressable` 触发展开；选择或系统 dismiss 后统一收起。`1.11.41` 的 run `31267566191` 又证明嵌入式 `Pressable` 的 `testID` 不会导出到 Compose 的无障碍树，因此 `1.11.42` 把稳定 tag 改为传给 `DropdownMenu` 的 Jetpack Compose `testID` modifier。
 
@@ -31,6 +32,8 @@
 
 `1.11.44` 的精确 HEAD `f6fb01e5` 已通过 Documentation run `31273151982`、Monorepo CI run `31273152025` 和 Android Release run `31273151972`，但 Field E2E run `31273152069` 暴露了最后一层跨渲染器失败。UiAutomator 已能稳定看到 `agent-input-permission-menu`，节点 bounds 为 `[48,2180][164,2295]`、`clickable=true`，Maestro 也按层级点击了中心 `(106,2237)`；然而 15 秒后 Compose popup 仍未挂载，层级和截图都只有原输入区，没有 `default permissions`。这证明把 RN trigger 与 Compose popup 改为同级仍不能形成可靠的受控菜单。`1.11.45` 因而让 Android 设置菜单完全留在 React Native：trigger 通过 `measureInWindow` 获取真实矩形，复用现有 `AnchoredActionMenu` 的透明 Modal、安全区、键盘和上下方向避让；选项、关闭、选中状态、`testID` 与 accessibility 都在同一渲染树内，外层 44px/flex 布局和既有图标文字保持不变。
 
+`1.11.45` 修复菜单后，Field 恢复链路还暴露了两个只属于 fixture/验收时序的问题。第一，MCP SDK `elicitInput()` 的默认等待上限只有 60 秒；Android 杀进程、重新进入会话、恢复选择并提交在现场约需 74 秒，请求会在真实回答到达前被 fixture 超时收束。现场工具改为显式等待 4 分钟，并增加负向测试，保证拒绝的 MCP 输出不能解锁排队 follow-up sentinel。第二，`/compact` 已在约 0.4 秒内完成，但压缩分隔线处在时间线虚拟列表当前视口下方；恢复 flow 现在先按 `DOWN` 滚动到 `codex-timeline-context-compaction`，再执行原有显式断言，没有删除或放宽压缩验收。
+
 ## 本地验证证据（2026-08-08）
 
 | 验证面 | 结果 |
@@ -38,7 +41,7 @@
 | App 定向 Vitest | 9 个文件，125/125 通过。 |
 | Android 锚定菜单 | `1.11.45` 的 App `tsc --noEmit` 通过；锚定弹层方向、安全区与裁切 4/4 测试通过。 |
 | CLI 定向 Vitest | 5 个文件，142/142 通过。 |
-| Responses fixture Vitest | 1 个文件，9/9 通过；旧默认工具和新 elicitation/queued follow-up 分支均覆盖。 |
+| Responses fixture Vitest | 1 个文件，10/10 通过；旧默认工具、新 elicitation/queued follow-up 分支及拒绝结果不能误解锁 sentinel 均覆盖。 |
 | TypeScript | `happy-app` 与 `happy` 的 `tsc --noEmit` 均通过。 |
 | Android fixture 类型 | 使用临时独立 tsconfig 编译通过；临时文件已删除。 |
 | 静态格式与语法 | Android E2E shell、MCP Node 脚本和两份 Maestro YAML 均通过解析；`git diff --check` 通过。 |
@@ -47,6 +50,15 @@
 | 独立复审 | 修正后 App 目标测试 6 个 spec、110 tests 通过；CLI executor 22 tests 通过；App 与 Android E2E 均无 Critical/Important finding。 |
 
 按项目云端构建边界，本地没有构建 Android APK、官方 Codex、CLI 制品、Web bundle 或 Tauri。它们必须由下述精确 GitHub Actions 对推送后的提交完成验收。
+
+## 云端验收证据（2026-08-09）
+
+- Android `1.11.45` 的发布源码 HEAD 为 `e558f8a1337490adf941466bd56b838d85b83808`。Documentation run [`31275043698`](https://github.com/KNaiFen/happy/actions/runs/31275043698)、Monorepo CI run [`31275043815`](https://github.com/KNaiFen/happy/actions/runs/31275043815) 和 Android Release run [`31275043700`](https://github.com/KNaiFen/happy/actions/runs/31275043700) 均为 `success`。
+- Android 制品为 [`happy-app-1.11.45-android-arm64-v8a-no-ota`](https://github.com/KNaiFen/happy/actions/runs/31275043700/artifacts/9026917399)（Artifact ID `9026917399`）。工作流已经验证生产包名、版本/versionCode、SDK 36、ARM64-only、OTA 关闭、源码提交、签名证书和 16 KB 对齐；按交付规则不在本机重复下载 APK。
+- 最终 fixture/验收 HEAD `e25cbd7185b255ca82a076bbc82510c45c1acce3` 的 Monorepo CI run [`31283071932`](https://github.com/KNaiFen/happy/actions/runs/31283071932) attempt 2 为 `success`，17 个 job 全部通过。attempt 1 仅有健康 HTTP stream p95 `789.3 ms` 超过既有 `750 ms` 门槛；相邻 HEAD 同一 job 成功且变更不涉及该路径，因此没有放宽性能门槛，只重跑失败 job。
+- 同一最终验收 HEAD 的 Official Codex Android Field E2E run [`31283071938`](https://github.com/KNaiFen/happy/actions/runs/31283071938) 为 `success`。诊断 Artifact [`codex-android-field-31283071938-1`](https://github.com/KNaiFen/happy/actions/runs/31283071938/artifacts/9029304620)（ID `9029304620`，SHA-256 `2851d01536dfbb5216e213b175fccb06aac052fccce946834b235591692a7173`）记录 `phase=verified`、`cliRoundTripObserved=true`、`providerMcpChoiceAccepted=true`、`providerQueuedFollowUpObserved=true`、`v4LifecycleCompleted=true`，并有 1 个 request、1 个 runtime、4 个 completed turn。
+- Field 的 `v4LifecycleCompleted=true` 要求 runtime 最终为 connected/idle、`statusUnknown=false`、无待审批或用户输入，所有 turn 均有 `completedAt`，所有 request 均非 pending。它直接证明恢复回答到达 provider、排队消息继续执行并由权威生命周期收束，不以超时或界面消失推断完成。
+- Android Release 必须由包版本变化触发，后续四个提交仅修正云端 fixture/验收脚本。为避免复用已经运行的版本，发布制品保留在 `e558f8a1`，最终真实 Field 与完整 CI 则运行在包含这些验收修正的 `e25cbd71`；二者共同覆盖发布源码与最终验收逻辑。
 
 ## 现场与根因
 
@@ -322,6 +334,6 @@ pnpm docs:check
 - [x] 完成两轮 findings-first 独立审查并修复全部 blocking findings。
 - [x] 更新当前文档并运行本地 `docs:sync` / `docs:check`。
 - [x] 将本地实现、测试和版本变更拆分为中文提交。
-- [ ] 推送当前 HEAD 到 `origin/main`，确认 Documentation、Monorepo CI、Android Release 与 Official Codex API 36 Field E2E 都针对精确 HEAD 成功。
-- [ ] 记录 workflow run ID、URL、成功结论和 Android Artifact URL，将本计划标记完成并移入 `docs/plans/archive/`。
+- [x] 推送最终实现/验收 HEAD 到 `origin/main`；Android 发布源码 HEAD 的 Documentation、Monorepo CI、Android Release 均成功，最终 fixture HEAD 的 Monorepo CI 与 Official Codex API 36 Field E2E 均成功。
+- [x] 记录 workflow run ID、URL、成功结论、Field diagnostics 和 Android Artifact URL，将本计划标记完成并移入 `docs/plans/archive/`。
 - [ ] 对归档文档提交再次运行知识库检查、推送并确认最终文档 HEAD 的必需检查。

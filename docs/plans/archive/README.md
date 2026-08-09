@@ -22,6 +22,7 @@
 - [Codex 原生 TUI Gateway 实施计划](./codex-native-tui-gateway.md)
 - [Codex 官方源码云端 E2E 计划](./codex-official-source-cloud-e2e.md)
 - [Codex 生产执行链审计与修复台账](./codex-production-execution-audit-remediation.md)
+- [Codex 请求回答可靠性与重启恢复实施计划](./codex-request-resolution-recovery.md)
 - [Codex 过往会话选择与 Resume（已完成）](./codex-resume-thread-picker.md)
 - [Codex 会话生命周期、时间线与活动显示修复](./codex-session-lifecycle-ordering-activity.md)
 - [Codex Slash-Command Routing](./codex-slash-command-routing.md)

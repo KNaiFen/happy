@@ -39,10 +39,6 @@
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 
-## 活动计划
-
-- [Codex 请求回答可靠性与重启恢复实施计划](./plans/codex-request-resolution-recovery.md)
-
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
@@ -119,6 +115,7 @@
 - [Codex 原生 TUI Gateway 实施计划](./plans/archive/codex-native-tui-gateway.md)
 - [Codex 官方源码云端 E2E 计划](./plans/archive/codex-official-source-cloud-e2e.md)
 - [Codex 生产执行链审计与修复台账](./plans/archive/codex-production-execution-audit-remediation.md)
+- [Codex 请求回答可靠性与重启恢复实施计划](./plans/archive/codex-request-resolution-recovery.md)
 - [Codex 过往会话选择与 Resume（已完成）](./plans/archive/codex-resume-thread-picker.md)
 - [Codex 会话生命周期、时间线与活动显示修复](./plans/archive/codex-session-lifecycle-ordering-activity.md)
 - [Codex Slash-Command Routing](./plans/archive/codex-slash-command-routing.md)
