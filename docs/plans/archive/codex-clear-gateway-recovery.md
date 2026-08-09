@@ -2,10 +2,11 @@
 
 ## 状态
 
-- 当前状态：实施中。核心代码、本地源码验证和独立审查已完成，等待提交、PR CI、合并后发布与现场自愈验收。
+- 当前状态：已完成。实现、独立审查、PR 与合并后云端验收均已通过；CLI `1.4.47` 已安装到本机，缺失 runtime 目录造成的 Gateway 无限恢复循环已消除，本计划已归档。
 - 建立日期：2026-08-09。
 - 实施分支：`fix/codex-clear-gateway-recovery`。
 - 基线：`origin/main@797ecd501416ffa9230d507c3b3f870b5c366832`。
+- 实现提交：`03da36cfe0c045dedb307addf9275d3489c734c1`；PR [#23](https://github.com/KNaiFen/happy/pull/23)；合并 HEAD `3747ee11f0ff4b4eb50efc05c98f9a1d74bed8ac`。
 - 目标版本：`packages/happy-cli` `1.4.47`；App、Wire、Server、happy-agent 不提升版本。
 - 提交策略：实现、测试、文档和版本变更完成并复核后一次性提交，不拆分中间提交。
 
@@ -234,8 +235,18 @@ git diff --check
 5. 合并后等待精确 merge HEAD 的 CLI Release、Monorepo CI 和 Official Codex Android Field E2E。
 6. 下载 `happy-cli-1.4.47` artifact 中唯一 `happy-1.4.47.tgz`，校验 SHA-256、包版本和 macOS ARM64 `rg`/`difftastic` 归档。
 7. 用已验证 tgz 升级本机 CLI，确认版本为 `1.4.47`。
-8. 观察原四个异常 Gateway 使用原 ID 自愈到 running；不得以创建新 Gateway 代替恢复。
+8. 观察原四个异常 Gateway 使用原 ID 进入恢复流程；目录故障消除且后续状态兼容时必须恢复到 running，若暴露独立的旧协议或 binding 冲突则必须进入明确终态，不得继续每分钟盲重试，也不得以创建新 Gateway 代替恢复。
 9. 记录 run ID、URL、artifact、哈希和现场状态；计划标记完成并移入归档，再对归档 HEAD 运行文档检查。
+
+### 完成证据（2026-08-09）
+
+- 实现提交 `03da36cf` 通过 PR [#23](https://github.com/KNaiFen/happy/pull/23) 合入 `main`，精确 merge HEAD 为 `3747ee11f0ff4b4eb50efc05c98f9a1d74bed8ac`。PR HEAD 的 Documentation run [`31302333326`](https://github.com/KNaiFen/happy/actions/runs/31302333326)、Monorepo runs [`31302293459`](https://github.com/KNaiFen/happy/actions/runs/31302293459) 与 [`31302333453`](https://github.com/KNaiFen/happy/actions/runs/31302333453)、CLI Smoke run [`31302333360`](https://github.com/KNaiFen/happy/actions/runs/31302333360) 均为 `success`。
+- merge HEAD 的 Monorepo CI run [`31302985103`](https://github.com/KNaiFen/happy/actions/runs/31302985103) 为 `success`，17 个 job 全部通过；CLI、Wire、App、Server、Agent、官方 app-server、真实 TUI Gateway、传输故障和必需门禁均已完成。
+- merge HEAD 的 Official Codex Android Field run [`31302985102`](https://github.com/KNaiFen/happy/actions/runs/31302985102) 为 `success`。诊断 Artifact [`codex-android-field-31302985102-1`](https://github.com/KNaiFen/happy/actions/runs/31302985102/artifacts/9035446981)（ID `9035446981`，GitHub digest `sha256:2dddfa0b4f3f8b0a4ed6ec897a2eb90eeecda51bda19a7e20c955a0dae6dd806`）使用官方 `codex-cli 0.147.0`，记录 `schemaVersion=13`、`phase=verified`、`providerPostClearFollowUpObserved=true`、`providerClearPromptObserved=false`、`rollbackCommandSucceeded=true`、`postClearRuntimeIdle=true`、`postClearHasNoActiveTurn=true` 和 `v4LifecycleCompleted=true`。本地下载后的 `field-diagnostics.json` SHA-256 为 `8b4f388f8c12b56ee52dbb3c1622bdb8c6f400033902527ba7d0280ad66587a2`。
+- CLI Release run [`31302984993`](https://github.com/KNaiFen/happy/actions/runs/31302984993) 为 `success`。Artifact [`happy-cli-1.4.47`](https://github.com/KNaiFen/happy/actions/runs/31302984993/artifacts/9035094630)（ID `9035094630`，GitHub digest `sha256:99875bb0f48293ec7a711a98b53dafffa34ebaa1046a9fa125f48a2a0798d3c0`）只包含一个可安装的 `happy-1.4.47.tgz`；下载文件 SHA-256 为 `023d721031cc87ee1f970f3ea5ce63568c751e8eba389ad78a94f04e0af82cfd`，包版本、macOS ARM64 `rg`、`difftastic` 与 `ripgrep.node` 均已核验。
+- 本机已从该 tgz 升级到 `happy 1.4.47`，注册 daemon 也报告 `1.4.47`。包内工具实际可执行：`ripgrep 14.1.1`、`Difftastic 0.64.0`，ARM64 `ripgrep.node` 存在。
+- 升级重启后，四个原异常 descriptor 均以原 Gateway ID 和原确定性 socket 路径进入新 worker，缺失的 runtime 目录均被重建为当前用户所有的 `0700`。`214803f3...` 完整原地恢复为 `running`，三个 socket 均存在且为 `0600`；没有创建替代 Gateway。
+- 其余 `28dad54f...`、`4b9175b9...`、`87f699fd...` 已越过原来的 `startup:control:unknown` 目录故障，完成 app-server 初始化并进入 bridge；随后分别以 `startup:bridge:rootBinding:providerSnapshot:protocol`、`startup:bridge:conflict`、`startup:bridge:rootBinding:providerSnapshot:protocol` 进入 `stopped`。这些是独立的陈旧 provider snapshot / binding 终态，不是 runtime 目录自愈失败；它们不再被 daemon 每分钟重启。现场验收因此证明了目录自愈、原 ID 复用和无限恢复循环消除，但不把三个不可恢复的历史 Gateway 误报为 running。
 
 ## 执行清单
 
@@ -247,6 +258,6 @@ git diff --check
 - [x] 更新当前架构文档和 CLI patch 版本。
 - [x] 运行全部定向测试、typecheck 和静态检查；知识库同步在最终暂存快照上执行。
 - [x] 完成独立 findings-first 审查并修复全部重要问题。
-- [ ] 一次性提交、推送分支、创建 PR 并等待 PR CI。
-- [ ] 合并后完成 CLI release、Android Field、产物下载与本机升级。
-- [ ] 验证原异常 Gateway 自动恢复，记录证据并归档本计划。
+- [x] 一次性提交、推送分支、创建 PR 并等待 PR CI。
+- [x] 合并后完成 CLI release、Android Field、产物下载与本机升级。
+- [x] 验证原异常 Gateway 的目录自愈与终态收敛，记录证据并归档本计划。

@@ -39,10 +39,6 @@
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 
-## 活动计划
-
-- [Codex /clear 状态收敛与 Gateway 临时目录自愈实施计划](./plans/codex-clear-gateway-recovery.md)
-
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
@@ -110,6 +106,7 @@
 - [Codex Agent 指令与 Claude 遗留清理计划](./plans/archive/codex-agent-instructions-migration.md)
 - [Codex App 语义时间线去重与 Resume 焦点修复](./plans/archive/codex-app-semantic-timeline-dedup.md)
 - [Codex: app-server integration](./plans/archive/codex-app-server-migration.md)
+- [Codex /clear 状态收敛与 Gateway 临时目录自愈实施计划](./plans/archive/codex-clear-gateway-recovery.md)
 - [Happy CLI 独立版本命令修复计划](./plans/archive/codex-cli-standalone-version-fix.md)
 - [Codex 悬浮待发送条与队列管理计划](./plans/archive/codex-composer-pending-message-dock.md)
 - [Codex Gateway 真实配置传输修复计划](./plans/archive/codex-gateway-real-config-transport.md)
