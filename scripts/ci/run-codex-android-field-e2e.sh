@@ -30,6 +30,19 @@ capture_diagnostics() {
   adb exec-out screencap -p > "${ARTIFACT_DIR}/final-screen.png" 2>/dev/null || true
   adb logcat -d -v threadtime > "${ARTIFACT_DIR}/android-logcat.txt" 2>/dev/null || true
   adb shell dumpsys activity activities > "${ARTIFACT_DIR}/android-activities.txt" 2>/dev/null || true
+  if [[ -f "${DIAGNOSTICS_FILE}" ]]; then
+    node -e '
+      const fs = require("node:fs");
+      const diagnostic = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      console.error("Mobile field rollback diagnostic:", JSON.stringify({
+        schemaVersion: diagnostic.schemaVersion,
+        phase: diagnostic.phase,
+        rollbackCommandResultTerminalStatus: diagnostic.rollbackCommandResultTerminalStatus,
+        rollbackCommandResultUpdatedAt: diagnostic.rollbackCommandResultUpdatedAt,
+        rollbackCommandErrorKind: diagnostic.rollbackCommandErrorKind,
+      }));
+    ' "${DIAGNOSTICS_FILE}" || true
+  fi
   return "${status}"
 }
 trap capture_diagnostics EXIT
@@ -104,7 +117,7 @@ for _ in $(seq 1 600); do
         throw new Error("Invalid mobile field verification marker");
       }
       if (
-        diagnostics.schemaVersion !== 14
+        diagnostics.schemaVersion !== 15
         || diagnostics.phase !== "verified"
         || diagnostics.machineRegistered !== true
         || diagnostics.sessionObserved !== true
@@ -128,6 +141,12 @@ for _ in $(seq 1 600); do
         || diagnostics.sessionActive !== true
         || diagnostics.postClearRuntimeIdle !== true
         || diagnostics.postClearHasNoActiveTurn !== true
+        || typeof diagnostics.rollbackCommandId !== "string"
+        || diagnostics.rollbackCommandId.length === 0
+        || diagnostics.rollbackCommandResultTerminalStatus !== "succeeded"
+        || !Number.isSafeInteger(diagnostics.rollbackCommandResultUpdatedAt)
+        || diagnostics.rollbackCommandResultUpdatedAt < 0
+        || diagnostics.rollbackCommandErrorKind !== "none"
         || diagnostics.rollbackCommandSucceeded !== true
         || diagnostics.postClearCommandSucceeded !== true
         || diagnostics.v4LifecycleCompleted !== true
@@ -151,6 +170,10 @@ for _ in $(seq 1 600); do
         || result.sessionActive !== true
         || result.postClearRuntimeIdle !== true
         || result.postClearHasNoActiveTurn !== true
+        || result.rollbackCommandId !== diagnostics.rollbackCommandId
+        || result.rollbackCommandResultTerminalStatus !== diagnostics.rollbackCommandResultTerminalStatus
+        || result.rollbackCommandResultUpdatedAt !== diagnostics.rollbackCommandResultUpdatedAt
+        || result.rollbackCommandErrorKind !== diagnostics.rollbackCommandErrorKind
         || result.rollbackCommandSucceeded !== true
         || result.postClearCommandSucceeded !== true
         || result.v4LifecycleCompleted !== true

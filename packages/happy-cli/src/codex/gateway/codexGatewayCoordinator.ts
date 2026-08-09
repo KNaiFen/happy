@@ -7,6 +7,7 @@ import type {
     CodexServerRequest,
 } from '../codexAppServerClient';
 import { CodexV4CommandCancelledError } from '../codexV4CommandProcessor';
+import { isCodexV4NotificationRoutingError } from '../codexV4ThreadRouter';
 import type { ServerNotification, Thread } from '../protocol';
 import { CodexGatewayArchivedSessionError } from './codexGatewayPresence';
 
@@ -937,8 +938,16 @@ export class CodexGatewayCoordinator {
         const barrierBatch = this.notificationBarrierBatch;
         const routed = this.notificationPipeline.then(() => this.routeNotification(notification, source));
         this.notificationPipeline = routed.catch((error) => {
-            barrierBatch.failure ??= { error };
-            this.options.onError?.(error);
+            // Keep the serial queue alive after every notification. Durable orphan failures
+            // are recoverable; an undurable failure must reject the barrier for this prefix.
+            if (!isCodexV4NotificationRoutingError(error) || !error.durablyQueued) {
+                barrierBatch.failure ??= { error };
+            }
+            try {
+                this.options.onError?.(error);
+            } catch {
+                // Diagnostics must never poison the serial notification pipeline.
+            }
         });
     }
 

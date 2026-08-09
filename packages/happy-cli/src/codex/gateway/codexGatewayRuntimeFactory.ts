@@ -76,6 +76,7 @@ const GATEWAY_PERMISSION_MODES = new Set<PermissionMode>([
     'safe-yolo',
     'yolo',
 ]);
+const ROLLBACK_COORDINATION_ATTEMPTS = 3;
 
 export interface CodexGatewayRuntimeFactoryApi {
     getOrCreateSession(options: Parameters<ApiClient['getOrCreateSession']>[0]): Promise<ApiSession | null>;
@@ -530,10 +531,20 @@ export class CodexGatewayRuntimeFactory {
                         throw error;
                     }
                     const router = options.router();
-                    try {
-                        if (command.command === 'thread.rollback') {
+                    if (command.command === 'thread.rollback') {
+                        try {
                             await this.options.awaitNotificationBarrier();
+                        } catch {
+                            // A rejected barrier means the captured provider prefix is not
+                            // durably accounted for. Retrying snapshot coordination cannot
+                            // recover a notification that may already be lost.
+                            throw new CodexRpcOutcomeUnknownError(
+                                command.command,
+                                'Provider command completed but Gateway notification ordering is uncertain',
+                            );
                         }
+                    }
+                    const coordinateOutcome = async (): Promise<void> => {
                         if (!options.readOnly && ROOT_HANDOFF_COMMANDS.has(command.command)) {
                             if (!outcome.threadId || options.generation === null) {
                                 throw new Error('Codex root handoff omitted its target binding');
@@ -548,8 +559,24 @@ export class CodexGatewayRuntimeFactory {
                         } else if (router) {
                             await registerCodexV4CommandOutcome(router, command, outcome);
                         }
-                    } catch (error) {
-                        if (error instanceof CodexRpcOutcomeUnknownError) throw error;
+                    };
+                    const attempts = command.command === 'thread.rollback'
+                        ? ROLLBACK_COORDINATION_ATTEMPTS
+                        : 1;
+                    let coordinationFailure: { error: unknown } | null = null;
+                    for (let attempt = 0; attempt < attempts; attempt += 1) {
+                        try {
+                            await coordinateOutcome();
+                            coordinationFailure = null;
+                            break;
+                        } catch (error) {
+                            coordinationFailure = { error };
+                        }
+                    }
+                    if (coordinationFailure) {
+                        if (coordinationFailure.error instanceof CodexRpcOutcomeUnknownError) {
+                            throw coordinationFailure.error;
+                        }
                         throw new CodexRpcOutcomeUnknownError(
                             command.command,
                             'Provider command completed but Gateway route coordination is uncertain',

@@ -18,8 +18,6 @@ import nacl from 'tweetnacl';
 import {
     SyncSnapshotResponseV4Schema,
     type CodexEntityV4,
-    type CodexCommandEntityV4,
-    type CodexCommandResultEntityV4,
     type CodexRequestEntityV4,
     type CodexRuntimeEntityV4,
     type CodexTurnEntityV4,
@@ -35,7 +33,12 @@ import {
     startCodexResponsesFixture,
     writeCodexResponsesConfig,
 } from './codex-responses-fixture';
-import { hasSucceededPostClearCommand } from './codex-mobile-field-command-correlation';
+import {
+    hasSucceededPostClearCommand,
+    inspectRollbackCommand,
+    type RollbackCommandErrorKind,
+    type RollbackCommandTerminalStatus,
+} from './codex-mobile-field-command-correlation';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const serverRoot = join(repoRoot, 'packages', 'happy-server');
@@ -64,7 +67,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 14;
+    schemaVersion: 15;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -92,6 +95,10 @@ interface FieldDiagnostic {
     sessionActive: boolean | null;
     postClearRuntimeIdle: boolean;
     postClearHasNoActiveTurn: boolean;
+    rollbackCommandId: string | null;
+    rollbackCommandResultTerminalStatus: RollbackCommandTerminalStatus | null;
+    rollbackCommandResultUpdatedAt: number | null;
+    rollbackCommandErrorKind: RollbackCommandErrorKind;
     rollbackCommandSucceeded: boolean;
     postClearCommandSucceeded: boolean;
     v4LifecycleCompleted: boolean;
@@ -189,7 +196,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 14,
+        schemaVersion: 15,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -217,6 +224,10 @@ async function main(): Promise<void> {
         sessionActive: null,
         postClearRuntimeIdle: false,
         postClearHasNoActiveTurn: false,
+        rollbackCommandId: null,
+        rollbackCommandResultTerminalStatus: null,
+        rollbackCommandResultUpdatedAt: null,
+        rollbackCommandErrorKind: 'commandMissing',
         rollbackCommandSucceeded: false,
         postClearCommandSucceeded: false,
         v4LifecycleCompleted: false,
@@ -224,7 +235,7 @@ async function main(): Promise<void> {
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 14,
+            schemaVersion: 15,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -252,6 +263,10 @@ async function main(): Promise<void> {
             sessionActive: null,
             postClearRuntimeIdle: false,
             postClearHasNoActiveTurn: false,
+            rollbackCommandId: null,
+            rollbackCommandResultTerminalStatus: null,
+            rollbackCommandResultUpdatedAt: null,
+            rollbackCommandErrorKind: 'commandMissing',
             rollbackCommandSucceeded: false,
             postClearCommandSucceeded: false,
             v4LifecycleCompleted: false,
@@ -284,7 +299,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 14,
+        schemaVersion: 15,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -312,6 +327,10 @@ async function main(): Promise<void> {
         sessionActive: null,
         postClearRuntimeIdle: false,
         postClearHasNoActiveTurn: false,
+        rollbackCommandId: null,
+        rollbackCommandResultTerminalStatus: null,
+        rollbackCommandResultUpdatedAt: null,
+        rollbackCommandErrorKind: 'commandMissing',
         rollbackCommandSucceeded: false,
         postClearCommandSucceeded: false,
         v4LifecycleCompleted: false,
@@ -582,7 +601,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 14,
+        schemaVersion: 15,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -610,6 +629,10 @@ async function verifyFieldRoundTrip(
         sessionActive: null,
         postClearRuntimeIdle: false,
         postClearHasNoActiveTurn: false,
+        rollbackCommandId: null,
+        rollbackCommandResultTerminalStatus: null,
+        rollbackCommandResultUpdatedAt: null,
+        rollbackCommandErrorKind: 'commandMissing',
         rollbackCommandSucceeded: false,
         postClearCommandSucceeded: false,
         v4LifecycleCompleted: false,
@@ -698,10 +721,16 @@ async function verifyFieldRoundTrip(
             diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 2;
             diagnostic.postClearRuntimeIdle = hasIdleRuntime(entities, sessionCrypto.threadId);
             diagnostic.postClearHasNoActiveTurn = hasNoActiveTurn(entities);
-            diagnostic.rollbackCommandSucceeded = hasSucceededRollbackCommand(
+            const rollback = inspectRollbackCommand(
                 entities,
                 sessionCrypto.threadId,
             );
+            diagnostic.rollbackCommandId = rollback.commandId;
+            diagnostic.rollbackCommandResultTerminalStatus = rollback.terminalStatus;
+            diagnostic.rollbackCommandResultUpdatedAt = rollback.updatedAt;
+            diagnostic.rollbackCommandErrorKind = rollback.errorKind;
+            diagnostic.rollbackCommandSucceeded = rollback.terminalStatus === 'succeeded'
+                && rollback.errorKind === 'none';
             diagnostic.postClearCommandSucceeded = hasSucceededPostClearCommand(
                 entities,
                 sessionCrypto.threadId,
@@ -774,6 +803,10 @@ async function verifyFieldRoundTrip(
             sessionActive: diagnostic.sessionActive,
             postClearRuntimeIdle: diagnostic.postClearRuntimeIdle,
             postClearHasNoActiveTurn: diagnostic.postClearHasNoActiveTurn,
+            rollbackCommandId: diagnostic.rollbackCommandId,
+            rollbackCommandResultTerminalStatus: diagnostic.rollbackCommandResultTerminalStatus,
+            rollbackCommandResultUpdatedAt: diagnostic.rollbackCommandResultUpdatedAt,
+            rollbackCommandErrorKind: diagnostic.rollbackCommandErrorKind,
             rollbackCommandSucceeded: diagnostic.rollbackCommandSucceeded,
             postClearCommandSucceeded: diagnostic.postClearCommandSucceeded,
             v4LifecycleCompleted: diagnostic.v4LifecycleCompleted,
@@ -956,24 +989,6 @@ function hasIdleRuntime(entities: readonly CodexEntityV4[], threadId: string): b
 function hasNoActiveTurn(entities: readonly CodexEntityV4[]): boolean {
     return !entities.some((entity) => (
         entity.entityType === 'codex.turn' && entity.status === 'inProgress'
-    ));
-}
-
-function hasSucceededRollbackCommand(
-    entities: readonly CodexEntityV4[],
-    threadId: string,
-): boolean {
-    const rollbackCommandIds = new Set(entities
-        .filter((entity): entity is CodexCommandEntityV4 => (
-            entity.entityType === 'codex.command'
-            && entity.threadId === threadId
-            && entity.command === 'thread.rollback'
-        ))
-        .map((command) => command.commandId));
-    return entities.some((entity): entity is CodexCommandResultEntityV4 => (
-        entity.entityType === 'codex.commandResult'
-        && rollbackCommandIds.has(entity.commandId)
-        && entity.status === 'succeeded'
     ));
 }
 
