@@ -108,7 +108,7 @@ jobs:
         test -f artifacts/happy-wire.tgz
         test -f artifacts/happy-cli.tgz
         test -f artifacts/happy-server.tgz
-        npm install -g artifacts/happy-wire.tgz artifacts/happy-server.tgz artifacts/happy-cli.tgz
+        npm install -g ./artifacts/happy-wire.tgz ./artifacts/happy-server.tgz ./artifacts/happy-cli.tgz
 
     - name: Test binary execution
       run: |
@@ -186,7 +186,7 @@ jobs:
       run: |
         if not exist artifacts\happy-wire.tgz exit /b 1
         if not exist artifacts\happy-cli.tgz exit /b 1
-        npm install -g artifacts\happy-wire.tgz artifacts\happy-cli.tgz
+        npm install -g ".\artifacts\happy-wire.tgz" ".\artifacts\happy-cli.tgz"
 
     - name: Debug npm global installation structure
       shell: cmd
