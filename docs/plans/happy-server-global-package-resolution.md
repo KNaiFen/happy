@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 当前状态：进行中（已确认归档构建与全局解析两层缺口，等待云端复验和可分发实现决策）。
+- 当前状态：进行中（归档 runtime 云端 smoke 已通过；全局同级包解析仍等待可分发实现决策）。
 - 建立日期：2026-08-10。
 - 发现基线：PR [#28](https://github.com/KNaiFen/happy/pull/28) 的 CLI Smoke run [31335259939](https://github.com/KNaiFen/happy/actions/runs/31335259939)。
 - 负责范围：`packages/happy-cli/src/commands/server.ts`、`happy-server-self-host` 安装说明与 CLI package smoke。
@@ -31,6 +31,13 @@ CLI 当前的失败提示仍建议执行 `npm install -g happy-server-self-host`
 当前 Actions 实现已在 prepare job 安装 Bun，执行 `build:runtime` 后再 pack；这只修复 smoke 输入的真实性，不改变已发布包。
 
 这能阻止源码 fallback 再次掩盖归档缺陷，但不会把全局同级安装错误标记为已修复。
+
+PR [#28](https://github.com/KNaiFen/happy/pull/28) 的最终 CLI Smoke
+[31336163603](https://github.com/KNaiFen/happy/actions/runs/31336163603) 已证明 prepare 生成的
+Server tgz 包含可加载的 standalone runtime；Linux Node 20/24 在没有源码 checkout 的临时项目中
+同地安装三份 tgz 后均通过 PGlite/Prisma 与 `happy server` 集成检查。该证据只关闭“归档缺少
+runtime”这一 smoke 输入缺口，不证明 `npm install -g happy happy-server-self-host` 的全局同级布局
+能够被当前 CLI resolver 找到。
 
 ## 下一步
 
