@@ -48,13 +48,13 @@ GitHub API 同时确认：`main` 当前没有 branch protection，仓库 ruleset
 - [x] Monorepo CI、CLI Smoke 和 Android Field 从代码路径中排除 Markdown/MDX。
 - [x] CLI Smoke 的路径补入 root `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`scripts/ci/**`、`scripts/postinstall.cjs`、`patches/**` 与 `.npmrc`。
 - [x] CLI Smoke 显式使用只读权限、PR 级并发取消和合理 job timeout。
-- [x] CLI Smoke 增加单一 prepare job；四个运行矩阵腿下载同一组固定文件名 npm 归档，不再重复 pnpm install、build、Prisma/Web bundle 和 pack。Linux 另以无源码 checkout 的临时项目同地安装三份 tgz，避免 server 源码 fallback 冒充归档验收。
+- [x] CLI Smoke 增加单一 prepare job；四个运行矩阵腿下载同一组固定文件名 npm 归档，不再重复 pnpm install、build、Prisma/runtime/Web bundle 和 pack。Linux 另以无源码 checkout 的临时项目同地安装三份 tgz，避免 server 源码 fallback 冒充归档验收。
 - [x] 所有工作流通过结构化 YAML 解析和 `actionlint v1.7.7` 静态检查。
 - [ ] PR Documentation、CLI Smoke 和 Required CI 在同一 head SHA 上成功，且分支 push 不产生重复 run。
 
 阶段 1 的直接收益只计算已实施的保守范围：样本中的 9 个 branch push 合计 8,328 runner 秒（138.8 分钟）。等价 main tree 的 8,354 runner 秒仍保留；两者合计为上述 16,682 秒。直到阶段 3 建立强制 PR 门禁和同 SHA 全局 gate 后，main 重复才能安全消除；本阶段不以缺少 main 验收换取速度。
 
-PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会掩盖 `happy-server-self-host` 全局同级安装无法被 CLI 解析的问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步由[专门活动计划](./happy-server-global-package-resolution.md)承接。
+PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步由[专门活动计划](./happy-server-global-package-resolution.md)承接。
 
 ### 阶段 2：变更影响规划与不可变制品复用
 

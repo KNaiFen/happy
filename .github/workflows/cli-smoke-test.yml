@@ -45,6 +45,11 @@ jobs:
         node-version: 24
         cache: pnpm
 
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.2.20
+
     - name: Install dependencies
       run: pnpm install --frozen-lockfile
 
@@ -56,9 +61,10 @@ jobs:
     # The server archive is only exercised on Linux. Building it in this Linux
     # preparation job preserves the platform-specific Prisma/native dependency
     # contract while avoiding duplicate builds for Node 20 and Node 24.
-    - name: Generate Prisma client + bundle happy-server-self-host webapp
+    - name: Generate Prisma client + build runtime + bundle happy-server-self-host webapp
       run: |
         pnpm --filter happy-server-self-host generate
+        pnpm --filter happy-server-self-host build:runtime
         pnpm --filter happy-server-self-host run bundle:webapp
 
     - name: Pack smoke archives
