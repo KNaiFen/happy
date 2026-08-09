@@ -87,6 +87,9 @@ function createHarness(options: {
             status: SyncV4CommandJournalStatus,
         ) => {
             commandStatuses.set(pending.commandId, status);
+            if (pending.command === 'thread.rollback') {
+                order.push(`rollback.command.${status}`);
+            }
             return {};
         }),
         flushOutboundOnce: vi.fn(async () => undefined),
@@ -191,6 +194,9 @@ function createHarness(options: {
         reconcile: vi.fn(async () => null),
     };
     const reportSessionStarted = vi.fn(async () => ({}));
+    const awaitNotificationBarrier = vi.fn(async () => {
+        order.push('rollback.notificationBarrier.drained');
+    });
     const factory = new CodexGatewayRuntimeFactory({
         gatewayId: 'gateway-a',
         sessionKeySeed: Buffer.alloc(32, 5).toString('base64url'),
@@ -206,6 +212,7 @@ function createHarness(options: {
         defaultEffort: 'high',
         modelCapabilities: [],
         terminalState: () => ({ state: 'attached', detachedAt: null }),
+        awaitNotificationBarrier,
         rootHandoff,
         reportSessionStarted,
         resolveRootSessionConfig: options.existingSession ? () => ({
@@ -229,6 +236,7 @@ function createHarness(options: {
         sync,
         client,
         rootHandoff,
+        awaitNotificationBarrier,
         reportSessionStarted,
         assertCurrentGeneration,
         order,
@@ -373,6 +381,19 @@ describe('CodexGatewayRuntimeFactory', () => {
             assertCurrentGeneration: harness.assertCurrentGeneration,
         });
         await runtime!.activate(thread());
+        let releaseNotificationBarrier!: () => void;
+        const notificationBarrierGate = new Promise<void>((resolve) => {
+            releaseNotificationBarrier = resolve;
+        });
+        harness.awaitNotificationBarrier.mockImplementationOnce(async () => {
+            harness.order.push('rollback.notificationBarrier.started');
+            await notificationBarrierGate;
+            harness.order.push('rollback.notificationBarrier.drained');
+        });
+        vi.mocked(harness.client.readThreadComplete).mockImplementationOnce(async () => {
+            harness.order.push('rollback.provider.responded');
+            return { thread: thread() };
+        });
         let releaseSnapshot!: () => void;
         const snapshotGate = new Promise<void>((resolve) => {
             releaseSnapshot = resolve;
@@ -390,6 +411,11 @@ describe('CodexGatewayRuntimeFactory', () => {
         });
 
         const pending = harness.emit(clear);
+        await vi.waitFor(() => expect(harness.order).toContain('rollback.notificationBarrier.started'));
+        expect(harness.order).not.toContain('rollback.snapshot.started');
+        expect(harness.commandStatuses.get('command-clear')).toBe('executing');
+
+        releaseNotificationBarrier();
         await vi.waitFor(() => expect(harness.order).toContain('rollback.snapshot.started'));
         expect(harness.commandStatuses.get('command-clear')).toBe('executing');
 
@@ -398,6 +424,41 @@ describe('CodexGatewayRuntimeFactory', () => {
 
         expect(harness.order).toContain('rollback.snapshot.persisted');
         expect(harness.commandStatuses.get('command-clear')).toBe('succeeded');
+        expect(harness.order).toEqual([
+            'rollback.command.received',
+            'rollback.command.executing',
+            'generation:3',
+            'rollback.provider.responded',
+            'rollback.notificationBarrier.started',
+            'rollback.notificationBarrier.drained',
+            'rollback.snapshot.started',
+            'rollback.snapshot.persisted',
+            'rollback.command.succeeded',
+        ]);
+        await runtime!.close();
+    });
+
+    it('marks rollback result unknown when the notification barrier cannot be proven', async () => {
+        const harness = createHarness();
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+        await runtime!.activate(thread());
+        const publishCount = vi.mocked(harness.sync.publishEntities).mock.calls.length;
+        harness.awaitNotificationBarrier.mockRejectedValueOnce(new Error('notification pipeline failed'));
+
+        await harness.emit(command('thread.rollback', { allTurns: true }, {
+            commandId: 'command-clear-unknown',
+            providerId: 'command-clear-unknown',
+            clientUserMessageId: 'command-clear-unknown',
+        }));
+
+        expect(harness.commandStatuses.get('command-clear-unknown')).toBe('resultUnknown');
+        expect(vi.mocked(harness.sync.publishEntities)).toHaveBeenCalledTimes(publishCount);
         await runtime!.close();
     });
 

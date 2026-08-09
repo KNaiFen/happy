@@ -299,6 +299,82 @@ describe('Codex Gateway coordinator', () => {
         expect(harness.coordinator.pendingSubscriptionThreadIds()).toEqual([]);
     });
 
+    it('captures only the provider notification prefix present at the rollback barrier', async () => {
+        const root = thread('thread-root', 'idle');
+        const harness = createHarness({ 'thread-root': root });
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-root');
+        const runtime = harness.runtimes.get('thread-root')!;
+        const order: string[] = [];
+        let releaseFirst!: () => void;
+        let releaseSecond!: () => void;
+        let firstStarted!: () => void;
+        const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+        const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+        const firstObserved = new Promise<void>((resolve) => { firstStarted = resolve; });
+        runtime.onNotification = async (value) => {
+            if (value.method === 'thread/status/changed' && value.params.status.type === 'active') {
+                firstStarted();
+                await firstGate;
+                order.push('first.completed');
+                return;
+            }
+            await secondGate;
+            order.push('second.completed');
+        };
+
+        harness.client.emitNotification(threadStatus('thread-root', 'active'));
+        await firstObserved;
+        const barrier = harness.coordinator.awaitNotificationBarrier();
+        harness.client.emitNotification(threadStatus('thread-root', 'idle'));
+
+        releaseFirst();
+        await barrier;
+        expect(order).toEqual(['first.completed']);
+
+        releaseSecond();
+        await harness.coordinator.flush();
+        expect(order).toEqual(['first.completed', 'second.completed']);
+    });
+
+    it('reports a routed notification failure once without poisoning the serial queue', async () => {
+        const routeFailure = new Error('notification route failed');
+        const errors: unknown[] = [];
+        const harness = createHarness(
+            { 'thread-root': thread('thread-root', 'idle') },
+            { onError: (error) => errors.push(error) },
+        );
+        await harness.coordinator.connect();
+        await harness.coordinator.bindRoot('thread-root');
+        const runtime = harness.runtimes.get('thread-root')!;
+        runtime.onNotification = async (notification) => {
+            if (
+                notification.method === 'thread/status/changed'
+                && notification.params.status.type === 'active'
+            ) {
+                throw routeFailure;
+            }
+        };
+
+        const failed = threadStatus('thread-root', 'active');
+        const succeeded = threadStatus('thread-root', 'idle');
+        harness.client.emitNotification(failed);
+        harness.client.emitNotification(succeeded);
+
+        const failedBarrier = expect(harness.coordinator.awaitNotificationBarrier())
+            .rejects.toBe(routeFailure);
+        const nextBatchBarrier = expect(harness.coordinator.awaitNotificationBarrier())
+            .resolves.toBeUndefined();
+        await Promise.all([failedBarrier, nextBatchBarrier]);
+        expect(errors).toEqual([routeFailure]);
+        expect(runtime.notifications).toEqual([failed, succeeded]);
+
+        runtime.onNotification = null;
+        harness.client.emitNotification(threadStatus('thread-root', 'active'));
+        await expect(harness.coordinator.flush()).resolves.toBeUndefined();
+        expect(runtime.notifications).toHaveLength(3);
+    });
+
     it('keeps a bridge lifecycle that arrives before a terminal root binding as subscription proof', async () => {
         const fresh = thread('thread-fresh', 'idle');
         const lifecycle = threadStatus('thread-fresh', 'active');

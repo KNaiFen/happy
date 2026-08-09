@@ -706,16 +706,18 @@ export class CodexSyncV4Mapper {
         const liveActiveTurn = source === 'metadata' && activeTurnId
             ? this.turns.get(turnKey(thread.id, activeTurnId))
             : null;
-        const hasActiveSnapshotTurn = thread.turns.some((turn) => {
-            if (turn.status !== 'inProgress') return false;
-            if (source !== 'metadata') return true;
-            const knownTurn = this.turns.get(turnKey(thread.id, turn.id));
-            return !knownTurn || knownTurn.status === 'inProgress';
-        });
+        const preservesHydratedMetadataState = source === 'metadata'
+            && previous !== undefined
+            && previous.status.type !== 'notLoaded';
+        const canHydrateMetadataActiveTurn = preservesHydratedMetadataState
+            && previous.status.type === 'active'
+            && !liveActiveTurn;
+        const hasActiveSnapshotTurn = (!preservesHydratedMetadataState || canHydrateMetadataActiveTurn)
+            && thread.turns.some((turn) => turn.status === 'inProgress');
         const hasActiveTurn = hasActiveSnapshotTurn
             || (liveActiveTurn?.status === 'inProgress');
         let status: CodexThreadStatusV4 = reportedStatus;
-        if (source === 'metadata' && previous) {
+        if (preservesHydratedMetadataState) {
             status = previous.status;
             if (hasActiveTurn && status.type !== 'active' && status.type !== 'systemError') {
                 status = { type: 'active', activeFlags: [] };
@@ -762,6 +764,14 @@ export class CodexSyncV4Mapper {
         if (includeTurns) {
             for (let turnIndex = 0; turnIndex < thread.turns.length; turnIndex += 1) {
                 const turn = thread.turns[turnIndex];
+                if (
+                    preservesHydratedMetadataState
+                    && turn.status === 'inProgress'
+                    && liveActiveTurn?.turnId !== turn.id
+                    && !canHydrateMetadataActiveTurn
+                ) {
+                    continue;
+                }
                 await this.applyTurn(
                     thread.id,
                     turn,
@@ -911,7 +921,12 @@ export class CodexSyncV4Mapper {
         const tokenUsage = normalizeThreadTokenUsage(usage);
         const nextThread = { ...thread, tokenUsage, updatedAt: now };
 
-        const turn = await this.ensureTurn(threadId, turnId, now);
+        const turn = this.turns.get(turnKey(threadId, turnId));
+        if (!turn) {
+            await this.publisher.publishEntity(nextThread);
+            this.threads.set(threadId, nextThread);
+            return;
+        }
         const nextTurn = { ...turn, usage: tokenUsage.last, updatedAt: now };
         await this.publisher.publishEntities([{ entity: nextThread }, { entity: nextTurn }]);
         this.threads.set(threadId, nextThread);

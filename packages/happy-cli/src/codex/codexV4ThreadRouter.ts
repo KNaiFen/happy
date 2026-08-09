@@ -224,6 +224,13 @@ export class CodexV4ThreadRouter {
         }
         await this.enqueueThread(threadId, async () => {
             const binding = await this.bindingForThread(threadId);
+            if (
+                this.options.rootBinding.syncClient.getPendingCodexNotifications()
+                    .some((entry) => entry.threadId === threadId)
+            ) {
+                this.threadsWithPendingOrphans.add(threadId);
+                await this.drainPendingNotifications(threadId);
+            }
             await binding.mapper.reconcileRollbackSnapshot(snapshot);
             await binding.mapper.flush();
             this.hydratedThreads.add(threadId);

@@ -84,6 +84,23 @@ jobs:
           pnpm --filter @slopus/happy-wire build
           pnpm --filter happy build
 
+      - name: Pack and install CLI under test
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./packages/happy-cli/package.json').version")"
+          PACK_ROOT="$RUNNER_TEMP/happy-mobile-cli-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          INSTALL_ROOT="$RUNNER_TEMP/happy-mobile-cli-installed-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$PACK_ROOT" "$INSTALL_ROOT"
+          pnpm --filter happy pack --pack-destination "$PACK_ROOT"
+          ARCHIVE="$PACK_ROOT/happy-${VERSION}.tgz"
+          test -f "$ARCHIVE"
+          npm install --ignore-scripts --prefix "$INSTALL_ROOT" "$ARCHIVE"
+          ENTRYPOINT="$INSTALL_ROOT/node_modules/happy/bin/happy.mjs"
+          test -f "$ENTRYPOINT"
+          test "$(node --no-warnings --no-deprecation "$ENTRYPOINT" --version)" = \
+            "happy version: $VERSION"
+          printf 'HAPPY_MOBILE_E2E_CLI_ENTRYPOINT=%s\n' "$ENTRYPOINT" >> "$GITHUB_ENV"
+
       - name: Download source-built official Codex
         uses: actions/download-artifact@v4
         with:

@@ -463,6 +463,7 @@ async function runCodexGatewayWorkerInternal(
                             state: terminal.state,
                             detachedAt: terminal.state === 'detached' ? terminal.detachedAt : null,
                         }),
+                        awaitNotificationBarrier: () => requireCoordinator().awaitNotificationBarrier(),
                         rootHandoff,
                         sandboxConfig: settings.sandboxConfig,
                         skillCommands: skills,

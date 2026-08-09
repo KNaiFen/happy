@@ -17,6 +17,7 @@ import {
 } from './codexV4ThreadRouter';
 
 class FakeMapper {
+    readonly order: string[] = [];
     readonly notifications: ServerNotification[] = [];
     readonly snapshots: Thread[] = [];
     readonly stateSnapshots: Thread[] = [];
@@ -39,6 +40,7 @@ class FakeMapper {
             this.notificationFailure = null;
             throw error;
         }
+        this.order.push('orphan.notification');
         this.notifications.push(notification);
     }
 
@@ -51,6 +53,7 @@ class FakeMapper {
     }
 
     async reconcileRollbackSnapshot(thread: Thread): Promise<void> {
+        this.order.push('rollback.snapshot');
         this.rollbackSnapshots.push(thread);
     }
 
@@ -88,10 +91,12 @@ class FakeMapper {
     }
     async flush(): Promise<void> {
         this.flushCount += 1;
-        if (!this.flushFailure) return;
-        const error = this.flushFailure;
-        this.flushFailure = null;
-        throw error;
+        if (this.flushFailure) {
+            const error = this.flushFailure;
+            this.flushFailure = null;
+            throw error;
+        }
+        this.order.push('mapper.flush');
     }
 }
 
@@ -482,12 +487,74 @@ describe('CodexV4ThreadRouter', () => {
         });
 
         await router.registerRootThread('thread-root');
+        root.mapper.notificationFailure = new Error('persist before rollback');
+        await expect(router.handleNotificationAsync({
+            method: 'thread/tokenUsage/updated',
+            params: {
+                threadId: 'thread-root',
+                turnId: 'turn-stale',
+                tokenUsage: {
+                    total: {
+                        totalTokens: 8,
+                        inputTokens: 5,
+                        cachedInputTokens: 0,
+                        cacheWriteInputTokens: 0,
+                        outputTokens: 3,
+                        reasoningOutputTokens: 0,
+                    },
+                    last: {
+                        totalTokens: 8,
+                        inputTokens: 5,
+                        cachedInputTokens: 0,
+                        cacheWriteInputTokens: 0,
+                        outputTokens: 3,
+                        reasoningOutputTokens: 0,
+                    },
+                    modelContextWindow: 200_000,
+                },
+            },
+        } as ServerNotification)).rejects.toThrow('persist before rollback');
+        expect(root.pendingCodexNotifications).toHaveLength(1);
+        root.mapper.order.length = 0;
+
         await router.reconcileRollbackSnapshot('thread-root', snapshot);
 
+        expect(root.mapper.order).toEqual([
+            'orphan.notification',
+            'mapper.flush',
+            'rollback.snapshot',
+            'mapper.flush',
+        ]);
+        expect(root.pendingCodexNotifications).toEqual([]);
         expect(root.mapper.rollbackSnapshots).toEqual([snapshot]);
-        expect(root.mapper.flushCount).toBe(1);
+        expect(root.mapper.flushCount).toBe(2);
         await expect(router.reconcileRollbackSnapshot('thread-other', snapshot))
             .rejects.toThrow('did not match');
+    });
+
+    it('does not apply a rollback snapshot when persisted orphan replay fails', async () => {
+        const root = binding('happy-root');
+        const snapshot = thread('thread-root', null);
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => snapshot,
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+        });
+        await router.registerRootThread('thread-root');
+        root.mapper.notificationFailure = new Error('initial route failure');
+        await expect(router.handleNotificationAsync({
+            method: 'thread/started',
+            params: { thread: snapshot },
+        } as ServerNotification)).rejects.toThrow('initial route failure');
+        root.mapper.notificationFailure = new Error('orphan replay failure');
+
+        await expect(router.reconcileRollbackSnapshot('thread-root', snapshot))
+            .rejects.toThrow('orphan replay failure');
+        expect(root.mapper.rollbackSnapshots).toEqual([]);
+        expect(root.mapper.flushCount).toBe(0);
+        expect(root.pendingCodexNotifications).toHaveLength(1);
     });
 
     it('hydrates an unknown child and never projects its lifecycle into the parent mapper', async () => {

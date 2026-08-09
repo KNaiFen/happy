@@ -16,6 +16,7 @@ export const OFFICIAL_CODEX_MCP_SENTINEL = 'MCP single-card field verification';
 export const OFFICIAL_CODEX_MCP_CHOICE_SENTINEL = 'MCP restart-safe field choice accepted';
 export const OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL = 'Official Codex queued follow-up E2E response';
 export const OFFICIAL_CODEX_POST_CLEAR_SENTINEL = 'Official Codex post-clear E2E response';
+export const OFFICIAL_CODEX_POST_CLEAR_INPUT = 'post-clear-from-android-e2e';
 export const OFFICIAL_CODEX_FIELD_MCP_SERVER = 'field_e2e';
 export const OFFICIAL_CODEX_FIELD_MCP_TOOL = 'record_field_event';
 export const OFFICIAL_CODEX_FIELD_ELICITATION_TOOL = 'collect_field_choice';
