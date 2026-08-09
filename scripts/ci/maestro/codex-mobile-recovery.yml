@@ -125,4 +125,34 @@ tags:
 - assertNotVisible: Plan mode with options
 - assertNotVisible: Based on this message, call
 - assertNotVisible: <happy-system>
+- tapOn:
+    id: agent-input-message
+- setClipboard: /clear
+- pasteText
+- hideKeyboard
+- tapOn:
+    id: agent-input-send
+- extendedWaitUntil:
+    visible:
+      id: agent-input-message
+    timeout: 45000
+- tapOn:
+    id: agent-input-message
+- setClipboard: post-clear-from-android-e2e
+- pasteText
+- hideKeyboard
+- tapOn:
+    id: agent-input-send
+- scrollUntilVisible:
+    element: Official Codex post-clear E2E response
+    direction: DOWN
+    timeout: 150000
+- assertVisible: Official Codex post-clear E2E response
+- assertNotVisible: CodexControlCommand
+- assertNotVisible: thread.rollback
+- scrollUntilVisible:
+    element: resume-history-from-android-e2e
+    direction: UP
+    timeout: 45000
+- assertVisible: resume-history-from-android-e2e
 - takeScreenshot: codex-recovered-after-process-death

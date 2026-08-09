@@ -4,6 +4,7 @@ import {
 } from '@slopus/happy-wire';
 import { describe, expect, it, vi } from 'vitest';
 import type { SyncV4CodexThreadRoute } from '@/api/syncV4Journal';
+import type { Thread } from './protocol';
 import type { CodexV4ThreadRouter } from './codexV4ThreadRouter';
 import {
     assertCodexV4ReadOnlyCommand,
@@ -50,6 +51,7 @@ function router() {
         registerRootThread: vi.fn(async () => {}),
         registerUserFork: vi.fn(async () => {}),
         registerDetachedReview: vi.fn(async () => {}),
+        reconcileRollbackSnapshot: vi.fn(async () => {}),
     } as unknown as CodexV4ThreadRouter;
 }
 
@@ -184,6 +186,33 @@ describe('Codex v4 command routing', () => {
             'turn-parent',
             'command-1',
         );
+    });
+
+    it('awaits the authoritative rollback snapshot for the exact target thread', async () => {
+        const target = router();
+        const snapshot = {
+            id: 'thread-root',
+            turns: [],
+            status: { type: 'idle' },
+        } as unknown as Thread;
+
+        await registerCodexV4CommandOutcome(
+            target,
+            command({ command: 'thread.rollback', payload: { allTurns: true } }),
+            { threadId: 'thread-root', rollbackSnapshot: snapshot },
+        );
+
+        expect(target.reconcileRollbackSnapshot).toHaveBeenCalledWith('thread-root', snapshot);
+        await expect(registerCodexV4CommandOutcome(
+            target,
+            command({ command: 'thread.rollback', payload: { allTurns: true } }),
+            { threadId: 'thread-root' },
+        )).rejects.toThrow('no authoritative snapshot');
+        await expect(registerCodexV4CommandOutcome(
+            target,
+            command({ command: 'thread.rollback', payload: { allTurns: true } }),
+            { rollbackSnapshot: snapshot },
+        )).rejects.toThrow('did not match');
     });
 
     it('reconciles only non-idempotent commands whose route receipt is durable', () => {

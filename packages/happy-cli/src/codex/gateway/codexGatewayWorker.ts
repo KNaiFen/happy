@@ -59,6 +59,7 @@ import { CodexGatewayRuntimeBindingUpdateError } from './codexGatewaySyncRuntime
 import {
     codexGatewayPaths,
     CodexGatewaySocketPathTooLongError,
+    ensureCodexGatewayRuntimeDirectories,
     readCodexGatewayDescriptor,
     readCodexGatewaySecret,
     writeCodexGatewayDescriptor,
@@ -178,6 +179,7 @@ async function runCodexGatewayWorkerInternal(
     if (!initialDescriptor.tuiSocketPath && !initialDescriptor.tuiPort) {
         throw new Error('Codex Gateway TUI endpoint is unavailable');
     }
+    await ensureCodexGatewayRuntimeDirectories(paths);
     const gatewayOrigin = initialDescriptor.origin;
     const gatewayCwd = initialDescriptor.cwd;
     const gatewayBootstrapOperationId = initialDescriptor.bootstrapOperationId;
@@ -1743,6 +1745,8 @@ function startupFailureKind(stage: CodexGatewayStartupStage, error: unknown): st
 }
 
 function safeErrorKind(error: unknown): string {
+    const nodeErrorCode = safeNodeErrorCode(error);
+    if (nodeErrorCode) return nodeErrorCode;
     if (error instanceof CodexGatewaySocketPathTooLongError) return 'socketPathTooLong';
     if (error instanceof CodexGatewayRootBindingError) {
         if (error.diagnosticCause instanceof CodexGatewayRuntimeBindingUpdateError) {
@@ -1756,6 +1760,29 @@ function safeErrorKind(error: unknown): string {
     }
     const classified = classifySyncV4DiagnosticError(error);
     return [...classified].slice(0, 128).join('');
+}
+
+const SAFE_NODE_ERROR_CODES = new Set([
+    'ENOENT',
+    'EACCES',
+    'ENOTDIR',
+    'EEXIST',
+    'EPERM',
+    'EROFS',
+    'ELOOP',
+    'ENOSPC',
+    'EIO',
+    'EADDRINUSE',
+]);
+
+function safeNodeErrorCode(error: unknown): string | null {
+    try {
+        if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
+        const code = (error as { code?: unknown }).code;
+        return typeof code === 'string' && SAFE_NODE_ERROR_CODES.has(code) ? code : null;
+    } catch {
+        return null;
+    }
 }
 
 function safeProxyTransportErrorKind(error: unknown): string {

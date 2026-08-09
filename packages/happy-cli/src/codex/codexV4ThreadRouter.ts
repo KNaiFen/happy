@@ -218,6 +218,18 @@ export class CodexV4ThreadRouter {
         await migrator.migrate(acquiredSnapshot ?? await this.options.readThread(threadId));
     }
 
+    async reconcileRollbackSnapshot(threadId: string, snapshot: Thread): Promise<void> {
+        if (snapshot.id !== threadId) {
+            throw new Error('Codex rollback snapshot did not match the requested thread');
+        }
+        await this.enqueueThread(threadId, async () => {
+            const binding = await this.bindingForThread(threadId);
+            await binding.mapper.reconcileRollbackSnapshot(snapshot);
+            await binding.mapper.flush();
+            this.hydratedThreads.add(threadId);
+        });
+    }
+
     async recoverPendingNotifications(): Promise<void> {
         const threadIds = new Set(
             this.options.rootBinding.syncClient.getPendingCodexNotifications()

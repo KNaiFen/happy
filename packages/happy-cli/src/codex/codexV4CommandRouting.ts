@@ -77,6 +77,18 @@ export async function registerCodexV4CommandOutcome(
     command: CodexCommandEntityV4,
     outcome: CodexV4CommandOutcome,
 ): Promise<void> {
+    if (command.command === 'thread.rollback') {
+        const targetThreadId = codexV4CommandTargetThreadId(command);
+        if (!targetThreadId) throw new Error('Codex rollback has no target thread');
+        if (outcome.threadId !== targetThreadId) {
+            throw new Error('Codex rollback outcome did not match the target thread');
+        }
+        if (!outcome.rollbackSnapshot) {
+            throw new Error('Codex rollback outcome has no authoritative snapshot');
+        }
+        await router.reconcileRollbackSnapshot(targetThreadId, outcome.rollbackSnapshot);
+        return;
+    }
     if (!outcome.threadId) return;
     switch (command.command) {
         case 'thread.start':

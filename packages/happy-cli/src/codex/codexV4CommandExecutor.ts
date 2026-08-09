@@ -100,15 +100,32 @@ export class CodexV4CommandExecutor {
                 let numTurns: number;
                 if (payload.allTurns === true) {
                     this.beforeProviderCall(command);
-                    const snapshot = await this.options.client.readThreadComplete({ threadId });
+                    const snapshot = await this.options.client.readThreadComplete({
+                        threadId,
+                        emitSnapshot: false,
+                    });
                     numTurns = snapshot.thread.turns.length;
-                    if (numTurns === 0) return { threadId, result: { rolledBackTurns: 0 } };
+                    if (numTurns === 0) {
+                        return {
+                            threadId,
+                            result: { rolledBackTurns: 0 },
+                            rollbackSnapshot: snapshot.thread,
+                        };
+                    }
                 } else {
                     numTurns = positiveInt(payload.numTurns, 'thread.rollback requires a positive numTurns');
                 }
                 this.beforeProviderCall(command);
-                const result = await this.options.client.rollbackThread({ threadId, numTurns });
-                return { threadId: result.thread.id, result: { rolledBackTurns: numTurns } };
+                const result = await this.options.client.rollbackThread({
+                    threadId,
+                    numTurns,
+                    emitSnapshot: false,
+                });
+                return {
+                    threadId: result.thread.id,
+                    result: { rolledBackTurns: numTurns },
+                    rollbackSnapshot: result.thread,
+                };
             }
             case 'thread.compact': {
                 const threadId = commandThreadId(command, payload);

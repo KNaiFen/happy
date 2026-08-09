@@ -1522,9 +1522,8 @@ describe('CodexAppServerClient sandbox integration', () => {
                             result: {
                                 thread: {
                                     id: 'thread-forked',
-                                    turns: [
-                                        { id: 'turn-1', items: [{ type: 'userMessage', id: 'user-1', content: [{ type: 'text', text: 'hello' }] }] },
-                                    ],
+                                    status: { type: 'idle' },
+                                    turns: [],
                                 },
                             },
                         });
@@ -1545,6 +1544,8 @@ describe('CodexAppServerClient sandbox integration', () => {
 
         const { CodexAppServerClient } = await import('./codexAppServerClient');
         const client = new CodexAppServerClient();
+        const notifications = vi.fn();
+        client.setStableNotificationHandler(notifications);
 
         await client.connect();
         const forked = await client.forkThread({
@@ -1554,7 +1555,13 @@ describe('CodexAppServerClient sandbox integration', () => {
             sandbox: 'workspace-write',
         });
         const read = await client.readThread({ threadId: forked.threadId, includeTurns: true });
-        const rolledBack = await client.rollbackThread({ threadId: forked.threadId, numTurns: 2 });
+        expect(client.turnId).toBe('turn-1');
+        notifications.mockClear();
+        const rolledBack = await client.rollbackThread({
+            threadId: forked.threadId,
+            numTurns: 2,
+            emitSnapshot: false,
+        });
         const injected = await client.injectItems({
             threadId: forked.threadId,
             items: [{
@@ -1566,7 +1573,9 @@ describe('CodexAppServerClient sandbox integration', () => {
 
         expect(forked.threadId).toBe('thread-forked');
         expect(read.thread.turns).toHaveLength(1);
-        expect(rolledBack.thread.turns).toHaveLength(1);
+        expect(rolledBack.thread.turns).toHaveLength(0);
+        expect(client.turnId).toBeNull();
+        expect(notifications).not.toHaveBeenCalled();
         expect(injected).toEqual({});
         expect(requests.find((msg) => msg.method === 'thread/fork')?.params).toEqual(expect.objectContaining({
             threadId: 'thread-source',

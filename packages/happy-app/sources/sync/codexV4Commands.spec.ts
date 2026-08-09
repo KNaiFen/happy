@@ -8,6 +8,7 @@ import {
     codexV4RequestResponse,
     commandForCodexV4Input,
     createCodexV4Command,
+    findActiveCodexV4Turn,
     parseCodexV4Input,
 } from './codexV4Commands';
 import { createCodexV4Projection } from './codexV4Projection';
@@ -141,6 +142,29 @@ describe('Codex v4 App commands', () => {
         })).toMatchObject({
             command: 'turn.start',
             threadId: 'thread-2',
+        });
+    });
+
+    it('starts a new turn after rollback interrupts the former active turn', () => {
+        const cleared = projection(true);
+        const formerActive = Object.values(cleared.entities['codex.turn'])[0];
+        cleared.entities['codex.turn'][formerActive.providerId] = {
+            ...formerActive,
+            status: 'interrupted',
+        };
+        cleared.runtime = {
+            threadId: 'thread-1',
+            execution: { type: 'idle' },
+        } as unknown as typeof cleared.runtime;
+
+        expect(findActiveCodexV4Turn(cleared)).toBeNull();
+        expect(commandForCodexV4Input({
+            parsed: parseCodexV4Input('after clear', []),
+            projection: cleared,
+            mode: {},
+        })).toMatchObject({
+            command: 'turn.start',
+            threadId: 'thread-1',
         });
     });
 

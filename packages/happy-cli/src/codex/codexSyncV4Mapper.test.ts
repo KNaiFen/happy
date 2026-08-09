@@ -662,6 +662,68 @@ describe('CodexSyncV4Mapper', () => {
         await mapper.close();
     });
 
+    it('reconciles rollback to idle while retaining historical item content', async () => {
+        const publisher = new RecordingPublisher();
+        let now = 1_800_000_000_000;
+        const mapper = new CodexSyncV4Mapper(publisher, {
+            codexCliVersion: '0.145.0',
+            now: () => now++,
+        });
+        const agentMessage: ThreadItem = {
+            type: 'agentMessage',
+            id: 'agent-before-clear',
+            text: 'Historical answer',
+            phase: null,
+            memoryCitation: null,
+        };
+        mapper.importThread({
+            ...thread('thread-clear', [turn('turn-active', 'inProgress', [agentMessage])]),
+            status: { type: 'active', activeFlags: [] },
+        });
+        await mapper.flush();
+
+        await mapper.reconcileRollbackSnapshot(thread('thread-clear'));
+        await mapper.flush();
+
+        expect(mapper.activeTurnId('thread-clear')).toBeNull();
+        expect(publisher.latest('codex.thread')[0].status).toEqual({ type: 'idle' });
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'idle' });
+        expect(publisher.latest('codex.turn')).toMatchObject([{
+            turnId: 'turn-active',
+            status: 'interrupted',
+            completedAt: expect.any(Number),
+        }]);
+        expect(publisher.latest('codex.item')).toMatchObject([{
+            itemId: 'agent-before-clear',
+            status: 'interrupted',
+            completedAt: expect.any(Number),
+        }]);
+        expect(publisher.latest('codex.part')).toMatchObject([{
+            content: 'Historical answer',
+            final: true,
+        }]);
+
+        mapper.handleNotification(notification({
+            method: 'thread/started',
+            params: {
+                thread: {
+                    ...thread('thread-clear', [turn('turn-active', 'inProgress', [agentMessage])]),
+                    status: { type: 'active', activeFlags: [] },
+                },
+            },
+        }));
+        await mapper.flush();
+
+        expect(mapper.activeTurnId('thread-clear')).toBeNull();
+        expect(publisher.latest('codex.thread')[0].status).toEqual({ type: 'idle' });
+        expect(publisher.latest('codex.runtime')[0].execution).toEqual({ type: 'idle' });
+        expect(publisher.latest('codex.turn')).toMatchObject([{
+            turnId: 'turn-active',
+            status: 'interrupted',
+        }]);
+        await mapper.close();
+    });
+
     it('does not let thread-started metadata overwrite an authoritative system error', async () => {
         const publisher = new RecordingPublisher();
         const mapper = new CodexSyncV4Mapper(publisher, {
@@ -670,7 +732,12 @@ describe('CodexSyncV4Mapper', () => {
 
         mapper.handleNotification(notification({
             method: 'thread/started',
-            params: { thread: thread('thread-error') },
+            params: {
+                thread: {
+                    ...thread('thread-error', [turn('turn-stale', 'inProgress')]),
+                    status: { type: 'active', activeFlags: [] },
+                },
+            },
         }));
         mapper.handleNotification(notification({
             method: 'thread/status/changed',
@@ -681,7 +748,12 @@ describe('CodexSyncV4Mapper', () => {
         }));
         mapper.handleNotification(notification({
             method: 'thread/started',
-            params: { thread: thread('thread-error') },
+            params: {
+                thread: {
+                    ...thread('thread-error', [turn('turn-stale', 'inProgress')]),
+                    status: { type: 'active', activeFlags: [] },
+                },
+            },
         }));
         await mapper.flush();
 

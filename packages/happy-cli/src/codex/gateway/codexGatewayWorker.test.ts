@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -316,6 +316,80 @@ afterEach(async () => {
 });
 
 describe('Codex Gateway worker composition', () => {
+    it('recreates a cleaned runtime directory and preserves the Gateway identity', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+        roots.push(root);
+        const happyHomeDir = join(root, 'happy');
+        const runtimeRoot = join(root, 'runtime');
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir,
+            runtimeRoot,
+        });
+        const secretBefore = await readFile(created.paths.secretPath, 'utf8');
+        await rm(runtimeRoot, { recursive: true, force: true });
+
+        const worker = runCodexGatewayWorker({
+            gatewayId: created.descriptor.gatewayId,
+            happyHomeDir,
+            runtimeRoot,
+            heartbeatMs: 60_000,
+        });
+        await vi.waitFor(async () => expect(
+            (await readCodexGatewayDescriptor(created.paths.descriptorPath))?.state,
+        ).toBe('running'));
+
+        const recovered = await readCodexGatewayDescriptor(created.paths.descriptorPath);
+        expect((await stat(created.paths.runtimeRoot)).isDirectory()).toBe(true);
+        expect((await stat(created.paths.runtimeDir)).isDirectory()).toBe(true);
+        expect(recovered).toMatchObject({
+            gatewayId: created.descriptor.gatewayId,
+            providerSocketPath: created.descriptor.providerSocketPath,
+            tuiSocketPath: created.descriptor.tuiSocketPath,
+            controlSocketPath: created.descriptor.controlSocketPath,
+            current: created.descriptor.current,
+            draining: created.descriptor.draining,
+        });
+        expect(await readFile(created.paths.secretPath, 'utf8')).toBe(secretBefore);
+        await mocks.controlHandlers!.stop({ force: true });
+        await worker;
+    });
+
+    it.each(['ENOENT', 'EACCES', 'ENOTDIR', 'EADDRINUSE'])(
+        'persists only the safe provider error code %s',
+        async (code) => {
+            const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
+            roots.push(root);
+            const happyHomeDir = join(root, 'happy');
+            const runtimeRoot = join(root, 'runtime');
+            const created = await createCodexGatewayFiles({
+                cwd: '/workspace/project',
+                origin: 'terminal',
+                happyHomeDir,
+                runtimeRoot,
+            });
+            const marker = `private-path-token-${code}`;
+            mocks.providerStartError = Object.assign(
+                new Error(`${code}: open /secret/${marker}`),
+                { code, path: `/secret/${marker}` },
+            );
+
+            await expect(runCodexGatewayWorker({
+                gatewayId: created.descriptor.gatewayId,
+                happyHomeDir,
+                runtimeRoot,
+            })).rejects.toThrow();
+
+            const descriptorText = await readFile(created.paths.descriptorPath, 'utf8');
+            expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
+                lastError: `startup:provider:${code}`,
+            });
+            expect(descriptorText).not.toContain(marker);
+            expect(descriptorText).not.toContain('/secret/');
+        },
+    );
+
     it('persists a payload-free stage when startup fails before the control server', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-worker-'));
         roots.push(root);
@@ -508,7 +582,7 @@ describe('Codex Gateway worker composition', () => {
         ).toBe('stopped'));
 
         expect(await readCodexGatewayDescriptor(created.paths.descriptorPath)).toMatchObject({
-            lastError: 'startup:bridge:unknown',
+            lastError: 'startup:bridge:EACCES',
         });
         await expect(outcome).resolves.toBeInstanceOf(Error);
     });

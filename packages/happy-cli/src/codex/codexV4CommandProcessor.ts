@@ -10,6 +10,7 @@ import type {
     SyncV4Client,
 } from '@/api/syncV4Client';
 import type { SyncV4CommandJournalStatus } from '@/api/syncV4Journal';
+import type { Thread } from './protocol';
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -18,6 +19,7 @@ export interface CodexV4CommandOutcome {
     turnId?: string | null;
     providerRequestId?: string | null;
     result?: unknown;
+    rollbackSnapshot?: Thread;
 }
 
 export type CodexV4CommandReconciliation =

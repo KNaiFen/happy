@@ -380,17 +380,42 @@ describe('CodexV4CommandExecutor', () => {
     });
 
     it('rolls back every official turn for /clear', async () => {
+        const rollbackSnapshot = { id: 'thread-1', turns: [] };
         const client = fakeClient({
             readThreadComplete: vi.fn(async () => ({
                 thread: { id: 'thread-1', turns: [{ id: 'turn-1' }, { id: 'turn-2' }, { id: 'turn-3' }] },
             })),
-            rollbackThread: vi.fn(async () => ({ thread: { id: 'thread-1' } })),
+            rollbackThread: vi.fn(async () => ({ thread: rollbackSnapshot })),
         });
         await expect(executor(client).execute(command('thread.rollback', { allTurns: true }))).resolves.toEqual({
             threadId: 'thread-1',
             result: { rolledBackTurns: 3 },
+            rollbackSnapshot,
         });
-        expect(client.rollbackThread).toHaveBeenCalledWith({ threadId: 'thread-1', numTurns: 3 });
+        expect(client.readThreadComplete).toHaveBeenCalledWith({
+            threadId: 'thread-1',
+            emitSnapshot: false,
+        });
+        expect(client.rollbackThread).toHaveBeenCalledWith({
+            threadId: 'thread-1',
+            numTurns: 3,
+            emitSnapshot: false,
+        });
+    });
+
+    it('reconciles an empty /clear snapshot without issuing a zero-turn rollback', async () => {
+        const rollbackSnapshot = { id: 'thread-1', turns: [], status: { type: 'idle' } };
+        const client = fakeClient({
+            readThreadComplete: vi.fn(async () => ({ thread: rollbackSnapshot })),
+            rollbackThread: vi.fn(),
+        });
+
+        await expect(executor(client).execute(command('thread.rollback', { allTurns: true }))).resolves.toEqual({
+            threadId: 'thread-1',
+            result: { rolledBackTurns: 0 },
+            rollbackSnapshot,
+        });
+        expect(client.rollbackThread).not.toHaveBeenCalled();
     });
 
     it('fails malformed native controls without starting a prompt turn', async () => {
