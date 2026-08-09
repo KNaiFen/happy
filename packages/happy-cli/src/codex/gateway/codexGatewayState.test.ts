@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import {
     CodexGatewaySocketPathTooLongError,
     CodexGatewayDescriptorSchema,
     createCodexGatewayFiles,
+    ensureCodexGatewayRuntimeDirectories,
     listCodexGatewayDescriptors,
     MAX_CODEX_GATEWAY_UNIX_SOCKET_PATH_BYTES,
     readCodexGatewayDescriptor,
@@ -205,5 +206,53 @@ describe('Codex Gateway state', () => {
             happyHomeDir: join(root, 'happy'),
             runtimeRoot,
         })).rejects.toThrow('private directory is not a directory');
+    });
+
+    it('recreates private runtime directories without changing durable Gateway state', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-state-'));
+        roots.push(root);
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir: join(root, 'happy'),
+            runtimeRoot: join(root, 'runtime'),
+        });
+        const descriptorBefore = await readFile(created.paths.descriptorPath, 'utf8');
+        const secretBefore = await readFile(created.paths.secretPath, 'utf8');
+        await rm(created.paths.runtimeRoot, { recursive: true, force: true });
+
+        await ensureCodexGatewayRuntimeDirectories(created.paths);
+
+        expect((await stat(created.paths.runtimeRoot)).isDirectory()).toBe(true);
+        expect((await stat(created.paths.runtimeDir)).isDirectory()).toBe(true);
+        if (process.platform !== 'win32') {
+            expect((await stat(created.paths.runtimeRoot)).mode & 0o777).toBe(0o700);
+            expect((await stat(created.paths.runtimeDir)).mode & 0o777).toBe(0o700);
+        }
+        expect(await readFile(created.paths.descriptorPath, 'utf8')).toBe(descriptorBefore);
+        expect(await readFile(created.paths.secretPath, 'utf8')).toBe(secretBefore);
+        expect(codexGatewayPaths(created.descriptor.gatewayId, {
+            happyHomeDir: join(root, 'happy'),
+            runtimeRoot: join(root, 'runtime'),
+        })).toEqual(created.paths);
+    });
+
+    it('rejects a symlink when recreating a missing Gateway runtime directory', async () => {
+        if (process.platform === 'win32') return;
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-state-'));
+        roots.push(root);
+        const created = await createCodexGatewayFiles({
+            cwd: '/workspace/project',
+            origin: 'terminal',
+            happyHomeDir: join(root, 'happy'),
+            runtimeRoot: join(root, 'runtime'),
+        });
+        const target = join(root, 'runtime-target');
+        await mkdir(target);
+        await rm(created.paths.runtimeDir, { recursive: true, force: true });
+        await symlink(target, created.paths.runtimeDir, 'dir');
+
+        await expect(ensureCodexGatewayRuntimeDirectories(created.paths))
+            .rejects.toThrow('private directory is not a directory');
     });
 });

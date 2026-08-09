@@ -20,6 +20,7 @@ class FakeMapper {
     readonly notifications: ServerNotification[] = [];
     readonly snapshots: Thread[] = [];
     readonly stateSnapshots: Thread[] = [];
+    readonly rollbackSnapshots: Thread[] = [];
     readonly relations: CodexRelationEntityV4[] = [];
     readonly goals: Array<{ threadId: string; goal: ThreadGoal | null }> = [];
     readonly connections: Array<{
@@ -47,6 +48,10 @@ class FakeMapper {
 
     importThreadState(thread: Thread): void {
         this.stateSnapshots.push(thread);
+    }
+
+    async reconcileRollbackSnapshot(thread: Thread): Promise<void> {
+        this.rollbackSnapshots.push(thread);
     }
 
     importGoal(threadId: string, goal: ThreadGoal | null): void {
@@ -463,6 +468,26 @@ describe('CodexV4ThreadRouter', () => {
             'thread-root',
             'ready',
         );
+    });
+
+    it('serializes an authoritative rollback snapshot through the root mapper and flushes it', async () => {
+        const root = binding('happy-root');
+        const snapshot = thread('thread-root', null);
+        const router = new CodexV4ThreadRouter({
+            rootBinding: root.value,
+            readThread: async () => snapshot,
+            createChildBinding: async () => {
+                throw new Error('unexpected child');
+            },
+        });
+
+        await router.registerRootThread('thread-root');
+        await router.reconcileRollbackSnapshot('thread-root', snapshot);
+
+        expect(root.mapper.rollbackSnapshots).toEqual([snapshot]);
+        expect(root.mapper.flushCount).toBe(1);
+        await expect(router.reconcileRollbackSnapshot('thread-other', snapshot))
+            .rejects.toThrow('did not match');
     });
 
     it('hydrates an unknown child and never projects its lifecycle into the parent mapper', async () => {

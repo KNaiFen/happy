@@ -9,6 +9,7 @@ import {
     OFFICIAL_CODEX_MCP_CHOICE_SENTINEL,
     OFFICIAL_CODEX_MCP_RESPONSE_SENTINEL,
     OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL,
+    OFFICIAL_CODEX_POST_CLEAR_SENTINEL,
     OFFICIAL_CODEX_RESPONSE_SENTINEL,
     OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
     OFFICIAL_CODEX_FIELD_MCP_SERVER,
@@ -139,6 +140,7 @@ describe('official Codex Responses fixture', () => {
             preferFixtureMcpTool: true,
             fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
             expectedQueuedFollowUpText: 'Q',
+            expectedPostClearText: 'post-clear-from-android-e2e',
         });
         await warmFixture(fixture);
         const elicitationTool = `${OFFICIAL_CODEX_FIELD_MCP_SERVER}__${OFFICIAL_CODEX_FIELD_ELICITATION_TOOL}`;
@@ -180,12 +182,24 @@ describe('official Codex Responses fixture', () => {
         });
         expect(queuedFollowUp).toContain(OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL);
 
+        const postClearFollowUp = await postResponses(fixture.baseUrl, {
+            model: 'mock-model',
+            input: [{
+                type: 'message',
+                role: 'user',
+                content: [{ type: 'input_text', text: 'post-clear-from-android-e2e' }],
+            }],
+        });
+        expect(postClearFollowUp).toContain(OFFICIAL_CODEX_POST_CLEAR_SENTINEL);
+
         const snapshot = fixture.snapshot();
         assert.equal(snapshot.fixtureMcpOfferCount, 1);
         assert.equal(snapshot.mcpToolCallCount, 1);
         assert.equal(snapshot.mcpToolOutputObserved, true);
         assert.equal(snapshot.mcpChoiceAccepted, true);
         assert.equal(snapshot.queuedFollowUpObserved, true);
+        assert.equal(snapshot.postClearFollowUpObserved, true);
+        assert.equal(snapshot.clearPromptObserved, false);
         assert.deepEqual(snapshot.toolNames, ['shell_command', elicitationTool]);
     });
 

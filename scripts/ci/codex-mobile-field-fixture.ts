@@ -18,6 +18,8 @@ import nacl from 'tweetnacl';
 import {
     SyncSnapshotResponseV4Schema,
     type CodexEntityV4,
+    type CodexCommandEntityV4,
+    type CodexCommandResultEntityV4,
     type CodexRequestEntityV4,
     type CodexRuntimeEntityV4,
     type CodexTurnEntityV4,
@@ -57,7 +59,7 @@ interface FixtureState {
 }
 
 interface FieldDiagnostic {
-    schemaVersion: 12;
+    schemaVersion: 13;
     phase: 'awaiting-app' | 'app-ready' | 'machine-ready' | 'waiting-for-roundtrip' | 'verified' | 'failed';
     machineRegistered: boolean;
     sessionObserved: boolean;
@@ -76,11 +78,16 @@ interface FieldDiagnostic {
     providerMcpToolOutputObserved: boolean;
     providerMcpChoiceAccepted: boolean;
     providerQueuedFollowUpObserved: boolean;
+    providerPostClearFollowUpObserved: boolean;
+    providerClearPromptObserved: boolean;
     sessionDataKeyDecryptable: boolean | null;
     sessionMetadataDecryptable: boolean | null;
     sessionMetadataCodexV4: boolean | null;
     sessionPermissionModeDefault: boolean | null;
     sessionActive: boolean | null;
+    postClearRuntimeIdle: boolean;
+    postClearHasNoActiveTurn: boolean;
+    rollbackCommandSucceeded: boolean;
     v4LifecycleCompleted: boolean;
 }
 
@@ -127,6 +134,7 @@ async function main(): Promise<void> {
         preferFixtureMcpTool: true,
         fixtureMcpToolName: OFFICIAL_CODEX_FIELD_ELICITATION_TOOL,
         expectedQueuedFollowUpText: 'Q',
+        expectedPostClearText: 'post-clear-from-android-e2e',
         mcpFollowupDelayMs: 90_000,
     });
     const codexHome = join(fixtureRoot, 'codex-home');
@@ -175,7 +183,7 @@ async function main(): Promise<void> {
         phase: 'awaiting-app',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 12,
+        schemaVersion: 13,
         phase: 'awaiting-app',
         machineRegistered: false,
         sessionObserved: false,
@@ -194,17 +202,22 @@ async function main(): Promise<void> {
         providerMcpToolOutputObserved: false,
         providerMcpChoiceAccepted: false,
         providerQueuedFollowUpObserved: false,
+        providerPostClearFollowUpObserved: false,
+        providerClearPromptObserved: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
         sessionPermissionModeDefault: null,
         sessionActive: null,
+        postClearRuntimeIdle: false,
+        postClearHasNoActiveTurn: false,
+        rollbackCommandSucceeded: false,
         v4LifecycleCompleted: false,
     });
     if (waitForAppReady) {
         await waitForFile(appReadyFile, appReadyTimeoutMs, 'Android zero-machine app bootstrap');
         await writeFieldDiagnostic(diagnosticsFile, {
-            schemaVersion: 12,
+            schemaVersion: 13,
             phase: 'app-ready',
             machineRegistered: false,
             sessionObserved: false,
@@ -223,11 +236,16 @@ async function main(): Promise<void> {
             providerMcpToolOutputObserved: false,
             providerMcpChoiceAccepted: false,
             providerQueuedFollowUpObserved: false,
+            providerPostClearFollowUpObserved: false,
+            providerClearPromptObserved: false,
             sessionDataKeyDecryptable: null,
             sessionMetadataDecryptable: null,
             sessionMetadataCodexV4: null,
             sessionPermissionModeDefault: null,
             sessionActive: null,
+            postClearRuntimeIdle: false,
+            postClearHasNoActiveTurn: false,
+            rollbackCommandSucceeded: false,
             v4LifecycleCompleted: false,
         });
     }
@@ -258,7 +276,7 @@ async function main(): Promise<void> {
         phase: 'machine-ready',
     });
     await writeFieldDiagnostic(diagnosticsFile, {
-        schemaVersion: 12,
+        schemaVersion: 13,
         phase: 'machine-ready',
         machineRegistered: true,
         sessionObserved: false,
@@ -277,11 +295,16 @@ async function main(): Promise<void> {
         providerMcpToolOutputObserved: false,
         providerMcpChoiceAccepted: false,
         providerQueuedFollowUpObserved: false,
+        providerPostClearFollowUpObserved: false,
+        providerClearPromptObserved: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
         sessionPermissionModeDefault: null,
         sessionActive: null,
+        postClearRuntimeIdle: false,
+        postClearHasNoActiveTurn: false,
+        rollbackCommandSucceeded: false,
         v4LifecycleCompleted: false,
     });
 
@@ -550,7 +573,7 @@ async function verifyFieldRoundTrip(
 ): Promise<void> {
     let verifiedSessionHash: string | null = null;
     const diagnostic: FieldDiagnostic = {
-        schemaVersion: 12,
+        schemaVersion: 13,
         phase: 'waiting-for-roundtrip',
         machineRegistered: true,
         sessionObserved: false,
@@ -569,11 +592,16 @@ async function verifyFieldRoundTrip(
         providerMcpToolOutputObserved: false,
         providerMcpChoiceAccepted: false,
         providerQueuedFollowUpObserved: false,
+        providerPostClearFollowUpObserved: false,
+        providerClearPromptObserved: false,
         sessionDataKeyDecryptable: null,
         sessionMetadataDecryptable: null,
         sessionMetadataCodexV4: null,
         sessionPermissionModeDefault: null,
         sessionActive: null,
+        postClearRuntimeIdle: false,
+        postClearHasNoActiveTurn: false,
+        rollbackCommandSucceeded: false,
         v4LifecycleCompleted: false,
     };
     let lastDiagnostic = '';
@@ -589,6 +617,8 @@ async function verifyFieldRoundTrip(
         diagnostic.providerMcpToolOutputObserved = provider?.mcpToolOutputObserved ?? false;
         diagnostic.providerMcpChoiceAccepted = provider?.mcpChoiceAccepted ?? false;
         diagnostic.providerQueuedFollowUpObserved = provider?.queuedFollowUpObserved ?? false;
+        diagnostic.providerPostClearFollowUpObserved = provider?.postClearFollowUpObserved ?? false;
+        diagnostic.providerClearPromptObserved = provider?.clearPromptObserved ?? false;
         const serialized = JSON.stringify(diagnostic);
         if (serialized === lastDiagnostic) return;
         lastDiagnostic = serialized;
@@ -656,6 +686,12 @@ async function verifyFieldRoundTrip(
                 [...counts.entries()].sort(([left], [right]) => left.localeCompare(right)),
             );
             diagnostic.commandAccepted = (counts.get('codex.command') ?? 0) >= 2;
+            diagnostic.postClearRuntimeIdle = hasIdleRuntime(entities, sessionCrypto.threadId);
+            diagnostic.postClearHasNoActiveTurn = hasNoActiveTurn(entities);
+            diagnostic.rollbackCommandSucceeded = hasSucceededRollbackCommand(
+                entities,
+                sessionCrypto.threadId,
+            );
             diagnostic.v4LifecycleCompleted = hasCompletedRequestRecoveryLifecycle(
                 entities,
                 sessionCrypto.threadId,
@@ -668,14 +704,19 @@ async function verifyFieldRoundTrip(
                 && (counts.get('codex.turn') ?? 0) >= 2
                 && (counts.get('codex.item') ?? 0) >= 2
                 && (counts.get('codex.part') ?? 0) >= 2
-                && (provider?.requestCount ?? 0) >= 5
+                && (provider?.requestCount ?? 0) >= 6
                 && provider?.toolOutputObserved === true
                 && (provider?.fixtureMcpOfferCount ?? 0) >= 1
                 && (provider?.mcpToolCallCount ?? 0) >= 1
                 && provider?.mcpToolOutputObserved === true
                 && provider?.mcpChoiceAccepted === true
                 && provider?.queuedFollowUpObserved === true
+                && provider?.postClearFollowUpObserved === true
+                && provider?.clearPromptObserved === false
                 && diagnostic.sessionPermissionModeDefault === true
+                && diagnostic.postClearRuntimeIdle
+                && diagnostic.postClearHasNoActiveTurn
+                && diagnostic.rollbackCommandSucceeded
                 && diagnostic.v4LifecycleCompleted
             );
             await persistDiagnostic();
@@ -709,11 +750,16 @@ async function verifyFieldRoundTrip(
             providerMcpToolOutputObserved: diagnostic.providerMcpToolOutputObserved,
             providerMcpChoiceAccepted: diagnostic.providerMcpChoiceAccepted,
             providerQueuedFollowUpObserved: diagnostic.providerQueuedFollowUpObserved,
+            providerPostClearFollowUpObserved: diagnostic.providerPostClearFollowUpObserved,
+            providerClearPromptObserved: diagnostic.providerClearPromptObserved,
             sessionDataKeyDecryptable: diagnostic.sessionDataKeyDecryptable,
             sessionMetadataDecryptable: diagnostic.sessionMetadataDecryptable,
             sessionMetadataCodexV4: diagnostic.sessionMetadataCodexV4,
             sessionPermissionModeDefault: diagnostic.sessionPermissionModeDefault,
             sessionActive: diagnostic.sessionActive,
+            postClearRuntimeIdle: diagnostic.postClearRuntimeIdle,
+            postClearHasNoActiveTurn: diagnostic.postClearHasNoActiveTurn,
+            rollbackCommandSucceeded: diagnostic.rollbackCommandSucceeded,
             v4LifecycleCompleted: diagnostic.v4LifecycleCompleted,
             verifiedAt: Date.now(),
         }, null, 2),
@@ -866,11 +912,7 @@ function hasCompletedRequestRecoveryLifecycle(
     entities: readonly CodexEntityV4[],
     threadId: string,
 ): boolean {
-    const runtime = entities
-        .filter((entity): entity is CodexRuntimeEntityV4 => (
-            entity.entityType === 'codex.runtime' && entity.threadId === threadId
-        ))
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+    const runtime = latestRuntimeForThread(entities, threadId);
     const turns = entities.filter((entity): entity is CodexTurnEntityV4 => (
         entity.entityType === 'codex.turn' && entity.threadId === threadId
     ));
@@ -882,9 +924,52 @@ function hasCompletedRequestRecoveryLifecycle(
         && runtime.statusUnknown === false
         && runtime.pendingApprovalCount === 0
         && runtime.pendingUserInputCount === 0
-        && turns.length >= 2
-        && turns.every((turn) => turn.status === 'completed' && turn.completedAt !== null)
+        && turns.length >= 3
+        && turns.every((turn) => turn.status !== 'inProgress' && turn.completedAt !== null)
+        && hasNoActiveTurn(entities)
         && requests.every((request) => request.status !== 'pending');
+}
+
+function hasIdleRuntime(entities: readonly CodexEntityV4[], threadId: string): boolean {
+    const runtime = latestRuntimeForThread(entities, threadId);
+    return runtime?.connection === 'connected'
+        && runtime.execution.type === 'idle'
+        && runtime.statusUnknown === false;
+}
+
+function hasNoActiveTurn(entities: readonly CodexEntityV4[]): boolean {
+    return !entities.some((entity) => (
+        entity.entityType === 'codex.turn' && entity.status === 'inProgress'
+    ));
+}
+
+function hasSucceededRollbackCommand(
+    entities: readonly CodexEntityV4[],
+    threadId: string,
+): boolean {
+    const rollbackCommandIds = new Set(entities
+        .filter((entity): entity is CodexCommandEntityV4 => (
+            entity.entityType === 'codex.command'
+            && entity.threadId === threadId
+            && entity.command === 'thread.rollback'
+        ))
+        .map((command) => command.commandId));
+    return entities.some((entity): entity is CodexCommandResultEntityV4 => (
+        entity.entityType === 'codex.commandResult'
+        && rollbackCommandIds.has(entity.commandId)
+        && entity.status === 'succeeded'
+    ));
+}
+
+function latestRuntimeForThread(
+    entities: readonly CodexEntityV4[],
+    threadId: string,
+): CodexRuntimeEntityV4 | undefined {
+    return entities
+        .filter((entity): entity is CodexRuntimeEntityV4 => (
+            entity.entityType === 'codex.runtime' && entity.threadId === threadId
+        ))
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0];
 }
 
 function appHeaders(token: string): Record<string, string> {

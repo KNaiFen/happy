@@ -104,7 +104,7 @@ for _ in $(seq 1 600); do
         throw new Error("Invalid mobile field verification marker");
       }
       if (
-        diagnostics.schemaVersion !== 12
+        diagnostics.schemaVersion !== 13
         || diagnostics.phase !== "verified"
         || diagnostics.machineRegistered !== true
         || diagnostics.sessionObserved !== true
@@ -119,11 +119,16 @@ for _ in $(seq 1 600); do
         || diagnostics.providerMcpToolOutputObserved !== true
         || diagnostics.providerMcpChoiceAccepted !== true
         || diagnostics.providerQueuedFollowUpObserved !== true
+        || diagnostics.providerPostClearFollowUpObserved !== true
+        || diagnostics.providerClearPromptObserved !== false
         || diagnostics.sessionDataKeyDecryptable !== true
         || diagnostics.sessionMetadataDecryptable !== true
         || diagnostics.sessionMetadataCodexV4 !== true
         || diagnostics.sessionPermissionModeDefault !== true
         || diagnostics.sessionActive !== true
+        || diagnostics.postClearRuntimeIdle !== true
+        || diagnostics.postClearHasNoActiveTurn !== true
+        || diagnostics.rollbackCommandSucceeded !== true
         || diagnostics.v4LifecycleCompleted !== true
         || result.officialCodexVersion !== diagnostics.officialCodexVersion
         || result.providerRequestCount !== diagnostics.providerRequestCount
@@ -136,11 +141,16 @@ for _ in $(seq 1 600); do
         || result.providerMcpToolOutputObserved !== true
         || result.providerMcpChoiceAccepted !== true
         || result.providerQueuedFollowUpObserved !== true
+        || result.providerPostClearFollowUpObserved !== true
+        || result.providerClearPromptObserved !== false
         || result.sessionDataKeyDecryptable !== true
         || result.sessionMetadataDecryptable !== true
         || result.sessionMetadataCodexV4 !== true
         || result.sessionPermissionModeDefault !== true
         || result.sessionActive !== true
+        || result.postClearRuntimeIdle !== true
+        || result.postClearHasNoActiveTurn !== true
+        || result.rollbackCommandSucceeded !== true
         || result.v4LifecycleCompleted !== true
         || result.retiredV3MessageRouteStatus !== diagnostics.retiredV3MessageRouteStatus
       ) {

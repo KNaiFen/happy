@@ -363,6 +363,44 @@ describe('CodexGatewayRuntimeFactory', () => {
         await runtime!.close();
     });
 
+    it('publishes rollback success only after the authoritative snapshot is durable', async () => {
+        const harness = createHarness();
+        const runtime = await harness.factory.tryCreate({
+            threadId: 'thread-a',
+            generation: 3,
+            previousSessionId: null,
+            registerThreadOwnership: vi.fn(),
+            assertCurrentGeneration: harness.assertCurrentGeneration,
+        });
+        await runtime!.activate(thread());
+        let releaseSnapshot!: () => void;
+        const snapshotGate = new Promise<void>((resolve) => {
+            releaseSnapshot = resolve;
+        });
+        vi.mocked(harness.sync.publishEntities).mockImplementationOnce(async () => {
+            harness.order.push('rollback.snapshot.started');
+            await snapshotGate;
+            harness.order.push('rollback.snapshot.persisted');
+            return [];
+        });
+        const clear = command('thread.rollback', { allTurns: true }, {
+            commandId: 'command-clear',
+            providerId: 'command-clear',
+            clientUserMessageId: 'command-clear',
+        });
+
+        const pending = harness.emit(clear);
+        await vi.waitFor(() => expect(harness.order).toContain('rollback.snapshot.started'));
+        expect(harness.commandStatuses.get('command-clear')).toBe('executing');
+
+        releaseSnapshot();
+        await pending;
+
+        expect(harness.order).toContain('rollback.snapshot.persisted');
+        expect(harness.commandStatuses.get('command-clear')).toBe('succeeded');
+        await runtime!.close();
+    });
+
     it('cancels a stale command before any provider side effect', async () => {
         const harness = createHarness();
         const runtime = await harness.factory.tryCreate({

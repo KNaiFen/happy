@@ -15,6 +15,7 @@ export const OFFICIAL_CODEX_TOOL_SENTINEL = 'HAPPY_OFFICIAL_CODEX_TOOL_OK';
 export const OFFICIAL_CODEX_MCP_SENTINEL = 'MCP single-card field verification';
 export const OFFICIAL_CODEX_MCP_CHOICE_SENTINEL = 'MCP restart-safe field choice accepted';
 export const OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL = 'Official Codex queued follow-up E2E response';
+export const OFFICIAL_CODEX_POST_CLEAR_SENTINEL = 'Official Codex post-clear E2E response';
 export const OFFICIAL_CODEX_FIELD_MCP_SERVER = 'field_e2e';
 export const OFFICIAL_CODEX_FIELD_MCP_TOOL = 'record_field_event';
 export const OFFICIAL_CODEX_FIELD_ELICITATION_TOOL = 'collect_field_choice';
@@ -41,6 +42,8 @@ export interface CodexResponsesFixtureSnapshot {
     mcpToolOutputObserved: boolean;
     mcpChoiceAccepted: boolean;
     queuedFollowUpObserved: boolean;
+    postClearFollowUpObserved: boolean;
+    clearPromptObserved: boolean;
     toolNames: string[];
     instructionSentinelObserved: boolean;
     requestShapes: RequestShape[];
@@ -53,6 +56,7 @@ export interface CodexResponsesFixtureOptions {
         | typeof OFFICIAL_CODEX_FIELD_MCP_TOOL
         | typeof OFFICIAL_CODEX_FIELD_ELICITATION_TOOL;
     expectedQueuedFollowUpText?: string;
+    expectedPostClearText?: string;
     mcpFollowupDelayMs?: number;
 }
 
@@ -92,6 +96,8 @@ export async function startCodexResponsesFixture(
         mcpToolOutputObserved: false,
         mcpChoiceAccepted: false,
         queuedFollowUpObserved: false,
+        postClearFollowUpObserved: false,
+        clearPromptObserved: false,
         toolNames: [],
         instructionSentinelObserved: false,
         requestShapes: [],
@@ -216,6 +222,7 @@ async function handleRequest(
     const inputTypes = collectInputTypes(body);
     state.requestCount += 1;
     state.requestShapes.push({ contentEncoding, inputTypes });
+    if (hasExactUserInputText(body, '/clear')) state.clearPromptObserved = true;
     if (
         options.expectedInstructionSentinel
         && containsString(body, options.expectedInstructionSentinel)
@@ -271,6 +278,20 @@ async function handleRequest(
             response,
             state.requestCount,
             OFFICIAL_CODEX_QUEUED_FOLLOWUP_SENTINEL,
+        );
+        return;
+    }
+
+    if (
+        options.expectedPostClearText
+        && state.queuedFollowUpObserved
+        && hasExactUserInputText(body, options.expectedPostClearText)
+    ) {
+        state.postClearFollowUpObserved = true;
+        await writeFinalResponse(
+            response,
+            state.requestCount,
+            OFFICIAL_CODEX_POST_CLEAR_SENTINEL,
         );
         return;
     }

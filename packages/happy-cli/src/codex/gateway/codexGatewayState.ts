@@ -205,9 +205,8 @@ export async function createCodexGatewayFiles(options: {
     const gatewayId = randomUUID();
     const paths = codexGatewayPaths(gatewayId, options);
     await ensurePrivateDirectory(paths.stateRoot);
-    await ensurePrivateDirectory(paths.runtimeRoot);
     await ensurePrivateDirectory(paths.gatewayDir);
-    await ensurePrivateDirectory(paths.runtimeDir);
+    await ensureCodexGatewayRuntimeDirectories(paths);
     const now = Math.max(0, Math.trunc(options.now ?? Date.now()));
     const [providerPort, tuiPort] = process.platform === 'win32'
         ? await Promise.all([reserveLoopbackPort(), reserveLoopbackPort()])
@@ -324,6 +323,13 @@ export async function assertPrivateFile(path: string): Promise<void> {
     if (process.platform === 'win32') return;
     const mode = (await stat(path)).mode & 0o777;
     if (mode !== 0o600) throw new Error(`Insecure Gateway file mode: ${mode.toString(8)}`);
+}
+
+export async function ensureCodexGatewayRuntimeDirectories(
+    paths: Pick<CodexGatewayPaths, 'runtimeRoot' | 'runtimeDir'>,
+): Promise<void> {
+    await ensurePrivateDirectory(paths.runtimeRoot);
+    await ensurePrivateDirectory(paths.runtimeDir);
 }
 
 async function ensurePrivateDirectory(path: string): Promise<void> {

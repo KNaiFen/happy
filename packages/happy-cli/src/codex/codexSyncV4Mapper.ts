@@ -196,6 +196,11 @@ export class CodexSyncV4Mapper {
         void this.enqueue(() => this.applyThreadSnapshot(thread, false)).catch(() => undefined);
     }
 
+    async reconcileRollbackSnapshot(thread: Thread): Promise<void> {
+        if (this.closed) throw new Error('Codex Sync v4 mapper is closed');
+        await this.enqueue(() => this.applyRollbackSnapshot(thread));
+    }
+
     importGoal(threadId: string, goal: ThreadGoal | null): void {
         if (this.closed) return;
         void this.enqueue(() => this.applyThreadGoal(threadId, goal, true)).catch(() => undefined);
@@ -701,12 +706,18 @@ export class CodexSyncV4Mapper {
         const liveActiveTurn = source === 'metadata' && activeTurnId
             ? this.turns.get(turnKey(thread.id, activeTurnId))
             : null;
-        const hasActiveTurn = thread.turns.some((turn) => turn.status === 'inProgress')
+        const hasActiveSnapshotTurn = thread.turns.some((turn) => {
+            if (turn.status !== 'inProgress') return false;
+            if (source !== 'metadata') return true;
+            const knownTurn = this.turns.get(turnKey(thread.id, turn.id));
+            return !knownTurn || knownTurn.status === 'inProgress';
+        });
+        const hasActiveTurn = hasActiveSnapshotTurn
             || (liveActiveTurn?.status === 'inProgress');
         let status: CodexThreadStatusV4 = reportedStatus;
         if (source === 'metadata' && previous) {
             status = previous.status;
-            if (hasActiveTurn && status.type !== 'active') {
+            if (hasActiveTurn && status.type !== 'active' && status.type !== 'systemError') {
                 status = { type: 'active', activeFlags: [] };
             }
         } else if (
@@ -760,6 +771,59 @@ export class CodexSyncV4Mapper {
                 );
             }
         }
+    }
+
+    private async applyRollbackSnapshot(thread: Thread): Promise<void> {
+        const authoritativeTurnIds = new Set(thread.turns.map((turn) => turn.id));
+        const now = this.now();
+        const interruptedTurnIds = new Set<string>();
+        const interruptedTurns: CodexTurnEntityV4[] = [];
+        for (const turn of this.turns.values()) {
+            if (
+                turn.threadId !== thread.id
+                || turn.status !== 'inProgress'
+                || authoritativeTurnIds.has(turn.turnId)
+            ) {
+                continue;
+            }
+            interruptedTurns.push({
+                ...turn,
+                status: 'interrupted',
+                completedAt: turn.completedAt ?? now,
+                updatedAt: now,
+            });
+            interruptedTurnIds.add(turn.turnId);
+        }
+        const interruptedItems = [...this.items.values()]
+            .filter((item) => (
+                item.threadId === thread.id
+                && interruptedTurnIds.has(item.turnId)
+                && (item.completedAt === null || item.status === 'inProgress')
+            ))
+            .map((item): CodexItemEntityV4 => ({
+                ...item,
+                status: 'interrupted',
+                completedAt: item.completedAt ?? now,
+                updatedAt: now,
+            }));
+        if (interruptedTurns.length > 0 || interruptedItems.length > 0) {
+            await this.publisher.publishEntities([
+                ...interruptedTurns.map((entity) => ({ entity })),
+                ...interruptedItems.map((entity) => ({ entity })),
+            ]);
+            for (const turn of interruptedTurns) this.turns.set(turn.providerId, turn);
+            for (const item of interruptedItems) {
+                this.items.set(item.providerId, item);
+                await this.finalizeItemStreams(item.threadId, item.turnId, item.itemId);
+            }
+        }
+
+        this.activeTurnByThread.delete(thread.id);
+        await this.applyThreadSnapshot(thread, true, null, 'snapshot');
+        this.options.onTurnStateChanged?.(
+            thread.id,
+            this.activeTurnByThread.get(thread.id) ?? null,
+        );
     }
 
     private async applyThreadStatus(threadId: string, status: CodexThreadStatusV4): Promise<void> {

@@ -1832,14 +1832,20 @@ export class CodexAppServerClient {
     async rollbackThread(opts: {
         threadId: string;
         numTurns: number;
+        emitSnapshot?: boolean;
     }): Promise<ThreadRollbackResponse> {
         const params: ThreadRollbackParams = {
             threadId: opts.threadId,
             numTurns: opts.numTurns,
         };
         const result = await this.request('thread/rollback', params) as ThreadRollbackResponse;
-        this.registerThreadSnapshot(result.thread, 'snapshot');
-        return result;
+        const thread = this.registerThreadSnapshot(
+            result.thread,
+            'snapshot',
+            opts.emitSnapshot !== false,
+        );
+        if (!thread) throw new Error('thread/rollback returned an invalid thread snapshot');
+        return { ...result, thread };
     }
 
     async injectItems(opts: {

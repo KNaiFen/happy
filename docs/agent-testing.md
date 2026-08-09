@@ -41,11 +41,22 @@ the MCP tool and that the exact queued message reached the Responses provider;
 a generic tool output, a disappearing queue dock, or a visible request card
 alone is not acceptance evidence.
 
+After the recovered request, queued follow-up, and compaction checks, the field
+flow sends the structured `/clear` control and then a unique post-clear prompt.
+A dedicated Responses sentinel proves that exact prompt reached the provider;
+the flow also rechecks restored history so rollback-state repair cannot erase the
+App timeline. `/clear` itself must not appear as provider prompt text or an
+internal control card.
+
 The fixture decrypts the final Sync v4 snapshot with the session data key. The
 field run passes only when the selected thread's runtime is connected and idle,
-has no pending approval or user-input count, every observed turn is completed,
-and no request remains pending. Visible streamed text before
-`response.completed` is therefore insufficient to prove turn completion.
+has no pending approval or user-input count, no decrypted thread has an
+`inProgress` turn, every observed turn has an authoritative terminal timestamp,
+and no request remains pending. Interrupted rollback history is valid terminal
+history; visible streamed text before `response.completed` is insufficient to
+prove turn completion. Diagnostic schema 13 separately records the post-clear
+provider sentinel, absence of `/clear` provider text, idle runtime,
+no-active-turn state, and successful structured rollback command.
 
 The recovered request must not show a running-tool timer, and a failed internal
 `request.resolve` command must not appear as a separate timeline card. The

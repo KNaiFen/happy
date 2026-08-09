@@ -1,6 +1,6 @@
 # Happy CLI 架构
 
-> **当前文档（2026-08-05）：** 未指定 provider 的新会话只启动 Codex。
+> **当前文档（2026-08-09）：** 未指定 provider 的新会话只启动 Codex。
 > 历史非 Codex 路径的启动、认证、连接、恢复、fork、UI、SDK 和 prompt fallback 已移除。
 
 ## 入口与运行形态
@@ -41,6 +41,12 @@ Gateway 将 Codex app-server 生命周期从一次前台 shell 中分离：
 - stale descriptor、worker crash 和 handoff 通过进程身份、generation 和 journal 恢复；
 - Gateway state 不允许泄露 bearer token、加密 key 或 provider payload。
 
+descriptor、secret 和 journal 是 durable state；Unix socket 及其父目录位于可能被系统清理的
+临时 runtimeRoot。worker 恢复时会在验证 durable identity 和 endpoint 后、打开 journal 前，
+使用与新建 Gateway 相同的私有目录规则重建缺失的 runtimeRoot/runtimeDir。恢复只重建目录，
+继续使用原 Gateway ID、确定性 socket 路径和 binding；symlink、普通文件、其他 UID 所有的目录
+会失败关闭。startup 诊断只持久化固定白名单中的 OS error code，不记录异常正文或本机路径。
+
 Native TUI 的终端字节流和 App 的结构化 Sync v4 投影是两条不同视图，生命周期所有权仍在
 同一个 Gateway/app-server。架构决定见
 [ADR-004](decisions/ADR-004-codex-native-tui-gateway.md)。
@@ -63,6 +69,9 @@ transport loss 或 interrupt ACK 只表示结果未知，不能结束 turn。
 - prompt/steer 通过稳定 RPC，并使用 command ID 关联 `clientUserMessageId`；
 - `/compact` 映射 `thread/compact/start`，以对应 compaction item 生命周期为完成证据；
 - `/review` 映射 `review/start`；
+- `/clear` 映射 `thread/rollback`。RPC 返回的 thread 是权威命令结果，通过 Router 的 per-thread
+  队列导入 mapper 并 flush 后才能发布 command success；它不会伪装成 `thread/started` metadata。
+  权威快照中已不存在的本地活动 turn/item 会收敛为 interrupted，已有历史 item/part 保留并最终化；
 - approval、user input 和 interrupt 都绑定预期 request/turn ID；
 - 非幂等控制在 RPC 结果未知时不会盲目重放；
 - provider child thread 是隔离的只读 side session，不能接受 App 写命令。
