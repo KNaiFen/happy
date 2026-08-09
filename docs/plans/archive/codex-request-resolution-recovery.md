@@ -59,6 +59,7 @@
 - 同一最终验收 HEAD 的 Official Codex Android Field E2E run [`31283071938`](https://github.com/KNaiFen/happy/actions/runs/31283071938) 为 `success`。诊断 Artifact [`codex-android-field-31283071938-1`](https://github.com/KNaiFen/happy/actions/runs/31283071938/artifacts/9029304620)（ID `9029304620`，SHA-256 `2851d01536dfbb5216e213b175fccb06aac052fccce946834b235591692a7173`）记录 `phase=verified`、`cliRoundTripObserved=true`、`providerMcpChoiceAccepted=true`、`providerQueuedFollowUpObserved=true`、`v4LifecycleCompleted=true`，并有 1 个 request、1 个 runtime、4 个 completed turn。
 - Field 的 `v4LifecycleCompleted=true` 要求 runtime 最终为 connected/idle、`statusUnknown=false`、无待审批或用户输入，所有 turn 均有 `completedAt`，所有 request 均非 pending。它直接证明恢复回答到达 provider、排队消息继续执行并由权威生命周期收束，不以超时或界面消失推断完成。
 - Android Release 必须由包版本变化触发，后续四个提交仅修正云端 fixture/验收脚本。为避免复用已经运行的版本，发布制品保留在 `e558f8a1`，最终真实 Field 与完整 CI 则运行在包含这些验收修正的 `e25cbd71`；二者共同覆盖发布源码与最终验收逻辑。
+- 归档提交 `6eb78138db7a6fba4cff3db4221e29c9510ec5c3` 的 Documentation run [`31294860069`](https://github.com/KNaiFen/happy/actions/runs/31294860069) 为 `success`，证明计划移动后的生成目录、内部链接和活动计划状态正确。
 
 ## 现场与根因
 
@@ -336,4 +337,4 @@ pnpm docs:check
 - [x] 将本地实现、测试和版本变更拆分为中文提交。
 - [x] 推送最终实现/验收 HEAD 到 `origin/main`；Android 发布源码 HEAD 的 Documentation、Monorepo CI、Android Release 均成功，最终 fixture HEAD 的 Monorepo CI 与 Official Codex API 36 Field E2E 均成功。
 - [x] 记录 workflow run ID、URL、成功结论、Field diagnostics 和 Android Artifact URL，将本计划标记完成并移入 `docs/plans/archive/`。
-- [ ] 对归档文档提交再次运行知识库检查、推送并确认最终文档 HEAD 的必需检查。
+- [x] 对归档文档提交再次运行知识库检查、推送并确认 Documentation run `31294860069` 成功。
