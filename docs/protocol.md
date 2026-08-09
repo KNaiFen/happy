@@ -80,7 +80,7 @@ Transient presence/usage events. Payload shape:
 Field names below match on-wire payloads.
 
 - `new-session`
-  - `body`: `{ t: "new-session", id, seq, metadata, metadataVersion, agentState, agentStateVersion, dataEncryptionKey, active, activeAt, createdAt, updatedAt }`
+  - `body`: `{ t: "new-session", id, seq, metadata, metadataVersion, agentState, agentStateVersion, dataEncryptionKey, active, activeAt, archivedAt, createdAt, updatedAt }`
 
 - `update-session`
   - `body`: `{ t: "update-session", id, metadata?, agentState? }`
@@ -89,6 +89,9 @@ Field names below match on-wire payloads.
 
 - `delete-session`
   - `body`: `{ t: "delete-session", sid }`
+
+- `delete-machine`
+  - `body`: `{ t: "delete-machine", machineId }`
 
 - `new-message`
   - `body`: `{ t: "new-message", sid, message: { id, seq, content, localId, createdAt, updatedAt } }`
@@ -121,10 +124,12 @@ Field names below match on-wire payloads.
   - `body`: `{ t: "kv-batch-update", changes: [{ key, value, version }] }`
 
 ### Ephemeral event types
-- `activity`: `{ type: "activity", id: sessionId, active, activeAt, thinking? }`
+- `activity`: `{ type: "activity", id: sessionId, active, activeAt, thinking?, archivedAt? }`
 - `machine-activity`: `{ type: "machine-activity", id: machineId, active, activeAt }`
 - `usage`: `{ type: "usage", id: sessionId, key, tokens, cost, timestamp }`
 - `machine-status`: `{ type: "machine-status", machineId, online, timestamp }`
+- `session-event`: `{ type: "session-event", sessionId, kind, title, body, timestamp }`, where `kind` is `done`, `permission`, or `question`
+- `sync-v4-invalidate`: `{ type: "sync-v4-invalidate", sessionId, highWatermark }`; this is only a polling wake-up hint, never canonical Sync v4 data
 
 ### Client -> server WebSocket events
 - `ping` -> callback `{}`

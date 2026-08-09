@@ -28,31 +28,35 @@ What this demonstrates:
 - That aborting the controller unblocks `callTool` promptly after rejection
 - Regression signal for "permission reject hangs indefinitely"
 
-### `experiments/test-codex-protocol.cjs` (current app-server path)
+### `experiments/test-codex-protocol.cjs` (historical raw app-server probe)
 
 Shows a minimal JSON-RPC conversation with `codex app-server --listen stdio://`
 using `initialize` -> `thread/start` -> `turn/start`.
 
 What this demonstrates:
 - The wire-level request/notification flow for app-server
-- That a turn completes (`task_complete`/`turn_aborted`) end-to-end
-- A minimal smoke test for validating protocol assumptions without Happy CLI
+- The legacy notification names that this probe was originally written to
+  observe (`task_complete`/`turn_aborted`)
+
+It is not a current stable-v2 smoke test: production completion is driven by
+`turn/completed`, and this script exits successfully after its timeout. Do not
+use it as release or compatibility evidence.
 
 ## Status
 
 - Current production integration: **app-server path**
 - Legacy reference/regression scripts: `codex.ts`, `codex-reject.ts`
-- Current protocol probe: `test-codex-protocol.cjs`
+- Historical raw app-server probe: `test-codex-protocol.cjs`
 
 ## Running
 
 ```bash
-# Legacy MCP exploration (auto-approve path)
-npx tsx experiments/codex.ts
+# Legacy MCP exploration (auto-approve path; pass an existing working directory)
+CWD="$PWD" npx tsx experiments/codex.ts
 
 # Legacy MCP rejection/unblock exploration
 npx tsx experiments/codex-reject.ts
 
-# Current app-server protocol smoke test
+# Historical raw app-server probe (not a smoke test)
 node experiments/test-codex-protocol.cjs
 ```

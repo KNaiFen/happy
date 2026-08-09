@@ -62,7 +62,8 @@ The Server stores opaque, encrypted entity mutations and assigns a per-session
   declared high watermark.
 
 Send ACK state, receive cursor state, and snapshot watermark are independent.
-Socket.IO sends only `{ sessionId, highWatermark }` invalidations. Correctness
+Socket.IO sends only `{ type: "sync-v4-invalidate", sessionId, highWatermark }`
+invalidations. Correctness
 comes from polling and pull recovery, so a lost or duplicated invalidation is
 harmless. A cursor older than retained journal data receives HTTP 410 with
 `snapshotRequired`.

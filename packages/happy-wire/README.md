@@ -9,8 +9,10 @@ The package contains:
 - Session and machine control-plane update schemas still used by Codex clients.
 - Shared voice and task-notification helpers.
 
-The retired V3 message channel and provider-specific metadata are intentionally not exported.
-Conversation content is synchronized exclusively through encrypted Sync V4 entities.
+The retired V3 message channel is intentionally not exported. The pre-encryption
+Sync V4 entity schemas include provider metadata and conversation fields so
+clients can encrypt them; the relay receives only the encrypted mutation
+ciphertext and its routing metadata.
 
 ## Requirements
 
