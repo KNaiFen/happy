@@ -2,6 +2,7 @@ name: Happy monorepo CI
 
 on:
   push:
+    branches: [main]
     paths:
       - "packages/happy-wire/**"
       - "packages/happy-agent/**"
@@ -10,11 +11,17 @@ on:
       - "packages/happy-cli/**"
       - "packages/happy-app/**"
       - "scripts/ci/**"
+      - "scripts/postinstall.cjs"
+      - "patches/**"
+      - ".npmrc"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/**"
+      - "!**/*.md"
+      - "!**/*.mdx"
   pull_request:
+    branches: [main]
     paths:
       - "packages/happy-wire/**"
       - "packages/happy-agent/**"
@@ -23,10 +30,15 @@ on:
       - "packages/happy-cli/**"
       - "packages/happy-app/**"
       - "scripts/ci/**"
+      - "scripts/postinstall.cjs"
+      - "patches/**"
+      - ".npmrc"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/**"
+      - "!**/*.md"
+      - "!**/*.mdx"
   workflow_dispatch:
 
 permissions:
