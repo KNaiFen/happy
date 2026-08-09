@@ -41,7 +41,9 @@
 
 ## 活动计划
 
+- [账户数据删除与保留契约实施计划](./plans/account-data-deletion-and-retention-contract.md)
 - [Codex rollback 后迟到通知重激活修复计划](./plans/codex-rollback-late-notification-race.md)
+- [Happy Server standalone Docker 路径修复计划](./plans/happy-server-standalone-docker-path.md)
 
 ## 审查记录
 
@@ -81,7 +83,7 @@
 - [Terms of Use](../packages/happy-app/TERMS.md)
 - [Happy Coder Content Creator Brief](../packages/happy-app/docs/marketing/README-creators.md)
 - [Agent Input 自动补全与文本替换](../packages/happy-app/sources/docs/autocomplete-text-manipulation.md)
-- [Happy i18n (Object-Based Implementation)](../packages/happy-app/sources/text/README.md)
+- [Happy App i18n](../packages/happy-app/sources/text/README.md)
 - [Happy](../packages/happy-cli/README.md)
 - [Codex Experiments](../packages/happy-cli/experiments/NOTES.md)
 - [Codex app-server protocol](../packages/happy-cli/src/codex/protocol/README.md)

@@ -1,6 +1,8 @@
 # New Session Right Sidebar Implementation Plan
 
-> **历史归档（2026-08-05）：** 此实施计划已经完成或被后续 Codex-only 界面吸收，不是当前任务清单。
+> **状态：已完成并归档（2026-08-05）。** 原计划的 sidebar helper 已由
+> `8ed622b20303d8ae7c7ec4dbd4b2544bf584ed7a` 实现为
+> `packages/happy-app/sources/utils/newSessionSidebarLayout.ts`。本文仅保留当时的设计和实施记录，不是当前任务清单。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

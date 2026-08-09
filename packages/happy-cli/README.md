@@ -101,7 +101,6 @@ happy connect status
 | `HAPPY_WEBAPP_URL` | Custom web app URL (default: `https://app.happy.engineering`) |
 | `HAPPY_HOME_DIR` | Custom home directory for Happy data (default: `~/.happy`) |
 | `HAPPY_DISABLE_CAFFEINATE` | Disable macOS sleep prevention |
-| `HAPPY_EXPERIMENTAL` | Enable experimental features |
 
 ### Sandbox (experimental)
 

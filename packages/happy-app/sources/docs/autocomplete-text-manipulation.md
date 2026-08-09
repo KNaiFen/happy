@@ -51,6 +51,7 @@
 
 ## 验证
 
-- `findActiveWord.test.ts` 覆盖 prefix、boundary、文件路径、cursor 和 stop characters；
+- `findActiveWord.test.ts` 覆盖 prefix、boundary、cursor 和 stop characters；当前实现支持 `@`
+  路径中的 `/` 与 `.`，但测试套件还没有覆盖该路径分支；
 - `applySuggestion.test.ts` 覆盖替换范围、尾随空格与 cursor；
 - 修改 Web/Native 输入事件时，同时验证键盘导航、IME/selection 和触控选择不改变共用算法。

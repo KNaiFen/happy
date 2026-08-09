@@ -1,6 +1,8 @@
 # Attachment Storage Diagnostics Implementation Plan
 
-> **历史归档（2026-08-05）：** 此实施计划已经完成或被后续实现吸收，不是当前任务清单。
+> **状态：已完成并归档（2026-08-05）。** 安全诊断实现保留在
+> `packages/happy-app/sources/sync/attachmentDiagnostics.ts`，引入提交为
+> `645b5aa59c2fbe32563c81ea5737325ced2b634d`。本文是历史实施记录，不是当前任务清单。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

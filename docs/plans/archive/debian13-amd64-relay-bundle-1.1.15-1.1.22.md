@@ -177,7 +177,7 @@ secret 和 named volume 必须保持原值。
 
 ## 状态
 
-**结果：R8 修复进行中。**
+**历史进展：2026-07-30 时 R8 修复进行中。**
 
 - 2026-07-30：物理设备验收重新打开本计划。`1.1.22` 的
   `pnpm deploy --prod --legacy` 最终树将 `@electric-sql/pglite` 从根锁文件的

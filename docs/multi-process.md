@@ -6,8 +6,9 @@ during the messy cases (pod kill, brief reconnect, network partition).
 
 For the shorter high-level control-flow doc, see `realtime-sync-and-rpc.md`.
 
-> **Status:** the code in this doc is on `main` but `handy.yaml` ships
-> `replicas: 1`. Flipping prod to multi-replica is a separate decision.
+> **Status:** `packages/happy-server/deploy/handy.yaml` ships `replicas: 3`.
+> This document describes the current Redis Streams and room-routing behavior;
+> the older reproduction history remains in the linked postmortem.
 
 ## TL;DR
 
@@ -22,10 +23,11 @@ membership is standard Socket.IO room state, cleaned up automatically on
 disconnect.
 
 If the daemon is briefly offline at call time (k8s pod cycling, transient
-network drop), the server **waits up to 10 seconds** for it to reappear before
-failing. If the daemon is in flight when its socket dies, a **presence poll**
-aborts the call within ~1 second instead of waiting the full 30s
-emit-with-ack timeout.
+network drop), the server waits up to **15 seconds** for it to reappear. Lookup
+attempts use 2 s, 4 s, then 8 s adapter timeouts with a 200 ms gap. If the
+daemon disappears during an RPC, a 2 s presence poll requires two consecutive
+absent results before failing, normally avoiding the full 30 s emit-with-ack
+timeout while tolerating a transient adapter miss.
 
 `connectionStateRecovery` is **commented out** in `socket.ts`. The streams
 adapter supports it (verified working) but we ship parity with the
@@ -51,8 +53,8 @@ rpc-call from web client
 │       └── returns []      → go to wait-for-reconnect
 │
 ├── wait-for-reconnect grace (only when no target found)
-│   └── waitForRoomMember(io, room, 10_000ms)
-│       └── poll every 200ms via fetchRoomSockets:
+│   └── waitForRoomMember(io, room, 15_000ms)
+│       └── poll via fetchRoomSockets with 2s/4s/8s timeouts and 200ms gaps:
 │           ├── room gained a member → return [target]
 │           └── deadline reached     → return []
 │       │
@@ -69,9 +71,9 @@ rpc-call from web client
 │   │   (cluster adapter routes cross-replica via Redis stream)
 │   │
 │   └── presencePoll = while (alive)
-│       └── sleep 1s, fetchRoomSockets again
-│           ├── target still in room → keep watching
-│           └── target absent       → throw 'RPC target disconnected'
+│       └── sleep 2s, fetchRoomSockets again (500ms adapter timeout)
+│           ├── target still in room → reset the miss count and keep watching
+│           └── two consecutive absent results → throw 'RPC target disconnected'
 │
 ├── Promise.race(ackPromise, presencePoll)
 │   ├── ackPromise resolves → callback({ok:true, result})
@@ -115,7 +117,7 @@ eventRouter.emitUpdate / emitEphemeral
 .
 └── io.to(rooms).emit('update' | 'ephemeral', payload)
     ├── streams adapter: XADD on the 'socket.io' Redis stream
-    │   (MAXLEN ~ 50000, auto-trimmed by Redis)
+    │   (MAXLEN ~ 200000, auto-trimmed by Redis)
     └── every replica's XREAD loop picks up the entry
         └── delivers to its local sockets that match the room set
             (sockets that disconnected before the emit miss it; client
@@ -148,7 +150,7 @@ Rooms used by `eventRouter`:
 │   └── events/eventRouter.ts              broadcast emission via rooms
 │
 └── packages/happy-server/deploy/handy.yaml  k8s Deployment + Service
-                                             (replicas: 1 in this PR)
+                                             (replicas: 3)
 ```
 
 ## What was wrong before (the four bugs)
@@ -161,7 +163,7 @@ socketId Redis keys with a 60-second TTL refreshed by `machine-alive` /
 .
 ├── #1  In-flight RPC eats the full 30s timeout when the target pod dies
 │       io.to(deadSocketId).emitWithAck() has no fast-fail.
-│       FIX: presence poll aborts within ~1s
+│       FIX: presence poll aborts after two 2s checks instead of waiting 30s
 │
 ├── #2  Reconnect race
 │       Between the daemon's disconnect cleanup and re-register, ~5–7% of
@@ -178,75 +180,45 @@ socketId Redis keys with a 60-second TTL refreshed by `machine-alive` /
 │
 └── #4  Streams adapter "unbounded growth"
         FALSE ALARM. The adapter trims with MAXLEN ~ on every XADD. Capped
-        at ~50k entries. Crossing this off the list.
+        at ~200k entries. Crossing this off the list.
 ```
 
-The full postmortem with reproduction commands is at
-`deploy/integration-tests/POSTMORTEM.md`.
+The historical postmortem is at
+[`packages/happy-server/deploy/integration-tests/POSTMORTEM.md`](../packages/happy-server/deploy/integration-tests/POSTMORTEM.md).
+It records an earlier reproduction and is not the current operational guide.
 
 ## How we tested it
 
-Local minikube with a 2-replica handy-server, Redis, Postgres, exposed as a
-real `LoadBalancer` service via `minikube tunnel`. All harnesses live in
-`deploy/integration-tests/`.
-
-```
-.
-├── test-rpc-cross-replica.mjs   steady-state cross-pod RPC
-│                                 (50 parallel + 20 sequential)
-├── test-multiprocess.mjs        broadcast fan-out + pod-kill recovery
-├── hammer.mjs <scenario>        pod-kill-mid-rpc, reconnect-storm,
-│                                 ttl-expiry, brief-disconnect,
-│                                 long-disconnect
-├── network-loss.mjs             long-running RPC loop with summary,
-│                                 usable with iptables blackouts
-├── missed-events.mjs            brief disconnect → triggered broadcast →
-│                                 reconnect; verifies missed-events
-│                                 behavior matches main (lost from socket,
-│                                 recovered via REST refetch)
-├── probe-rpc.mjs                direct rpc-register sanity probe +
-│                                 Redis key inspector
-├── probe-fetchsockets.mjs       fetchSockets latency probe
-├── POSTMORTEM.md                full bug-by-bug
-└── ../local.sh                  bring up the whole minikube stack
-```
-
-To bring up the test environment from scratch:
+The current minikube harness is
+`packages/happy-server/deploy/integration-tests/`. Start from that directory:
 
 ```bash
-deploy/local.sh                                        # provisions stack
-kubectl get pods -l app=handy-server                   # confirm 2 replicas
-kubectl patch svc handy-server -p '{"spec":{"type":"LoadBalancer"}}'
-minikube tunnel &                                      # exposes :3000
-node deploy/integration-tests/test-rpc-cross-replica.mjs
+bash local.sh
+./run-all.sh
 ```
 
-Final gauntlet result against the fix:
+`run-all.sh` uses a NodePort `minikube service` tunnel when available, so its
+normal route survives pod kills. Its default suite runs `stress-prod-realistic.mjs`,
+the eight current `stress-rpc-registration.mjs` scenarios (including the
+destructive `rolling-deploy` scenario), and `test-rpc-dead-daemon.mjs`. Use
+`./run-all.sh --safe-only` to skip `rolling-deploy` and the dead-daemon test, or
+`./run-all.sh --deploy` to provision before the suite. A plain
+`kubectl port-forward` is a fallback only and is not suitable for pod-kill cases.
 
-```
-.
-├── steady-state cross-pod RPC          50/50 + 20/20 ✅ (after ~5s warmup)
-├── pod-kill-mid-rpc                    1612ms fast-fail ✅ (was 30000ms)
-├── brief-disconnect                    SUCCESS in 2011ms ✅
-├── long-disconnect                     bounded 10542ms ✅ (10s grace + ~0.5s)
-├── ttl-expiry (smoking gun)            ALL 5 calls pass through +75s ✅
-├── reconnect-storm (5 cycles)          96–97% success ✅ (only inherent
-│                                         in-flight failures, ~3%)
-├── broadcast multi-process             20/20 fan-out, 5/5 unaffected ✅
-├── network-loss 60s loop               85/85 zero failures ✅
-└── missed-events parity                event lost via socket, in DB,
-                                        recovered=undefined ✅ (matches main)
-```
+The current scenario names are `fire-and-forget`, `register-race-timing`,
+`reconnect-no-ack`, `rapid-sessions`, `rolling-deploy`, `ios-session-flow`,
+`high-concurrency`, and `cross-replica-3pod`. Historical command names and
+measurements in the postmortem must not be used as current acceptance evidence.
 
 ## Tunable constants
 
 ```
-RPC_RECONNECT_GRACE_MS        10_000   wait-for-reconnect window (2× heartbeat)
-RPC_RECONNECT_POLL_MS            200   poll cadence inside the grace
-RPC_PRESENCE_POLL_MS           1_000   presence-poll cadence during in-flight
+RPC_RECONNECT_GRACE_MS        15_000   wait-for-reconnect window
+RPC_RECONNECT_POLL_MS            200   gap between lookup attempts
+RPC_LOOKUP_FETCH_TIMEOUTS_MS  2k/4k/8k adapter timeouts during lookup
+RPC_PRESENCE_POLL_MS           2_000   in-flight presence-poll cadence
 RPC_PRESENCE_FETCH_TIMEOUT_MS    500   per-call cross-replica fetchSockets cap
-RPC_CALL_TIMEOUT_MS           30_000   upper bound on emitWithAck — same as main
-                                       (no support for >30s RPCs in either)
+RPC_CALL_TIMEOUT_MS           30_000   upper bound on emitWithAck
 ```
 
 ## Adapter details and limits worth knowing
@@ -257,10 +229,10 @@ RPC_CALL_TIMEOUT_MS           30_000   upper bound on emitWithAck — same as ma
 │   ~5s after a pod starts, the adapter's heartbeat exchange means
 │   cross-replica fetchSockets() may not see all rooms. First few RPCs
 │   immediately after a fresh rollout can hit the wait-for-reconnect
-│   grace; we sized RPC_RECONNECT_GRACE_MS at 10s to cover 2 heartbeat
-│   cycles.
+│   grace; the current 15s window allows the increasing lookup timeouts to
+│   settle without a tight retry loop.
 │
-├── MAXLEN ~ 50000
+├── MAXLEN ~ 200000
 │   configured in socket.ts. Auto-trims on every XADD, no cleanup needed.
 │
 ├── fetchSockets() cross-replica
@@ -305,7 +277,7 @@ RPC_CALL_TIMEOUT_MS           30_000   upper bound on emitWithAck — same as ma
 │   than the fix itself. Tracked as future-work.
 │
 ├── UI "reconnecting…" indicator
-│   Server now waits 10s for daemons. Client doesn't yet show that wait
+│   Server now waits up to 15s for daemons. Client doesn't yet show that wait
 │   in the UI. apiSocket-side change, separate from this PR.
 │
 ├── Tuning the adapter discovery window

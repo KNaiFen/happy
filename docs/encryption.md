@@ -395,13 +395,17 @@ Messages are encrypted as `MessageContent` and then base64 encoded:
   "startedFromDaemon": true,
   "hostPid": 12345,
   "startedBy": "daemon | terminal",
-  "lifecycleState": "running | archiveRequested | archived",
-  "lifecycleStateSince": 123,
-  "archivedBy": "...",
-  "archiveReason": "...",
-  "flavor": "..."
+  "flavor": "codex",
+  "codexSyncVersion": 4,
+  "codexThreadId": "...",
+  "codexReadOnly": false
 }
 ```
+
+`Metadata` does not carry session archival lifecycle fields. Current archive
+state is unencrypted server-side session routing state (`archivedAt`, `active`,
+and `lastActiveAt`); the archive and unarchive routes enforce its authorization
+and write guards separately from encrypted metadata.
 
 ### Agent state (encrypted)
 ```json
@@ -489,7 +493,6 @@ graph LR
     subgraph "Third-Party Tokens"
         GH[GitHub OAuth]
         OAI[OpenAI]
-        GEM[Gemini]
     end
 
     subgraph "Server"
@@ -501,16 +504,15 @@ graph LR
     DB[(Postgres)]
 
     Secret --> KeyTree --> Encrypt
-    GH & OAI & GEM --> Encrypt --> DB
+    GH & OAI --> Encrypt --> DB
 
     style GH fill:#fff3e0
     style OAI fill:#fff3e0
-    style GEM fill:#fff3e0
 ```
 
 The server encrypts certain third-party tokens at rest:
 - GitHub OAuth tokens (`GithubUser.token`).
-- Vendor service tokens (`ServiceAccountToken.token`).
+- OpenAI service tokens (`ServiceAccountToken.token`).
 
 These are encrypted with a server-only KeyTree derived from `HANDY_MASTER_SECRET` and are not end-to-end encrypted.
 

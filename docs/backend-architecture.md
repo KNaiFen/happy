@@ -50,7 +50,8 @@ mutation 先持久化再 ACK；发送 ACK、接收 cursor 和 snapshot watermark
 1. CLI 将 Codex thread、runtime、turn、item、part、request、command 和 relation 映射为独立实体。
 2. CLI 在本地 journal 持久化 mutation 后，按 FIFO 上传密文。
 3. Server 分配顺序并返回 ACK，不推进任何客户端的读取 cursor。
-4. Socket.IO 只发送 `{ sessionId, highWatermark }` 唤醒提示。
+4. Socket.IO 只发送 `{ type: "sync-v4-invalidate", sessionId, highWatermark }`
+   唤醒提示。
 5. App/CLI 轮询 changes；缺口、缓存损坏或 HTTP 410 通过 snapshot 重建。
 6. 客户端完成处理后才持久化自己的 cursor。
 

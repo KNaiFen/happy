@@ -11,7 +11,7 @@
 </h1>
 
 <h4 align="center">
-Use Codex from anywhere with end-to-end encryption.
+Use Codex from anywhere with encrypted session synchronization.
 </h4>
 
 <div align="center">
@@ -56,14 +56,15 @@ happy codex
 On your computer, run `happy` (or `happy codex`) to start Codex through the
 official app-server protocol. Happy projects encrypted thread, turn, item, tool,
 approval, and status updates to your paired App so the same session can be
-monitored and controlled away from the terminal.
+monitored and controlled away from the terminal. Push notification copy and
+optional voice use separate data flows; see the [privacy policy](PRIVACY.md).
 
 ## 🔥 Why Happy Coder?
 
 - 📱 **Mobile access to Codex** - Check what your coding agent is building while away from your desk
 - 🔔 **Push notifications** - Get alerted when Codex needs permission or encounters errors
 - ⚡ **Switch devices instantly** - Take control from phone or desktop with one keypress
-- 🔐 **End-to-end encrypted** - Your code never leaves your devices unencrypted
+- 🔐 **Encrypted synchronization** - Happy encrypts session content before relay synchronization; notification copy and optional voice are separate flows documented in the privacy policy
 - 🛠️ **Open source** - Audit the code, self-host the Relay, and opt out of documented product analytics
 
 ## 📦 Project Components

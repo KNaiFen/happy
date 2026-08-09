@@ -30,8 +30,9 @@ patch version，并在云端构建完整兼容集合；仅文档、测试或 CI 
 - Codex 的规范协议是 Sync v4 entity/mutation 模型；
 - v1/v2/v3 schema 仅为仍在使用的共享基础设施和历史数据保留；
 - schema 添加优先保持 additive；破坏性变更必须有迁移、ADR 和跨包测试；
-- Sync v4 schema 只描述密文容器与允许记录的元数据，不加入 plaintext prompt、
-  reasoning、tool arguments/output、provider ID、token 或 key；
+- `syncV4Entities.ts` 描述客户端加密前的 Codex entity schema，因此可以包含 provider ID、prompt、
+  tool arguments/output 和 command result；它们必须只作为 `SyncMutationV4.ciphertext`
+  内部内容传输，不得出现在 mutation 元数据、诊断或日志中；
 - `voice.ts` 另有明确边界：它会在 App/Server 间传输短期 `conversationToken`、
   `conversationId`、`agentId` 与 pseudonymous ElevenLabs user ID。这些字段不可写入日志；
 - 只有官方 reasoning summary 可进入同步实体。

@@ -39,7 +39,7 @@ Credentials are stored at `~/.happy/agent.key`.
 ### List sessions
 
 ```bash
-# List all sessions
+# List supported Codex Sync v4 sessions
 happy-agent list
 
 # List only active sessions
@@ -157,7 +157,10 @@ Exit code 0 when agent becomes idle, 1 on timeout.
 
 ## Session ID Matching
 
-All commands that accept a `<session-id>` support prefix matching. You can provide the first few characters of a session ID and the CLI will resolve the full ID.
+Commands that accept a `<session-id>` resolve prefixes only among supported
+Codex Sync v4 sessions. Legacy, unknown, and non-Codex session metadata is
+filtered before prefix matching, so those records cannot be operated through
+`happy-agent`.
 
 Machine-aware commands such as `spawn --machine <machine-id>` also support ID prefix matching.
 

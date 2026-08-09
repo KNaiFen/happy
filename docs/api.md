@@ -111,7 +111,7 @@ falling back to a legacy Codex protocol.
 - `GET /v1/connect/github/callback`
 - `POST /v1/connect/github/webhook`
 - `DELETE /v1/connect/github`
-- `POST /v1/connect/:vendor/register` (`vendor` in `openai | gemini`)
+- `POST /v1/connect/:vendor/register` (`vendor` is `openai`)
 - `GET /v1/connect/:vendor/token`
 - `DELETE /v1/connect/:vendor`
 - `GET /v1/connect/tokens`

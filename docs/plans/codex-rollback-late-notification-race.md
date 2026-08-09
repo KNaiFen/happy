@@ -2,13 +2,13 @@
 
 ## 状态
 
-- 当前状态：进行中
-- 进度说明：`1.4.48` 已合并且 Monorepo CI/CLI release 成功，但 Android Field `31313964459` 证明 rollback provider 已成功后仍生成失败控制卡；`1.4.49` 已完成本地协调恢复与 schema 15 诊断实现，当前补齐通知 orphan 持久化失败的 fatal barrier 语义，必须由新 Field 重新验收。
+- 当前状态：进行中（仅剩实体 App 复验与归档收尾）。
+- 进度说明：`1.4.49` 实现已经 PR #26 合并为 `28d05371`，同 SHA 的 Documentation、CLI package、Monorepo CI 与 Android Field 都已成功。CLI tgz 已下载、校验、安装，daemon 与目标 Gateway worker 已重启并恢复原会话到 idle；仍缺少原实体 App 上的 `/clear` 后接普通消息复验。
 - 建立日期：2026-08-09。
 - 实施分支：`fix/codex-v4-rollback-coordination`。
-- 当前基线：`origin/main@a4045c2f81a21c77e6713bc30446620e7974c4eb`。
+- 当前基线：`origin/main@28d053713e09e3ddf0f9674c024f38995f65807f`。
 - 失败版本：`packages/happy-cli` `1.4.48`，不得复用。
-- 目标版本：`packages/happy-cli` `1.4.49`；App、Wire、Server 和 happy-agent 不提升版本。
+- 目标版本：`packages/happy-cli` `1.4.49`（已发行）；App、Wire、Server 和 happy-agent 未提升版本。
 - 提交策略：实现、测试、文档和版本变更完成后一次性提交；云端验收完成后另做 docs-only 归档提交。
 
 ## 用户可见故障
@@ -236,6 +236,12 @@ git diff --check
 - [x] `1.4.48` 已合并，Monorepo CI 与 CLI release 成功。
 - [x] Android Field `31313964459` 的 rollback command 失败已被确认为当前阻断项。
 - [x] barrier 纯顺序语义、三次本地协调、orphan 持久化失败的 fatal 语义和 schema 15 精确终态诊断完成本地验证与差异审查。
-- [ ] `1.4.49` 提交、PR、合并及精确 SHA 云端验收完成。
-- [ ] `happy-1.4.49.tgz` 已下载、校验、安装，本机 daemon/worker 与原会话复验完成。
+- [x] `1.4.49` 提交、PR #26、合并及精确 SHA 云端验收完成：
+  `28d05371` 的 Documentation `31321425763`、CLI package `31321425775`、
+  Monorepo CI `31321425900` 与 Android Field `31321425891` 均成功。
+- [x] `happy-1.4.49.tgz` 已下载、校验、安装；SHA-256 为
+  `bf6ae339bc3e037fc889a009e0343c49f93726dd1feaa20bc01de8f04a9275ea`，包内
+  版本与 macOS ARM64 `rg`/`difftastic` 归档均已核实。本机
+  daemon/worker 已恢复原会话到 idle；实体 App 复验仍未完成。
+- [ ] 在实体 App 的原会话上执行 `/clear` 后发送一条普通消息，确认无失败控制卡、无过期 thinking 状态且新消息正常回复。
 - [ ] 计划已归档并完成 docs-only 收尾提交。

@@ -1,5 +1,9 @@
 # Codex Design System Notes
 
+> **Research snapshot:** Last updated in Git on 2026-04-26. The exact source
+> collection time was not recorded. This is an inspection of a Codex desktop
+> build, not a Codium implementation specification or a current Happy contract.
+
 These notes describe the inspected Codex desktop app, not Codium's implementation. The source snapshot was taken from the running macOS Codex app via the Chrome DevTools Protocol on `app://-/index.html?hostId=local`.
 
 Observed app version:

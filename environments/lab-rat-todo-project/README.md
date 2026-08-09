@@ -20,8 +20,8 @@ model switching, session resume.
 - `app.js` — todo logic and localStorage persistence
 - `AGENTS.template.md` — tracked source that the environment manager materializes
   as Codex-native `AGENTS.md`
-- `exercise-flow.md` — 20-step scripted interaction sequence with expected
-  outcomes and protocol primitive coverage
+- `exercise-flow.md` — 24-step scripted interaction sequence, plus setup, with
+  expected outcomes and protocol primitive coverage
 
 ## Known issues (intentional)
 

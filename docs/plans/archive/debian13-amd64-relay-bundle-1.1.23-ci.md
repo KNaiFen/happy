@@ -6,7 +6,7 @@
 - 分支 CI：全部通过
 - main release：GitHub Actions `30481191295` 失败
 - 制品：未构建、未上传
-- 后续版本：Server `1.1.24`
+- 当前归档结论：失败并由 [Server `1.1.24` 成功发布记录](debian13-amd64-relay-bundle-1.1.24-release.md) 替代。
 
 ## 已通过
 
