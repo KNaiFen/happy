@@ -9,6 +9,16 @@ on:
       version:
         required: true
         type: string
+    outputs:
+      candidate_artifact_id:
+        description: Immutable Actions artifact ID for the verified happy-agent candidate.
+        value: ${{ jobs.build.outputs.candidate_artifact_id }}
+      candidate_artifact_digest:
+        description: ZIP SHA-256 reported by Actions for the happy-agent candidate.
+        value: ${{ jobs.build.outputs.candidate_artifact_digest }}
+      candidate_artifact_name:
+        description: Exact Actions artifact name for the happy-agent candidate.
+        value: ${{ jobs.build.outputs.candidate_artifact_name }}
 
 permissions:
   contents: read
@@ -27,9 +37,10 @@ jobs:
       VERSION: ${{ inputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
 
       - name: Verify gated source
         run: |
@@ -37,12 +48,12 @@ jobs:
           test "$(node -p "require('./packages/happy-agent/package.json').version")" = "$VERSION"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.11.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -67,25 +78,30 @@ jobs:
     if: needs.ci.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      candidate_artifact_id: ${{ steps.upload_candidate.outputs.artifact-id }}
+      candidate_artifact_digest: ${{ steps.upload_candidate.outputs.artifact-digest }}
+      candidate_artifact_name: ${{ steps.candidate.outputs.artifact_name }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       VERSION: ${{ inputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
 
       - name: Verify gated source
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.11.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -142,10 +158,20 @@ jobs:
           pnpm --filter happy-agent exec tsx ../../scripts/ci/happy-agent-package-smoke.ts \
             "$INSTALL_ROOT/node_modules/happy-agent/bin/happy-agent.mjs"
 
-      - name: Upload happy-agent package
-        uses: actions/upload-artifact@v4
+      - name: Write happy-agent release candidate manifest
+        run: node scripts/ci/release-candidate-promotion.cjs write-manifest agent "$VERSION" "$SOURCE_SHA" artifacts
+
+      - name: Declare happy-agent candidate artifact
+        id: candidate
+        run: echo "artifact_name=release-candidate-agent-${VERSION}-${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload happy-agent release candidate
+        id: upload_candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: happy-agent-${{ env.VERSION }}
-          path: artifacts/happy-agent-${{ env.VERSION }}.tgz
+          name: ${{ steps.candidate.outputs.artifact_name }}
+          path: |
+            artifacts/release-candidate.json
+            artifacts/happy-agent-${{ env.VERSION }}.tgz
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7

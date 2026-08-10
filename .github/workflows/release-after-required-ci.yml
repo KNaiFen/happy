@@ -33,9 +33,10 @@ jobs:
       source_run_url: ${{ steps.gate.outputs.source_run_url }}
     steps:
       - name: Checkout gate verifier
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
+          persist-credentials: false
 
       - name: Verify source workflow and Required CI gate
         id: gate
@@ -64,10 +65,11 @@ jobs:
       SOURCE_BASE_SHA: ${{ needs.source_gate.outputs.source_base_sha }}
     steps:
       - name: Checkout exact gated source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify merged pull request base
         run: |
@@ -128,3 +130,260 @@ jobs:
     with:
       source_sha: ${{ needs.source_gate.outputs.source_sha }}
       version: ${{ needs.versions.outputs.agent_version }}
+
+  promote_cli:
+    name: Promote verified CLI package
+    needs: [source_gate, versions, cli]
+    if: needs.cli.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CANDIDATE_ARTIFACT_DIGEST: ${{ needs.cli.outputs.candidate_artifact_digest }}
+      CANDIDATE_ARTIFACT_ID: ${{ needs.cli.outputs.candidate_artifact_id }}
+      CANDIDATE_ARTIFACT_NAME: ${{ needs.cli.outputs.candidate_artifact_name }}
+      PRODUCT: cli
+      SOURCE_SHA: ${{ needs.source_gate.outputs.source_sha }}
+      VERSION: ${{ needs.versions.outputs.cli_version }}
+    steps:
+      - name: Checkout promotion verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Download exact CLI candidate and verify Actions digest
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-candidate-promotion.cjs download "$RUNNER_TEMP/release-candidate-cli.zip"
+
+      - name: Verify CLI candidate layout and payloads
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/release-candidate-cli"
+          python3 scripts/ci/release_candidate_archive.py extract \
+            "$RUNNER_TEMP/release-candidate-cli.zip" "$PRODUCT" "$VERSION" "$CANDIDATE_DIR"
+          node scripts/ci/release-candidate-promotion.cjs verify "$PRODUCT" "$VERSION" "$SOURCE_SHA" "$CANDIDATE_DIR"
+
+      - name: Write CLI promotion receipt
+        env:
+          CANDIDATE_ARCHIVE_SHA256: ${{ steps.candidate.outputs.candidate_archive_sha256 }}
+        run: >-
+          node scripts/ci/release-candidate-promotion.cjs write-receipt cli "$VERSION" "$SOURCE_SHA" "$RUNNER_TEMP/release-candidate-cli"
+
+      - name: Upload promoted CLI package
+        id: upload_promoted
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: happy-cli-${{ env.VERSION }}
+          path: |
+            ${{ runner.temp }}/release-candidate-cli/release-promotion.json
+            ${{ runner.temp }}/release-candidate-cli/happy-${{ env.VERSION }}.tgz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record CLI promotion
+        run: |
+          {
+            echo "product=$PRODUCT"
+            echo "source_sha=$SOURCE_SHA"
+            echo "candidate_artifact_id=$CANDIDATE_ARTIFACT_ID"
+            echo "candidate_artifact_digest=${{ steps.candidate.outputs.candidate_artifact_digest }}"
+            echo "promoted_artifact_id=${{ steps.upload_promoted.outputs.artifact-id }}"
+            echo "promoted_artifact_digest=${{ steps.upload_promoted.outputs.artifact-digest }}"
+            echo "promoted_artifact_url=${{ steps.upload_promoted.outputs.artifact-url }}"
+            echo "retention_days=30"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote_android:
+    name: Promote verified Android APK
+    needs: [source_gate, versions, android]
+    if: needs.android.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CANDIDATE_ARTIFACT_DIGEST: ${{ needs.android.outputs.candidate_artifact_digest }}
+      CANDIDATE_ARTIFACT_ID: ${{ needs.android.outputs.candidate_artifact_id }}
+      CANDIDATE_ARTIFACT_NAME: ${{ needs.android.outputs.candidate_artifact_name }}
+      PRODUCT: android
+      SOURCE_SHA: ${{ needs.source_gate.outputs.source_sha }}
+      VERSION: ${{ needs.versions.outputs.android_version }}
+    steps:
+      - name: Checkout promotion verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Download exact Android candidate and verify Actions digest
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-candidate-promotion.cjs download "$RUNNER_TEMP/release-candidate-android.zip"
+
+      - name: Verify Android candidate layout and payloads
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/release-candidate-android"
+          python3 scripts/ci/release_candidate_archive.py extract \
+            "$RUNNER_TEMP/release-candidate-android.zip" "$PRODUCT" "$VERSION" "$CANDIDATE_DIR"
+          node scripts/ci/release-candidate-promotion.cjs verify "$PRODUCT" "$VERSION" "$SOURCE_SHA" "$CANDIDATE_DIR"
+
+      - name: Write Android promotion receipt
+        env:
+          CANDIDATE_ARCHIVE_SHA256: ${{ steps.candidate.outputs.candidate_archive_sha256 }}
+        run: >-
+          node scripts/ci/release-candidate-promotion.cjs write-receipt android "$VERSION" "$SOURCE_SHA" "$RUNNER_TEMP/release-candidate-android"
+
+      - name: Upload promoted Android APK
+        id: upload_promoted
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: happy-app-${{ env.VERSION }}-android-arm64-v8a-no-ota
+          path: |
+            ${{ runner.temp }}/release-candidate-android/release-promotion.json
+            ${{ runner.temp }}/release-candidate-android/happy-app-${{ env.VERSION }}-android-arm64-v8a-no-ota.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record Android promotion
+        run: |
+          {
+            echo "product=$PRODUCT"
+            echo "source_sha=$SOURCE_SHA"
+            echo "candidate_artifact_id=$CANDIDATE_ARTIFACT_ID"
+            echo "candidate_artifact_digest=${{ steps.candidate.outputs.candidate_artifact_digest }}"
+            echo "promoted_artifact_id=${{ steps.upload_promoted.outputs.artifact-id }}"
+            echo "promoted_artifact_digest=${{ steps.upload_promoted.outputs.artifact-digest }}"
+            echo "promoted_artifact_url=${{ steps.upload_promoted.outputs.artifact-url }}"
+            echo "retention_days=30"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote_relay:
+    name: Promote verified Debian relay bundle
+    needs: [source_gate, versions, relay]
+    if: needs.relay.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CANDIDATE_ARTIFACT_DIGEST: ${{ needs.relay.outputs.candidate_artifact_digest }}
+      CANDIDATE_ARTIFACT_ID: ${{ needs.relay.outputs.candidate_artifact_id }}
+      CANDIDATE_ARTIFACT_NAME: ${{ needs.relay.outputs.candidate_artifact_name }}
+      PRODUCT: relay
+      SOURCE_SHA: ${{ needs.source_gate.outputs.source_sha }}
+      VERSION: ${{ needs.versions.outputs.relay_version }}
+    steps:
+      - name: Checkout promotion verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Download exact relay candidate and verify Actions digest
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-candidate-promotion.cjs download "$RUNNER_TEMP/release-candidate-relay.zip"
+
+      - name: Verify relay candidate layout and payloads
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/release-candidate-relay"
+          python3 scripts/ci/release_candidate_archive.py extract \
+            "$RUNNER_TEMP/release-candidate-relay.zip" "$PRODUCT" "$VERSION" "$CANDIDATE_DIR"
+          node scripts/ci/release-candidate-promotion.cjs verify "$PRODUCT" "$VERSION" "$SOURCE_SHA" "$CANDIDATE_DIR"
+
+      - name: Write relay promotion receipt
+        env:
+          CANDIDATE_ARCHIVE_SHA256: ${{ steps.candidate.outputs.candidate_archive_sha256 }}
+        run: >-
+          node scripts/ci/release-candidate-promotion.cjs write-receipt relay "$VERSION" "$SOURCE_SHA" "$RUNNER_TEMP/release-candidate-relay"
+
+      - name: Upload promoted Debian relay bundle
+        id: upload_promoted
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: happy-relay-server-${{ env.VERSION }}-debian13-amd64
+          path: |
+            ${{ runner.temp }}/release-candidate-relay/release-promotion.json
+            ${{ runner.temp }}/release-candidate-relay/happy-relay-server-${{ env.VERSION }}-debian13-amd64.tar.gz
+            ${{ runner.temp }}/release-candidate-relay/happy-relay-server-${{ env.VERSION }}-debian13-amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record relay promotion
+        run: |
+          {
+            echo "product=$PRODUCT"
+            echo "source_sha=$SOURCE_SHA"
+            echo "candidate_artifact_id=$CANDIDATE_ARTIFACT_ID"
+            echo "candidate_artifact_digest=${{ steps.candidate.outputs.candidate_artifact_digest }}"
+            echo "promoted_artifact_id=${{ steps.upload_promoted.outputs.artifact-id }}"
+            echo "promoted_artifact_digest=${{ steps.upload_promoted.outputs.artifact-digest }}"
+            echo "promoted_artifact_url=${{ steps.upload_promoted.outputs.artifact-url }}"
+            echo "retention_days=30"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote_agent:
+    name: Promote verified happy-agent package
+    needs: [source_gate, versions, agent]
+    if: needs.agent.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CANDIDATE_ARTIFACT_DIGEST: ${{ needs.agent.outputs.candidate_artifact_digest }}
+      CANDIDATE_ARTIFACT_ID: ${{ needs.agent.outputs.candidate_artifact_id }}
+      CANDIDATE_ARTIFACT_NAME: ${{ needs.agent.outputs.candidate_artifact_name }}
+      PRODUCT: agent
+      SOURCE_SHA: ${{ needs.source_gate.outputs.source_sha }}
+      VERSION: ${{ needs.versions.outputs.agent_version }}
+    steps:
+      - name: Checkout promotion verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Download exact happy-agent candidate and verify Actions digest
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-candidate-promotion.cjs download "$RUNNER_TEMP/release-candidate-agent.zip"
+
+      - name: Verify happy-agent candidate layout and payloads
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/release-candidate-agent"
+          python3 scripts/ci/release_candidate_archive.py extract \
+            "$RUNNER_TEMP/release-candidate-agent.zip" "$PRODUCT" "$VERSION" "$CANDIDATE_DIR"
+          node scripts/ci/release-candidate-promotion.cjs verify "$PRODUCT" "$VERSION" "$SOURCE_SHA" "$CANDIDATE_DIR"
+
+      - name: Write happy-agent promotion receipt
+        env:
+          CANDIDATE_ARCHIVE_SHA256: ${{ steps.candidate.outputs.candidate_archive_sha256 }}
+        run: >-
+          node scripts/ci/release-candidate-promotion.cjs write-receipt agent "$VERSION" "$SOURCE_SHA" "$RUNNER_TEMP/release-candidate-agent"
+
+      - name: Upload promoted happy-agent package
+        id: upload_promoted
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: happy-agent-${{ env.VERSION }}
+          path: |
+            ${{ runner.temp }}/release-candidate-agent/release-promotion.json
+            ${{ runner.temp }}/release-candidate-agent/happy-agent-${{ env.VERSION }}.tgz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record happy-agent promotion
+        run: |
+          {
+            echo "product=$PRODUCT"
+            echo "source_sha=$SOURCE_SHA"
+            echo "candidate_artifact_id=$CANDIDATE_ARTIFACT_ID"
+            echo "candidate_artifact_digest=${{ steps.candidate.outputs.candidate_artifact_digest }}"
+            echo "promoted_artifact_id=${{ steps.upload_promoted.outputs.artifact-id }}"
+            echo "promoted_artifact_digest=${{ steps.upload_promoted.outputs.artifact-digest }}"
+            echo "promoted_artifact_url=${{ steps.upload_promoted.outputs.artifact-url }}"
+            echo "retention_days=30"
+          } >> "$GITHUB_STEP_SUMMARY"
