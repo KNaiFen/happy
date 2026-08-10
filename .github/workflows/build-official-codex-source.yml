@@ -12,6 +12,12 @@ on:
       commit:
         description: Peeled immutable Codex source commit
         value: ${{ jobs.build.outputs.commit }}
+      artifact_id:
+        description: Immutable Actions artifact identifier for the verified runtime bundle
+        value: ${{ jobs.build.outputs.artifact_id }}
+      artifact_digest:
+        description: SHA-256 digest reported by GitHub Actions for the runtime artifact archive
+        value: ${{ jobs.build.outputs.artifact_digest }}
   workflow_dispatch:
 
 permissions:
@@ -30,6 +36,8 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       commit: ${{ steps.release.outputs.commit }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -256,6 +264,11 @@ jobs:
           ARTIFACT_ROOT="$RUNNER_TEMP/official-codex-linux-x64"
           RELEASE_DIR="$GITHUB_WORKSPACE/.ci/openai-codex/codex-rs/target/release"
           MARKER="$RELEASE_DIR/.happy-official-runtime.json"
+          HAPPY_SOURCE_SHA="$GITHUB_SHA"
+          if [[ ! "$HAPPY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unexpected Happy source SHA: $HAPPY_SOURCE_SHA" >&2
+            exit 1
+          fi
           mkdir -p "$ARTIFACT_ROOT/bin/codex-resources"
           install -m 0755 \
             "$RELEASE_DIR/codex" \
@@ -274,8 +287,11 @@ jobs:
           test "$(jq -r '.bwrapSha256' "$MARKER")" = \
             "$(sha256sum "$ARTIFACT_ROOT/bin/codex-resources/bwrap" | cut -d' ' -f1)"
           BWRAP_SHA256="$(jq -r '.bwrapSha256' "$MARKER")"
+          CODEX_SHA256="$(sha256sum "$ARTIFACT_ROOT/bin/codex" | cut -d' ' -f1)"
+          CODE_MODE_HOST_SHA256="$(sha256sum "$ARTIFACT_ROOT/bin/codex-code-mode-host" | cut -d' ' -f1)"
           jq -n \
             --arg repository "https://github.com/openai/codex" \
+            --arg happySourceSha "$HAPPY_SOURCE_SHA" \
             --arg tag "${{ steps.release.outputs.tag }}" \
             --arg version "${{ steps.release.outputs.version }}" \
             --arg commit "${{ steps.release.outputs.commit }}" \
@@ -285,10 +301,13 @@ jobs:
             --arg sourceCargoLockSha256 "${{ steps.cargo_lock.outputs.source_sha256 }}" \
             --arg resolvedCargoLockSha256 "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
             --arg bwrapSha256 "$BWRAP_SHA256" \
-            '{schemaVersion: 3, runtimeBundleVersion: 2, repository: $repository, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version, sourceCargoLockSha256: $sourceCargoLockSha256, resolvedCargoLockSha256: $resolvedCargoLockSha256, bwrapSha256: $bwrapSha256}' \
+            --arg codexSha256 "$CODEX_SHA256" \
+            --arg codexCodeModeHostSha256 "$CODE_MODE_HOST_SHA256" \
+            '{schemaVersion: 4, runtimeBundleVersion: 2, repository: $repository, happySourceSha: $happySourceSha, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version, sourceCargoLockSha256: $sourceCargoLockSha256, resolvedCargoLockSha256: $resolvedCargoLockSha256, bwrapSha256: $bwrapSha256, binarySha256: {codex: $codexSha256, codexCodeModeHost: $codexCodeModeHostSha256, bwrap: $bwrapSha256}}' \
             > "$ARTIFACT_ROOT/source.json"
 
       - name: Upload official Codex binary
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: official-codex-linux-x64

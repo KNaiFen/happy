@@ -25,6 +25,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -531,15 +532,26 @@ jobs:
       - name: Test official Codex fixture helpers from source
         run: |
           node --test scripts/ci/codex-mobile-recovery-launch.test.cjs
+          node --test scripts/ci/official-codex-artifact-reuse.test.cjs
           node node_modules/vitest/vitest.mjs run \
             scripts/ci/codex-responses-fixture.test.ts \
             scripts/ci/codex-mobile-field-command-correlation.test.ts
 
-      - name: Download source-built official Codex
-        uses: actions/download-artifact@v4
-        with:
-          name: official-codex-linux-x64
-          path: ${{ runner.temp }}/official-codex
+      - name: Download exact source-built official Codex
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OFFICIAL_CODEX_ARTIFACT_ID: ${{ needs.official_codex.outputs.artifact_id }}
+          OFFICIAL_CODEX_ARTIFACT_DIGEST: ${{ needs.official_codex.outputs.artifact_digest }}
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs download
+          "$OFFICIAL_CODEX_ARTIFACT_ID" "$OFFICIAL_CODEX_ARTIFACT_DIGEST"
+          "$RUNNER_TEMP/official-codex"
+
+      - name: Validate official Codex artifact content
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs verify
+          "$RUNNER_TEMP/official-codex" "${{ github.sha }}"
+          "${{ needs.official_codex.outputs.commit }}"
 
       - name: Verify official Codex provenance
         run: |
@@ -552,6 +564,8 @@ jobs:
           test -x "$BWRAP"
           test "$(timeout 15s "$CODEX_BIN" --version)" = \
             "codex-cli $HAPPY_SCENARIO_CODEX_VERSION"
+          test "$(jq -r '.version' "$RUNNER_TEMP/official-codex/source.json")" = \
+            "${{ needs.official_codex.outputs.version }}"
           test "$(jq -r '.commit' "$RUNNER_TEMP/official-codex/source.json")" = \
             "${{ needs.official_codex.outputs.commit }}"
           test "$(jq -r '.runtimeBundleVersion' "$RUNNER_TEMP/official-codex/source.json")" = 2
@@ -606,11 +620,21 @@ jobs:
       - name: Typecheck TUI fixture and PTY tests from source
         run: node node_modules/typescript/bin/tsc --project scripts/ci/tsconfig.codex-gateway-tui.json
 
-      - name: Download source-built official Codex
-        uses: actions/download-artifact@v4
-        with:
-          name: official-codex-linux-x64
-          path: ${{ runner.temp }}/official-codex
+      - name: Download exact source-built official Codex
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OFFICIAL_CODEX_ARTIFACT_ID: ${{ needs.official_codex.outputs.artifact_id }}
+          OFFICIAL_CODEX_ARTIFACT_DIGEST: ${{ needs.official_codex.outputs.artifact_digest }}
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs download
+          "$OFFICIAL_CODEX_ARTIFACT_ID" "$OFFICIAL_CODEX_ARTIFACT_DIGEST"
+          "$RUNNER_TEMP/official-codex"
+
+      - name: Validate official Codex artifact content
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs verify
+          "$RUNNER_TEMP/official-codex" "${{ github.sha }}"
+          "${{ needs.official_codex.outputs.commit }}"
 
       - name: Verify official Codex provenance
         run: |
@@ -623,6 +647,8 @@ jobs:
           test -x "$BWRAP"
           test "$(timeout 15s "$CODEX_BIN" --version)" = \
             "codex-cli $HAPPY_SCENARIO_CODEX_VERSION"
+          test "$(jq -r '.version' "$RUNNER_TEMP/official-codex/source.json")" = \
+            "${{ needs.official_codex.outputs.version }}"
           test "$(jq -r '.commit' "$RUNNER_TEMP/official-codex/source.json")" = \
             "${{ needs.official_codex.outputs.commit }}"
           test "$(jq -r '.runtimeBundleVersion' "$RUNNER_TEMP/official-codex/source.json")" = 2
