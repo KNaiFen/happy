@@ -5,8 +5,6 @@ tags:
   - sync-v4
   - field
 ---
-- launchApp:
-    stopApp: false
 - extendedWaitUntil:
     visible: New chat
     timeout: 45000

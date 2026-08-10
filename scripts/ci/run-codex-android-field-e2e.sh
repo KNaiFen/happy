@@ -47,6 +47,22 @@ capture_diagnostics() {
 }
 trap capture_diagnostics EXIT
 
+restart_app_after_process_death() {
+  local launch_log="${ARTIFACT_DIR}/recovery-am-start.txt"
+  printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${launch_log}"
+  if ! timeout 30s adb shell am start -W \
+    -a android.intent.action.MAIN \
+    -c android.intent.category.LAUNCHER \
+    -p "${APP_ID}" >> "${launch_log}" 2>&1; then
+    cat "${launch_log}" >&2 || true
+    echo "Bounded recovery launcher start failed." >&2
+    return 1
+  fi
+  printf 'finished_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${launch_log}"
+  cat "${launch_log}"
+  grep -Fqx 'Status: ok' "${launch_log}"
+}
+
 test -f "${APK_PATH}"
 test -f "${BOOTSTRAP_FLOW_PATH}"
 test -f "${ZERO_MACHINE_FLOW_PATH}"
@@ -93,6 +109,8 @@ touch "${APP_READY_FILE}"
   --test-output-dir "${TEST_OUTPUT_DIR}" \
   --debug-output "${DEBUG_OUTPUT_DIR}" \
   "${FLOW_PATH}"
+
+restart_app_after_process_death
 
 "${MAESTRO_BIN}" \
   --no-ansi \
