@@ -3,20 +3,6 @@ name: CLI Smoke Test
 on:
   pull_request:
     branches: [main]
-    paths:
-      - 'packages/happy-cli/**'
-      - 'packages/happy-server/**'
-      - 'packages/happy-wire/**'
-      - 'scripts/ci/**'
-      - 'scripts/postinstall.cjs'
-      - 'patches/**'
-      - '.npmrc'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - '.github/workflows/cli-smoke-test.yml'
-      - '!**/*.md'
-      - '!**/*.mdx'
 
 permissions:
   contents: read
@@ -26,8 +12,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Classify CLI smoke changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cli_smoke: ${{ steps.changes.outputs.cli_smoke }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Classify changed paths
+      id: changes
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: node scripts/ci/classify-workflow-changes.cjs "$BASE_SHA" "$HEAD_SHA" false
+
   prepare:
     name: Build CLI smoke packages once
+    needs: classify
+    if: needs.classify.outputs.cli_smoke == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -90,7 +97,8 @@ jobs:
         retention-days: 1
 
   smoke-test-linux:
-    needs: prepare
+    needs: [classify, prepare]
+    if: needs.classify.outputs.cli_smoke == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -175,7 +183,8 @@ jobs:
         echo "happy server smoke test passed (booted + Prisma query engine OK)"
 
   smoke-test-windows:
-    needs: prepare
+    needs: [classify, prepare]
+    if: needs.classify.outputs.cli_smoke == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -309,5 +318,35 @@ jobs:
         )
 
         echo Smoke test passed on Windows!
+
+  smoke-gate:
+    name: CLI Smoke gate
+    if: always()
+    needs:
+      - classify
+      - prepare
+      - smoke-test-linux
+      - smoke-test-windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Require selected smoke jobs to pass
+      env:
+        CLASSIFY_RESULT: ${{ needs.classify.result }}
+        EXPECT_SMOKE: ${{ needs.classify.outputs.cli_smoke }}
+        PREPARE_RESULT: ${{ needs.prepare.result }}
+        LINUX_RESULT: ${{ needs.smoke-test-linux.result }}
+        WINDOWS_RESULT: ${{ needs.smoke-test-windows.result }}
+      run: |
+        test "$CLASSIFY_RESULT" = success
+        if [ "$EXPECT_SMOKE" = true ]; then
+          test "$PREPARE_RESULT" = success
+          test "$LINUX_RESULT" = success
+          test "$WINDOWS_RESULT" = success
+        else
+          test "$PREPARE_RESULT" = skipped
+          test "$LINUX_RESULT" = skipped
+          test "$WINDOWS_RESULT" = skipped
+        fi
 
 # We don't need a smoke test for macOS because most contributors are developing on macOS.

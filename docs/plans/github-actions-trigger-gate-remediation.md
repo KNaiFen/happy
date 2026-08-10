@@ -2,10 +2,10 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 已由 PR 云端验收并合入 `main`，阶段 2 至阶段 5 未完成）。
+- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类与阶段 3 的稳定 PR gate 已实现，云端验收和 ruleset 尚未完成；阶段 2 制品复用、阶段 4 至阶段 5 仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@4e2f7d981b8881bcec597b6b4ec3bc69c2e58ab4`。
-- 实施分支：`codex/kb-maintenance-20260810-actions`。
+- 当前基线：`origin/main@f47d0b28d92029d3e42d32d0b26eadfb67ecd5ee`。
+- 实施分支：`codex/kb-maintenance-20260810-actions-gates`。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -55,7 +55,7 @@ GitHub API 同时确认：`main` 当前没有 branch protection，仓库 ruleset
 - [x] 所有工作流通过结构化 YAML 解析和 `actionlint v1.7.7` 静态检查。
 - [x] PR Documentation、CLI Smoke 和 Required CI 在同一 head SHA 上成功，且分支 push 不产生重复 run。
 
-阶段 1 的直接收益只计算已实施的保守范围：样本中的 9 个 branch push 合计 8,328 runner 秒（138.8 分钟）。等价 main tree 的 8,354 runner 秒仍保留；两者合计为上述 16,682 秒。直到阶段 3 建立强制 PR 门禁和同 SHA 全局 gate 后，main 重复才能安全消除；本阶段不以缺少 main 验收换取速度。
+阶段 1 的直接收益只计算已实施的保守范围：样本中的 9 个 branch push 约占 8,190 runner 秒，等价 main tree 约占 8,354 runner 秒；审计按不同 job 终止时间取样，分项与总量存在约 138 秒的口径差异，因此只将理论节省记为约 16,682 runner 秒（约 278 分钟）。直到阶段 3 建立强制 PR 门禁和同 SHA 全局 gate 后，main 重复才能安全消除；本阶段不以缺少 main 验收换取速度。
 
 阶段 1 的 PR 云端验收均针对同一 head SHA `580a64ba`：
 
@@ -97,15 +97,15 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 
 ### 阶段 2：变更影响规划与不可变制品复用
 
-- [ ] 为 Monorepo CI 增加始终运行的变更分类入口，按包依赖关系启用必要 job；Required gate 明确接受有意跳过的 job，但拒绝失败或取消。
-- [ ] 保留 Wire 变更对 CLI、Server、App、Agent 等消费者的保守传递，不做仅凭目录名的危险跳过。
+- [x] 为 Monorepo CI 和 CLI Smoke 增加始终运行的变更分类入口，按包依赖关系启用必要 job；聚合 gate 明确接受有意跳过的 job，但拒绝失败或取消。分类器单测覆盖 docs-only、Wire 传播、独立包和 root 输入。
+- [x] 保留 Wire 变更对 CLI、Server、App、Agent 等消费者的保守传递，不做仅凭目录名的危险跳过；分类器单测验证该传播集合。
 - [ ] Official Codex 以解析后的 release tag、peeled commit、Rust toolchain 和 runtime marker 形成不可变指纹；CI 与 Field 复用同一已验证归档。
 - [ ] Android Field 将 App 源码指纹与 Codex 指纹分离；相同 App 指纹的定时运行复用已验证 APK，不重复 Gradle 构建。
 - [ ] 用新的 run 样本比较 wall time、runner time、cache restore/export 和失败定位时间，不仅比较单次绿色耗时。
 
 ### 阶段 3：全局门禁与发行提升
 
-- [ ] 设计一个不会被 path filter 留在 pending 的始终运行 PR gate，并将 `Required CI gate`、CLI Smoke 与 Documentation 映射为稳定 required checks。
+- [x] 让 Monorepo CI、CLI Smoke 和 Documentation 在所有目标 PR 上产生终态检查；重型 job 通过分类器按需跳过，聚合检查保持稳定名称。尚需在真实 docs-only/root-only PR 上验证后再配置 required checks。
 - [ ] GitHub `main` ruleset 要求 PR、分支最新、禁止直接 push，并限制管理员 bypass；启用前先验证 docs-only 与 root-only PR 都能产生终态检查。
 - [ ] CLI、Android、Relay、happy-agent 的 release workflow 只在同一 SHA 的全局 gate 成功后进入 build/promotion。
 - [ ] 将“构建候选物”与“提升可交付物”分离；promotion 只消费既有 digest，不重新构建。
@@ -170,9 +170,10 @@ git diff --cached --check
 
 ## 下一步
 
-1. 创建 docs-only 证据 PR，确认计划索引变更只触发 Documentation；合并前不触碰用户的 lockfile 或本机目录。
-2. 将 Field recovery 的 `fetch failed`/`commandMissing` 作为阶段 4 的首个实现任务，先增加可定位的请求/命令生命周期证据，再修复并取得独立 Field 成功 run。
-3. 在阶段 4 未稳定前，继续保留 Field 为非必需的外部验收；阶段 2 的 Official Codex 指纹和制品复用设计可与其并行，但不得以缓存命中替代验收。
+1. 推送本分支并验证一个代码 PR：确认分类器选择必要 job、CLI Smoke 仍复用单一 prepare、三个聚合检查在同一 head SHA 成功。
+2. 合并后创建独立 docs-only 证据 PR，确认三项稳定检查均有终态且重型 job 全部 skipped；随后配置 `main` ruleset，禁止直接 push。
+3. 将 Field recovery 的 `fetch failed`/`commandMissing` 作为阶段 4 的首个实现任务，先增加可定位的请求/命令生命周期证据，再修复并取得独立 Field 成功 run。
+4. 阶段 2 的 Official Codex 指纹、跨 run 归档复用和阶段 3 的 release same-SHA gate 可并行实施，但不得以缓存命中替代验收。
 
 ## 完成条件
 

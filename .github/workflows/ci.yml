@@ -22,23 +22,6 @@ on:
       - "!**/*.mdx"
   pull_request:
     branches: [main]
-    paths:
-      - "packages/happy-wire/**"
-      - "packages/happy-agent/**"
-      - "packages/codium/**"
-      - "packages/happy-server/**"
-      - "packages/happy-cli/**"
-      - "packages/happy-app/**"
-      - "scripts/ci/**"
-      - "scripts/postinstall.cjs"
-      - "patches/**"
-      - ".npmrc"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/**"
-      - "!**/*.md"
-      - "!**/*.mdx"
   workflow_dispatch:
 
 permissions:
@@ -49,8 +32,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Classify CI changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      wire: ${{ steps.changes.outputs.wire }}
+      agent: ${{ steps.changes.outputs.agent }}
+      codium: ${{ steps.changes.outputs.codium }}
+      codium_runtime: ${{ steps.changes.outputs.codium_runtime }}
+      server: ${{ steps.changes.outputs.server }}
+      cli: ${{ steps.changes.outputs.cli }}
+      app: ${{ steps.changes.outputs.app }}
+      tauri: ${{ steps.changes.outputs.tauri }}
+      migration: ${{ steps.changes.outputs.migration }}
+      official_codex: ${{ steps.changes.outputs.official_codex }}
+      protocol_drift: ${{ steps.changes.outputs.protocol_drift }}
+      codex_transport_scenarios: ${{ steps.changes.outputs.codex_transport_scenarios }}
+      codex_official_app_server: ${{ steps.changes.outputs.codex_official_app_server }}
+      codex_gateway_tui: ${{ steps.changes.outputs.codex_gateway_tui }}
+      dependency_audit: ${{ steps.changes.outputs.dependency_audit }}
+      codex_provider_boundary: ${{ steps.changes.outputs.codex_provider_boundary }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: node scripts/ci/classify-workflow-changes.cjs "$BASE_SHA" "$HEAD_SHA" "$FORCE_ALL"
+
   wire:
     name: Wire typecheck, test, and build
+    needs: classify
+    if: needs.classify.outputs.wire == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -79,6 +99,8 @@ jobs:
 
   agent:
     name: Agent typecheck, test, and build
+    needs: classify
+    if: needs.classify.outputs.agent == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -110,6 +132,8 @@ jobs:
 
   codium:
     name: Codium typecheck, test, and production build
+    needs: classify
+    if: needs.classify.outputs.codium == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -141,6 +165,8 @@ jobs:
 
   codium_codex_runtime:
     name: Codium bundled Codex runtime lifecycle
+    needs: classify
+    if: needs.classify.outputs.codium_runtime == 'true'
     runs-on: macos-14
     timeout-minutes: 40
     steps:
@@ -172,6 +198,8 @@ jobs:
 
   server:
     name: Server typecheck, test, and build
+    needs: classify
+    if: needs.classify.outputs.server == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -214,6 +242,8 @@ jobs:
 
   cli:
     name: CLI typecheck, unit test, and build
+    needs: classify
+    if: needs.classify.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -245,6 +275,8 @@ jobs:
 
   app:
     name: App typecheck, unit test, and Web build
+    needs: classify
+    if: needs.classify.outputs.app == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -291,6 +323,8 @@ jobs:
 
   tauri:
     name: macOS Tauri Rust format, check, and test
+    needs: classify
+    if: needs.classify.outputs.tauri == 'true'
     runs-on: macos-14
     timeout-minutes: 45
     steps:
@@ -318,6 +352,8 @@ jobs:
 
   migration:
     name: PostgreSQL migration deploy and upgrade
+    needs: classify
+    if: needs.classify.outputs.migration == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -360,10 +396,14 @@ jobs:
 
   official_codex:
     name: Build latest stable official Codex source
+    needs: classify
+    if: needs.classify.outputs.official_codex == 'true'
     uses: ./.github/workflows/build-official-codex-source.yml
 
   protocol-drift:
     name: Codex 0.145.0 stable-v2 protocol drift
+    needs: classify
+    if: needs.classify.outputs.protocol_drift == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -400,6 +440,8 @@ jobs:
 
   codex_transport_scenarios:
     name: Codex fake-provider transport fault scenarios
+    needs: classify
+    if: needs.classify.outputs.codex_transport_scenarios == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -456,7 +498,8 @@ jobs:
 
   codex_official_app_server:
     name: Official Codex app-server lifecycle
-    needs: official_codex
+    needs: [classify, official_codex]
+    if: needs.classify.outputs.codex_official_app_server == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -527,7 +570,8 @@ jobs:
 
   codex_gateway_tui:
     name: Official Codex TUI Gateway round trip
-    needs: official_codex
+    needs: [classify, official_codex]
+    if: needs.classify.outputs.codex_gateway_tui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -611,6 +655,8 @@ jobs:
 
   dependency-audit:
     name: Production dependency critical audit
+    needs: classify
+    if: needs.classify.outputs.dependency_audit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -632,6 +678,8 @@ jobs:
 
   codex_provider_boundary:
     name: Codex-only provider boundary
+    needs: classify
+    if: needs.classify.outputs.codex_provider_boundary == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -653,6 +701,7 @@ jobs:
     name: Required CI gate
     if: always()
     needs:
+      - classify
       - wire
       - agent
       - codium
@@ -671,38 +720,66 @@ jobs:
       - codex_provider_boundary
     runs-on: ubuntu-latest
     steps:
-      - name: Require every CI job to pass
+      - name: Require every selected CI job to pass
         env:
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          EXPECT_WIRE: ${{ needs.classify.outputs.wire }}
           WIRE_RESULT: ${{ needs.wire.result }}
+          EXPECT_AGENT: ${{ needs.classify.outputs.agent }}
           AGENT_RESULT: ${{ needs.agent.result }}
+          EXPECT_CODIUM: ${{ needs.classify.outputs.codium }}
           CODIUM_RESULT: ${{ needs.codium.result }}
+          EXPECT_CODIUM_RUNTIME: ${{ needs.classify.outputs.codium_runtime }}
           CODIUM_RUNTIME_RESULT: ${{ needs.codium_codex_runtime.result }}
+          EXPECT_SERVER: ${{ needs.classify.outputs.server }}
           SERVER_RESULT: ${{ needs.server.result }}
+          EXPECT_CLI: ${{ needs.classify.outputs.cli }}
           CLI_RESULT: ${{ needs.cli.result }}
+          EXPECT_APP: ${{ needs.classify.outputs.app }}
           APP_RESULT: ${{ needs.app.result }}
+          EXPECT_TAURI: ${{ needs.classify.outputs.tauri }}
           TAURI_RESULT: ${{ needs.tauri.result }}
+          EXPECT_MIGRATION: ${{ needs.classify.outputs.migration }}
           MIGRATION_RESULT: ${{ needs.migration.result }}
+          EXPECT_OFFICIAL_CODEX: ${{ needs.classify.outputs.official_codex }}
           OFFICIAL_CODEX_RESULT: ${{ needs.official_codex.result }}
+          EXPECT_PROTOCOL: ${{ needs.classify.outputs.protocol_drift }}
           PROTOCOL_RESULT: ${{ needs.protocol-drift.result }}
+          EXPECT_SCENARIOS: ${{ needs.classify.outputs.codex_transport_scenarios }}
           SCENARIOS_RESULT: ${{ needs.codex_transport_scenarios.result }}
+          EXPECT_OFFICIAL_APP_SERVER: ${{ needs.classify.outputs.codex_official_app_server }}
           OFFICIAL_APP_SERVER_RESULT: ${{ needs.codex_official_app_server.result }}
+          EXPECT_CODEX_GATEWAY_TUI: ${{ needs.classify.outputs.codex_gateway_tui }}
           CODEX_GATEWAY_TUI_RESULT: ${{ needs.codex_gateway_tui.result }}
+          EXPECT_AUDIT: ${{ needs.classify.outputs.dependency_audit }}
           AUDIT_RESULT: ${{ needs.dependency-audit.result }}
+          EXPECT_CODEX_BOUNDARY: ${{ needs.classify.outputs.codex_provider_boundary }}
           CODEX_BOUNDARY_RESULT: ${{ needs.codex_provider_boundary.result }}
         run: |
-          test "$WIRE_RESULT" = success
-          test "$AGENT_RESULT" = success
-          test "$CODIUM_RESULT" = success
-          test "$CODIUM_RUNTIME_RESULT" = success
-          test "$SERVER_RESULT" = success
-          test "$CLI_RESULT" = success
-          test "$APP_RESULT" = success
-          test "$TAURI_RESULT" = success
-          test "$MIGRATION_RESULT" = success
-          test "$OFFICIAL_CODEX_RESULT" = success
-          test "$PROTOCOL_RESULT" = success
-          test "$SCENARIOS_RESULT" = success
-          test "$OFFICIAL_APP_SERVER_RESULT" = success
-          test "$CODEX_GATEWAY_TUI_RESULT" = success
-          test "$AUDIT_RESULT" = success
-          test "$CODEX_BOUNDARY_RESULT" = success
+          require_result() {
+            expected="$1"
+            actual="$2"
+            name="$3"
+            if [ "$expected" = true ]; then wanted=success; else wanted=skipped; fi
+            if [ "$actual" != "$wanted" ]; then
+              echo "$name: expected $wanted, got $actual" >&2
+              return 1
+            fi
+          }
+          test "$CLASSIFY_RESULT" = success
+          require_result "$EXPECT_WIRE" "$WIRE_RESULT" wire
+          require_result "$EXPECT_AGENT" "$AGENT_RESULT" agent
+          require_result "$EXPECT_CODIUM" "$CODIUM_RESULT" codium
+          require_result "$EXPECT_CODIUM_RUNTIME" "$CODIUM_RUNTIME_RESULT" codium-runtime
+          require_result "$EXPECT_SERVER" "$SERVER_RESULT" server
+          require_result "$EXPECT_CLI" "$CLI_RESULT" cli
+          require_result "$EXPECT_APP" "$APP_RESULT" app
+          require_result "$EXPECT_TAURI" "$TAURI_RESULT" tauri
+          require_result "$EXPECT_MIGRATION" "$MIGRATION_RESULT" migration
+          require_result "$EXPECT_OFFICIAL_CODEX" "$OFFICIAL_CODEX_RESULT" official-codex
+          require_result "$EXPECT_PROTOCOL" "$PROTOCOL_RESULT" protocol-drift
+          require_result "$EXPECT_SCENARIOS" "$SCENARIOS_RESULT" transport-scenarios
+          require_result "$EXPECT_OFFICIAL_APP_SERVER" "$OFFICIAL_APP_SERVER_RESULT" official-app-server
+          require_result "$EXPECT_CODEX_GATEWAY_TUI" "$CODEX_GATEWAY_TUI_RESULT" gateway-tui
+          require_result "$EXPECT_AUDIT" "$AUDIT_RESULT" dependency-audit
+          require_result "$EXPECT_CODEX_BOUNDARY" "$CODEX_BOUNDARY_RESULT" provider-boundary
