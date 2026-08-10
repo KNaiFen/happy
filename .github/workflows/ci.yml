@@ -589,8 +589,10 @@ jobs:
       - name: Validate official Codex artifact content
         run: >-
           node scripts/ci/official-codex-artifact-reuse.cjs verify
-          "$RUNNER_TEMP/official-codex" "${{ github.sha }}"
+          "$RUNNER_TEMP/official-codex" "${{ needs.official_codex.outputs.attested_happy_source_sha }}"
           "${{ needs.official_codex.outputs.commit }}"
+          "${{ needs.official_codex.outputs.recipe_fingerprint }}"
+          "${{ needs.official_codex.outputs.attestation_run_id }}"
 
       - name: Verify official Codex provenance
         run: |
@@ -674,8 +676,10 @@ jobs:
       - name: Validate official Codex artifact content
         run: >-
           node scripts/ci/official-codex-artifact-reuse.cjs verify
-          "$RUNNER_TEMP/official-codex" "${{ github.sha }}"
+          "$RUNNER_TEMP/official-codex" "${{ needs.official_codex.outputs.attested_happy_source_sha }}"
           "${{ needs.official_codex.outputs.commit }}"
+          "${{ needs.official_codex.outputs.recipe_fingerprint }}"
+          "${{ needs.official_codex.outputs.attestation_run_id }}"
 
       - name: Verify official Codex provenance
         run: |

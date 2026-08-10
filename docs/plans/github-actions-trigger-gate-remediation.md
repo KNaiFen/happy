@@ -2,16 +2,17 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 修复均已完成并有云端证据。当前分支继续收敛阶段 5：将全部工作流的外部 Action 固定到完整 SHA、关闭 checkout 凭据持久化、升级已知 Node.js 20 Action runtime、增加 GitHub Actions Dependabot 维护、禁用 Relay 默认 `.dockerbuild` artifact，并依据真实 Android rehearsal 将 payload 上限从 128 MiB 调整为 160 MiB。阶段 2 的 APK 复用与长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余队列/Relay 优化和实体设备验收仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 修复均已完成并有云端证据。PR #40 已把供应链检查、完整 SHA 固定、checkout 凭据关闭、Node.js 24 Action 升级、Actions Dependabot 维护和 Relay `.dockerbuild` 抑制合并到 main。当前分支已完成 Official Codex schema 5 的 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation，以及 target cache 编译 provenance 继承；源码和回归证据已具备，仍待 PR 与新 main 云端验收。阶段 2 的 APK 复用与长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余队列/Relay 优化和实体设备验收仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@09033b09b2d0834f81908ed50163f91aef6b43f4`。
-- 当前实施分支：`codex/kb-maintenance-20260811-workflow-optimization`，只改变 CI/发行编排、测试和本文档，
+- 当前基线：`origin/main@1278ac91a204f5326a00e74e3938c6125ab13e23`（PR #40 squash merge）。
+- 当前实施分支：`codex/kb-maintenance-20260811-official-codex-reuse`，只改变 CI/发行编排、测试和本文档，
   不改变包版本或可分发行为。
-- 本地复审：候选下载与提升逻辑、候选 ZIP 预检与原子提取、发行 workflow 和本文档已完成独立复审；
-  当前分支通过 promotion Node 18 项、归档 Python 18 项、workflow Action 安全 3 项测试、12 个 workflow
-  与 Dependabot 的结构化 YAML 解析、`actionlint 1.7.7`、知识库检查和 Git diff 检查。全部 113 个外部
-  `uses:` 均固定到 40 位 SHA，36 个 checkout 均显式禁用凭据持久化；Action tag/SHA 复核没有未解决的
-  版本错配。当前分支仍须 PR 与新 main 的云端复审，外部环境验收继续按下文保持未完成。
+- 本地复审：当前分支通过 Official Codex 复用 Node 12 项测试、Node syntax check、12 个 workflow 的
+  Ruby YAML 解析、build workflow 全部 `run` 块 `bash -n`、fingerprint CLI fixture 和 `git diff --check`；
+  target cache marker 已升级为 schema 4，并从 marker 继承原始编译 Happy SHA/run，拒绝旧或缺失
+  provenance 的缓存后再编译；
+  同时保留 PR #40 已通过的 promotion/归档/Action 安全测试、`actionlint 1.7.7` 与完整 SHA 复核证据。
+  当前分支仍须 PR 与新 main 的云端复审，外部环境验收继续按下文保持未完成。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -86,6 +87,15 @@
   通过 source gate 与版本检测，四个 build 和四个 promotion 全部 skipped，artifact 数为零；
   同一 merge SHA 的 Field [31412302548](https://github.com/KNaiFen/happy/actions/runs/31412302548)
   与四产品 rehearsal 均成功，详细证据见阶段 2、阶段 3。
+- 供应链检查与 Node.js 24 Action 升级：PR [#40](https://github.com/KNaiFen/happy/pull/40)，已于
+  `2026-08-10T18:57:18Z` squash merge 为 `1278ac91a204f5326a00e74e3938c6125ab13e23`。该 SHA 的
+  Documentation [31421679455](https://github.com/KNaiFen/happy/actions/runs/31421679455) 与
+  Monorepo CI [31421679658](https://github.com/KNaiFen/happy/actions/runs/31421679658) 成功；主 CI
+  墙钟约 54 分钟，其中 Official Codex job 2,433 秒、实际源码编译步骤 2,316 秒。后置 release
+  router [31426163735](https://github.com/KNaiFen/happy/actions/runs/31426163735) 只运行一次，版本未变时
+  四个 build 与四个 promotion 均 skipped，artifact 无误生成；同 SHA 的 Android Field
+  [31426163792](https://github.com/KNaiFen/happy/actions/runs/31426163792) 已成功选择精确 main
+  artifact，官方 Codex reusable build skipped，Field 运行结果仍待终态确认。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -177,10 +187,17 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 - [x] 为 Monorepo CI 和 CLI Smoke 增加始终运行的变更分类入口，按包依赖关系启用必要 job；聚合 gate 明确接受有意跳过的 job，但拒绝失败或取消。分类器单测覆盖 docs-only、Wire 传播、独立包和 root 输入。
 - [x] 保留 Wire 变更对 CLI、Server、App、Agent 等消费者的保守传递，不做仅凭目录名的危险跳过；分类器单测验证该传播集合。
 - [x] Official Codex 以解析后的 release tag、peeled commit、Rust toolchain 和 runtime marker 形成不可变指纹；CI 与 Field 复用同一已验证归档。
+- [x] 将 Official Codex 复用升级为 schema 5：以 canonical recipe fingerprint（release/锁文件/实际 Rust
+  工具链、runner、rusty_v8 资产、Linux 构建依赖、环境和 workflow/helper 摘要）命名 artifact；selector
+  只接受同仓库 `push/main`、首轮、成功且 `Required CI gate` 成功的 main producer。PR 只读取已验证 main
+  artifact；main 命中后重新 attestation 并上传到当前 run，同时保留最初编译 SHA/run 与所有二进制、Cargo.lock
+  摘要。验收必须覆盖分页漂移、重复/过期/错误 workflow 候选、API/archive/manifest/二进制摘要篡改，以及
+  Rust facts 在 source-declared override 后采集；target cache marker schema 4 也保留并校验最初编译
+  Happy SHA/run，避免缓存命中伪造编译来源。当前分支本地 12/12 测试通过，PR/main 对照仍由 B1 跟踪。
 - [ ] Android Field 将 App 源码指纹与 Codex 指纹分离；相同 App 指纹的定时运行复用已验证 APK，不重复 Gradle 构建。
 - [ ] 用新的 run 样本比较 wall time、runner time、cache restore/export 和失败定位时间，不仅比较单次绿色耗时。
 
-阶段 2 已实施的路径只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI` 完成事件
+历史实现（PR #35，schema 4）的路径只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI` 完成事件
 触发，先核验该精确 `head_sha` 的 `Required CI gate` 成功、唯一未过期
 `official-codex-linux-x64` artifact 的 ID 和 Actions API SHA-256 digest，再下载该精确 ZIP。
 随后校验 `source.json` 的 Happy SHA、release tag、peeled Codex commit 与 `codex`、
@@ -202,6 +219,13 @@ Field artifact [9060612275](https://github.com/KNaiFen/happy/actions/runs/313810
 `be6e8eac...f61b` 和三个可执行文件摘要；其 API 36 job 成功，四个 Maestro JUnit 零失败，
 recovery 启动 2.704 秒且 `Status: ok`，最终诊断为 `phase=verified`、rollback
 `succeeded/none`、post-clear 成功与 `v4LifecycleCompleted=true`。
+
+当前分支的 schema 5 实现以 artifact 名 `official-codex-linux-x64-r3-<recipe fingerprint>` 区分完整
+编译配方；PR 只选择已通过首轮 main `Required CI gate` 的 producer，main 命中后重新写入当前
+attestation 并上传到当前 CI run。源码 fresh build 会把 `compiledHappySourceSha/compiledRunId`
+写入 target marker；缓存命中必须读取并校验这两个字段，随后在 `source.json` 中继承它们，旧 marker
+或非法 provenance 会失效并重新编译。这样可以同时证明“当前 run 的 attestation”与“二进制最初实际编译
+来源”，不把缓存命中误报为当前 run 编译。
 
 这是一组可复现的跨 run 功能验收而非长期性能结论：该 Field job 用时 1,690 秒，较 PR #34 的
 1,934 秒少 244 秒，但 Android 构建和共享缓存仍会造成波动。阶段 2 的性能项保留，必须按验收矩阵
@@ -393,8 +417,8 @@ checkout `v7.0.1`、setup-node `v7.0.0`、pnpm/action-setup `v6.0.10` 和 setup-
 也固定到经上游 tag 复核的精确 commit。Action 自身要求 GitHub Actions Runner `>=2.327.1`，
 本仓库只使用 GitHub-hosted runner，没有 self-hosted 兼容性阻塞。
 
-2026-08-11 的只读仓库设置核验为：Actions 已启用但 `allowed_actions=all`、
-`sha_pinning_required=false`；Dependabot security updates 为 disabled；Dependency Review 对精确
+2026-08-11 的只读仓库设置核验为：Actions 已启用、`allowed_actions=all`，且 PR #40 合并后
+`sha_pinning_required=true`；Dependabot security updates 为 disabled；Dependency Review 对精确
 base/head 返回 `403 Forbidden`；Code Scanning analyses 返回 `404 no analysis found`；GitHub
 Environment 数量为零。Secret scanning 与 push protection 已启用，ruleset `20624143` 保持 active
 且没有 bypass actor。上述仓库设置不由源码 PR 隐式修改，必须由管理员明确授权并留下设置 URL、
@@ -404,8 +428,8 @@ Environment 数量为零。Secret scanning 与 push protection 已启用，rules
 
 | 编号 | 当前证据与影响 | 下一步 | 完成标准 |
 | --- | --- | --- | --- |
-| B1：当前优化 PR 云端验收 | 本地已完成 113/113 SHA pin、36/36 checkout 凭据关闭和 Node.js 24 Action 升级；尚无该分支的 GitHub-hosted runner 证据。 | 创建非草稿 PR，等待 Documentation、CLI Smoke、Required CI；合并后至少重跑 Android 与 Relay rehearsal。 | 所有 required checks 绑定同一 head SHA 成功；新 main 的 Android/Relay run 无旧 Action Node.js 20 汇总警告，Relay 只有 candidate + promoted 两个 artifact。 |
-| B2：仓库级 Action 策略 | API 为 `allowed_actions=all`、`sha_pinning_required=false`；源码测试能防项目内回归，但不能阻止管理员或未来分支绕过。 | 仓库管理员评估 allowlist，并启用“Require actions to be pinned to a full-length commit SHA”。 | 设置 API 返回 `sha_pinning_required=true`，保留设置 URL、操作者、时间和一次成功 CI。 |
+| B1：当前 Official Codex 复用 PR 云端验收 | 本地 schema-5 recipe fingerprint、可信 main selector、main re-attestation、实际 Rust toolchain 采集和 target-cache compiled provenance 继承已实现并通过 12/12 测试；该分支尚无 GitHub-hosted runner 证据。基线 SHA `1278ac91` 的 main CI 已成功，但使用的是旧 schema。诊断 Field run [31426163792](https://github.com/KNaiFen/happy/actions/runs/31426163792) 已成功选择 main artifact、跳过 reusable Codex build，APK Gradle 步骤在采样时仍未终态，不能作为本分支验收。 | 创建非草稿 PR，等待 Documentation、CLI Smoke、Required CI；核对 PR 命中 main artifact 时无源码编译，合并后核对 main 重新 attestation、Field 精确选择当前 run artifact。 | PR/main 对同一 recipe 均成功；PR 日志没有 `cargo build --locked --release`，main 命中时编译步骤 skipped 且当前 run 有新 attestation artifact；Field 仍通过来源、recipe、archive 和二进制校验。 |
+| B2：仓库级 Action allowlist | API 为 `allowed_actions=all`、`sha_pinning_required=true`；完整 SHA 强制已由 PR #40 后的仓库设置满足，但 allowlist 仍未决定。 | 仓库管理员评估是否从 `all` 收敛到 selected patterns，先列出全部第三方 Action 与 reusable workflow 依赖，再做低风险设置变更。 | 若启用 allowlist，API 返回 selected 且所有 12 个 workflow 与依赖的 reusable workflow 均成功；若不适用，记录维护者决定和理由，不把 SHA 强制误写成 allowlist 已完成。 |
 | B3：依赖与 SAST 门禁 | Dependabot security updates disabled；Dependency Review API 403；CodeQL 为 `no analysis found`。当前无法安全增加 required dependency-review/CodeQL job。 | 管理员启用安全更新并确认 Dependency Graph/Advanced Security 权限；选择适用语言初始化 CodeQL，再以真实 PR 验证。 | API 可读取 dependency diff 和 CodeQL analysis；新增检查对同一 PR head 终态成功，并在注入有风险依赖/可识别样例时 fail-closed。 |
 | B4：Environment/部署边界 | Environment 数量为零；当前仓库只有构建与 artifact 交付，没有已确认的自动生产部署目标。 | 维护者确认是否存在需要审批、健康检查和回滚的部署；没有部署则记录“不适用”的 ADR/长期决定。 | 有部署时 environment protection、审批人与回滚 runbook 经演练；无部署时文档明确 build-only，计划不再把 environment 当未决门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
@@ -418,6 +442,9 @@ Environment 数量为零。Secret scanning 与 push protection 已启用，rules
 
 ```bash
 node --check scripts/docs/knowledge-base.mjs
+node --check scripts/ci/official-codex-artifact-reuse.cjs
+node --check scripts/ci/official-codex-artifact-reuse.test.cjs
+node --test scripts/ci/official-codex-artifact-reuse.test.cjs
 node --test scripts/ci/workflow-action-security.test.cjs
 node --test scripts/ci/verify-release-source-gate.test.cjs
 node --test scripts/ci/release-candidate-promotion.test.cjs
@@ -452,8 +479,9 @@ git diff --cached --check
 
 ## 下一步
 
-1. 完成当前优化分支的精确暂存、知识库生成和本地验证，创建非草稿 PR；对同一 head SHA 等待
-   Documentation、CLI Smoke 和 Required CI，失败时读取真实日志并修复，不 rerun 掩盖。
+1. 完成当前 Official Codex 复用分支的精确暂存、知识库生成和本地验证，创建非草稿 PR；对同一 head SHA 等待
+   Documentation、CLI Smoke 和 Required CI，重点核对 recipe 命中/源码编译分支与 reusable workflow outputs，
+   失败时读取真实日志并修复，不 rerun 掩盖。
 2. PR 可干净合并且 required checks 全绿后 squash merge；在新 main 上核验唯一 release router 的
    未变版本零制品路径，并分别重跑 Android、Relay 不发布 rehearsal。Android 必须证明新 Action
    runtime 保留签名、上传和 receipt；Relay 必须证明 `DOCKER_BUILD_RECORD_UPLOAD=false` 后不再产生
