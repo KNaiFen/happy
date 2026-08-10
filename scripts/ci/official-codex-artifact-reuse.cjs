@@ -18,7 +18,7 @@ const artifactName = 'official-codex-linux-x64';
 const ciGateName = 'Required CI gate';
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const gitShaPattern = /^[0-9a-f]{40}$/;
-const artifactDigestPattern = /^sha256:([0-9a-f]{64})$/;
+const artifactDigestPattern = /^(?:sha256:)?([0-9a-f]{64})$/;
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const artifactBinaryPaths = {
     codex: 'bin/codex',
@@ -54,7 +54,7 @@ function parseArtifactDigest(value) {
     }
     const match = artifactDigestPattern.exec(value);
     if (!match) {
-        throw new Error('Artifact digest must use sha256 with a lowercase digest');
+        throw new Error('Artifact digest must be a lowercase SHA-256 digest');
     }
     return match[1];
 }

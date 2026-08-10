@@ -166,6 +166,8 @@ test('reads every Actions API page before deciding that a gate or artifact is un
 });
 
 test('rejects malformed Actions artifact digests', () => {
+    assert.equal(parseArtifactDigest('a'.repeat(64)), 'a'.repeat(64));
+    assert.equal(parseArtifactDigest(`sha256:${'a'.repeat(64)}`), 'a'.repeat(64));
     for (const value of [undefined, 'sha1:abcd', `sha256:${'A'.repeat(64)}`, `sha256:${'a'.repeat(63)}`]) {
         assert.throws(() => parseArtifactDigest(value), /Artifact digest|sha256/);
     }
