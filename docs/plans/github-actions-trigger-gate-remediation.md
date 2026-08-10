@@ -2,10 +2,10 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类和阶段 3 的稳定 PR gate/ruleset 已完成；阶段 4 的首次 Field launcher 修复已由云端失败取证，当前正在实施显式组件启动；阶段 2 制品复用和阶段 4 至阶段 5 的其余工作仍未完成）。
+- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类和阶段 3 的稳定 PR gate/ruleset 已完成；阶段 4 的显式组件启动已由云端失败取证，当前正在实施唯一组件行筛选；阶段 2 制品复用和阶段 4 至阶段 5 的其余工作仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@53a31f3afab862cb6858cbc7cf41c7d7be29f7bf`。
-- 当前实施分支：`codex/kb-maintenance-20260810-field-explicit-launch`。
+- 当前基线：`origin/main@0b972972503d1bcc736a2f1ed796d6cbce8ce3f3`。
+- 当前实施分支：`codex/kb-maintenance-20260810-field-resolve-output`。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -20,6 +20,11 @@
   `b657356157f1abb6f24c322d619068ca93925fb2`，squash merge
   `53a31f3afab862cb6858cbc7cf41c7d7be29f7bf`；merge-SHA Field
   [31362434710](https://github.com/KNaiFen/happy/actions/runs/31362434710) 未通过，失败证据见阶段 4，
+  不能以 PR CI 成功替代 API 36 恢复验收。
+- Field launcher 显式组件修复：PR [#33](https://github.com/KNaiFen/happy/pull/33)，PR head
+  `25114c2ba9e41f978ec40ceaccf4c0d89e3ca8e5`，squash merge
+  `0b972972503d1bcc736a2f1ed796d6cbce8ce3f3`；merge-SHA Field
+  [31368887798](https://github.com/KNaiFen/happy/actions/runs/31368887798) 未通过，失败证据见阶段 4，
   不能以 PR CI 成功替代 API 36 恢复验收。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
@@ -166,6 +171,16 @@ v4 lifecycle 断言。该实现的 merge-SHA Field [31362434710](https://github.
 解析或显式启动失败仍立即失败；不重试、不延长业务超时，也不勾选该修复项直到新的 Field 诊断为
 `phase=verified`。
 
+PR #33 的 merge-SHA Field [31368887798](https://github.com/KNaiFen/happy/actions/runs/31368887798)
+证明 PackageManager 解析已经找到安装的组件，但 API 36 的 `--brief` 输出同时包含一行
+`priority=0 preferredOrder=0 ...` 元数据和一行
+`com.slopus.happy.dev/.MainActivity`。脚本将两行整体作为组件，并因空白校验而在
+`08:34:59Z` 立即退出；`recovery-am-start.txt` 没有 `Status: ok`，所以 recovery Maestro、choice、
+queue、rollback 与 `/clear` 都未开始。新的最小修复保留原始输出用于诊断，只选择开头为目标包
+且不含空白的行，并要求恰好一条候选；随后仍以相同的显式 `am start -W -n` 和 30 秒边界启动。
+该筛选、包路径、解析、启动与完整 Sync v4 断言均须由新的 merge-SHA Field 证明，不能仅凭
+PR CI 关闭阻塞。
+
 ### 阶段 5：供应链与外部验收
 
 - [ ] 将第三方 Action 固定到完整 commit SHA，并通过 Dependabot 或 Renovate 维护更新；先覆盖 release、artifact 和密钥相关路径。
@@ -210,7 +225,7 @@ git diff --cached --check
 
 ## 下一步
 
-1. 提交并合并显式 Field launcher 修复后，等待精确 merge SHA 的 API 36 Field run；只有 `recovery-am-start.txt` 在 30 秒内完成且既有诊断为 `phase=verified` 时才关闭该阻塞。
+1. 提交并合并唯一 Field launcher 组件筛选修复后，等待精确 merge SHA 的 API 36 Field run；只有 `recovery-am-start.txt` 在 30 秒内完成、`Status: ok`，且既有诊断为 `phase=verified` 时才关闭该阻塞。
 2. 阶段 2 的 Official Codex 指纹、跨 run 归档复用和阶段 3 的 release same-SHA gate 分成独立变更实施，不得以缓存命中替代验收。
 3. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 

@@ -49,6 +49,9 @@ trap capture_diagnostics EXIT
 
 restart_app_after_process_death() {
   local launch_log="${ARTIFACT_DIR}/recovery-am-start.txt"
+  local resolved_activity_output
+  local resolved_component
+  local component_candidates
   printf 'started_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${launch_log}"
   if ! (
     printf 'package_paths:\n'
@@ -57,18 +60,24 @@ restart_app_after_process_death() {
       exit 1
     fi
     printf 'resolved_launcher_activity:\n'
-    if ! resolved_component="$(adb shell cmd package resolve-activity --brief \
+    if ! resolved_activity_output="$(adb shell cmd package resolve-activity --brief \
       -a android.intent.action.MAIN \
       -c android.intent.category.LAUNCHER \
       -p "${APP_ID}" | tr -d '\r')"; then
       echo "Recovery launcher activity resolution failed." >&2
       exit 1
     fi
-    printf '%s\n' "${resolved_component}"
-    if [[ "${resolved_component}" != "${APP_ID}/"* ]] || [[ "${resolved_component}" =~ [[:space:]] ]]; then
-      echo "Resolved launcher activity is not a component of ${APP_ID}." >&2
+    printf '%s\n' "${resolved_activity_output}"
+    component_candidates="$(
+      printf '%s\n' "${resolved_activity_output}" |
+        awk -v app_id="${APP_ID}" 'index($0, app_id "/") == 1 && $0 !~ /[[:space:]]/ { print }'
+    )"
+    if [[ -z "${component_candidates}" ]] || [[ "${component_candidates}" == *$'\n'* ]]; then
+      echo "Expected exactly one launcher component of ${APP_ID}." >&2
       exit 1
     fi
+    resolved_component="${component_candidates}"
+    printf 'selected_launcher_component=%s\n' "${resolved_component}"
     if ! timeout 30s adb shell am start -W \
       -a android.intent.action.MAIN \
       -c android.intent.category.LAUNCHER \
