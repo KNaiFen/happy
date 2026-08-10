@@ -18,13 +18,32 @@ on:
       artifact_digest:
         description: SHA-256 digest reported by GitHub Actions for the runtime artifact archive
         value: ${{ jobs.build.outputs.artifact_digest }}
+      artifact_name:
+        description: Recipe-bound Actions artifact name
+        value: ${{ jobs.build.outputs.artifact_name }}
+      recipe_fingerprint:
+        description: Canonical immutable build recipe fingerprint
+        value: ${{ jobs.build.outputs.recipe_fingerprint }}
+      attested_happy_source_sha:
+        description: Happy source SHA attached to the verified artifact
+        value: ${{ jobs.build.outputs.attested_happy_source_sha }}
+      attestation_run_id:
+        description: CI run that carries the artifact attestation
+        value: ${{ jobs.build.outputs.attestation_run_id }}
+      compiled_happy_source_sha:
+        description: Happy source SHA that originally compiled the binaries
+        value: ${{ jobs.build.outputs.compiled_happy_source_sha }}
+      compiled_run_id:
+        description: CI run that originally compiled the binaries
+        value: ${{ jobs.build.outputs.compiled_run_id }}
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: official-codex-source-${{ github.repository }}-${{ github.ref }}
+  group: official-codex-source-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -36,8 +55,14 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       commit: ${{ steps.release.outputs.commit }}
-      artifact_id: ${{ steps.upload.outputs.artifact-id }}
-      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id || steps.reuse.outputs.artifact_id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest || steps.reuse.outputs.artifact_digest }}
+      artifact_name: ${{ steps.recipe.outputs.artifact_name }}
+      recipe_fingerprint: ${{ steps.recipe.outputs.recipe_fingerprint }}
+      attested_happy_source_sha: ${{ steps.upload.outputs.artifact-id && github.sha || steps.reuse.outputs.head_sha }}
+      attestation_run_id: ${{ steps.upload.outputs.artifact-id && github.run_id || steps.reuse.outputs.source_run_id }}
+      compiled_happy_source_sha: ${{ steps.verified_reuse.outputs.compiled_happy_source_sha || steps.cached_binary.outputs.compiled_happy_source_sha || github.sha }}
+      compiled_run_id: ${{ steps.verified_reuse.outputs.compiled_run_id || steps.cached_binary.outputs.compiled_run_id || github.run_id }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -121,21 +146,35 @@ jobs:
       - name: Install source-declared Rust toolchain
         working-directory: .ci/openai-codex/codex-rs
         run: |
+          set -euo pipefail
           rustup toolchain install "${{ steps.rust.outputs.toolchain }}" --profile minimal
           rustup override set "${{ steps.rust.outputs.toolchain }}"
+          # Capture the toolchain after the override; this is the compiler used by the build.
+          rustc -vV > "$RUNNER_TEMP/rustc-vV.txt"
+          cargo -Vv > "$RUNNER_TEMP/cargo-Vv.txt"
 
       - name: Install official Linux build dependencies
+        id: linux_deps
         run: |
+          set -euo pipefail
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             --no-install-recommends binutils pkg-config libcap-dev
+          printf 'binutils=%s\n' "$(dpkg-query -W -f='${Version}' binutils)" >> "$GITHUB_OUTPUT"
+          printf 'pkg_config=%s\n' "$(dpkg-query -W -f='${Version}' pkg-config)" >> "$GITHUB_OUTPUT"
+          printf 'libcap_dev=%s\n' "$(dpkg-query -W -f='${Version}' libcap-dev)" >> "$GITHUB_OUTPUT"
+          printf 'cc=%s\n' "$(cc --version | head -n 1)" >> "$GITHUB_OUTPUT"
+          printf 'cxx=%s\n' "$(c++ --version | head -n 1)" >> "$GITHUB_OUTPUT"
+          printf 'ld=%s\n' "$(ld --version | head -n 1)" >> "$GITHUB_OUTPUT"
+          printf 'strip=%s\n' "$(strip --version | head -n 1)" >> "$GITHUB_OUTPUT"
+          printf 'glibc=%s\n' "$(ldd --version | head -n 1)" >> "$GITHUB_OUTPUT"
 
       - name: Configure official rusty_v8 artifacts
         id: v8
         run: |
           set -euo pipefail
           SOURCE_ROOT="$GITHUB_WORKSPACE/.ci/openai-codex"
-          TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+          TARGET="$(cd "$SOURCE_ROOT/codex-rs" && rustc -vV | sed -n 's/^host: //p')"
           VERSION="$(python3 "$SOURCE_ROOT/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
           if [[ ! "$TARGET" =~ ^[A-Za-z0-9_.-]+$ ]]; then
             echo "Unexpected Rust host target: $TARGET" >&2
@@ -161,6 +200,9 @@ jobs:
           printf 'RUSTY_V8_SRC_BINDING_PATH=%s\n' "$BINDING_PATH" >> "$GITHUB_ENV"
           printf 'target=%s\n' "$TARGET" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'archive_sha256=%s\n' "$(sha256sum "$ARCHIVE_PATH" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf 'binding_sha256=%s\n' "$(sha256sum "$BINDING_PATH" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf 'checksums_sha256=%s\n' "$(sha256sum "$CHECKSUMS_PATH" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Cache official Codex Cargo downloads
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -201,18 +243,122 @@ jobs:
           printf 'Source Cargo.lock:   %s\n' "$SOURCE_SHA256"
           printf 'Resolved Cargo.lock: %s\n' "$RESOLVED_SHA256"
 
+      - name: Resolve immutable official Codex build recipe
+        id: recipe
+        env:
+          RUSTFLAGS_VALUE: ${{ env.RUSTFLAGS }}
+          CFLAGS_VALUE: ${{ env.CFLAGS }}
+          CXXFLAGS_VALUE: ${{ env.CXXFLAGS }}
+          CC_VALUE: ${{ env.CC }}
+          CXX_VALUE: ${{ env.CXX }}
+        run: |
+          set -euo pipefail
+          : "${ImageOS:?GitHub runner ImageOS is required for recipe provenance}"
+          : "${ImageVersion:?GitHub runner ImageVersion is required for recipe provenance}"
+          WORKFLOW_SHA256="$(sha256sum .github/workflows/build-official-codex-source.yml | cut -d' ' -f1)"
+          HELPER_SHA256="$(sha256sum scripts/ci/official-codex-artifact-reuse.cjs | cut -d' ' -f1)"
+          jq -n \
+            --arg repository "https://github.com/openai/codex" \
+            --arg tag "${{ steps.release.outputs.tag }}" \
+            --arg version "${{ steps.release.outputs.version }}" \
+            --arg commit "${{ steps.release.outputs.commit }}" \
+            --arg sourceLock "${{ steps.cargo_lock.outputs.source_sha256 }}" \
+            --arg resolvedLock "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
+            --arg declaredToolchain "${{ steps.rust.outputs.toolchain }}" \
+            --arg rustcVerbose "$(cat "$RUNNER_TEMP/rustc-vV.txt")" \
+            --arg cargoVerbose "$(cat "$RUNNER_TEMP/cargo-Vv.txt")" \
+            --arg target "${{ steps.v8.outputs.target }}" \
+            --arg runnerOs "$RUNNER_OS" \
+            --arg runnerArch "$RUNNER_ARCH" \
+            --arg imageOs "$ImageOS" \
+            --arg imageVersion "$ImageVersion" \
+            --arg rustyV8Version "${{ steps.v8.outputs.version }}" \
+            --arg rustyV8ArchiveSha256 "${{ steps.v8.outputs.archive_sha256 }}" \
+            --arg rustyV8BindingSha256 "${{ steps.v8.outputs.binding_sha256 }}" \
+            --arg rustyV8ChecksumsSha256 "${{ steps.v8.outputs.checksums_sha256 }}" \
+            --arg binutils "${{ steps.linux_deps.outputs.binutils }}" \
+            --arg pkgConfig "${{ steps.linux_deps.outputs.pkg_config }}" \
+            --arg libcapDev "${{ steps.linux_deps.outputs.libcap_dev }}" \
+            --arg cc "${{ steps.linux_deps.outputs.cc }}" \
+            --arg cxx "${{ steps.linux_deps.outputs.cxx }}" \
+            --arg ld "${{ steps.linux_deps.outputs.ld }}" \
+            --arg strip "${{ steps.linux_deps.outputs.strip }}" \
+            --arg glibc "${{ steps.linux_deps.outputs.glibc }}" \
+            --arg cargoIncremental "$CARGO_INCREMENTAL" \
+            --arg cargoNetGitFetchWithCli "$CARGO_NET_GIT_FETCH_WITH_CLI" \
+            --arg rustflags "${RUSTFLAGS_VALUE:-}" \
+            --arg cflags "${CFLAGS_VALUE:-}" \
+            --arg cxxflags "${CXXFLAGS_VALUE:-}" \
+            --arg ccEnv "${CC_VALUE:-}" \
+            --arg cxxEnv "${CXX_VALUE:-}" \
+            --arg workflowSha256 "$WORKFLOW_SHA256" \
+            --arg helperSha256 "$HELPER_SHA256" \
+            --argjson binaries "$(jq -n \
+              '{codex: "bin/codex", codexCodeModeHost: "bin/codex-code-mode-host", bwrap: "bin/codex-resources/bwrap"}')" \
+            --argjson cargoLocksLayout "$(jq -n '{source: "Cargo.lock.source", resolved: "Cargo.lock.resolved"}')" \
+            '{
+              fingerprintSchema: 1,
+              manifestSchema: 5,
+              runtimeBundleVersion: 2,
+              repository: $repository,
+              release: {tag: $tag, version: $version, commit: $commit},
+              cargoLocks: {sourceSha256: $sourceLock, resolvedSha256: $resolvedLock},
+              rust: {declaredToolchain: $declaredToolchain, rustcVerbose: $rustcVerbose, cargoVerbose: $cargoVerbose, target: $target},
+              runner: {os: $runnerOs, arch: $runnerArch, imageOs: $imageOs, imageVersion: $imageVersion},
+              rustyV8: {version: $rustyV8Version, archiveSha256: $rustyV8ArchiveSha256, bindingSha256: $rustyV8BindingSha256, checksumsSha256: $rustyV8ChecksumsSha256},
+              linuxBuild: {packages: {binutils: $binutils, pkgConfig: $pkgConfig, libcapDev: $libcapDev}, tools: {cc: $cc, cxx: $cxx, ld: $ld, strip: $strip, glibc: $glibc}},
+              environment: {cargoIncremental: $cargoIncremental, cargoNetGitFetchWithCli: $cargoNetGitFetchWithCli, rustflags: $rustflags, cflags: $cflags, cxxflags: $cxxflags, cc: $ccEnv, cxx: $cxxEnv},
+              recipeFiles: {workflowSha256: $workflowSha256, helperSha256: $helperSha256},
+              artifactLayout: {binaries: $binaries, cargoLocks: $cargoLocksLayout}
+            }' > "$RUNNER_TEMP/official-codex-recipe.json"
+          node scripts/ci/official-codex-artifact-reuse.cjs fingerprint \
+            "$RUNNER_TEMP/official-codex-recipe.json"
+
+      - name: Find trusted main Official Codex artifact
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/official-codex-artifact-reuse.cjs find "${{ steps.recipe.outputs.recipe_fingerprint }}"
+
+      - name: Download trusted main Official Codex artifact
+        if: steps.reuse.outputs.selected == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs download
+          "${{ steps.reuse.outputs.artifact_id }}" "${{ steps.reuse.outputs.artifact_digest }}"
+          "$RUNNER_TEMP/official-codex-linux-x64"
+
+      - name: Validate trusted main Official Codex artifact
+        id: verified_reuse
+        if: steps.reuse.outputs.selected == 'true'
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs verify
+          "$RUNNER_TEMP/official-codex-linux-x64"
+          "${{ steps.reuse.outputs.head_sha }}" "${{ steps.release.outputs.commit }}"
+          "${{ steps.recipe.outputs.recipe_fingerprint }}" "${{ steps.reuse.outputs.source_run_id }}"
+
+      - name: Re-attest trusted artifact on main
+        if: >-
+          steps.reuse.outputs.selected == 'true' && github.event_name == 'push'
+          && github.ref == 'refs/heads/main'
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs attest
+          "$RUNNER_TEMP/official-codex-linux-x64" "$GITHUB_SHA" "$GITHUB_RUN_ID"
+          "${{ steps.release.outputs.commit }}" "${{ steps.recipe.outputs.recipe_fingerprint }}"
+
       - name: Cache exact official Codex target
         id: target_cache
+        if: steps.reuse.outputs.selected != 'true'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             .ci/openai-codex/codex-rs/target
-          key: official-codex-runtime-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.commit }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
-          restore-keys: |
-            official-codex-${{ runner.os }}-${{ runner.arch }}-${{ steps.release.outputs.commit }}-${{ hashFiles('.ci/openai-codex/codex-rs/Cargo.lock') }}
+          key: official-codex-runtime-v3-${{ steps.recipe.outputs.recipe_fingerprint }}
 
       - name: Verify cached official Codex binary
         id: cached_binary
+        if: steps.reuse.outputs.selected != 'true'
         run: |
           set -euo pipefail
           RELEASE_DIR="$GITHUB_WORKSPACE/.ci/openai-codex/codex-rs/target/release"
@@ -220,17 +366,24 @@ jobs:
           CODE_MODE_HOST="$RELEASE_DIR/codex-code-mode-host"
           BWRAP="$RELEASE_DIR/bwrap"
           MARKER="$RELEASE_DIR/.happy-official-runtime.json"
+          COMPILED_HAPPY_SOURCE_SHA="$(jq -r '.compiledHappySourceSha // empty' "$MARKER" 2>/dev/null || true)"
+          COMPILED_RUN_ID="$(jq -r '.compiledRunId // empty' "$MARKER" 2>/dev/null || true)"
           if test "${{ steps.target_cache.outputs.cache-hit }}" = true \
             && test -x "$CANDIDATE" \
             && test -x "$CODE_MODE_HOST" \
             && test -x "$BWRAP" \
             && test -f "$MARKER" \
             && test "$(timeout 15s "$CANDIDATE" --version)" = "codex-cli ${{ steps.release.outputs.version }}" \
-            && test "$(jq -r '.schemaVersion' "$MARKER")" = 2 \
+            && test "$(jq -r '.schemaVersion' "$MARKER")" = 4 \
             && test "$(jq -r '.commit' "$MARKER")" = "${{ steps.release.outputs.commit }}" \
             && test "$(jq -r '.resolvedCargoLockSha256' "$MARKER")" = "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
-            && test "$(jq -r '.bwrapSha256' "$MARKER")" = "$(sha256sum "$BWRAP" | cut -d' ' -f1)"; then
+            && test "$(jq -r '.recipeFingerprint' "$MARKER")" = "${{ steps.recipe.outputs.recipe_fingerprint }}" \
+            && test "$(jq -r '.bwrapSha256' "$MARKER")" = "$(sha256sum "$BWRAP" | cut -d' ' -f1)" \
+            && [[ "$COMPILED_HAPPY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] \
+            && [[ "$COMPILED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
             printf 'usable=true\n' >> "$GITHUB_OUTPUT"
+            printf 'compiled_happy_source_sha=%s\n' "$COMPILED_HAPPY_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+            printf 'compiled_run_id=%s\n' "$COMPILED_RUN_ID" >> "$GITHUB_OUTPUT"
             printf 'Using exact verified official Codex runtime bundle cache.\n'
           else
             rm -f "$CANDIDATE" "$CODE_MODE_HOST" "$BWRAP" "$MARKER"
@@ -239,7 +392,7 @@ jobs:
           fi
 
       - name: Build official codex app-server runtime bundle
-        if: steps.cached_binary.outputs.usable != 'true'
+        if: steps.reuse.outputs.selected != 'true' && steps.cached_binary.outputs.usable != 'true'
         working-directory: .ci/openai-codex/codex-rs
         run: |
           set -euo pipefail
@@ -258,18 +411,31 @@ jobs:
             --arg commit "${{ steps.release.outputs.commit }}" \
             --arg resolvedCargoLockSha256 "${{ steps.cargo_lock.outputs.resolved_sha256 }}" \
             --arg bwrapSha256 "$BWRAP_SHA256" \
-            '{schemaVersion: 2, commit: $commit, resolvedCargoLockSha256: $resolvedCargoLockSha256, bwrapSha256: $bwrapSha256}' \
+            --arg compiledHappySourceSha "$GITHUB_SHA" \
+            --argjson compiledRunId "$GITHUB_RUN_ID" \
+            '{schemaVersion: 4, commit: $commit, resolvedCargoLockSha256: $resolvedCargoLockSha256, recipeFingerprint: "${{ steps.recipe.outputs.recipe_fingerprint }}", compiledHappySourceSha: $compiledHappySourceSha, compiledRunId: $compiledRunId, bwrapSha256: $bwrapSha256}' \
             > "$RELEASE_DIR/.happy-official-runtime.json"
 
       - name: Verify binary and write provenance
+        if: steps.reuse.outputs.selected != 'true'
         run: |
           set -euo pipefail
           ARTIFACT_ROOT="$RUNNER_TEMP/official-codex-linux-x64"
           RELEASE_DIR="$GITHUB_WORKSPACE/.ci/openai-codex/codex-rs/target/release"
           MARKER="$RELEASE_DIR/.happy-official-runtime.json"
           HAPPY_SOURCE_SHA="$GITHUB_SHA"
+          COMPILED_HAPPY_SOURCE_SHA="$(jq -r '.compiledHappySourceSha // empty' "$MARKER" 2>/dev/null || true)"
+          COMPILED_RUN_ID="$(jq -r '.compiledRunId // empty' "$MARKER" 2>/dev/null || true)"
           if [[ ! "$HAPPY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Unexpected Happy source SHA: $HAPPY_SOURCE_SHA" >&2
+            exit 1
+          fi
+          if [[ ! "$COMPILED_HAPPY_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Runtime bundle compiled Happy source SHA is missing or invalid" >&2
+            exit 1
+          fi
+          if [[ ! "$COMPILED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Runtime bundle compiled run id is missing or invalid" >&2
             exit 1
           fi
           mkdir -p "$ARTIFACT_ROOT/bin/codex-resources"
@@ -286,7 +452,9 @@ jobs:
           install -m 0644 "$RUNNER_TEMP/Cargo.lock.resolved" "$ARTIFACT_ROOT/Cargo.lock.resolved"
           test "$(timeout 15s "$ARTIFACT_ROOT/bin/codex" --version)" = \
             "codex-cli ${{ steps.release.outputs.version }}"
-          test "$(jq -r '.schemaVersion' "$MARKER")" = 2
+          test "$(jq -r '.schemaVersion' "$MARKER")" = 4
+          test "$(jq -r '.recipeFingerprint' "$MARKER")" = \
+            "${{ steps.recipe.outputs.recipe_fingerprint }}"
           test "$(jq -r '.bwrapSha256' "$MARKER")" = \
             "$(sha256sum "$ARTIFACT_ROOT/bin/codex-resources/bwrap" | cut -d' ' -f1)"
           BWRAP_SHA256="$(jq -r '.bwrapSha256' "$MARKER")"
@@ -306,14 +474,20 @@ jobs:
             --arg bwrapSha256 "$BWRAP_SHA256" \
             --arg codexSha256 "$CODEX_SHA256" \
             --arg codexCodeModeHostSha256 "$CODE_MODE_HOST_SHA256" \
-            '{schemaVersion: 4, runtimeBundleVersion: 2, repository: $repository, happySourceSha: $happySourceSha, tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version, sourceCargoLockSha256: $sourceCargoLockSha256, resolvedCargoLockSha256: $resolvedCargoLockSha256, bwrapSha256: $bwrapSha256, binarySha256: {codex: $codexSha256, codexCodeModeHost: $codexCodeModeHostSha256, bwrap: $bwrapSha256}}' \
+            --arg compiledHappySourceSha "$COMPILED_HAPPY_SOURCE_SHA" \
+            --argjson compiledRunId "$COMPILED_RUN_ID" \
+            --argjson attestationRunId "$GITHUB_RUN_ID" \
+            --arg recipeFingerprint "${{ steps.recipe.outputs.recipe_fingerprint }}" \
+            --slurpfile recipeInputs "$RUNNER_TEMP/official-codex-recipe.json" \
+            '{schemaVersion: 5, runtimeBundleVersion: 2, repository: $repository, happySourceSha: $happySourceSha, attestationRunId: $attestationRunId, compiledHappySourceSha: $compiledHappySourceSha, compiledRunId: $compiledRunId, recipeFingerprint: $recipeFingerprint, recipeInputs: $recipeInputs[0], tag: $tag, version: $version, commit: $commit, rustToolchain: $rustToolchain, target: $target, rustyV8Version: $rustyV8Version, sourceCargoLockSha256: $sourceCargoLockSha256, resolvedCargoLockSha256: $resolvedCargoLockSha256, bwrapSha256: $bwrapSha256, binarySha256: {codex: $codexSha256, codexCodeModeHost: $codexCodeModeHostSha256, bwrap: $bwrapSha256}}' \
             > "$ARTIFACT_ROOT/source.json"
 
       - name: Upload official Codex binary
         id: upload
+        if: steps.reuse.outputs.selected != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: official-codex-linux-x64
+          name: ${{ steps.recipe.outputs.artifact_name }}
           path: ${{ runner.temp }}/official-codex-linux-x64
           if-no-files-found: error
           retention-days: 7
