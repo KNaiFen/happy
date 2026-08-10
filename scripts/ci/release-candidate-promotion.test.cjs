@@ -11,6 +11,7 @@ const {
     finalArtifactName,
     normalizeArtifactDigest,
     payloadPaths,
+    rehearsalArtifactName,
     validateCandidateArtifactMetadata,
     validateCandidateManifest,
     verifyExtractedCandidate,
@@ -570,11 +571,15 @@ test('writes a digest-bound promotion receipt from a verified candidate without 
             candidateArchiveSha256: artifactDigest,
             directory,
             product: 'relay',
+            promotionArtifactName: finalArtifactName('relay', '1.1.42'),
+            promotionMode: 'release',
+            promotionRetentionDays: 30,
             routerRunId,
             sourceSha,
             version: '1.1.42',
         });
         assert.equal(receipt.sourceSha, sourceSha);
+        assert.equal(receipt.schema, 2);
         assert.equal(receipt.candidate.artifactId, 987654);
         assert.equal(
             receipt.candidate.artifactDigest,
@@ -583,11 +588,83 @@ test('writes a digest-bound promotion receipt from a verified candidate without 
         assert.deepEqual(receipt.payloads, manifest.payloads);
         assert.deepEqual(receipt.promotion, {
             artifactName: 'happy-relay-server-1.1.42-debian13-amd64',
+            mode: 'release',
             retentionDays: 30,
         });
         assert.deepEqual(JSON.parse(readFileSync(path.join(directory, 'release-promotion.json'), 'utf8')), receipt);
     } finally {
         rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test('writes an explicitly source-bound short-lived rehearsal receipt', () => {
+    const directory = temporaryCandidate('agent', '0.1.10');
+    const artifactName = rehearsalArtifactName('agent', '0.1.10', sourceSha, routerRunId);
+    try {
+        writeCandidateManifest({ directory, product: 'agent', sourceSha, version: '0.1.10' });
+        const receipt = writePromotionReceipt({
+            candidateArtifactDigest: artifactDigest,
+            candidateArtifactId: 987654,
+            candidateArtifactName: candidateArtifactName('agent', '0.1.10', sourceSha),
+            candidateArchiveSha256: artifactDigest,
+            directory,
+            product: 'agent',
+            promotionArtifactName: artifactName,
+            promotionMode: 'rehearsal',
+            promotionRetentionDays: 1,
+            routerRunId,
+            sourceSha,
+            version: '0.1.10',
+        });
+        assert.deepEqual(receipt.promotion, {
+            artifactName,
+            mode: 'rehearsal',
+            retentionDays: 1,
+        });
+    } finally {
+        rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test('rejects promotion targets whose mode, name, or retention can be confused with a release', () => {
+    for (const [overrides, expected] of [
+        [{ promotionMode: 'other' }, /Invalid promotion mode/],
+        [{ promotionArtifactName: 'happy-agent-0.1.10' }, /rehearsal artifact name does not match/],
+        [{ promotionRetentionDays: 30 }, /Invalid rehearsal artifact retention/],
+        [{
+            promotionArtifactName: finalArtifactName('agent', '0.1.10'),
+            promotionMode: 'release',
+            promotionRetentionDays: 1,
+        }, /Invalid release artifact retention/],
+        [{
+            promotionMode: 'release',
+            promotionRetentionDays: 30,
+        }, /release artifact name does not match/],
+    ]) {
+        const directory = temporaryCandidate('agent', '0.1.10');
+        try {
+            writeCandidateManifest({ directory, product: 'agent', sourceSha, version: '0.1.10' });
+            assert.throws(
+                () => writePromotionReceipt({
+                    candidateArtifactDigest: artifactDigest,
+                    candidateArtifactId: 987654,
+                    candidateArtifactName: candidateArtifactName('agent', '0.1.10', sourceSha),
+                    candidateArchiveSha256: artifactDigest,
+                    directory,
+                    product: 'agent',
+                    promotionArtifactName: rehearsalArtifactName('agent', '0.1.10', sourceSha, routerRunId),
+                    promotionMode: 'rehearsal',
+                    promotionRetentionDays: 1,
+                    routerRunId,
+                    sourceSha,
+                    version: '0.1.10',
+                    ...overrides,
+                }),
+                expected,
+            );
+        } finally {
+            rmSync(directory, { recursive: true, force: true });
+        }
     }
 });
 
@@ -652,24 +729,67 @@ test('release workflows expose short-lived candidates and the router promotes wi
         path.join(repositoryRoot, '.github/workflows/release-after-required-ci.yml'),
         'utf8',
     );
+    assertPinnedWorkflowActions(router, 'release-after-required-ci.yml');
     for (const product of workflows.map(([name]) => name)) {
         const job = new RegExp(`  promote_${product}:([\\s\\S]*?)(?=\\n  promote_|$)`).exec(router)?.[1];
         assert.ok(job, `missing promotion job for ${product}`);
-        assert.match(job, /release-candidate-promotion\.cjs download/);
-        assert.match(job, /release_candidate_archive\.py extract/);
-        assert.match(job, /release-candidate-promotion\.cjs verify /);
-        assert.match(job, /release-candidate-promotion\.cjs write-receipt/);
-        assert.match(job, /id: upload_promoted/);
-        assert.match(job, /retention-days: 30/);
-        assert.doesNotMatch(job, /\bpnpm\b|\bgradlew\b|\bdocker\b|\bpack\b|\bunzip\b/);
-        assert.match(job, /persist-credentials: false/);
+        assert.match(job, /uses: \.\/\.github\/workflows\/promote-release-candidate\.yml/);
+        assert.match(job, new RegExp(`product: ${product}`));
+        assert.match(job, new RegExp(`candidate_artifact_id: \\$\\{\\{ needs\\.${product}\\.outputs\\.candidate_artifact_id \\}\\}`));
+        assert.match(job, /promotion_mode: release/);
+        assert.match(job, /promotion_retention_days: 30/);
+        assert.doesNotMatch(job, /\n\s+run:|actions\/upload-artifact|release-candidate-promotion\.cjs/);
     }
     assert.match(router, /actions: read/);
     assert.match(router, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\.0\.1/);
-    assert.match(router, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\.0\.1/);
-    assert.doesNotMatch(router, /uses: actions\/(?:checkout|upload-artifact)@v/);
-    assert.match(router, /CANDIDATE_ARTIFACT_ID: \$\{\{ needs\.cli\.outputs\.candidate_artifact_id \}\}/);
-    assert.match(router, /CANDIDATE_ARTIFACT_DIGEST: \$\{\{ needs\.android\.outputs\.candidate_artifact_digest \}\}/);
+    assert.doesNotMatch(router, /actions\/upload-artifact|release-candidate-promotion\.cjs/);
+
+    const promotionWorkflow = readFileSync(
+        path.join(repositoryRoot, '.github/workflows/promote-release-candidate.yml'),
+        'utf8',
+    );
+    assertPinnedWorkflowActions(promotionWorkflow, 'promote-release-candidate.yml');
+    assert.match(promotionWorkflow, /on:\n  workflow_call:\n/);
+    assert.match(promotionWorkflow, /promotion_mode:\n        required: true\n        type: string/);
+    assert.match(promotionWorkflow, /promotion_retention_days:\n        required: true\n        type: number/);
+    assert.match(promotionWorkflow, /release-candidate-promotion\.cjs download/);
+    assert.match(promotionWorkflow, /release-candidate-promotion\.cjs validate-target/);
+    assert.match(promotionWorkflow, /release_candidate_archive\.py extract/);
+    assert.match(promotionWorkflow, /release-candidate-promotion\.cjs verify /);
+    assert.match(promotionWorkflow, /release-candidate-promotion\.cjs write-receipt/);
+    assert.match(promotionWorkflow, /id: upload_promoted/);
+    assert.match(promotionWorkflow, /retention-days: \$\{\{ inputs\.promotion_retention_days \}\}/);
+    assert.match(promotionWorkflow, /persist-credentials: false/);
+    assert.doesNotMatch(promotionWorkflow, /\bpnpm\b|\bgradlew\b|\bdocker\b|\bpack\b|\bunzip\b/);
+
+    const rehearsal = readFileSync(
+        path.join(repositoryRoot, '.github/workflows/release-candidate-rehearsal.yml'),
+        'utf8',
+    );
+    assertPinnedWorkflowActions(rehearsal, 'release-candidate-rehearsal.yml');
+    assert.match(rehearsal, /on:\n  workflow_dispatch:\n/);
+    assert.doesNotMatch(rehearsal, /\n  (?:push|pull_request|workflow_run):\n/);
+    assert.match(rehearsal, /github\.run_attempt == 1/);
+    assert.match(rehearsal, /github\.ref == 'refs\/heads\/main'/);
+    assert.match(rehearsal, /inputs\.source_sha == github\.sha/);
+    assert.match(rehearsal, /EXPECTED_SOURCE_SHA: \$\{\{ inputs\.source_sha \}\}/);
+    assert.match(rehearsal, /SOURCE_RUN_ID: \$\{\{ inputs\.source_run_id \}\}/);
+    assert.match(rehearsal, /node scripts\/ci\/verify-release-source-gate\.cjs/);
+    assert.equal(
+        [...rehearsal.matchAll(/uses: \.\/\.github\/workflows\/build-[^\n]+/g)].length,
+        4,
+    );
+    assert.equal(
+        [...rehearsal.matchAll(/uses: \.\/\.github\/workflows\/promote-release-candidate\.yml/g)].length,
+        4,
+    );
+    assert.equal([...rehearsal.matchAll(/promotion_mode: rehearsal/g)].length, 4);
+    assert.equal([...rehearsal.matchAll(/promotion_retention_days: 1/g)].length, 4);
+    assert.match(rehearsal, /name: Release rehearsal gate/);
+    assert.match(rehearsal, /require_path cli/);
+    assert.match(rehearsal, /cli\|android\|relay\|agent/);
+    assert.match(rehearsal, /ANDROID_KEYSTORE_BASE64: \$\{\{ secrets\.ANDROID_KEYSTORE_BASE64 \}\}/);
+    assert.doesNotMatch(rehearsal, /secrets: inherit/);
     const ciWorkflow = readFileSync(path.join(repositoryRoot, '.github/workflows/ci.yml'), 'utf8');
     assertPinnedWorkflowActions(ciWorkflow, 'ci.yml');
     const officialCodexWorkflow = readFileSync(
