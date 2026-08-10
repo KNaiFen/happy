@@ -1,29 +1,16 @@
 name: Codex Android field E2E
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Happy monorepo CI"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "packages/happy-wire/**"
-      - "packages/happy-server/**"
-      - "packages/happy-cli/**"
-      - "packages/happy-app/**"
-      - "scripts/ci/**"
-      - "scripts/postinstall.cjs"
-      - "patches/**"
-      - ".npmrc"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/codex-android-field-e2e.yml"
-      - ".github/workflows/build-official-codex-source.yml"
-      - "!**/*.md"
-      - "!**/*.mdx"
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -31,13 +18,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  reuse_ci_artifact:
+    name: Select verified CI Official Codex artifact
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      selected: ${{ steps.resolve.outputs.selected }}
+      reason: ${{ steps.resolve.outputs.reason }}
+      source_run_id: ${{ steps.resolve.outputs.source_run_id }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      artifact_id: ${{ steps.resolve.outputs.artifact_id }}
+      artifact_digest: ${{ steps.resolve.outputs.artifact_digest }}
+    steps:
+      - name: Checkout target CI source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Resolve exact successful CI artifact
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs resolve
+          "${{ github.event.workflow_run.id }}" "${{ github.event.workflow_run.head_sha }}"
+
   official_codex:
     name: Build latest stable official Codex source
+    if: github.event_name != 'workflow_run'
     uses: ./.github/workflows/build-official-codex-source.yml
 
   android-field:
     name: API 36 App to official Codex field round trip
-    needs: official_codex
+    needs: [reuse_ci_artifact, official_codex]
+    if: >-
+      always() && (
+        (github.event_name == 'workflow_run' && needs.reuse_ci_artifact.result == 'success' && needs.reuse_ci_artifact.outputs.selected == 'true') ||
+        (github.event_name != 'workflow_run' && needs.official_codex.result == 'success')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 100
     env:
@@ -50,10 +69,13 @@ jobs:
       MAESTRO_SHA256: "a4ccab6b604617e7aef6db4f885666056eabe5cfa32befaa3bc994041b8fcbb5"
       MAESTRO_CLI_NO_ANALYTICS: "1"
       MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: "true"
-      HAPPY_SCENARIO_CODEX_VERSION: ${{ needs.official_codex.outputs.version }}
+      HAPPY_FIELD_SOURCE_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
+      HAPPY_EXPECTED_CODEX_COMMIT: ${{ github.event_name != 'workflow_run' && needs.official_codex.outputs.commit || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -106,14 +128,26 @@ jobs:
             "happy version: $VERSION"
           printf 'HAPPY_MOBILE_E2E_CLI_ENTRYPOINT=%s\n' "$ENTRYPOINT" >> "$GITHUB_ENV"
 
-      - name: Download source-built official Codex
-        uses: actions/download-artifact@v4
-        with:
-          name: official-codex-linux-x64
-          path: ${{ runner.temp }}/official-codex
+      - name: Download exact official Codex artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OFFICIAL_CODEX_ARTIFACT_ID: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.artifact_id || needs.official_codex.outputs.artifact_id }}
+          OFFICIAL_CODEX_ARTIFACT_DIGEST: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.artifact_digest || needs.official_codex.outputs.artifact_digest }}
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs download
+          "$OFFICIAL_CODEX_ARTIFACT_ID" "$OFFICIAL_CODEX_ARTIFACT_DIGEST"
+          "$RUNNER_TEMP/official-codex"
+
+      - name: Validate official Codex artifact content
+        run: >-
+          node scripts/ci/official-codex-artifact-reuse.cjs verify
+          "$RUNNER_TEMP/official-codex" "$HAPPY_FIELD_SOURCE_SHA" "$HAPPY_EXPECTED_CODEX_COMMIT"
 
       - name: Verify official Codex provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           CODEX_BIN="$RUNNER_TEMP/official-codex/bin/codex"
           CODE_MODE_HOST="$RUNNER_TEMP/official-codex/bin/codex-code-mode-host"
           BWRAP="$RUNNER_TEMP/official-codex/bin/codex-resources/bwrap"
@@ -123,8 +157,32 @@ jobs:
           test -x "$BWRAP"
           test "$(timeout 15s "$CODEX_BIN" --version)" = \
             "codex-cli $HAPPY_SCENARIO_CODEX_VERSION"
-          test "$(jq -r '.commit' "$RUNNER_TEMP/official-codex/source.json")" = \
-            "${{ needs.official_codex.outputs.commit }}"
+          test "$(jq -r '.happySourceSha' "$RUNNER_TEMP/official-codex/source.json")" = \
+            "$HAPPY_FIELD_SOURCE_SHA"
+          if test -n "$HAPPY_EXPECTED_CODEX_COMMIT"; then
+            test "$(jq -r '.commit' "$RUNNER_TEMP/official-codex/source.json")" = \
+              "$HAPPY_EXPECTED_CODEX_COMMIT"
+          fi
+          TAG="$(jq -r '.tag' "$RUNNER_TEMP/official-codex/source.json")"
+          VERSION="$(jq -r '.version' "$RUNNER_TEMP/official-codex/source.json")"
+          test "$TAG" = "rust-v$VERSION"
+          RELEASE_JSON="$(gh api "repos/openai/codex/releases/tags/$TAG")"
+          test "$(jq -r '.draft' <<< "$RELEASE_JSON")" = false
+          test "$(jq -r '.prerelease' <<< "$RELEASE_JSON")" = false
+          REF_JSON="$(gh api "repos/openai/codex/git/ref/tags/$TAG")"
+          OBJECT_TYPE="$(jq -r '.object.type' <<< "$REF_JSON")"
+          OBJECT_SHA="$(jq -r '.object.sha' <<< "$REF_JSON")"
+          for _ in 1 2 3 4; do
+            if test "$OBJECT_TYPE" = commit; then
+              break
+            fi
+            test "$OBJECT_TYPE" = tag
+            TAG_JSON="$(gh api "repos/openai/codex/git/tags/$OBJECT_SHA")"
+            OBJECT_TYPE="$(jq -r '.object.type' <<< "$TAG_JSON")"
+            OBJECT_SHA="$(jq -r '.object.sha' <<< "$TAG_JSON")"
+          done
+          test "$OBJECT_TYPE" = commit
+          test "$OBJECT_SHA" = "$HAPPY_SCENARIO_CODEX_COMMIT"
           test "$(jq -r '.runtimeBundleVersion' "$RUNNER_TEMP/official-codex/source.json")" = 2
           test "$(jq -r '.bwrapSha256' "$RUNNER_TEMP/official-codex/source.json")" = \
             "$(sha256sum "$BWRAP" | cut -d' ' -f1)"
@@ -192,7 +250,7 @@ jobs:
           APP_ENV: development
           NODE_ENV: production
           HAPPY_DISABLE_OTA: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+          HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
           HAPPY_MOBILE_FIELD_E2E: "1"
           EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
           EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
@@ -206,7 +264,7 @@ jobs:
           APP_ENV: development
           NODE_ENV: production
           HAPPY_DISABLE_OTA: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+          HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
           HAPPY_MOBILE_FIELD_E2E: "1"
           EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
           EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"

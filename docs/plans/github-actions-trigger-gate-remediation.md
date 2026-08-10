@@ -2,10 +2,10 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类和阶段 3 的稳定 PR gate/ruleset 已完成；阶段 4 的显式组件启动已由云端失败取证，当前正在实施唯一组件行筛选；阶段 2 制品复用和阶段 4 至阶段 5 的其余工作仍未完成）。
+- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类和阶段 3 的稳定 PR gate/ruleset 已完成；阶段 4 的 Field recovery 阻塞已由精确 merge-SHA API 36 验收关闭；阶段 2 的 Official Codex 跨 run 制品复用正在独立分支实施，阶段 3 的 release gate 与阶段 4 至阶段 5 的其余工作仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@0b972972503d1bcc736a2f1ed796d6cbce8ce3f3`。
-- 当前实施分支：`codex/kb-maintenance-20260810-field-resolve-output`。
+- 当前基线：`origin/main@ba4e0e7a8f58524e40fb4ce7272c8b5f35c8a9b9`。
+- 当前实施分支：`codex/kb-maintenance-20260810-official-artifact-reuse`。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -26,6 +26,15 @@
   `0b972972503d1bcc736a2f1ed796d6cbce8ce3f3`；merge-SHA Field
   [31368887798](https://github.com/KNaiFen/happy/actions/runs/31368887798) 未通过，失败证据见阶段 4，
   不能以 PR CI 成功替代 API 36 恢复验收。
+- Field launcher 唯一组件行筛选：PR [#34](https://github.com/KNaiFen/happy/pull/34)，PR head
+  `03aeaf45662de35831f91048fa964175b1c3b5d3`，squash merge
+  `ba4e0e7a8f58524e40fb4ce7272c8b5f35c8a9b9`；PR 的 Documentation
+  [31372564420](https://github.com/KNaiFen/happy/actions/runs/31372564420)、CLI Smoke
+  [31372564078](https://github.com/KNaiFen/happy/actions/runs/31372564078) 和 Monorepo CI
+  [31372564863](https://github.com/KNaiFen/happy/actions/runs/31372564863) 成功；精确 merge-SHA
+  Field [31373901326](https://github.com/KNaiFen/happy/actions/runs/31373901326) 成功，诊断
+  artifact [9058100566](https://github.com/KNaiFen/happy/actions/runs/31373901326/artifacts/9058100566)
+  关闭了阶段 4 的 recovery 阻塞，详细证据见下文。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -120,6 +129,16 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 - [ ] Android Field 将 App 源码指纹与 Codex 指纹分离；相同 App 指纹的定时运行复用已验证 APK，不重复 Gradle 构建。
 - [ ] 用新的 run 样本比较 wall time、runner time、cache restore/export 和失败定位时间，不仅比较单次绿色耗时。
 
+阶段 2 的当前实现候选只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI`
+完成事件触发，先核验该精确 `head_sha` 的 `Required CI gate` 成功、唯一未过期
+`official-codex-linux-x64` artifact 的 ID 和 Actions API SHA-256 digest，再下载该精确 ZIP。
+随后校验 `source.json` 的 Happy SHA、release tag、peeled Codex commit 与 `codex`、
+`codex-code-mode-host`、`bwrap` 三个文件摘要；跨 run 没有可读取的 reusable-workflow output，
+因此 Field 还必须从公开的 Codex release tag 重新 peel 出 commit 并与清单匹配，不能把空的
+`needs.official_codex.outputs.commit` 当作校验。定时和手动 Field 继续自行构建 Official Codex，
+避免在最近仅有文档变更、没有同 SHA CI artifact 时错误复用旧制品。该候选尚未通过 PR CI 与跨
+run Field 验收，保持未完成状态。
+
 ### 阶段 3：全局门禁与发行提升
 
 - [x] 让 Monorepo CI、CLI Smoke 和 Documentation 在所有目标 PR 上产生终态检查；重型 job 通过分类器按需跳过，聚合检查保持稳定名称。PR #31 的 docs-only 对照已验证这一行为。
@@ -141,7 +160,7 @@ docs-only 对照和 GitHub ruleset 的外部证据。
 ### 阶段 4：Field 稳定性、队列与失败前移
 
 - [ ] 用 Happy SHA + Official Codex commit 指纹消除 `main push` 与 daily schedule 的同输入互相取消、重跑。
-- [ ] 修复 Field recovery 场景的真实失败；在稳定前不把它设置为必需合并门禁，也不使用盲目 retry。
+- [x] 修复 Field recovery 场景的真实失败；没有把它设置为必需合并门禁，也没有使用盲目 retry。
 - [ ] Relay 将能在源码/契约层发现的问题前移到 Docker 构建之前；必须依赖最终 bundle 的安装、迁移、重启和安全检查仍保留在交付验收。
 - [ ] 对长期 queued、superseded 和超过 SLA 的 workflow 建立终止与告警规则，不把无 job 的 queued run 当作发行证据。
 - [ ] 对 Relay `cache-to: mode=max` 做受控 A/B；只有持续减少总 runner/wall time 时才保留最大导出。
@@ -157,7 +176,7 @@ docs-only 对照和 GitHub ruleset 的外部证据。
 process-death、UI、choice、rollback 与 v4 lifecycle 断言；不得加入盲目重试或延长业务超时。
 在修复并取得新的成功诊断前，不得将 Field 设为 Required CI gate。
 
-当前实施分支将 recovery YAML 中的 `launchApp` 移除，改为在同一 `killApp` 后、Maestro
+PR #32 已将 recovery YAML 中的 `launchApp` 移除，改为在同一 `killApp` 后、Maestro
 断言前执行一次 `timeout 30s adb shell am start -W`，并把 UTC 起止时间和 ADB 输出保存为
 `recovery-am-start.txt`。新的 `node:test` 静态契约拒绝重新引入 Maestro 启动或无界 ADB 命令。
 这只改变启动执行者，不改变 process-death、`Waiting for you`、choice、rollback、`/clear` 或
@@ -180,6 +199,21 @@ queue、rollback 与 `/clear` 都未开始。新的最小修复保留原始输�
 且不含空白的行，并要求恰好一条候选；随后仍以相同的显式 `am start -W -n` 和 30 秒边界启动。
 该筛选、包路径、解析、启动与完整 Sync v4 断言均须由新的 merge-SHA Field 证明，不能仅凭
 PR CI 关闭阻塞。
+
+PR #34 将这一选择写成动态 ADB stub 回归测试，覆盖 API 36 的两行实际输出形状；它只接受包名前缀
+且无空白的唯一组件，随后必须得到 `Status: ok`。其精确 merge-SHA Field
+[31373901326](https://github.com/KNaiFen/happy/actions/runs/31373901326) 于
+`2026-08-10T09:51:16Z` 成功：Official Codex job 用时 85 秒，Android Field job 用时
+1,934 秒。诊断 artifact
+[9058100566](https://github.com/KNaiFen/happy/actions/runs/31373901326/artifacts/9058100566)
+中的 `recovery-am-start.txt` 只选择
+`com.slopus.happy.dev/.MainActivity`，从 `09:44:03Z` 到 `09:44:06Z` 完成，含
+`Status: ok`、`TotalTime: 3500` 与 `WaitTime: 3524`。bootstrap、zero-machine、主 field 和
+recovery 四个 Maestro JUnit 均为零失败，recovery 实际用时 352 秒；其命令记录证明恢复后的
+choice、queued follow-up、`/compact`、`/clear` 与 post-clear 响应均执行成功。最终
+`field-diagnostics.json` 为 `phase=verified`、
+`rollbackCommandResultTerminalStatus=succeeded`、`rollbackCommandErrorKind=none`、
+`postClearCommandSucceeded=true`、`v4LifecycleCompleted=true`。阶段 4 的 recovery 阻塞至此关闭。
 
 ### 阶段 5：供应链与外部验收
 
@@ -225,8 +259,8 @@ git diff --cached --check
 
 ## 下一步
 
-1. 提交并合并唯一 Field launcher 组件筛选修复后，等待精确 merge SHA 的 API 36 Field run；只有 `recovery-am-start.txt` 在 30 秒内完成、`Status: ok`，且既有诊断为 `phase=verified` 时才关闭该阻塞。
-2. 阶段 2 的 Official Codex 指纹、跨 run 归档复用和阶段 3 的 release same-SHA gate 分成独立变更实施，不得以缓存命中替代验收。
+1. 提交阶段 2 的 Official Codex 指纹与跨 run 归档复用，要求 PR CI 证明同 run 的 artifact ID 消费、跨 run 空 output 边界和公开 tag-to-commit 校验；合并后以 `workflow_run` Field 证明跨 run digest、清单和 Android 场景均成功。
+2. 在跨 run Field 成功后采集 Official Codex 被复用前后的 runner/wall time；阶段 3 的 release same-SHA gate 保持独立变更，不得以缓存命中替代验收。
 3. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
