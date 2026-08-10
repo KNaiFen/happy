@@ -1,0 +1,130 @@
+name: Build release artifacts after required CI
+
+on:
+  workflow_run:
+    workflows: [Happy monorepo CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: release-after-ci-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  source_gate:
+    name: Verify exact main CI gate
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.gate.outputs.source_sha }}
+      source_base_sha: ${{ steps.gate.outputs.source_base_sha }}
+      source_run_id: ${{ steps.gate.outputs.source_run_id }}
+      source_run_url: ${{ steps.gate.outputs.source_run_url }}
+    steps:
+      - name: Checkout gate verifier
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+
+      - name: Verify source workflow and Required CI gate
+        id: gate
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node scripts/ci/verify-release-source-gate.cjs
+
+  versions:
+    name: Detect release version changes
+    needs: source_gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cli_changed: ${{ steps.cli.outputs.changed }}
+      cli_version: ${{ steps.cli.outputs.version }}
+      android_changed: ${{ steps.android.outputs.changed }}
+      android_version: ${{ steps.android.outputs.version }}
+      relay_changed: ${{ steps.relay.outputs.changed }}
+      relay_version: ${{ steps.relay.outputs.version }}
+      agent_changed: ${{ steps.agent.outputs.changed }}
+      agent_version: ${{ steps.agent.outputs.version }}
+    env:
+      SOURCE_SHA: ${{ needs.source_gate.outputs.source_sha }}
+      SOURCE_BASE_SHA: ${{ needs.source_gate.outputs.source_base_sha }}
+    steps:
+      - name: Checkout exact gated source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify merged pull request base
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git cat-file -e "${SOURCE_BASE_SHA}^{commit}"
+
+      - name: Detect CLI version bump
+        id: cli
+        run: node scripts/ci/detect-package-version-change.cjs packages/happy-cli/package.json "$SOURCE_BASE_SHA"
+
+      - name: Detect Android version bump
+        id: android
+        run: node scripts/ci/detect-package-version-change.cjs packages/happy-app/package.json "$SOURCE_BASE_SHA"
+
+      - name: Detect Relay version bump
+        id: relay
+        run: node scripts/ci/detect-package-version-change.cjs packages/happy-server/package.json "$SOURCE_BASE_SHA"
+
+      - name: Detect happy-agent version bump
+        id: agent
+        run: node scripts/ci/detect-package-version-change.cjs packages/happy-agent/package.json "$SOURCE_BASE_SHA"
+
+  cli:
+    name: Build gated CLI package
+    needs: [source_gate, versions]
+    if: needs.versions.outputs.cli_changed == 'true'
+    uses: ./.github/workflows/build-cli-release.yml
+    with:
+      source_sha: ${{ needs.source_gate.outputs.source_sha }}
+      version: ${{ needs.versions.outputs.cli_version }}
+
+  android:
+    name: Build gated Android APK
+    needs: [source_gate, versions]
+    if: needs.versions.outputs.android_changed == 'true'
+    uses: ./.github/workflows/build-android-release.yml
+    with:
+      source_sha: ${{ needs.source_gate.outputs.source_sha }}
+      version: ${{ needs.versions.outputs.android_version }}
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+  relay:
+    name: Build gated Debian relay bundle
+    needs: [source_gate, versions]
+    if: needs.versions.outputs.relay_changed == 'true'
+    uses: ./.github/workflows/build-debian13-relay-release.yml
+    with:
+      source_sha: ${{ needs.source_gate.outputs.source_sha }}
+      version: ${{ needs.versions.outputs.relay_version }}
+
+  agent:
+    name: Build gated happy-agent package
+    needs: [source_gate, versions]
+    if: needs.versions.outputs.agent_changed == 'true'
+    uses: ./.github/workflows/build-happy-agent-release.yml
+    with:
+      source_sha: ${{ needs.source_gate.outputs.source_sha }}
+      version: ${{ needs.versions.outputs.agent_version }}

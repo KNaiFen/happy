@@ -1,43 +1,43 @@
 name: Build Android APK on version bump
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - packages/happy-app/package.json
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-apk-${{ github.ref }}
+  group: android-apk-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 jobs:
-  version:
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.version.outputs.changed }}
-      version: ${{ steps.version.outputs.version }}
-    steps:
-      - name: Checkout version history
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Detect APP version bump
-        id: version
-        run: node scripts/ci/detect-package-version-change.cjs packages/happy-app/package.json "${{ github.event.before }}"
-
   ci:
     name: Validate Android app
-    needs: version
-    if: needs.version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION: ${{ inputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify gated source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(node -p "require('./packages/happy-app/package.json').version")" = "$VERSION"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -60,16 +60,22 @@ jobs:
         run: pnpm --filter happy-app exec vitest run
 
   build:
-    needs: [version, ci]
-    if: needs.version.outputs.changed == 'true' && needs.ci.result == 'success'
+    needs: ci
+    if: needs.ci.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      VERSION: ${{ needs.version.outputs.version }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION: ${{ inputs.version }}
       EXPECTED_CERT_SHA256: fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify gated source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -106,7 +112,7 @@ jobs:
           NODE_ENV: production
           HAPPY_DISABLE_OTA: "1"
           HAPPY_LOCAL_RELEASE: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+          HAPPY_BUILD_COMMIT_SHA: ${{ env.SOURCE_SHA }}
         run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
 
       - name: Verify generated Android manifest
@@ -131,7 +137,7 @@ jobs:
           NODE_ENV: production
           HAPPY_DISABLE_OTA: "1"
           HAPPY_LOCAL_RELEASE: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.sha }}
+          HAPPY_BUILD_COMMIT_SHA: ${{ env.SOURCE_SHA }}
         run: |
           sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx5120m -XX:MaxMetaspaceSize=1024m/' packages/happy-app/android/gradle.properties
           packages/happy-app/android/gradlew \
@@ -142,7 +148,7 @@ jobs:
 
       - name: Verify and stage APK
         env:
-          BUILD_COMMIT_SHA: ${{ github.sha }}
+          BUILD_COMMIT_SHA: ${{ env.SOURCE_SHA }}
         run: |
           set -euo pipefail
           APK="packages/happy-app/android/app/build/outputs/apk/release/app-release.apk"
