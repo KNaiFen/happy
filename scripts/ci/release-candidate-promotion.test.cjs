@@ -5,6 +5,8 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const candidatePolicy = require('./release-candidate-policy.json');
+
 const {
     candidateArtifactName,
     fetchCandidateArtifact,
@@ -169,6 +171,27 @@ test('rejects a manifest payload above the shared product policy', () => {
         }),
         /Invalid candidate payload size/,
     );
+});
+
+test('android payload policy keeps headroom above the latest rehearsed APK', () => {
+    const rehearsedApkBytes = 125_068_159;
+    const maxBytes = candidatePolicy.products.android.payloads[0].maxBytes;
+    assert.ok(rehearsedApkBytes * 5 <= maxBytes * 4, 'Android rehearsal must stay below 80% of its payload limit');
+    assert.doesNotThrow(() => validateCandidateManifest({
+        schema: 1,
+        product: 'android',
+        version: '1.11.45',
+        sourceSha,
+        payloads: [{
+            path: 'happy-app-1.11.45-android-arm64-v8a-no-ota.apk',
+            sha256: 'c'.repeat(64),
+            size: rehearsedApkBytes,
+        }],
+    }, {
+        product: 'android',
+        sourceSha,
+        version: '1.11.45',
+    }));
 });
 
 test('rejects malformed digest formats', () => {
@@ -723,6 +746,9 @@ test('release workflows expose short-lived candidates and the router promotes wi
         assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\.0\.1/);
         assert.doesNotMatch(workflow, /uses: (?:actions|pnpm|android-actions|gradle|oven-sh|docker|aquasecurity)\/[^\n]+@v/);
         assert.doesNotMatch(workflow, /\n  push:\n/);
+        if (product === 'relay') {
+            assert.match(workflow, /DOCKER_BUILD_RECORD_UPLOAD: "false"/);
+        }
     }
 
     const router = readFileSync(

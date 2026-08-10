@@ -69,8 +69,9 @@ jobs:
           FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/ci/classify-workflow-changes.cjs "$BASE_SHA" "$HEAD_SHA" "$FORCE_ALL"
 
-      - name: Test release source gate
+      - name: Test release and workflow security gates
         run: |
+          node --test scripts/ci/workflow-action-security.test.cjs
           node --test scripts/ci/verify-release-source-gate.test.cjs
           node --test scripts/ci/release-candidate-promotion.test.cjs
           python3 scripts/ci/release_candidate_archive_test.py
