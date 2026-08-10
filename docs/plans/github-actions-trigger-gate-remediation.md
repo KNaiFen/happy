@@ -2,13 +2,16 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类与阶段 3 的稳定 PR gate 已实现，云端验收和 ruleset 尚未完成；阶段 2 制品复用、阶段 4 至阶段 5 仍未完成）。
+- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类与阶段 3 的稳定 PR gate 已通过代码 PR 验收并合入 `main`，docs-only 证据和 ruleset 尚未完成；阶段 2 制品复用、阶段 4 至阶段 5 仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@f47d0b28d92029d3e42d32d0b26eadfb67ecd5ee`。
-- 实施分支：`codex/kb-maintenance-20260810-actions-gates`。
+- 当前基线：`origin/main@d68a74a63977a5e19bf803875e02663994963a34`。
+- 实施分支：`codex/kb-maintenance-20260810-actions-ruleset`。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
+- 稳定 gate 实施：PR [#30](https://github.com/KNaiFen/happy/pull/30)，PR head
+  `c359156f0bc390167570c93e0f17c83cc3a389d3`，squash merge
+  `d68a74a63977a5e19bf803875e02663994963a34`。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -112,6 +115,15 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 - [ ] Android 上传独立 checksum/attestation；所有正式制品记录 source SHA、版本、摘要、保留期和下载入口。
 - [ ] 为 release workflow 自身和打包脚本增加不发布的 `workflow_dispatch` 或 PR rehearsal 路径。
 
+代码 PR [#30](https://github.com/KNaiFen/happy/pull/30) 在同一 head SHA `c359156f` 上完成了
+三项稳定 gate 验收：Documentation
+[31358745202](https://github.com/KNaiFen/happy/actions/runs/31358745202)、CLI Smoke
+[31358745206](https://github.com/KNaiFen/happy/actions/runs/31358745206) 和 Monorepo CI
+[31358745351](https://github.com/KNaiFen/happy/actions/runs/31358745351) 均成功；后者的
+`Required CI gate` 成功，CLI 的单一 prepare 与四个 Node/平台矩阵腿也全部成功。该 PR
+修改了 workflow 与 `scripts/ci`，因此分类器保守选择全量验收；这证明了代码路径，尚不代替
+docs-only 对照和 GitHub ruleset 的外部证据。
+
 ### 阶段 4：Field 稳定性、队列与失败前移
 
 - [ ] 用 Happy SHA + Official Codex commit 指纹消除 `main push` 与 daily schedule 的同输入互相取消、重跑。
@@ -123,8 +135,13 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 阶段 4 当前证据：Field recovery 在成功 run
 [31321425891](https://github.com/KNaiFen/happy/actions/runs/31321425891) 中曾于 5 分 52 秒完成，
 但在 merge SHA run [31336894628](https://github.com/KNaiFen/happy/actions/runs/31336894628)
-中出现上述 `fetch failed`/`commandMissing`。在修复并取得新的成功诊断前，不得将 Field 设为
-Required CI gate，也不得把取消、重试或延长等待当作修复。
+中失败。失败 artifact 的 Maestro `commands.json` 与 `maestro.log` 进一步确认：recovery 的
+`launchApp` 从 `21:55:28Z` 到 `22:04:42Z` 耗时 554,522 毫秒，真正的 launcher intent
+直到结束前才送达设备；成功对照只耗时 1,894 毫秒。该延迟超过 MCP elicitation 的 4 分钟
+生命周期，因此 `commandMissing` 是请求先行结算后的下游结果，不是 Happy rollback 的首因。
+最小修复应以 30 秒硬上限的单次 `adb shell am start -W` 替代 Maestro `launchApp`，保留原
+process-death、UI、choice、rollback 与 v4 lifecycle 断言；不得加入盲目重试或延长业务超时。
+在修复并取得新的成功诊断前，不得将 Field 设为 Required CI gate。
 
 ### 阶段 5：供应链与外部验收
 
@@ -152,7 +169,7 @@ git diff --cached --check
 - 分支 push 不产生 Monorepo CI、Documentation 或 CLI Smoke run；打开/更新 PR 后只产生一组对应检查。
 - 第一阶段 PR 的 Documentation、CLI Smoke 与 Required CI 对同一 head SHA 成功。
 - CLI Smoke prepare 只运行一次；Linux/Windows 四个矩阵腿都下载同名 artifact，并分别通过 Node 20/24 安装与命令检查。
-- docs-only 对照 PR 只运行 Documentation；root lockfile 或 workspace 配置变更必须运行 CLI Smoke 和 Monorepo CI。
+- docs-only 对照 PR 必须产生 Documentation、`CLI Smoke gate` 和 `Required CI gate` 三个成功终态，同时 CLI prepare、平台矩阵与 Monorepo 重型 job 全部为 skipped；root lockfile 或 workspace 配置变更必须运行 CLI Smoke 和 Monorepo CI。
 
 ### main 与外部验证
 
@@ -170,10 +187,9 @@ git diff --cached --check
 
 ## 下一步
 
-1. 推送本分支并验证一个代码 PR：确认分类器选择必要 job、CLI Smoke 仍复用单一 prepare、三个聚合检查在同一 head SHA 成功。
-2. 合并后创建独立 docs-only 证据 PR，确认三项稳定检查均有终态且重型 job 全部 skipped；随后配置 `main` ruleset，禁止直接 push。
-3. 将 Field recovery 的 `fetch failed`/`commandMissing` 作为阶段 4 的首个实现任务，先增加可定位的请求/命令生命周期证据，再修复并取得独立 Field 成功 run。
-4. 阶段 2 的 Official Codex 指纹、跨 run 归档复用和阶段 3 的 release same-SHA gate 可并行实施，但不得以缓存命中替代验收。
+1. 以本次计划证据更新创建独立 docs-only PR，确认三项稳定检查均有终态且重型 job 全部 skipped；随后配置 `main` ruleset，禁止直接 push。
+2. 将 Field recovery 的 Maestro `launchApp` 替换为 30 秒硬上限的单次 ADB 启动，保留既有断言并取得独立 Field 成功 run。
+3. 阶段 2 的 Official Codex 指纹、跨 run 归档复用和阶段 3 的 release same-SHA gate 分成独立变更实施，不得以缓存命中替代验收。
 
 ## 完成条件
 
