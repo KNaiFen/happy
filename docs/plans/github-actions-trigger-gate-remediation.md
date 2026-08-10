@@ -2,16 +2,20 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类与阶段 3 的稳定 PR gate 已通过代码 PR 验收并合入 `main`，docs-only 证据和 ruleset 尚未完成；阶段 2 制品复用、阶段 4 至阶段 5 仍未完成）。
+- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类和阶段 3 的稳定 PR gate/ruleset 已完成；阶段 4 的 Field recovery 启动边界已提交为待云端验收的实现，阶段 2 制品复用和阶段 4 至阶段 5 的其余工作仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@d68a74a63977a5e19bf803875e02663994963a34`。
-- 实施分支：`codex/kb-maintenance-20260810-actions-ruleset`。
+- 当前基线：`origin/main@fe493da0d7b143557717853f0ae3eb3e7f4ce488`。
+- 实施分支：`codex/kb-maintenance-20260810-field-launch`。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
 - 稳定 gate 实施：PR [#30](https://github.com/KNaiFen/happy/pull/30)，PR head
   `c359156f0bc390167570c93e0f17c83cc3a389d3`，squash merge
   `d68a74a63977a5e19bf803875e02663994963a34`。
+- docs-only 证据与规则集：PR [#31](https://github.com/KNaiFen/happy/pull/31)，PR head
+  `c17e8a38596bf1c354b6bc8c2d6955a2faa524a7`，squash merge
+  `fe493da0d7b143557717853f0ae3eb3e7f4ce488`；GitHub ruleset
+  [`main PR and stable CI gates`](https://github.com/KNaiFen/happy/rules/20624143) 已 active。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -108,8 +112,8 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 
 ### 阶段 3：全局门禁与发行提升
 
-- [x] 让 Monorepo CI、CLI Smoke 和 Documentation 在所有目标 PR 上产生终态检查；重型 job 通过分类器按需跳过，聚合检查保持稳定名称。尚需在真实 docs-only/root-only PR 上验证后再配置 required checks。
-- [ ] GitHub `main` ruleset 要求 PR、分支最新、禁止直接 push，并限制管理员 bypass；启用前先验证 docs-only 与 root-only PR 都能产生终态检查。
+- [x] 让 Monorepo CI、CLI Smoke 和 Documentation 在所有目标 PR 上产生终态检查；重型 job 通过分类器按需跳过，聚合检查保持稳定名称。PR #31 的 docs-only 对照已验证这一行为。
+- [x] GitHub `main` ruleset 要求 PR、分支最新、禁止直接 push，并限制管理员 bypass；ruleset `20624143` 要求 `Required CI gate`、`CLI Smoke gate` 和 `Generated indexes and links`，均绑定 GitHub Actions integration `15368`，且 `bypass_actors=[]` / `current_user_can_bypass=never`。未制造无语义的 root-only PR；根安装输入的分类行为由单元测试和 PR #30 的 workflow/scripts 代码路径覆盖。
 - [ ] CLI、Android、Relay、happy-agent 的 release workflow 只在同一 SHA 的全局 gate 成功后进入 build/promotion。
 - [ ] 将“构建候选物”与“提升可交付物”分离；promotion 只消费既有 digest，不重新构建。
 - [ ] Android 上传独立 checksum/attestation；所有正式制品记录 source SHA、版本、摘要、保留期和下载入口。
@@ -142,6 +146,12 @@ docs-only 对照和 GitHub ruleset 的外部证据。
 最小修复应以 30 秒硬上限的单次 `adb shell am start -W` 替代 Maestro `launchApp`，保留原
 process-death、UI、choice、rollback 与 v4 lifecycle 断言；不得加入盲目重试或延长业务超时。
 在修复并取得新的成功诊断前，不得将 Field 设为 Required CI gate。
+
+当前实施分支将 recovery YAML 中的 `launchApp` 移除，改为在同一 `killApp` 后、Maestro
+断言前执行一次 `timeout 30s adb shell am start -W`，并把 UTC 起止时间和 ADB 输出保存为
+`recovery-am-start.txt`。新的 `node:test` 静态契约拒绝重新引入 Maestro 启动或无界 ADB 命令。
+这只改变启动执行者，不改变 process-death、`Waiting for you`、choice、rollback、`/clear` 或
+v4 lifecycle 断言；尚未取得 Field 成功 run，不勾选该修复项。
 
 ### 阶段 5：供应链与外部验收
 
@@ -187,9 +197,9 @@ git diff --cached --check
 
 ## 下一步
 
-1. 以本次计划证据更新创建独立 docs-only PR，确认三项稳定检查均有终态且重型 job 全部 skipped；随后配置 `main` ruleset，禁止直接 push。
-2. 将 Field recovery 的 Maestro `launchApp` 替换为 30 秒硬上限的单次 ADB 启动，保留既有断言并取得独立 Field 成功 run。
-3. 阶段 2 的 Official Codex 指纹、跨 run 归档复用和阶段 3 的 release same-SHA gate 分成独立变更实施，不得以缓存命中替代验收。
+1. 合并 Field launcher 修复后，等待精确 merge SHA 的 API 36 Field run；只有 `recovery-am-start.txt` 在 30 秒内完成且既有诊断为 `phase=verified` 时才关闭该阻塞。
+2. 阶段 2 的 Official Codex 指纹、跨 run 归档复用和阶段 3 的 release same-SHA gate 分成独立变更实施，不得以缓存命中替代验收。
+3. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
 

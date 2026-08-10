@@ -529,7 +529,8 @@ jobs:
         run: node node_modules/typescript/bin/tsc --project scripts/ci/tsconfig.codex-official.json
 
       - name: Test official Codex fixture helpers from source
-        run: >-
+        run: |
+          node --test scripts/ci/codex-mobile-recovery-launch.test.cjs
           node node_modules/vitest/vitest.mjs run
           scripts/ci/codex-responses-fixture.test.ts
           scripts/ci/codex-mobile-field-command-correlation.test.ts
