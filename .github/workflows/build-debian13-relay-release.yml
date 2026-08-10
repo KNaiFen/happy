@@ -9,6 +9,16 @@ on:
       version:
         required: true
         type: string
+    outputs:
+      candidate_artifact_id:
+        description: Immutable Actions artifact ID for the verified Debian relay candidate.
+        value: ${{ jobs.build.outputs.candidate_artifact_id }}
+      candidate_artifact_digest:
+        description: ZIP SHA-256 reported by Actions for the Debian relay candidate.
+        value: ${{ jobs.build.outputs.candidate_artifact_digest }}
+      candidate_artifact_name:
+        description: Exact Actions artifact name for the Debian relay candidate.
+        value: ${{ jobs.build.outputs.candidate_artifact_name }}
 
 permissions:
   contents: read
@@ -27,9 +37,10 @@ jobs:
       VERSION: ${{ inputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
 
       - name: Verify gated source
         run: |
@@ -37,18 +48,18 @@ jobs:
           test "$(node -p "require('./packages/happy-server/package.json').version")" = "$VERSION"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.11.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.2.20
 
@@ -122,6 +133,10 @@ jobs:
     if: needs.validate.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      candidate_artifact_id: ${{ steps.upload_candidate.outputs.artifact-id }}
+      candidate_artifact_digest: ${{ steps.upload_candidate.outputs.artifact-digest }}
+      candidate_artifact_name: ${{ steps.candidate.outputs.artifact_name }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       VERSION: ${{ inputs.version }}
@@ -129,18 +144,19 @@ jobs:
       BUNDLE_DIR: dist/relay-bundle
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
 
       - name: Verify gated source
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.2.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Build Debian 13 amd64 relay image
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: packages/happy-server/deploy/debian13-amd64/Dockerfile
@@ -193,7 +209,7 @@ jobs:
           '
 
       - name: Block Critical image vulnerabilities
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ env.IMAGE }}
@@ -207,7 +223,7 @@ jobs:
         run: mkdir -p "$BUNDLE_DIR"
 
       - name: Generate CycloneDX image SBOM
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ env.IMAGE }}
@@ -238,12 +254,22 @@ jobs:
             "$BUNDLE_DIR/happy-relay-server-$VERSION-debian13-amd64.tar.gz" \
             "$VERSION"
 
-      - name: Upload Debian 13 relay bundle
-        uses: actions/upload-artifact@v4
+      - name: Write Debian relay release candidate manifest
+        run: >-
+          node scripts/ci/release-candidate-promotion.cjs write-manifest relay "$VERSION" "$SOURCE_SHA" "$BUNDLE_DIR"
+
+      - name: Declare Debian relay candidate artifact
+        id: candidate
+        run: echo "artifact_name=release-candidate-relay-${VERSION}-${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Debian 13 relay release candidate
+        id: upload_candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: happy-relay-server-${{ env.VERSION }}-debian13-amd64
+          name: ${{ steps.candidate.outputs.artifact_name }}
           path: |
+            ${{ env.BUNDLE_DIR }}/release-candidate.json
             ${{ env.BUNDLE_DIR }}/happy-relay-server-${{ env.VERSION }}-debian13-amd64.tar.gz
             ${{ env.BUNDLE_DIR }}/happy-relay-server-${{ env.VERSION }}-debian13-amd64.tar.gz.sha256
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7

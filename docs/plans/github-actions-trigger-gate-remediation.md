@@ -2,11 +2,13 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset，以及阶段 4 的 Field recovery 修复均已完成并有云端证据；阶段 3 的 release same-SHA gate 已在独立分支实现并等待云端验收，阶段 2 的 APK 复用与性能采样、阶段 3 的 digest promotion，以及阶段 4 至阶段 5 的其余工作仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset，以及阶段 4 的 Field recovery 修复均已完成并有云端证据；阶段 3 的 release same-SHA gate 已合并且失败闭合路径已有云端证据，但成功 gate 路径曾被一次 `pnpm install` 进程泄漏阻塞。当前分支已实现候选清单、Actions/API/下载三重 digest 绑定、不重建 promotion、有界流式下载、逐跳 HTTPS 重定向校验、ZIP EOCD 预检与原子提取，并固定发行链及其 Required CI/Official Codex 信任链的 Action SHA；阶段 2 的 APK 复用与性能采样、阶段 3 的真实制品验收，以及阶段 4 至阶段 5 的其余工作仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@65adf2066db2360b94ca559dbe3aeb7e9ab90ff4`。
-- 当前实施分支：`codex/kb-maintenance-20260810-release-gates`，只改变 CI/发行编排、测试和本文档，
+- 当前基线：`origin/main@5f4754642a3a55f2d3bfca5bcb09e9ac7d161e66`。
+- 当前实施分支：`codex/kb-maintenance-20260810-release-promotion`，只改变 CI/发行编排、测试和本文档，
   不改变包版本或可分发行为。
+- 本地复审：候选下载与提升逻辑、候选 ZIP 预检与原子提取、发行 workflow 和本文档已完成独立复审；
+  最终复审没有 Critical 或 Important 发现。真实候选 rehearsal 和外部环境验收仍按下文保持未完成。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -46,6 +48,18 @@
   Monorepo CI [31379920438](https://github.com/KNaiFen/happy/actions/runs/31379920438) 与
   `workflow_run` Field [31381065818](https://github.com/KNaiFen/happy/actions/runs/31381065818)
   均成功，详细复用证据见阶段 2。
+- Release same-SHA gate：PR [#37](https://github.com/KNaiFen/happy/pull/37)，PR head
+  `d5b71b2d3867fffd26ef7f76efb101c631ce511e`，squash merge
+  `5f4754642a3a55f2d3bfca5bcb09e9ac7d161e66`。PR 的 Documentation
+  [31388597000](https://github.com/KNaiFen/happy/actions/runs/31388597000)、CLI Smoke
+  [31388597019](https://github.com/KNaiFen/happy/actions/runs/31388597019) 和 Monorepo CI
+  [31388597298](https://github.com/KNaiFen/happy/actions/runs/31388597298) 均成功；merge-SHA
+  Documentation [31390088051](https://github.com/KNaiFen/happy/actions/runs/31390088051) 成功，
+  但 Monorepo CI [31390088194](https://github.com/KNaiFen/happy/actions/runs/31390088194)
+  因一个依赖安装进程未退出而在 25 分钟 job 时限失败。后置发行路由
+  [31392233424](https://github.com/KNaiFen/happy/actions/runs/31392233424) 恰好运行一次，
+  `source_gate`、版本检测和四个构建均 skipped，artifact 总数为零，证明失败时闭合；成功 gate
+  与未变版本分类仍须由新的 merge SHA 证明。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -171,8 +185,8 @@ recovery 启动 2.704 秒且 `Status: ok`，最终诊断为 `phase=verified`、r
 
 - [x] 让 Monorepo CI、CLI Smoke 和 Documentation 在所有目标 PR 上产生终态检查；重型 job 通过分类器按需跳过，聚合检查保持稳定名称。PR #31 的 docs-only 对照已验证这一行为。
 - [x] GitHub `main` ruleset 要求 PR、分支最新、禁止直接 push，并限制管理员 bypass；ruleset `20624143` 要求 `Required CI gate`、`CLI Smoke gate` 和 `Generated indexes and links`，均绑定 GitHub Actions integration `15368`，且 `bypass_actors=[]` / `current_user_can_bypass=never`。未制造无语义的 root-only PR；根安装输入的分类行为由单元测试和 PR #30 的 workflow/scripts 代码路径覆盖。
-- [ ] CLI、Android、Relay、happy-agent 的 release workflow 只在同一 SHA 的全局 gate 成功后进入 build/promotion。
-- [ ] 将“构建候选物”与“提升可交付物”分离；promotion 只消费既有 digest，不重新构建。
+- [ ] CLI、Android、Relay、happy-agent 的 release workflow 只在同一 SHA 的全局 gate 成功后进入 build/promotion；代码与失败 gate 的 merge-SHA 路由已证明 fail-closed，仍缺成功 gate 的真实候选证据。
+- [ ] 将“构建候选物”与“提升可交付物”分离；本地实现只消费既有 artifact ID/digest、不重新构建并在解压前执行资源与路径门禁，仍待真实候选 rehearsal 验收。
 - [ ] Android 上传独立 checksum/attestation；所有正式制品记录 source SHA、版本、摘要、保留期和下载入口。
 - [ ] 为 release workflow 自身和打包脚本增加不发布的 `workflow_dispatch` 或 PR rehearsal 路径。
 
@@ -199,7 +213,37 @@ check 和所有构建 checkout 都绑定同一已核验 SHA。
 不再生成制品：首轮失败、取消或发行构建失败后必须按版本规则提升受影响包的 patch version，不能
 通过 rerun 复用已经进入发行编排的版本。当前分支没有包版本变化，因此 PR 和 merge-SHA 只能验证门禁、版本分类和四个
 reusable workflow 的静态/调用契约；在新的真实版本提升或不发布 rehearsal 取得云端构建证据前，
-本阶段检查项保持未完成。候选物与 promotion digest 的分离也仍是后续独立变更，不由本实现冒充。
+本阶段检查项保持未完成。PR #37 的 merge-SHA CI 失败后，路由只产生六个 skipped job 且没有
+artifact，证明失败闭合逻辑生效，但不能替代成功路径验收。
+
+当前 promotion 分支把四个 build workflow 的输出改为 7 天候选 artifact：候选清单固定包含
+schema、产品、版本、source SHA，以及每个 payload 的文件名、大小和 SHA-256。Reusable workflow
+向 router 暴露精确 artifact ID、Actions digest 和 source-bound 名称；promotion 再从 Actions API
+按 ID 读取同一 router run 的 metadata，比较 upload output 与 API digest，下载 ZIP 并复算 ZIP
+SHA-256，且 promotion receipt 强制这两个摘要相等；在解压前拒绝额外或危险路径，解压后复算清单
+与 payload。只有全部一致时，才把同一
+payload 连同 promotion receipt 上传为 30 天正式下载入口；promotion job 不运行 pnpm、Gradle、
+Docker、pack 或任何构建命令。当前分支又把 ZIP 中央目录校验与提取交给 Python 标准库：先拒绝
+ZIP64、多磁盘、异常条目数和超过 64 KiB 的中央目录，再构造 `ZipFile` 并拒绝
+额外/重复/穿越/符号链接/加密/高压缩比条目；预检与解析使用同一文件描述符，随后在临时目录中
+按声明大小流式提取，成功后原子改名；
+CLI、Android、Relay、Agent 的下载 ZIP 上限分别为 256/192/384/32 MiB，对应单一主 payload
+上限为 192/128/320/16 MiB；这些门槛依据现有云端制品峰值（CLI 105,350,356、Android
+69,837,686、Relay 190,197,608、Agent 38,640 字节）留有增长余量，并由一份结构化策略同时驱动
+Node 下载器和 Python 解压器。
+Node 下载器把 Actions metadata 限制在 1 MiB 并只接受流式正文，不使用无界 `json()` 或
+`arrayBuffer()` 回退；候选 ZIP 也按产品上限流式读取。Metadata API 禁止自动重定向；ZIP API
+入口携带 GitHub token，但后续最多 5 个重定向逐跳要求 HTTPS 且不得含 userinfo，并永久移除
+`Authorization`，错误也不回显带签名的 `Location`。历史 CLI artifact
+`9040323027` 的 API 大小与实际下载 ZIP 均为 105,350,356 字节，且 ZIP 普通文件属性可被新解析器接受。
+发行与提升链的 checkout、pnpm、Node、Android/Gradle、Docker、Trivy 和 upload-artifact 均固定到完整
+提交 SHA，checkout 设置 `persist-credentials: false`，正式上传改用 `upload-artifact v7.0.1`。
+实现已有 Node 15 项、Python 18 项源码测试，覆盖摘要不一致、超限/非流式 metadata、每一跳不安全或
+过多重定向、非成功响应体取消、ZIP64、多磁盘、异常 EOCD/中央目录边界、悬空或竞态目标路径，并证明
+FIFO 输入会快速失败、EOCD 失败发生在 `ZipFile` 构造前、路径替换不会改变已打开的归档、候选目录
+不会覆盖竞态创建的目标，且损坏的 DEFLATE 数据会归一化为受控错误并清理暂存输出；但在
+真实版本提升或不发布 rehearsal 完成前，阶段 3 的
+候选提升检查项仍保持未完成。
 
 ### 阶段 4：Field 稳定性、队列与失败前移
 
@@ -259,10 +303,22 @@ choice、queued follow-up、`/compact`、`/clear` 与 post-clear 响应均执行
 `rollbackCommandResultTerminalStatus=succeeded`、`rollbackCommandErrorKind=none`、
 `postClearCommandSucceeded=true`、`v4LifecycleCompleted=true`。阶段 4 的 recovery 阻塞至此关闭。
 
+PR #37 的 merge-SHA CI 暴露了另一类长时失败：job
+[93459562730](https://github.com/KNaiFen/happy/actions/runs/31390088194/job/93459562730)
+在 `12:53:33Z` 开始 `pnpm install --frozen-lockfile`，包链接和 root/App/CLI/Server lifecycle
+均在 `12:53:47Z` 前报告完成，但父进程没有退出，也没有继续输出；job 在 `13:18:17Z` 到达
+25 分钟时限后取消，runner 清理了两个 `MainThread` 进程和一个 shell。相同 cache key 的成功对照
+[31379920438](https://github.com/KNaiFen/happy/actions/runs/31379920438) 在 15 秒内完成同一安装，
+而 PR #37 没有修改 package 或 lockfile，因此当前证据不足以归因到依赖内容，也不允许通过重跑
+冒充修复。当前分支只给该安装步骤增加 5 分钟独立硬上限；它不跳过任何 lifecycle 或测试，但可把
+同类静默卡死的 runner 浪费从 25 分钟压缩到最多约 5 分 30 秒，并为新的 SHA 提供是否复现的终态证据。
+更广泛的 SLA/告警检查项仍保持未完成。
+
 ### 阶段 5：供应链与外部验收
 
-- [ ] 将第三方 Action 固定到完整 commit SHA，并通过 Dependabot 或 Renovate 维护更新；先覆盖 release、artifact 和密钥相关路径。
-- [ ] 升级仍使用 Node.js 20 action runtime 的 artifact 等 Action；升级后保留上传、下载、摘要和失败诊断语义，不以强制运行兼容层作为长期完成状态。
+- [x] 已将 release、artifact、签名/密钥和容器扫描路径，以及作为 release `source_gate` 上游的 Required CI 与 Official Codex reusable workflow 的第三方 Action 固定到完整 commit SHA；这 18 个 checkout 均设置 `persist-credentials: false`，相关 `upload-artifact` 已升级至 v7.0.1（Node 24 runtime）。
+- [ ] 为未进入当前 release 信任链的其余 workflow 补齐 SHA pin，并通过 Dependabot 或 Renovate 维护更新；仓库级安全设置仍需管理员证据。
+- [ ] 升级仍使用 Node.js 20 action runtime 的非发行 Action；升级后保留上传、下载、摘要和失败诊断语义，不以强制运行兼容层作为长期完成状态。
 - [ ] 启用 Dependabot security updates、PR dependency review 与适用的 CodeQL/SAST；保留现有 secret scanning、push protection、Critical dependency audit 和 Relay Trivy/SBOM。
 - [ ] 在真实 ARM64 目标设备上安装生产签名 APK，验证升级安装、真实网络切换、relay reconnect 与关键 Codex 生命周期；保留精确 workflow、artifact 和设备证据。
 - [ ] 根据实际交付方式决定是否需要 GitHub Environment 审批、发布后健康检查和回滚；构建-only 工作流不得冒充生产部署。
@@ -274,6 +330,8 @@ choice、queued follow-up、`/compact`、`/clear` 与 post-clear 响应均执行
 ```bash
 node --check scripts/docs/knowledge-base.mjs
 node --test scripts/ci/verify-release-source-gate.test.cjs
+node --test scripts/ci/release-candidate-promotion.test.cjs
+python3 scripts/ci/release_candidate_archive_test.py
 node scripts/docs/knowledge-base.mjs --check
 git diff --check
 git diff --cached --check
@@ -304,13 +362,18 @@ git diff --cached --check
 
 ## 下一步
 
-1. 合并 release same-SHA gate 后，核验精确 merge SHA 的 `Happy monorepo CI`、唯一后置发行路由、
-   source run/job API 证据和四个未变版本的 skipped 结果；不得把 skipped build 表述为发行制品验收。
-2. 在下一次真实 patch version 提升或不发布 rehearsal 中，证明对应 reusable workflow 只在同 SHA
-   gate 后构建；随后再独立实现候选物清单、Actions artifact digest 校验与不重建 promotion。
-3. 重新采样至少 20 次 Official Codex CI/Field，报告 runner/wall P50/P90、cache 命中、取消率和失败阶段；在有足够样本前不把单次 244 秒差值宣称为长期节省。
-4. 将 Android APK 的 App 指纹与 Codex 指纹分离，并仅在新变更的安全/隔离边界有证据后复用 APK；不得以缓存命中替代发行验收。
-5. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
+1. 让当前 promotion PR 的精确 head 通过 Documentation、CLI Smoke 和 Required CI；若
+   `codex_transport_scenarios` 再次卡住，5 分钟边界必须给出终态，不能重跑或放宽场景掩盖问题。
+2. 合并后核验新的 merge SHA 的成功 `Happy monorepo CI`、唯一后置发行路由、source run/job API
+   证据和四个未变版本的 skipped 结果；不得把 skipped build 表述为发行制品验收。
+3. 在下一次真实 patch version 提升或不发布 rehearsal 中，证明对应 reusable workflow 只在同 SHA
+   gate 后构建，并核验候选 artifact ID/API digest、ZIP digest、promotion receipt 和最终下载 URL；
+   promotion 必须复用同一 payload，不能重新构建；同时确认私有仓库 ZIP API 首跳鉴权成功、签名
+   下载重定向不携带 `Authorization`，并记录候选与正式 artifact 的摘要一致性。
+4. 重新采样至少 20 次 Official Codex CI/Field，报告 runner/wall P50/P90、cache 命中、取消率和失败阶段；在有足够样本前不把单次 244 秒差值宣称为长期节省。
+5. 将 Android APK 的 App 指纹与 Codex 指纹分离，并仅在新变更的安全/隔离边界有证据后复用 APK；不得以缓存命中替代发行验收。
+6. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
+7. 在真实候选演练后复核产品上限；若任何正式制品接近 80% 上限，先更新观测证据和测试，再调整策略，不能静默放宽。
 
 ## 完成条件
 

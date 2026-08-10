@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "centralDirectoryMaxBytes": 65536,
+  "manifestMaxBytes": 65536,
+  "maxCompressionRatio": 100,
+  "products": {
+    "cli": {
+      "archiveMaxBytes": 268435456,
+      "expectedEntries": 2,
+      "finalArtifactName": "happy-cli-{version}",
+      "payloads": [
+        {
+          "path": "happy-{version}.tgz",
+          "maxBytes": 201326592
+        }
+      ]
+    },
+    "android": {
+      "archiveMaxBytes": 201326592,
+      "expectedEntries": 2,
+      "finalArtifactName": "happy-app-{version}-android-arm64-v8a-no-ota",
+      "payloads": [
+        {
+          "path": "happy-app-{version}-android-arm64-v8a-no-ota.apk",
+          "maxBytes": 134217728
+        }
+      ]
+    },
+    "relay": {
+      "archiveMaxBytes": 402653184,
+      "expectedEntries": 3,
+      "finalArtifactName": "happy-relay-server-{version}-debian13-amd64",
+      "payloads": [
+        {
+          "path": "happy-relay-server-{version}-debian13-amd64.tar.gz",
+          "maxBytes": 335544320
+        },
+        {
+          "path": "happy-relay-server-{version}-debian13-amd64.tar.gz.sha256",
+          "maxBytes": 4096
+        }
+      ]
+    },
+    "agent": {
+      "archiveMaxBytes": 33554432,
+      "expectedEntries": 2,
+      "finalArtifactName": "happy-agent-{version}",
+      "payloads": [
+        {
+          "path": "happy-agent-{version}.tgz",
+          "maxBytes": 16777216
+        }
+      ]
+    }
+  }
+}
