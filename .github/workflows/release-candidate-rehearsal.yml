@@ -1,10 +1,25 @@
-name: Build release artifacts after required CI
+name: Rehearse release candidate chain
 
 on:
-  workflow_run:
-    workflows: [Happy monorepo CI]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      product:
+        description: Release product to build and promote under an explicit rehearsal name.
+        required: true
+        type: choice
+        options:
+          - cli
+          - android
+          - relay
+          - agent
+      source_sha:
+        description: Exact merged main SHA whose first-attempt Required CI gate succeeded.
+        required: true
+        type: string
+      source_run_id:
+        description: Exact successful Happy monorepo CI run ID for source_sha.
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -12,18 +27,16 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: release-after-ci-${{ github.event.workflow_run.head_sha }}
+  group: release-rehearsal-${{ inputs.product }}-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 jobs:
   source_gate:
     name: Verify exact main CI gate
     if: >-
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.run_attempt == 1 &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.run_attempt == 1
+      github.run_attempt == 1 &&
+      github.ref == 'refs/heads/main' &&
+      inputs.source_sha == github.sha
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -41,24 +54,20 @@ jobs:
       - name: Verify source workflow and Required CI gate
         id: gate
         env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
         run: node scripts/ci/verify-release-source-gate.cjs
 
   versions:
-    name: Detect release version changes
+    name: Read gated package versions
     needs: source_gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      cli_changed: ${{ steps.cli.outputs.changed }}
       cli_version: ${{ steps.cli.outputs.version }}
-      android_changed: ${{ steps.android.outputs.changed }}
       android_version: ${{ steps.android.outputs.version }}
-      relay_changed: ${{ steps.relay.outputs.changed }}
       relay_version: ${{ steps.relay.outputs.version }}
-      agent_changed: ${{ steps.agent.outputs.changed }}
       agent_version: ${{ steps.agent.outputs.version }}
     env:
       SOURCE_SHA: ${{ needs.source_gate.outputs.source_sha }}
@@ -77,35 +86,35 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           git cat-file -e "${SOURCE_BASE_SHA}^{commit}"
 
-      - name: Detect CLI version bump
+      - name: Read CLI version
         id: cli
         run: node scripts/ci/detect-package-version-change.cjs packages/happy-cli/package.json "$SOURCE_BASE_SHA"
 
-      - name: Detect Android version bump
+      - name: Read Android version
         id: android
         run: node scripts/ci/detect-package-version-change.cjs packages/happy-app/package.json "$SOURCE_BASE_SHA"
 
-      - name: Detect Relay version bump
+      - name: Read Relay version
         id: relay
         run: node scripts/ci/detect-package-version-change.cjs packages/happy-server/package.json "$SOURCE_BASE_SHA"
 
-      - name: Detect happy-agent version bump
+      - name: Read happy-agent version
         id: agent
         run: node scripts/ci/detect-package-version-change.cjs packages/happy-agent/package.json "$SOURCE_BASE_SHA"
 
   cli:
-    name: Build gated CLI package
+    name: Build rehearsed CLI candidate
     needs: [source_gate, versions]
-    if: needs.versions.outputs.cli_changed == 'true'
+    if: inputs.product == 'cli'
     uses: ./.github/workflows/build-cli-release.yml
     with:
       source_sha: ${{ needs.source_gate.outputs.source_sha }}
       version: ${{ needs.versions.outputs.cli_version }}
 
   android:
-    name: Build gated Android APK
+    name: Build rehearsed Android candidate
     needs: [source_gate, versions]
-    if: needs.versions.outputs.android_changed == 'true'
+    if: inputs.product == 'android'
     uses: ./.github/workflows/build-android-release.yml
     with:
       source_sha: ${{ needs.source_gate.outputs.source_sha }}
@@ -114,25 +123,25 @@ jobs:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
 
   relay:
-    name: Build gated Debian relay bundle
+    name: Build rehearsed Debian relay candidate
     needs: [source_gate, versions]
-    if: needs.versions.outputs.relay_changed == 'true'
+    if: inputs.product == 'relay'
     uses: ./.github/workflows/build-debian13-relay-release.yml
     with:
       source_sha: ${{ needs.source_gate.outputs.source_sha }}
       version: ${{ needs.versions.outputs.relay_version }}
 
   agent:
-    name: Build gated happy-agent package
+    name: Build rehearsed happy-agent candidate
     needs: [source_gate, versions]
-    if: needs.versions.outputs.agent_changed == 'true'
+    if: inputs.product == 'agent'
     uses: ./.github/workflows/build-happy-agent-release.yml
     with:
       source_sha: ${{ needs.source_gate.outputs.source_sha }}
       version: ${{ needs.versions.outputs.agent_version }}
 
   promote_cli:
-    name: Promote verified CLI package
+    name: Promote rehearsed CLI candidate
     needs: [source_gate, versions, cli]
     if: needs.cli.result == 'success'
     uses: ./.github/workflows/promote-release-candidate.yml
@@ -143,12 +152,12 @@ jobs:
       candidate_artifact_id: ${{ needs.cli.outputs.candidate_artifact_id }}
       candidate_artifact_digest: ${{ needs.cli.outputs.candidate_artifact_digest }}
       candidate_artifact_name: ${{ needs.cli.outputs.candidate_artifact_name }}
-      promotion_mode: release
-      promotion_artifact_name: happy-cli-${{ needs.versions.outputs.cli_version }}
-      promotion_retention_days: 30
+      promotion_mode: rehearsal
+      promotion_artifact_name: release-rehearsal-cli-${{ needs.versions.outputs.cli_version }}-${{ needs.source_gate.outputs.source_sha }}-${{ github.run_id }}
+      promotion_retention_days: 1
 
   promote_android:
-    name: Promote verified Android APK
+    name: Promote rehearsed Android candidate
     needs: [source_gate, versions, android]
     if: needs.android.result == 'success'
     uses: ./.github/workflows/promote-release-candidate.yml
@@ -159,12 +168,12 @@ jobs:
       candidate_artifact_id: ${{ needs.android.outputs.candidate_artifact_id }}
       candidate_artifact_digest: ${{ needs.android.outputs.candidate_artifact_digest }}
       candidate_artifact_name: ${{ needs.android.outputs.candidate_artifact_name }}
-      promotion_mode: release
-      promotion_artifact_name: happy-app-${{ needs.versions.outputs.android_version }}-android-arm64-v8a-no-ota
-      promotion_retention_days: 30
+      promotion_mode: rehearsal
+      promotion_artifact_name: release-rehearsal-android-${{ needs.versions.outputs.android_version }}-${{ needs.source_gate.outputs.source_sha }}-${{ github.run_id }}
+      promotion_retention_days: 1
 
   promote_relay:
-    name: Promote verified Debian relay bundle
+    name: Promote rehearsed Debian relay candidate
     needs: [source_gate, versions, relay]
     if: needs.relay.result == 'success'
     uses: ./.github/workflows/promote-release-candidate.yml
@@ -175,12 +184,12 @@ jobs:
       candidate_artifact_id: ${{ needs.relay.outputs.candidate_artifact_id }}
       candidate_artifact_digest: ${{ needs.relay.outputs.candidate_artifact_digest }}
       candidate_artifact_name: ${{ needs.relay.outputs.candidate_artifact_name }}
-      promotion_mode: release
-      promotion_artifact_name: happy-relay-server-${{ needs.versions.outputs.relay_version }}-debian13-amd64
-      promotion_retention_days: 30
+      promotion_mode: rehearsal
+      promotion_artifact_name: release-rehearsal-relay-${{ needs.versions.outputs.relay_version }}-${{ needs.source_gate.outputs.source_sha }}-${{ github.run_id }}
+      promotion_retention_days: 1
 
   promote_agent:
-    name: Promote verified happy-agent package
+    name: Promote rehearsed happy-agent candidate
     needs: [source_gate, versions, agent]
     if: needs.agent.result == 'success'
     uses: ./.github/workflows/promote-release-candidate.yml
@@ -191,6 +200,70 @@ jobs:
       candidate_artifact_id: ${{ needs.agent.outputs.candidate_artifact_id }}
       candidate_artifact_digest: ${{ needs.agent.outputs.candidate_artifact_digest }}
       candidate_artifact_name: ${{ needs.agent.outputs.candidate_artifact_name }}
-      promotion_mode: release
-      promotion_artifact_name: happy-agent-${{ needs.versions.outputs.agent_version }}
-      promotion_retention_days: 30
+      promotion_mode: rehearsal
+      promotion_artifact_name: release-rehearsal-agent-${{ needs.versions.outputs.agent_version }}-${{ needs.source_gate.outputs.source_sha }}-${{ github.run_id }}
+      promotion_retention_days: 1
+
+  rehearsal_gate:
+    name: Release rehearsal gate
+    needs:
+      - source_gate
+      - versions
+      - cli
+      - android
+      - relay
+      - agent
+      - promote_cli
+      - promote_android
+      - promote_relay
+      - promote_agent
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SELECTED_PRODUCT: ${{ inputs.product }}
+      SOURCE_GATE_RESULT: ${{ needs.source_gate.result }}
+      VERSIONS_RESULT: ${{ needs.versions.result }}
+      CLI_BUILD_RESULT: ${{ needs.cli.result }}
+      CLI_PROMOTION_RESULT: ${{ needs.promote_cli.result }}
+      ANDROID_BUILD_RESULT: ${{ needs.android.result }}
+      ANDROID_PROMOTION_RESULT: ${{ needs.promote_android.result }}
+      RELAY_BUILD_RESULT: ${{ needs.relay.result }}
+      RELAY_PROMOTION_RESULT: ${{ needs.promote_relay.result }}
+      AGENT_BUILD_RESULT: ${{ needs.agent.result }}
+      AGENT_PROMOTION_RESULT: ${{ needs.promote_agent.result }}
+    steps:
+      - name: Require exactly one successful rehearsal path
+        run: |
+          set -euo pipefail
+          test "$SOURCE_GATE_RESULT" = success
+          test "$VERSIONS_RESULT" = success
+          case "$SELECTED_PRODUCT" in
+            cli|android|relay|agent) ;;
+            *) exit 1 ;;
+          esac
+
+          require_path() {
+            local product="$1"
+            local build_result="$2"
+            local promotion_result="$3"
+            if [ "$product" = "$SELECTED_PRODUCT" ]; then
+              test "$build_result" = success
+              test "$promotion_result" = success
+            else
+              test "$build_result" = skipped
+              test "$promotion_result" = skipped
+            fi
+          }
+
+          require_path cli "$CLI_BUILD_RESULT" "$CLI_PROMOTION_RESULT"
+          require_path android "$ANDROID_BUILD_RESULT" "$ANDROID_PROMOTION_RESULT"
+          require_path relay "$RELAY_BUILD_RESULT" "$RELAY_PROMOTION_RESULT"
+          require_path agent "$AGENT_BUILD_RESULT" "$AGENT_PROMOTION_RESULT"
+
+          {
+            echo "product=$SELECTED_PRODUCT"
+            echo "source_sha=${{ needs.source_gate.outputs.source_sha }}"
+            echo "source_run_url=${{ needs.source_gate.outputs.source_run_url }}"
+            echo "result=success"
+          } >> "$GITHUB_STEP_SUMMARY"

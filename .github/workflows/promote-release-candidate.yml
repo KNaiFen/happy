@@ -1,0 +1,121 @@
+name: Promote a verified release candidate
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      product:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      candidate_artifact_id:
+        required: true
+        type: string
+      candidate_artifact_digest:
+        required: true
+        type: string
+      candidate_artifact_name:
+        required: true
+        type: string
+      promotion_mode:
+        required: true
+        type: string
+      promotion_artifact_name:
+        required: true
+        type: string
+      promotion_retention_days:
+        required: true
+        type: number
+    outputs:
+      promotion_artifact_id:
+        description: Immutable Actions artifact ID for the promoted payload.
+        value: ${{ jobs.promote.outputs.promotion_artifact_id }}
+      promotion_artifact_digest:
+        description: ZIP SHA-256 reported by Actions for the promoted payload.
+        value: ${{ jobs.promote.outputs.promotion_artifact_digest }}
+      promotion_artifact_url:
+        description: Download page for the promoted payload.
+        value: ${{ jobs.promote.outputs.promotion_artifact_url }}
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  promote:
+    name: Verify and promote existing candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      promotion_artifact_id: ${{ steps.upload_promoted.outputs.artifact-id }}
+      promotion_artifact_digest: ${{ steps.upload_promoted.outputs.artifact-digest }}
+      promotion_artifact_url: ${{ steps.upload_promoted.outputs.artifact-url }}
+    env:
+      CANDIDATE_ARTIFACT_DIGEST: ${{ inputs.candidate_artifact_digest }}
+      CANDIDATE_ARTIFACT_ID: ${{ inputs.candidate_artifact_id }}
+      CANDIDATE_ARTIFACT_NAME: ${{ inputs.candidate_artifact_name }}
+      PRODUCT: ${{ inputs.product }}
+      PROMOTION_ARTIFACT_NAME: ${{ inputs.promotion_artifact_name }}
+      PROMOTION_MODE: ${{ inputs.promotion_mode }}
+      PROMOTION_RETENTION_DAYS: ${{ inputs.promotion_retention_days }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout promotion verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Validate promotion mode and artifact target
+        run: node scripts/ci/release-candidate-promotion.cjs validate-target "$PRODUCT" "$VERSION" "$SOURCE_SHA"
+
+      - name: Download exact candidate and verify Actions digest
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-candidate-promotion.cjs download "$RUNNER_TEMP/release-candidate-$PRODUCT.zip"
+
+      - name: Verify candidate layout and payloads
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/release-candidate-$PRODUCT"
+          python3 scripts/ci/release_candidate_archive.py extract \
+            "$RUNNER_TEMP/release-candidate-$PRODUCT.zip" "$PRODUCT" "$VERSION" "$CANDIDATE_DIR"
+          node scripts/ci/release-candidate-promotion.cjs verify "$PRODUCT" "$VERSION" "$SOURCE_SHA" "$CANDIDATE_DIR"
+
+      - name: Write digest-bound promotion receipt
+        env:
+          CANDIDATE_ARCHIVE_SHA256: ${{ steps.candidate.outputs.candidate_archive_sha256 }}
+        run: >-
+          node scripts/ci/release-candidate-promotion.cjs write-receipt "$PRODUCT" "$VERSION" "$SOURCE_SHA" "$RUNNER_TEMP/release-candidate-$PRODUCT"
+
+      - name: Remove candidate-only manifest
+        run: rm -- "$RUNNER_TEMP/release-candidate-$PRODUCT/release-candidate.json"
+
+      - name: Upload promoted payload
+        id: upload_promoted
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.promotion_artifact_name }}
+          path: ${{ runner.temp }}/release-candidate-${{ inputs.product }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.promotion_retention_days }}
+
+      - name: Record promotion
+        run: |
+          {
+            echo "mode=$PROMOTION_MODE"
+            echo "product=$PRODUCT"
+            echo "source_sha=$SOURCE_SHA"
+            echo "candidate_artifact_id=$CANDIDATE_ARTIFACT_ID"
+            echo "candidate_artifact_digest=${{ steps.candidate.outputs.candidate_artifact_digest }}"
+            echo "promotion_artifact_id=${{ steps.upload_promoted.outputs.artifact-id }}"
+            echo "promotion_artifact_digest=${{ steps.upload_promoted.outputs.artifact-digest }}"
+            echo "promotion_artifact_url=${{ steps.upload_promoted.outputs.artifact-url }}"
+            echo "retention_days=$PROMOTION_RETENTION_DAYS"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -12,6 +12,7 @@ const path = require('node:path');
 const CANDIDATE_POLICY = require('./release-candidate-policy.json');
 
 const CANDIDATE_SCHEMA = 1;
+const PROMOTION_RECEIPT_SCHEMA = 2;
 const MAX_GITHUB_API_METADATA_BYTES = 1024 * 1024;
 const MAX_DOWNLOAD_REDIRECTS = 5;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -110,6 +111,31 @@ function candidateArtifactName(product, version, sourceSha) {
 function finalArtifactName(product, version) {
     validateVersion(version);
     return renderVersionTemplate(productConfig(product).finalArtifactName, version, 'final artifact name');
+}
+
+function rehearsalArtifactName(product, version, sourceSha, runId) {
+    validateVersion(version);
+    validateGitSha(sourceSha);
+    productConfig(product);
+    return `release-rehearsal-${product}-${version}-${sourceSha}-${validateArtifactId(runId, 'rehearsal run id')}`;
+}
+
+function validatePromotionTarget({ artifactName, mode, product, retentionDays, routerRunId, sourceSha, version }) {
+    requireValue(mode === 'release' || mode === 'rehearsal', `Invalid promotion mode: ${mode}`);
+    const parsedRetentionDays = Number(retentionDays);
+    const expectedRetentionDays = mode === 'release' ? 30 : 1;
+    requireValue(
+        Number.isSafeInteger(parsedRetentionDays) && parsedRetentionDays === expectedRetentionDays,
+        `Invalid ${mode} artifact retention: ${retentionDays}`,
+    );
+    const expectedArtifactName = mode === 'release'
+        ? finalArtifactName(product, version)
+        : rehearsalArtifactName(product, version, sourceSha, routerRunId);
+    requireValue(
+        artifactName === expectedArtifactName,
+        `${mode} artifact name does not match the expected source-bound name: ${artifactName}`,
+    );
+    return { artifactName: expectedArtifactName, mode, retentionDays: expectedRetentionDays };
 }
 
 function normalizeArtifactDigest(value, name = 'artifact digest') {
@@ -545,6 +571,9 @@ function writePromotionReceipt({
     candidateArchiveSha256,
     directory,
     product,
+    promotionArtifactName,
+    promotionMode,
+    promotionRetentionDays,
     routerRunId,
     sourceSha,
     version,
@@ -562,8 +591,17 @@ function writePromotionReceipt({
         candidateDigest === archiveSha256,
         'Candidate receipt archive SHA-256 does not match candidate artifact digest',
     );
+    const promotion = validatePromotionTarget({
+        artifactName: promotionArtifactName,
+        mode: promotionMode,
+        product,
+        retentionDays: promotionRetentionDays,
+        routerRunId: runId,
+        sourceSha,
+        version,
+    });
     const receipt = {
-        schema: CANDIDATE_SCHEMA,
+        schema: PROMOTION_RECEIPT_SCHEMA,
         product,
         version,
         sourceSha,
@@ -575,10 +613,7 @@ function writePromotionReceipt({
             routerRunId: runId,
         },
         payloads: manifest.payloads,
-        promotion: {
-            artifactName: finalArtifactName(product, version),
-            retentionDays: 30,
-        },
+        promotion,
     };
     writeFileSync(path.join(directory, 'release-promotion.json'), `${JSON.stringify(receipt, null, 2)}\n`);
     return receipt;
@@ -605,6 +640,20 @@ async function main(argv = process.argv.slice(2), env = process.env) {
         await downloadCandidateArtifactFromEnvironment({ env, outputPath });
         return;
     }
+    case 'validate-target': {
+        const [product, version, sourceSha] = arguments_;
+        requireValue(arguments_.length === 3, 'Usage: validate-target <product> <version> <source-sha>');
+        validatePromotionTarget({
+            artifactName: env.PROMOTION_ARTIFACT_NAME,
+            mode: env.PROMOTION_MODE,
+            product,
+            retentionDays: env.PROMOTION_RETENTION_DAYS,
+            routerRunId: validateArtifactId(env.GITHUB_RUN_ID, 'router workflow run id'),
+            sourceSha,
+            version,
+        });
+        return;
+    }
     case 'write-receipt': {
         const [product, version, sourceSha, directory] = arguments_;
         requireValue(arguments_.length === 4, 'Usage: write-receipt <product> <version> <source-sha> <directory>');
@@ -615,6 +664,9 @@ async function main(argv = process.argv.slice(2), env = process.env) {
             candidateArchiveSha256: env.CANDIDATE_ARCHIVE_SHA256,
             directory,
             product,
+            promotionArtifactName: env.PROMOTION_ARTIFACT_NAME,
+            promotionMode: env.PROMOTION_MODE,
+            promotionRetentionDays: env.PROMOTION_RETENTION_DAYS,
             routerRunId: env.GITHUB_RUN_ID,
             sourceSha,
             version,
@@ -622,7 +674,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
         return;
     }
     default:
-        throw new Error('Usage: release-candidate-promotion.cjs <write-manifest|verify|download|write-receipt> ...');
+        throw new Error('Usage: release-candidate-promotion.cjs <write-manifest|verify|download|validate-target|write-receipt> ...');
     }
 }
 
@@ -635,6 +687,7 @@ if (require.main === module) {
 
 module.exports = {
     CANDIDATE_SCHEMA,
+    PROMOTION_RECEIPT_SCHEMA,
     PRODUCT_CONFIGS,
     candidateArtifactName,
     createCandidateManifest,
@@ -643,8 +696,10 @@ module.exports = {
     finalArtifactName,
     normalizeArtifactDigest,
     payloadPaths,
+    rehearsalArtifactName,
     validateCandidateArtifactMetadata,
     validateCandidateManifest,
+    validatePromotionTarget,
     verifyExtractedCandidate,
     writeCandidateManifest,
     writePromotionReceipt,

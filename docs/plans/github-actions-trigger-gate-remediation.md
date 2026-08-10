@@ -2,13 +2,15 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset，以及阶段 4 的 Field recovery 修复均已完成并有云端证据；阶段 3 的 release same-SHA gate 已合并且失败闭合路径已有云端证据，但成功 gate 路径曾被一次 `pnpm install` 进程泄漏阻塞。当前分支已实现候选清单、Actions/API/下载三重 digest 绑定、不重建 promotion、有界流式下载、逐跳 HTTPS 重定向校验、ZIP EOCD 预检与原子提取，并固定发行链及其 Required CI/Official Codex 信任链的 Action SHA；阶段 2 的 APK 复用与性能采样、阶段 3 的真实制品验收，以及阶段 4 至阶段 5 的其余工作仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset 与 release same-SHA gate，以及阶段 4 的 Field recovery 修复均已完成并有云端证据；PR #38 的 merge SHA 已证明成功 gate、未变版本跳过和零制品路径。当前后续分支正在把四份重复 promotion 收敛为同一个 reusable workflow，并实现只接受精确成功 main CI run 的短保留期、不发布 rehearsal；该分支只有本地验证，尚未取得候选构建和 promotion 云端证据。阶段 2 的 APK 复用与性能采样、阶段 3 的四类真实制品验收，以及阶段 4 至阶段 5 的其余工作仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@5f4754642a3a55f2d3bfca5bcb09e9ac7d161e66`。
-- 当前实施分支：`codex/kb-maintenance-20260810-release-promotion`，只改变 CI/发行编排、测试和本文档，
+- 当前基线：`origin/main@3cf1727449592273c0a3ab6cbfb48c7d1f77be20`。
+- 当前实施分支：`codex/kb-maintenance-20260811-workflow-rehearsal`，只改变 CI/发行编排、测试和本文档，
   不改变包版本或可分发行为。
-- 本地复审：候选下载与提升逻辑、候选 ZIP 预检与原子提取、发行 workflow 和本文档已完成独立复审；
-  最终复审没有 Critical 或 Important 发现。真实候选 rehearsal 和外部环境验收仍按下文保持未完成。
+- 本地复审：PR #38 的候选下载与提升逻辑、候选 ZIP 预检与原子提取、发行 workflow 和本文档已完成独立复审，
+  最终复审没有 Critical 或 Important 发现；后续 rehearsal 分支当前通过 17 项 Node 测试、12 个 workflow
+  的结构化 YAML 解析和 `actionlint 1.7.7`，仍须 PR 与 main 云端复审。真实候选 rehearsal 和外部环境验收
+  继续按下文保持未完成。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -60,6 +62,17 @@
   [31392233424](https://github.com/KNaiFen/happy/actions/runs/31392233424) 恰好运行一次，
   `source_gate`、版本检测和四个构建均 skipped，artifact 总数为零，证明失败时闭合；成功 gate
   与未变版本分类仍须由新的 merge SHA 证明。
+- 候选安全提升与成功 gate 证据：PR [#38](https://github.com/KNaiFen/happy/pull/38)，PR head
+  `557c3c30bb6136320dfcf413932b432bada8370a`，squash merge
+  `3cf1727449592273c0a3ab6cbfb48c7d1f77be20`。PR 的 Documentation
+  [31404045087](https://github.com/KNaiFen/happy/actions/runs/31404045087)、CLI Smoke
+  [31404045108](https://github.com/KNaiFen/happy/actions/runs/31404045108) 和 Monorepo CI
+  [31404047733](https://github.com/KNaiFen/happy/actions/runs/31404047733) 均成功；merge-SHA
+  Documentation [31405741335](https://github.com/KNaiFen/happy/actions/runs/31405741335) 和
+  Monorepo CI [31405741401](https://github.com/KNaiFen/happy/actions/runs/31405741401) 均成功。
+  唯一后置路由 [31407154579](https://github.com/KNaiFen/happy/actions/runs/31407154579) 的 source gate
+  与版本检测成功，四个候选构建及四个 promotion 均 skipped，artifact 总数为零；这证明成功 gate
+  和未变版本路径不会误发制品，但不替代真实候选 rehearsal。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -185,10 +198,11 @@ recovery 启动 2.704 秒且 `Status: ok`，最终诊断为 `phase=verified`、r
 
 - [x] 让 Monorepo CI、CLI Smoke 和 Documentation 在所有目标 PR 上产生终态检查；重型 job 通过分类器按需跳过，聚合检查保持稳定名称。PR #31 的 docs-only 对照已验证这一行为。
 - [x] GitHub `main` ruleset 要求 PR、分支最新、禁止直接 push，并限制管理员 bypass；ruleset `20624143` 要求 `Required CI gate`、`CLI Smoke gate` 和 `Generated indexes and links`，均绑定 GitHub Actions integration `15368`，且 `bypass_actors=[]` / `current_user_can_bypass=never`。未制造无语义的 root-only PR；根安装输入的分类行为由单元测试和 PR #30 的 workflow/scripts 代码路径覆盖。
-- [ ] CLI、Android、Relay、happy-agent 的 release workflow 只在同一 SHA 的全局 gate 成功后进入 build/promotion；代码与失败 gate 的 merge-SHA 路由已证明 fail-closed，仍缺成功 gate 的真实候选证据。
+- [x] 自动 release router 只在同一 SHA 的首轮全局 gate 成功后进入版本分类；PR #37 的失败路径与 PR #38 的成功且未变版本路径分别证明 fail-closed、唯一 router、八个 skipped 和零制品。四类真实候选仍由下一项单独验收。
+- [ ] CLI、Android、Relay、happy-agent 的候选 build/promotion 各取得一次同 SHA 成功 gate 后的真实云端证据。
 - [ ] 将“构建候选物”与“提升可交付物”分离；本地实现只消费既有 artifact ID/digest、不重新构建并在解压前执行资源与路径门禁，仍待真实候选 rehearsal 验收。
 - [ ] Android 上传独立 checksum/attestation；所有正式制品记录 source SHA、版本、摘要、保留期和下载入口。
-- [ ] 为 release workflow 自身和打包脚本增加不发布的 `workflow_dispatch` 或 PR rehearsal 路径。
+- [ ] 为 release workflow 自身和打包脚本增加不发布的 `workflow_dispatch` rehearsal 路径；后续分支已实现，仍待 PR 合并和云端运行。
 
 代码 PR [#30](https://github.com/KNaiFen/happy/pull/30) 在同一 head SHA `c359156f` 上完成了
 三项稳定 gate 验收：Documentation
@@ -211,12 +225,12 @@ check 和所有构建 checkout 都绑定同一已核验 SHA。
 为避免 release 版本提交的 main CI 被下一次合并取消或替换 pending run 后永久漏发，main CI 的
 并发组按 SHA 隔离；PR 更新仍按 PR ref 取消旧 head 的运行。上游 CI 或发行路由的第二次 attempt
 不再生成制品：首轮失败、取消或发行构建失败后必须按版本规则提升受影响包的 patch version，不能
-通过 rerun 复用已经进入发行编排的版本。当前分支没有包版本变化，因此 PR 和 merge-SHA 只能验证门禁、版本分类和四个
-reusable workflow 的静态/调用契约；在新的真实版本提升或不发布 rehearsal 取得云端构建证据前，
-本阶段检查项保持未完成。PR #37 的 merge-SHA CI 失败后，路由只产生六个 skipped job 且没有
-artifact，证明失败闭合逻辑生效，但不能替代成功路径验收。
+通过 rerun 复用已经进入发行编排的版本。PR #37 的 merge-SHA CI 失败后，路由只产生六个 skipped
+job 且没有 artifact，证明失败闭合逻辑生效；PR #38 的 merge SHA 又通过同一 source gate，版本检测
+确认四个版本均未变化，四个构建和四个 promotion 均 skipped，artifact 总数为零。二者共同证明路由
+会失败闭合且不会对未变版本误发制品，但仍不能替代真实候选 build/promotion 验收。
 
-当前 promotion 分支把四个 build workflow 的输出改为 7 天候选 artifact：候选清单固定包含
+PR #38 把四个 build workflow 的输出改为 7 天候选 artifact：候选清单固定包含
 schema、产品、版本、source SHA，以及每个 payload 的文件名、大小和 SHA-256。Reusable workflow
 向 router 暴露精确 artifact ID、Actions digest 和 source-bound 名称；promotion 再从 Actions API
 按 ID 读取同一 router run 的 metadata，比较 upload output 与 API digest，下载 ZIP 并复算 ZIP
@@ -242,8 +256,15 @@ Node 下载器把 Actions metadata 限制在 1 MiB 并只接受流式正文，�
 过多重定向、非成功响应体取消、ZIP64、多磁盘、异常 EOCD/中央目录边界、悬空或竞态目标路径，并证明
 FIFO 输入会快速失败、EOCD 失败发生在 `ZipFile` 构造前、路径替换不会改变已打开的归档、候选目录
 不会覆盖竞态创建的目标，且损坏的 DEFLATE 数据会归一化为受控错误并清理暂存输出；但在
-真实版本提升或不发布 rehearsal 完成前，阶段 3 的
-候选提升检查项仍保持未完成。
+真实版本提升或不发布 rehearsal 完成前，阶段 3 的候选提升检查项仍保持未完成。
+
+后续 rehearsal 分支把 router 中四份相同的下载、解压、验证、写收据和上传 job 收敛为一个
+`workflow_call` promotion；正式路由传入 `mode=release` 与 30 天保留期，手动 rehearsal 传入
+`mode=rehearsal` 与 1 天保留期。收据 schema 2 强制模式、source/run-bound 名称和保留期一致，
+因此 rehearsal artifact 不能使用正式交付名称。手动入口每次只接受一个产品，要求精确 merged-main
+SHA 和对应首轮成功 Monorepo CI run ID，并复用相同 build 与 promotion workflow；其聚合 gate 要求
+被选产品的 build/promotion 成功、另外三条路径全部 skipped。当前这些约束只有本地单测、YAML 解析
+和 actionlint 证据；在精确 PR head 与 merge SHA 的云端运行完成前不勾选上述两项。
 
 ### 阶段 4：Field 稳定性、队列与失败前移
 
@@ -362,18 +383,20 @@ git diff --cached --check
 
 ## 下一步
 
-1. 让当前 promotion PR 的精确 head 通过 Documentation、CLI Smoke 和 Required CI；若
-   `codex_transport_scenarios` 再次卡住，5 分钟边界必须给出终态，不能重跑或放宽场景掩盖问题。
-2. 合并后核验新的 merge SHA 的成功 `Happy monorepo CI`、唯一后置发行路由、source run/job API
-   证据和四个未变版本的 skipped 结果；不得把 skipped build 表述为发行制品验收。
-3. 在下一次真实 patch version 提升或不发布 rehearsal 中，证明对应 reusable workflow 只在同 SHA
-   gate 后构建，并核验候选 artifact ID/API digest、ZIP digest、promotion receipt 和最终下载 URL；
-   promotion 必须复用同一 payload，不能重新构建；同时确认私有仓库 ZIP API 首跳鉴权成功、签名
-   下载重定向不携带 `Authorization`，并记录候选与正式 artifact 的摘要一致性。
-4. 重新采样至少 20 次 Official Codex CI/Field，报告 runner/wall P50/P90、cache 命中、取消率和失败阶段；在有足够样本前不把单次 244 秒差值宣称为长期节省。
-5. 将 Android APK 的 App 指纹与 Codex 指纹分离，并仅在新变更的安全/隔离边界有证据后复用 APK；不得以缓存命中替代发行验收。
-6. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
-7. 在真实候选演练后复核产品上限；若任何正式制品接近 80% 上限，先更新观测证据和测试，再调整策略，不能静默放宽。
+1. 等待 PR #38 merge SHA 的 Field [31407142572](https://github.com/KNaiFen/happy/actions/runs/31407142572)
+   到终态；核验精确 Official Codex artifact 复用、四个 API 36 场景、recovery、rollback、`/clear`、
+   v4 lifecycle 与最终 `phase=verified`，失败时读取真实诊断，不以 rerun 掩盖。
+2. 让 reusable promotion/rehearsal PR 的精确 head 通过 Documentation、CLI Smoke 和 Required CI，
+   合并后再次核验唯一 router 与零版本变化路径；任何门禁缺席或错误运行构建都必须先修复。
+3. 针对 CLI、Android、Relay 和 happy-agent 分别运行一次不发布 rehearsal，绑定同一个已通过首轮
+   Required CI 的 merge SHA；逐个核验候选 artifact ID、Actions API digest、下载 ZIP digest、
+   promotion receipt、1 天 rehearsal 下载 URL 和 payload 摘要。promotion 必须复用同一 payload，
+   不能重新构建；同时确认私有仓库 ZIP API 首跳鉴权成功且签名下载重定向不携带 `Authorization`。
+4. rehearsal 完成后复核产品上限；若任何制品接近 80% 上限，先更新观测证据和测试，再调整策略，
+   不能静默放宽。正式 release 仍只由真实 patch version 提升触发，rehearsal 不替代正式发布证据。
+5. 重新采样至少 20 次 Official Codex CI/Field，报告 runner/wall P50/P90、cache 命中、取消率和失败阶段；在有足够样本前不把单次 244 秒差值宣称为长期节省。
+6. 将 Android APK 的 App 指纹与 Codex 指纹分离，并仅在新变更的安全/隔离边界有证据后复用 APK；不得以缓存命中替代发行验收。
+7. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
 
