@@ -531,9 +531,9 @@ jobs:
       - name: Test official Codex fixture helpers from source
         run: |
           node --test scripts/ci/codex-mobile-recovery-launch.test.cjs
-          node node_modules/vitest/vitest.mjs run
-          scripts/ci/codex-responses-fixture.test.ts
-          scripts/ci/codex-mobile-field-command-correlation.test.ts
+          node node_modules/vitest/vitest.mjs run \
+            scripts/ci/codex-responses-fixture.test.ts \
+            scripts/ci/codex-mobile-field-command-correlation.test.ts
 
       - name: Download source-built official Codex
         uses: actions/download-artifact@v4
