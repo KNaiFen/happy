@@ -1,43 +1,40 @@
 name: Build happy-agent package on version bump
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - packages/happy-agent/package.json
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: happy-agent-package-${{ github.ref }}
+  group: happy-agent-package-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 jobs:
-  version:
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.version.outputs.changed }}
-      version: ${{ steps.version.outputs.version }}
-    steps:
-      - name: Checkout version history
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Detect happy-agent version bump
-        id: version
-        run: node scripts/ci/detect-package-version-change.cjs packages/happy-agent/package.json "${{ github.event.before }}"
-
   ci:
     name: Validate happy-agent source
-    needs: version
-    if: needs.version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION: ${{ inputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify gated source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(node -p "require('./packages/happy-agent/package.json').version")" = "$VERSION"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -66,15 +63,21 @@ jobs:
         run: pnpm --filter happy-agent test
 
   build:
-    needs: [version, ci]
-    if: needs.version.outputs.changed == 'true' && needs.ci.result == 'success'
+    needs: ci
+    if: needs.ci.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      VERSION: ${{ needs.version.outputs.version }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION: ${{ inputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify gated source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -108,7 +111,7 @@ jobs:
           ARCHIVE="artifacts/happy-agent-${VERSION}.tgz"
           CONTENTS="$RUNNER_TEMP/happy-agent-archive.txt"
           test -f "$ARCHIVE"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           tar -xOf "$ARCHIVE" package/package.json > "$RUNNER_TEMP/happy-agent-package.json"
           node - "$RUNNER_TEMP/happy-agent-package.json" "$VERSION" <<'NODE'
           const fs = require('node:fs');

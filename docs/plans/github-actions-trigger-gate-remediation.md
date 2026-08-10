@@ -2,11 +2,11 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset，以及阶段 4 的 Field recovery 修复均已完成并有云端证据；阶段 2 的 APK 复用与性能采样、阶段 3 的 release gate，以及阶段 4 至阶段 5 的其余工作仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset，以及阶段 4 的 Field recovery 修复均已完成并有云端证据；阶段 3 的 release same-SHA gate 已在独立分支实现并等待云端验收，阶段 2 的 APK 复用与性能采样、阶段 3 的 digest promotion，以及阶段 4 至阶段 5 的其余工作仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@47d95bacec5d59e0efee8ea16ad5366721198bbb`。
-- 下一实施分支：阶段 3 的 release same-SHA gate 必须从下一次的 `origin/main` 独立创建；本计划的
-  docs-only 证据提交不改变发行行为。
+- 当前基线：`origin/main@65adf2066db2360b94ca559dbe3aeb7e9ab90ff4`。
+- 当前实施分支：`codex/kb-maintenance-20260810-release-gates`，只改变 CI/发行编排、测试和本文档，
+  不改变包版本或可分发行为。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -185,6 +185,22 @@ recovery 启动 2.704 秒且 `Status: ok`，最终诊断为 `phase=verified`、r
 修改了 workflow 与 `scripts/ci`，因此分类器保守选择全量验收；这证明了代码路径，尚不代替
 docs-only 对照和 GitHub ruleset 的外部证据。
 
+release same-SHA gate 的当前实现使用唯一的 `workflow_run` 路由，而不是让四个发行工作流各自
+轮询或重复查询全局 CI。路由只接受同仓库 `push/main` 的首轮成功
+`Happy monorepo CI`，再通过 Actions API 重新核验精确 `head_sha`、workflow 路径、run 状态和
+唯一成功的 `Required CI gate`；校验脚本从 `github.workflow_sha` checkout，候选源码则只从已
+核验的 source SHA checkout。路由还要求 source SHA 关联唯一已合并、目标为 `main` 的 PR，并以
+该 PR 的 `base.sha` 统一检测四个版本变化；这覆盖 squash、merge 和 rebase merge，直接 push 或
+来源不明的提交不会进入发行。Android `buildCommitSha`、Relay OCI revision、happy-agent source
+check 和所有构建 checkout 都绑定同一已核验 SHA。
+
+为避免 release 版本提交的 main CI 被下一次合并取消或替换 pending run 后永久漏发，main CI 的
+并发组按 SHA 隔离；PR 更新仍按 PR ref 取消旧 head 的运行。上游 CI 或发行路由的第二次 attempt
+不再生成制品：首轮失败、取消或发行构建失败后必须按版本规则提升受影响包的 patch version，不能
+通过 rerun 复用已经进入发行编排的版本。当前分支没有包版本变化，因此 PR 和 merge-SHA 只能验证门禁、版本分类和四个
+reusable workflow 的静态/调用契约；在新的真实版本提升或不发布 rehearsal 取得云端构建证据前，
+本阶段检查项保持未完成。候选物与 promotion digest 的分离也仍是后续独立变更，不由本实现冒充。
+
 ### 阶段 4：Field 稳定性、队列与失败前移
 
 - [ ] 用 Happy SHA + Official Codex commit 指纹消除 `main push` 与 daily schedule 的同输入互相取消、重跑。
@@ -257,6 +273,7 @@ choice、queued follow-up、`/compact`、`/clear` 与 post-clear 响应均执行
 
 ```bash
 node --check scripts/docs/knowledge-base.mjs
+node --test scripts/ci/verify-release-source-gate.test.cjs
 node scripts/docs/knowledge-base.mjs --check
 git diff --check
 git diff --cached --check
@@ -287,9 +304,13 @@ git diff --cached --check
 
 ## 下一步
 
-1. 重新采样至少 20 次 Official Codex CI/Field，报告 runner/wall P50/P90、cache 命中、取消率和失败阶段；在有足够样本前不把单次 244 秒差值宣称为长期节省。
-2. 将 Android APK 的 App 指纹与 Codex 指纹分离，并仅在新变更的安全/隔离边界有证据后复用 APK；阶段 3 的 release same-SHA gate 与 digest promotion 保持独立变更，不得以缓存命中替代验收。
-3. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
+1. 合并 release same-SHA gate 后，核验精确 merge SHA 的 `Happy monorepo CI`、唯一后置发行路由、
+   source run/job API 证据和四个未变版本的 skipped 结果；不得把 skipped build 表述为发行制品验收。
+2. 在下一次真实 patch version 提升或不发布 rehearsal 中，证明对应 reusable workflow 只在同 SHA
+   gate 后构建；随后再独立实现候选物清单、Actions artifact digest 校验与不重建 promotion。
+3. 重新采样至少 20 次 Official Codex CI/Field，报告 runner/wall P50/P90、cache 命中、取消率和失败阶段；在有足够样本前不把单次 244 秒差值宣称为长期节省。
+4. 将 Android APK 的 App 指纹与 Codex 指纹分离，并仅在新变更的安全/隔离边界有证据后复用 APK；不得以缓存命中替代发行验收。
+5. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
 

@@ -29,8 +29,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: happy-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: happy-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   classify:
@@ -67,6 +67,9 @@ jobs:
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/ci/classify-workflow-changes.cjs "$BASE_SHA" "$HEAD_SHA" "$FORCE_ALL"
+
+      - name: Test release source gate
+        run: node --test scripts/ci/verify-release-source-gate.test.cjs
 
   wire:
     name: Wire typecheck, test, and build
