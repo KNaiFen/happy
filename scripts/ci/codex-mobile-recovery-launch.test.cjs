@@ -10,10 +10,16 @@ test('Android process-death recovery uses bounded ADB startup before Maestro ass
     ]);
 
     assert.doesNotMatch(recoveryFlow, /^\s*-\s+launchApp:/m);
+    assert.match(runner, /adb shell pm path "\$\{APP_ID\}"/);
+    assert.match(runner, /cmd package resolve-activity --brief/);
     assert.match(runner, /timeout 30s adb shell am start -W/);
     assert.match(runner, /-a android\.intent\.action\.MAIN/);
     assert.match(runner, /-c android\.intent\.category\.LAUNCHER/);
-    assert.match(runner, /-p "\$\{APP_ID\}"/);
+    assert.match(runner, /-n "\$\{resolved_component\}"/);
+    assert.doesNotMatch(runner, /am start -W[\s\S]*-p "\$\{APP_ID\}"/);
+    assert.match(runner, /Recovery package path lookup failed\./);
+    assert.match(runner, /Recovery launcher activity resolution failed\./);
+    assert.match(runner, /Resolved recovery launcher start failed\./);
     assert.match(runner, /recovery-am-start\.txt/);
     assert.match(runner, /grep -Fqx 'Status: ok'/);
     assert.match(runner, /restart_app_after_process_death\n\n"\$\{MAESTRO_BIN\}"/);
