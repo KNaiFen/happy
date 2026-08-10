@@ -2,10 +2,11 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 已完成；阶段 2 的变更分类和阶段 3 的稳定 PR gate/ruleset 已完成；阶段 4 的 Field recovery 阻塞已由精确 merge-SHA API 36 验收关闭；阶段 2 的 Official Codex 跨 run 制品复用正在独立分支实施，阶段 3 的 release gate 与阶段 4 至阶段 5 的其余工作仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset，以及阶段 4 的 Field recovery 修复均已完成并有云端证据；阶段 2 的 APK 复用与性能采样、阶段 3 的 release gate，以及阶段 4 至阶段 5 的其余工作仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@ba4e0e7a8f58524e40fb4ce7272c8b5f35c8a9b9`。
-- 当前实施分支：`codex/kb-maintenance-20260810-official-artifact-reuse`。
+- 当前基线：`origin/main@47d95bacec5d59e0efee8ea16ad5366721198bbb`。
+- 下一实施分支：阶段 3 的 release same-SHA gate 必须从下一次的 `origin/main` 独立创建；本计划的
+  docs-only 证据提交不改变发行行为。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -35,6 +36,16 @@
   Field [31373901326](https://github.com/KNaiFen/happy/actions/runs/31373901326) 成功，诊断
   artifact [9058100566](https://github.com/KNaiFen/happy/actions/runs/31373901326/artifacts/9058100566)
   关闭了阶段 4 的 recovery 阻塞，详细证据见下文。
+- Official Codex 跨 run 制品复用：PR [#35](https://github.com/KNaiFen/happy/pull/35)，PR head
+  `95ce2f76429bb082ef60f51399f329d3c11eeab6`，squash merge
+  `47d95bacec5d59e0efee8ea16ad5366721198bbb`。PR 的 Documentation
+  [31378727717](https://github.com/KNaiFen/happy/actions/runs/31378727717)、CLI Smoke
+  [31378727716](https://github.com/KNaiFen/happy/actions/runs/31378727716) 和 Monorepo CI
+  [31378728078](https://github.com/KNaiFen/happy/actions/runs/31378728078) 均成功；merge-SHA
+  Documentation [31379919984](https://github.com/KNaiFen/happy/actions/runs/31379919984)、
+  Monorepo CI [31379920438](https://github.com/KNaiFen/happy/actions/runs/31379920438) 与
+  `workflow_run` Field [31381065818](https://github.com/KNaiFen/happy/actions/runs/31381065818)
+  均成功，详细复用证据见阶段 2。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -125,19 +136,36 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
 
 - [x] 为 Monorepo CI 和 CLI Smoke 增加始终运行的变更分类入口，按包依赖关系启用必要 job；聚合 gate 明确接受有意跳过的 job，但拒绝失败或取消。分类器单测覆盖 docs-only、Wire 传播、独立包和 root 输入。
 - [x] 保留 Wire 变更对 CLI、Server、App、Agent 等消费者的保守传递，不做仅凭目录名的危险跳过；分类器单测验证该传播集合。
-- [ ] Official Codex 以解析后的 release tag、peeled commit、Rust toolchain 和 runtime marker 形成不可变指纹；CI 与 Field 复用同一已验证归档。
+- [x] Official Codex 以解析后的 release tag、peeled commit、Rust toolchain 和 runtime marker 形成不可变指纹；CI 与 Field 复用同一已验证归档。
 - [ ] Android Field 将 App 源码指纹与 Codex 指纹分离；相同 App 指纹的定时运行复用已验证 APK，不重复 Gradle 构建。
 - [ ] 用新的 run 样本比较 wall time、runner time、cache restore/export 和失败定位时间，不仅比较单次绿色耗时。
 
-阶段 2 的当前实现候选只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI`
-完成事件触发，先核验该精确 `head_sha` 的 `Required CI gate` 成功、唯一未过期
+阶段 2 已实施的路径只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI` 完成事件
+触发，先核验该精确 `head_sha` 的 `Required CI gate` 成功、唯一未过期
 `official-codex-linux-x64` artifact 的 ID 和 Actions API SHA-256 digest，再下载该精确 ZIP。
 随后校验 `source.json` 的 Happy SHA、release tag、peeled Codex commit 与 `codex`、
 `codex-code-mode-host`、`bwrap` 三个文件摘要；跨 run 没有可读取的 reusable-workflow output，
-因此 Field 还必须从公开的 Codex release tag 重新 peel 出 commit 并与清单匹配，不能把空的
+因此 Field 还从公开的 Codex release tag 重新 peel 出 commit 并与清单匹配，不能把空的
 `needs.official_codex.outputs.commit` 当作校验。定时和手动 Field 继续自行构建 Official Codex，
-避免在最近仅有文档变更、没有同 SHA CI artifact 时错误复用旧制品。该候选尚未通过 PR CI 与跨
-run Field 验收，保持未完成状态。
+避免在最近仅有文档变更、没有同 SHA CI artifact 时错误复用旧制品。
+
+PR #35 的首个 PR head 暴露 `upload-artifact` 输出裸 64 位 SHA-256、REST API 输出
+`sha256:<digest>` 的格式差异；修复后的 `95ce2f76` 接受且只接受这两种小写 SHA-256 形态，
+并继续拒绝其他算法、长度和大小写。该 head 的 app-server 与 TUI 消费者均按 ID/digest 成功下载、
+校验清单并运行完整生命周期。合并后，main CI [31379920438](https://github.com/KNaiFen/happy/actions/runs/31379920438)
+只构建一次 Official Codex；其成功完成才触发 Field
+[31381065818](https://github.com/KNaiFen/happy/actions/runs/31381065818)。Field selector 输出
+`source_run_id=31379920438`、`head_sha=47d95bac...`、`artifact_id=9059502920` 与
+`artifact_digest=sha256:aa409d86...d4ad33d`，没有运行 reusable `official_codex` build job。
+Field artifact [9060612275](https://github.com/KNaiFen/happy/actions/runs/31381065818/artifacts/9060612275)
+的 `source.json` 是 schema 4，绑定同一 Happy SHA、`rust-v0.147.0`、peeled commit
+`be6e8eac...f61b` 和三个可执行文件摘要；其 API 36 job 成功，四个 Maestro JUnit 零失败，
+recovery 启动 2.704 秒且 `Status: ok`，最终诊断为 `phase=verified`、rollback
+`succeeded/none`、post-clear 成功与 `v4LifecycleCompleted=true`。
+
+这是一组可复现的跨 run 功能验收而非长期性能结论：该 Field job 用时 1,690 秒，较 PR #34 的
+1,934 秒少 244 秒，但 Android 构建和共享缓存仍会造成波动。阶段 2 的性能项保留，必须按验收矩阵
+重新采样，不能把这一次绿色结果外推为 P50/P90。
 
 ### 阶段 3：全局门禁与发行提升
 
@@ -259,8 +287,8 @@ git diff --cached --check
 
 ## 下一步
 
-1. 提交阶段 2 的 Official Codex 指纹与跨 run 归档复用，要求 PR CI 证明同 run 的 artifact ID 消费、跨 run 空 output 边界和公开 tag-to-commit 校验；合并后以 `workflow_run` Field 证明跨 run digest、清单和 Android 场景均成功。
-2. 在跨 run Field 成功后采集 Official Codex 被复用前后的 runner/wall time；阶段 3 的 release same-SHA gate 保持独立变更，不得以缓存命中替代验收。
+1. 重新采样至少 20 次 Official Codex CI/Field，报告 runner/wall P50/P90、cache 命中、取消率和失败阶段；在有足够样本前不把单次 244 秒差值宣称为长期节省。
+2. 将 Android APK 的 App 指纹与 Codex 指纹分离，并仅在新变更的安全/隔离边界有证据后复用 APK；阶段 3 的 release same-SHA gate 与 digest promotion 保持独立变更，不得以缓存命中替代验收。
 3. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
