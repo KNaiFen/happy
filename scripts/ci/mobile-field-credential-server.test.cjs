@@ -13,7 +13,7 @@ const {
 
 const credentials = {
     token: 'field-header.field-payload.field-signature',
-    secret: `${'a'.repeat(42)}A`,
+    secret: Buffer.alloc(32, 1).toString('base64url'),
 };
 
 test('serves credentials only from the no-store loopback endpoint', async (context) => {
