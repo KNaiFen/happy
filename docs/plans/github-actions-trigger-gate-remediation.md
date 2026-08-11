@@ -2,16 +2,16 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 修复均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承均已合并到 main。PR #41 的首个 main run 已建立可信 recipe artifact，但 PR #41 本身没有命中它（当时尚无可信 main producer）；当前分支已实现 Field admission、同 SHA 非取消并发锁和同 recipe 成功收据去重，仍待本分支 PR/main 的云端对照。阶段 2 的 APK 源码指纹复用与长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。阶段 2 的 APK 源码指纹复用与长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@13f7b1a4e3d1202626e7608150357e6b89572750`（PR #41 squash merge）。
-- 当前实施分支：`codex/kb-maintenance-20260811-field-concurrency`，只改变 Field CI 编排、测试和本文档，
-  不改变包版本或可分发行为。
-- 本地复审：PR #41 的 Official Codex 复用 Node 12 项测试、当前 Field 去重 Node 9 项测试、综合
-  Node 61 项测试、Node syntax check、12 个 workflow 的 Ruby YAML 解析和 `git diff --check` 均通过；
-  测试包含 mock `gh api` 的空候选、可信 receipt ZIP 和 API 不可用回退；当前分支仍须 PR 命中可信
-  main recipe、main/Field 去重和 receipt 下载校验的 GitHub-hosted 证据，
-  外部环境验收继续按下文保持未完成。
+- 当前基线：`origin/main@41814d01b42c3afa91a0e4c0eb6ab03050c1376d`（PR #42 squash merge）。
+- 当前实施分支：`main` 已包含 Field CI 编排、测试和本文档所述的并发/去重实现；本阶段不改变
+  包版本或可分发行为。
+- 本地复审：PR #41 的 Official Codex 复用 Node 12 项测试、Field 去重 Node 9 项测试、综合 Node
+  61 项测试、Node syntax check、12 个 workflow 的 Ruby YAML 解析和 `git diff --check` 均通过；测试包含
+  mock `gh api` 的空候选、可信 receipt ZIP 和 API 不可用回退。PR #42 的 PR/main 云端对照已补足同 recipe
+  main artifact 命中、main re-attestation、Field receipt 下载校验与同 SHA 后继跳过证据；外部环境验收继续按
+  下文保持未完成。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -115,6 +115,18 @@
   [9082542260](https://github.com/KNaiFen/happy/actions/runs/31437957178/artifacts/9082542260) 的 Actions
   digest 为 `sha256:3a21bd7a...d65c527`。该 run 使用旧 workflow，只产生一份诊断 artifact，按预期
   没有新的成功 receipt。
+- Field 同输入并发与 receipt 去重：PR [#42](https://github.com/KNaiFen/happy/pull/42)，PR head
+  `f33a4468cbb170fcdd80a2ce33b62d50ee27dfca`，已于 `2026-08-11T01:47:57Z` squash merge 为
+  `41814d01b42c3afa91a0e4c0eb6ab03050c1376d`。PR 的 Documentation
+  [31449177608](https://github.com/KNaiFen/happy/actions/runs/31449177608)、CLI Smoke
+  [31449177584](https://github.com/KNaiFen/happy/actions/runs/31449177584) 和 Required CI
+  [31449177727](https://github.com/KNaiFen/happy/actions/runs/31449177727) 均成功，且 PR 的 Official Codex
+  selector 复用 artifact `9081338617`、fresh build job 为 skipped。merge-SHA main CI
+  [31450406708](https://github.com/KNaiFen/happy/actions/runs/31450406708) 成功并重新 attestation；同 SHA 的
+  唯一 release router [31451157898](https://github.com/KNaiFen/happy/actions/runs/31451157898) 成功，四个 build
+  与四个 promotion 全部 skipped、artifact 数为零。自动 Field [31451157897](https://github.com/KNaiFen/happy/actions/runs/31451157897)
+  成功后上传 receipt `9086877640`；同 SHA 手动对照 [31451221044](https://github.com/KNaiFen/happy/actions/runs/31451221044)
+  等待自动 run 后以 `reason=prior-success` 成功，Android Field job skipped，详见阶段 2 与阶段 4。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -222,18 +234,24 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
   Rust facts 在 source-declared override 后采集；target cache marker schema 4 也保留并校验最初编译
   Happy SHA/run，避免缓存命中伪造编译来源。PR #41 已将该实现合并到 main；其首个 main run
   `31433827550` 在没有可信 producer 时按预期 fresh 编译并上传 recipe artifact，PR/main/Field 的
-  “复用命中”对照仍由 B1 跟踪。
+  “复用命中”对照已由 PR #42 的 PR/main/Field 云端运行完成。
 - [ ] Android Field 将 App 源码指纹与 Codex 指纹分离；相同 App 指纹的定时运行复用已验证 APK，不重复 Gradle 构建。
 - [ ] 用新的 run 样本比较 wall time、runner time、cache restore/export 和失败定位时间，不仅比较单次绿色耗时。
 
-当前 Field 去重实现（本分支，尚待云端验收）按 `workflow_run.head_sha` 或当前 `github.sha` 建立
+当前 main 的 Field 去重实现按 `workflow_run.head_sha` 或当前 `github.sha` 建立
 `cancel-in-progress: false` 的 workflow 锁；`workflow_run` 只有同仓库、`push/main`、首轮且成功的
 上游 CI 才进入 selector。完整 Field job 成功后才上传
 `codex-android-field-success-v1-<happy SHA>-<recipe fingerprint>` 收据，后继同 SHA run 必须验证
 收据所属 workflow、run、job、artifact digest、receipt JSON、压缩包实际字节上限和 14 天有效期，才跳过 APK/模拟器；
-API 不可用、候选过期/篡改、失败/取消/重跑或 recipe 改变均执行真实 Field。Pending concurrency run
-可能被更新事件替换，但不会取消已开始的 Android job；这是 GitHub concurrency 的剩余平台语义，需由
-云端对照确认无 runner 浪费。
+API 不可用、候选过期/篡改、失败/取消/重跑或 recipe 改变均执行真实 Field。PR #42 的 merge SHA
+`41814d01` 对照证明：自动 `workflow_run` [31451157897](https://github.com/KNaiFen/happy/actions/runs/31451157897)
+从 `02:02:39Z` 至 `02:34:44Z` 成功，Android Field job 实际执行 31 分 43 秒并在 `02:33:43Z` 上传
+receipt `9086877640`；同 SHA 的手动 `workflow_dispatch`
+[31451221044](https://github.com/KNaiFen/happy/actions/runs/31451221044) 从 `02:03:54Z` 至 `02:35:56Z` 成功，
+其 32 分 02 秒主要为并发等待，dedup 输出 `should_run=false`、`reason=prior-success`，Android Field job
+为 skipped（没有 APK、emulator 或 Maestro 步骤）。自动 run 的 `cancelled_by=null` 且成功结束，证明后继不会
+取消已开始的 Android job；待运行的同 SHA run 仍可能被更新事件替换，这是 GitHub concurrency 的平台语义，
+但不再产生已开始 job 的 runner 浪费。
 
 历史实现（PR #35，schema 4）的路径只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI` 完成事件
 触发，先核验该精确 `head_sha` 的 `Required CI gate` 成功、唯一未过期
@@ -370,7 +388,7 @@ digest、模式和 1 天保留期一致；本地从 GitHub 下载候选与 promo
 
 ### 阶段 4：Field 稳定性、队列与失败前移
 
-- [ ] 用 Happy SHA + Official Codex recipe 指纹消除 `main push` 与 daily schedule 的同输入互相取消、重跑；本分支已实现 SHA 锁、可信 admission 和成功 receipt selector，等待 PR/main/schedule 云端对照。
+- [x] 用 Happy SHA + Official Codex recipe 指纹消除同输入的运行中取消与成功后重跑；PR #42 的 merge-SHA `workflow_run` + 同 SHA `workflow_dispatch` 对照证明已开始 Field 不被取消、成功 receipt 后继会跳过 APK/模拟器。下一次 daily schedule 继续作为生产事件样本采集，但不阻塞该实现验收。
 - [x] 修复 Field recovery 场景的真实失败；没有把它设置为必需合并门禁，也没有使用盲目 retry。
 - [ ] Relay 将能在源码/契约层发现的问题前移到 Docker 构建之前；必须依赖最终 bundle 的安装、迁移、重启和安全检查仍保留在交付验收。
 - [ ] 对长期 queued、superseded 和超过 SLA 的 workflow 建立终止与告警规则，不把无 job 的 queued run 当作发行证据。
@@ -391,6 +409,15 @@ Field 并发基线复核：最近 30 次 run 中，#133/#134 与 #124/#125 的�
 取消前序 Android job，合计浪费 24 分 02 秒 runner 时间；#144/#145 的同 SHA、同 Codex
 manifest 重复完整执行，两个 Field job 合计 1 小时 12 分 24 秒。该证据支持先治理运行中取消和
 同 recipe 成功后的重复；不把旧 run 的最终 `cancelled` 结论单独当作完整 job 浪费证明。
+
+PR #42 的精确云端对照关闭了这一实现项，而不外推为长期性能结论。自动 `workflow_run`
+[31451157897](https://github.com/KNaiFen/happy/actions/runs/31451157897) 的 selector 选择同 SHA main CI 的
+Official Codex artifact，reusable build skipped，`Check prior successful Android Field receipt` 首次输出
+`no-prior-success` 后执行完整 API 36 Field 并上传 receipt `9086877640`。手动
+`workflow_dispatch` [31451221044](https://github.com/KNaiFen/happy/actions/runs/31451221044) 在自动 Field
+已开始后进入同一 SHA 锁，未取消前者；receipt 可用后它的 dedup job 验证该 artifact 并输出
+`should_run=false`、`reason=prior-success`，Android Field job `steps=[]`。这同时证明 receipt 只在完整
+成功后才消除重复，不以“queued”或“running”状态冒充成功。
 
 PR #32 已将 recovery YAML 中的 `launchApp` 移除，改为在同一 `killApp` 后、Maestro
 断言前执行一次 `timeout 30s adb shell am start -W`，并把 UTC 起止时间和 ADB 输出保存为
@@ -446,7 +473,7 @@ PR #37 的 merge-SHA CI 暴露了另一类长时失败：job
 
 - [x] 全部 12 个 workflow 的 113 个外部 Action 均固定到完整 commit SHA，36 个 checkout 均设置 `persist-credentials: false`；常驻 CI 的源码测试会拒绝可变引用和遗漏凭据关闭的 checkout，包括以 `id`/`if` 等合法键开头的步骤。
 - [x] 新增仅维护 GitHub Actions 的 Dependabot 周更配置，minor/patch 合并为一组且最多同时打开 5 个 PR；它不等同于仓库级 Dependabot security updates。
-- [ ] 在当前优化 PR 与新 main 上验证 Node.js 24 Action 升级仍保留上传、下载、摘要、缓存和失败诊断语义，并确认不再出现旧 Action 的 Node.js 20 runtime 警告。
+- [x] 在 PR #42 与其 merge-SHA main 上验证 Node.js 24 Action 升级仍保留上传、下载、摘要、缓存和失败诊断语义；main CI、Field 与 release router 的相关日志未出现 Node.js 20 Action runtime 警告，Field receipt 上传/下载与 Official Codex artifact 重用均成功。
 - [ ] 由管理员决定并启用仓库级 Action SHA 强制、Dependabot security updates、PR dependency review 与适用的 CodeQL/SAST；保留现有 secret scanning、push protection、Critical dependency audit 和 Relay Trivy/SBOM。
 - [ ] 在真实 ARM64 目标设备上安装生产签名 APK，验证升级安装、真实网络切换、relay reconnect 与关键 Codex 生命周期；保留精确 workflow、artifact 和设备证据。
 - [ ] 根据实际交付方式决定是否需要 GitHub Environment 审批、发布后健康检查和回滚；构建-only 工作流不得冒充生产部署。
@@ -471,13 +498,12 @@ Environment 数量为零。Secret scanning 与 push protection 已启用，rules
 
 | 编号 | 当前证据与影响 | 下一步 | 完成标准 |
 | --- | --- | --- | --- |
-| B1：当前 Official Codex 复用 PR 云端验收 | PR #41 已合并；其首个 main CI [31433827550](https://github.com/KNaiFen/happy/actions/runs/31433827550) 以 `no-trusted-main-artifact` fresh 编译并建立 schema-5 recipe artifact `9081338617`，因此 PR #41 本身没有“PR 命中 main artifact”的证据。对应 Field [31437957178](https://github.com/KNaiFen/happy/actions/runs/31437957178) 已选择该 artifact、跳过 reusable build并成功完成来源、recipe、archive、二进制与 API 36 验证。 | 本分支 PR 必须命中 `9081338617` 的同 recipe main artifact；合并后核对 main re-attestation、Field 精确选择当前 run，并记录成功/失败终态。 | PR 日志没有 `cargo build --locked --release`；main 命中时编译步骤 skipped 且当前 run 有新 attestation artifact；Field 通过来源、recipe、archive 和二进制校验。 |
 | B2：仓库级 Action allowlist | API 为 `allowed_actions=all`、`sha_pinning_required=true`；完整 SHA 强制已由 PR #40 后的仓库设置满足，但 allowlist 仍未决定。 | 仓库管理员评估是否从 `all` 收敛到 selected patterns，先列出全部第三方 Action 与 reusable workflow 依赖，再做低风险设置变更。 | 若启用 allowlist，API 返回 selected 且所有 12 个 workflow 与依赖的 reusable workflow 均成功；若不适用，记录维护者决定和理由，不把 SHA 强制误写成 allowlist 已完成。 |
 | B3：依赖与 SAST 门禁 | Dependabot security updates disabled；Dependency Review API 403；CodeQL 为 `no analysis found`。当前无法安全增加 required dependency-review/CodeQL job。 | 管理员启用安全更新并确认 Dependency Graph/Advanced Security 权限；选择适用语言初始化 CodeQL，再以真实 PR 验证。 | API 可读取 dependency diff 和 CodeQL analysis；新增检查对同一 PR head 终态成功，并在注入有风险依赖/可识别样例时 fail-closed。 |
 | B4：Environment/部署边界 | Environment 数量为零；当前仓库只有构建与 artifact 交付，没有已确认的自动生产部署目标。 | 维护者确认是否存在需要审批、健康检查和回滚的部署；没有部署则记录“不适用”的 ADR/长期决定。 | 有部署时 environment protection、审批人与回滚 runbook 经演练；无部署时文档明确 build-only，计划不再把 environment 当未决门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
 | B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |
-| B7：剩余实现工作 | Android Field 仍每次构建 APK；本分支已实现 Field admission、同 SHA `cancel-in-progress: false` 锁和同 recipe 成功 receipt 去重，但尚无云端对照。Relay 前移检查、超 SLA 告警和 cache mode A/B 仍未实现。 | 先完成本分支 PR 的同 SHA workflow_run + schedule 对照，确认第二次 run 在可信 receipt 命中后跳过 APK/模拟器；随后分别实施 APK App 指纹复用、Relay 前移、SLA 与 cache A/B，每项独立 PR。 | APK 只按可验证 App 指纹复用；同输入运行中不互相取消且后继成功 receipt 会跳过；Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
+| B7：后续实现工作 | PR #42 已完成 Field admission、同 SHA `cancel-in-progress: false` 锁和同 recipe 成功 receipt 去重的 PR/main/手动同 SHA 云端对照；Android Field 仍每次构建 APK，Relay 前移检查、超 SLA 告警和 cache mode A/B 仍未实现。 | 分别实施 APK App 指纹复用、Relay 前移、SLA 与 cache A/B，每项独立 PR；daily schedule 仅作为新增样本继续记录，不把它作为已完成的手动同 SHA 对照替代项。 | APK 只按可验证 App 指纹复用；Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
 
 ## 验收矩阵
 
@@ -512,6 +538,8 @@ git diff --cached --check
 ### main 与外部验证
 
 - merge SHA 的 post-merge/main 工作流按设计运行；任何 release 候选物只能引用该精确 SHA。
+- 同 SHA 的自动 `workflow_run` Field 成功 receipt 后，后继 `workflow_dispatch` 或 schedule run 必须保留
+  `reason=prior-success` 与 skipped Android Field job；在 receipt 不存在、过期或校验失败时必须执行真实 Field。
 - ruleset、Actions 安全设置和真实设备验收记录管理员、时间、URL 与结果，不以计划勾选代替外部证据。
 - 完成后重新采样至少 20 次相关 workflow，报告重复 run、runner 分钟、wall P50/P90、取消率和失败阶段分布。
 
@@ -525,24 +553,17 @@ git diff --cached --check
 
 ## 下一步
 
-1. 完成本分支 Field 去重 PR 的精确暂存、知识库生成和本地验证，创建非草稿 PR；对同一 head SHA 等待
-   Documentation、CLI Smoke 和 Required CI，重点核对新 PR 命中 `9081338617` 同 recipe main artifact、
-   不执行 Official Codex 源码编译，并读取真实日志修复失败，不 rerun 掩盖。
-2. PR 可干净合并且 required checks 全绿后 squash merge；在新 main 上核验唯一 release router 的
-   未变版本零制品路径、首次 Field receipt 上传和后续 `workflow_dispatch`/schedule 同 SHA 命中 receipt
-   后跳过 APK/模拟器。Android 必须证明新 Action runtime 保留签名、上传和 receipt；Relay 必须证明
-   `DOCKER_BUILD_RECORD_UPLOAD=false` 后不再产生 90 天 `.dockerbuild` artifact。
-3. 将 B2-B4 的仓库级设置交由管理员决策：先取得 SHA 强制、Dependabot security updates、
+1. 将 B2-B4 的仓库级设置交由管理员决策：先取得 SHA 强制、Dependabot security updates、
    Dependency Review/CodeQL 可用性与 Environment 是否适用的明确证据，再决定 required check；不得在
    API 仍为 403/404 时加入永久失败的门禁。
-4. 为 Android 正式交付增加独立 checksum/attestation，并安排 B5 的实体 ARM64 设备验收；本次
+2. 为 Android 正式交付增加独立 checksum/attestation，并安排 B5 的实体 ARM64 设备验收；本次
    x86_64 Field 和 rehearsal 不能替代物理设备、生产网络或外部账号证据。
-5. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
+3. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
    和失败阶段；在有足够样本前不把单次 run 差值宣称为长期节省。
-6. 将 Android APK 的 App 指纹与 Codex 指纹分离，并依次处理 Relay 失败前移、超 SLA 告警和 cache
-   mode A/B；Field 同输入并发已在本分支实现，只有上述云端对照成功后才关闭对应项；每项以独立云端
+4. 将 Android APK 的 App 指纹与 Codex 指纹分离，并依次处理 Relay 失败前移、超 SLA 告警和 cache
+   mode A/B；Field 同输入并发已经过云端对照，每项后续优化仍以独立云端
    对照证明，不删除最终交付验收。
-7. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
+5. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
 
