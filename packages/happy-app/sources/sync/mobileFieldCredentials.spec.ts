@@ -3,7 +3,7 @@ import { fetchMobileFieldCredentials } from './mobileFieldCredentials';
 
 const credentials = {
     token: 'field-header.field-payload.field-signature',
-    secret: `${'a'.repeat(42)}A`,
+    secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
 };
 
 function response(body: unknown, init: ResponseInit = {}): Response {
