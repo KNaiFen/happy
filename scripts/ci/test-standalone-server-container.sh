@@ -118,6 +118,7 @@ assert_container_security() {
 }
 
 assert_host_health() {
+    # shellcheck disable=SC2016
     HOST_BASE_URL="$host_base_url" node -e '
         async function main() {
             const response = await fetch(new URL("/health", process.env.HOST_BASE_URL));
@@ -138,6 +139,7 @@ assert_host_attachment() {
         'process.stdout.write(require("node:fs").readFileSync("/data/ci-standalone-state.json"))' \
         > "$temporary_dir/ci-standalone-state.json"
 
+    # shellcheck disable=SC2016
     HOST_BASE_URL="$host_base_url" PHASE="$phase" STATE_PATH="$temporary_dir/ci-standalone-state.json" node -e '
         const fs = require("node:fs");
 
