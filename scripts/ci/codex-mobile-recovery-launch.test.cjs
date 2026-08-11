@@ -11,6 +11,73 @@ const { join, resolve } = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
+test('Android bootstrap waits for the first runtime credential request and fails closed', async () => {
+    const runner = await readFile(resolve(process.cwd(), 'scripts/ci/run-codex-android-field-e2e.sh'), 'utf8');
+    const start = runner.indexOf('assert_first_credential_request() {');
+    const end = runner.indexOf('\nrestart_app_after_process_death()', start);
+    assert.notEqual(start, -1);
+    assert.notEqual(end, -1);
+    const functionSource = runner.slice(start, end);
+    const bootstrapEnd = runner.indexOf('\n  "${BOOTSTRAP_FLOW_PATH}"');
+    const assertionCall = runner.indexOf('\nassert_first_credential_request\n', bootstrapEnd);
+    const zeroMachineDebug = runner.indexOf('--debug-output "${DEBUG_OUTPUT_DIR}/zero-machine"');
+    assert(bootstrapEnd > 0 && assertionCall > bootstrapEnd && zeroMachineDebug > assertionCall);
+    assert.match(runner, /CREDENTIAL_LOG="\$\{RUNNER_TEMP\}\/happy-mobile-credential-server\.log"/);
+    assert.match(runner, /test -f "\$\{CREDENTIAL_LOG\}"/);
+    const root = await mkdtemp(join(tmpdir(), 'happy-android-credential-request-'));
+    const sequencePath = join(root, 'seq');
+    const sleepPath = join(root, 'sleep');
+    try {
+        await writeFile(sequencePath, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "\${CREDENTIAL_TEST_SEQUENCE:-1}"
+`, { mode: 0o755 });
+        await writeFile(sleepPath, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "\${CREDENTIAL_TEST_APPEND:-}" ]]; then
+  printf '%s\\n' "$CREDENTIAL_TEST_APPEND" >> "$CREDENTIAL_LOG"
+fi
+`, { mode: 0o755 });
+
+        let assertionCount = 0;
+        const runAssertion = async ({ initialLog = '', append = '', sequence = '1' }) => {
+            const logPath = join(root, `credential-${assertionCount++}.log`);
+            await writeFile(logPath, initialLog);
+            return spawnSync('bash', ['-c', `set -euo pipefail
+${functionSource}
+assert_first_credential_request
+`], {
+                encoding: 'utf8',
+                env: {
+                    ...process.env,
+                    CREDENTIAL_LOG: logPath,
+                    CREDENTIAL_TEST_APPEND: append,
+                    CREDENTIAL_TEST_SEQUENCE: sequence,
+                    PATH: `${root}:${process.env.PATH}`,
+                },
+            });
+        };
+
+        const accepted = await runAssertion({
+            append: 'Mobile Field credential request 1: method=GET status=200',
+            sequence: '1 2',
+        });
+        assert.equal(accepted.status, 0, accepted.stderr);
+
+        const rejected = await runAssertion({
+            initialLog: 'Mobile Field credential request 1: method=GET status=404\n',
+        });
+        assert.notEqual(rejected.status, 0);
+        assert.match(rejected.stderr, /exact loopback endpoint/);
+
+        const missing = await runAssertion({ initialLog: '', sequence: '1' });
+        assert.notEqual(missing.status, 0);
+        assert.match(missing.stderr, /Timed out waiting for the App/);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
 test('Android process-death recovery uses bounded ADB startup before Maestro assertions', async () => {
     const [recoveryFlow, runner] = await Promise.all([
         readFile(resolve(process.cwd(), 'scripts/ci/maestro/codex-mobile-recovery.yml'), 'utf8'),

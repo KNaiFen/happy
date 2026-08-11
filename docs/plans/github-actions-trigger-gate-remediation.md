@@ -2,11 +2,11 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。当前实施分支已完成 Field 凭据运行时注入、App 指纹、独立 APK producer job 与失败安全复用的源码实现，但自动 cache miss 与受控手动 cache hit 尚无云端证据，因此阶段 2 的 APK 项仍保持未完成。长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收也仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。PR #44 已将 Field 凭据运行时注入、App 指纹、独立 APK producer job 与失败安全复用合并到 main；其自动 cache miss 已成功构建、校验、上传和消费 APK，但真实 App surface 因 React Native `whatwg-fetch` 的 `cache: no-store` 将精确 loopback 路径改写为带查询的 URL 而失败。该修复尚待新的 PR/main、自动 miss 与受控手动 cache hit 云端证据，因此阶段 2 的 APK 项仍保持未完成。长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收也仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@0bc54735862b1f097561971d7036643f6a92e626`（PR #43 squash merge）。
-- 当前实施分支：`codex/kb-maintenance-20260811-field-apk-reuse`；`main` 已包含 Field 并发/成功收据
-  去重的云端验收记录，本分支继续实现 App 指纹 APK 复用。本阶段不改变包版本或生产可分发行为。
+- 当前基线：`origin/main@5be51a792bb1cc6c9471a1ba49acd49a78c7d47f`（PR #44 squash merge）。
+- 当前实施分支：`codex/kb-maintenance-20260811-field-startup`；`main` 已包含 Field 并发/成功收据
+  去重和 APK producer 的云端记录，本分支只修复 Field loopback 客户端请求保持精确路径。本阶段不改变包版本或生产可分发行为。
 - 本地复审：PR #41 的 Official Codex 复用 Node 12 项测试、Field 去重 Node 9 项测试、综合 Node
   61 项测试、Node syntax check、12 个 workflow 的 Ruby YAML 解析和 `git diff --check` 均通过；测试包含
   mock `gh api` 的空候选、可信 receipt ZIP 和 API 不可用回退。PR #42 的 PR/main 云端对照已补足同 recipe
@@ -127,6 +127,21 @@
   与四个 promotion 全部 skipped、artifact 数为零。自动 Field [31451157897](https://github.com/KNaiFen/happy/actions/runs/31451157897)
   成功后上传 receipt `9086877640`；同 SHA 手动对照 [31451221044](https://github.com/KNaiFen/happy/actions/runs/31451221044)
   等待自动 run 后以 `reason=prior-success` 成功，Android Field job skipped，详见阶段 2 与阶段 4。
+- Android Field APK producer 与运行时凭据注入：PR [#44](https://github.com/KNaiFen/happy/pull/44)，PR head
+  `21d9361f3fae34a6804a8f4529224cb3030d59d5`，已于 `2026-08-11T04:27:55Z` squash merge 为
+  `5be51a792bb1cc6c9471a1ba49acd49a78c7d47f`。PR 的 Documentation
+  [31457748571](https://github.com/KNaiFen/happy/actions/runs/31457748571)、CLI Smoke
+  [31457748567](https://github.com/KNaiFen/happy/actions/runs/31457748567) 和 Required CI
+  [31457748755](https://github.com/KNaiFen/happy/actions/runs/31457748755) 均成功。merge-SHA main CI
+  [31458552949](https://github.com/KNaiFen/happy/actions/runs/31458552949) 成功，自动 Field
+  [31459331849](https://github.com/KNaiFen/happy/actions/runs/31459331849) 的独立 APK producer 成功构建、
+  校验、上传和下游复验 APK，但 App surface 未绘制首帧。诊断证明该 APK 使用 React Native 0.83 的
+  `whatwg-fetch`；客户端传入 `cache: no-store` 后，polyfill 会把 GET URL 改写为
+  `/credentials?_=...`，而 loopback 服务按契约拒绝查询字符串并返回 404，初始化 catch 又保留 splash。
+  当前分支以 `Cache-Control: no-store` 请求头替代该 RequestInit 选项，并增加无 payload 请求状态日志；
+  workflow readiness 只等待服务 `ready` 日志且在 App 启动前拒绝任何请求记录，runner 则在 bootstrap
+  Maestro 成功后要求首个请求为精确 `GET /credentials` 的 `200`，避免把探测请求冒充 App 证据。修复尚未
+  取得 PR/main/Field 证据，不能勾选 APK 复用项。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -530,7 +545,7 @@ Environment 数量为零。Secret scanning 与 push protection 已启用，rules
 | B4：Environment/部署边界 | Environment 数量为零；当前仓库只有构建与 artifact 交付，没有已确认的自动生产部署目标。 | 维护者确认是否存在需要审批、健康检查和回滚的部署；没有部署则记录“不适用”的 ADR/长期决定。 | 有部署时 environment protection、审批人与回滚 runbook 经演练；无部署时文档明确 build-only，计划不再把 environment 当未决门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
 | B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |
-| B7：后续实现工作 | PR #42 已完成 Field admission、同 SHA `cancel-in-progress: false` 锁和同 recipe 成功 receipt 去重的 PR/main/手动同 SHA 云端对照；当前分支已实现 APK App 指纹、独立 producer 与严格下载校验，但尚无 main cache miss + 强制手动 cache hit 的云端对照。Relay 前移检查、超 SLA 告警和 cache mode A/B 仍未实现。 | 先完成本分支 PR/main CI、自动 miss 和显式手动 hit；取得 artifact/provenance/耗时证据后再关闭 APK 子项。Relay 前移、SLA 与 cache A/B 分别使用独立 PR；daily schedule 只作为新增样本。 | APK 只按可验证 App 指纹复用，miss 与 hit 均完成全部 Field 断言且 hit 跳过 Gradle/NDK/CMake；Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
+| B7：后续实现工作 | PR #42 已完成 Field admission、同 SHA `cancel-in-progress: false` 锁和同 recipe 成功 receipt 去重的 PR/main/手动同 SHA 云端对照。PR #44 的 APK App 指纹、独立 producer 与严格下载校验已合并；自动 cache miss 已证明 producer 和消费者校验，但 App 因 `cache: no-store` URL 改写而在 splash 前失败。当前分支改用请求头，readiness 不再消费凭据端点，并在 App bootstrap 后核验首个无 payload 请求状态。Relay 前移检查、超 SLA 告警和 cache mode A/B 仍未实现。 | 先完成本修复分支 PR/main CI、自动 miss 和显式手动 hit；取得 artifact/provenance、App bootstrap 后首个请求为 `GET 200`、耗时证据后再关闭 APK 子项。Relay 前移、SLA 与 cache A/B 分别使用独立 PR；daily schedule 只作为新增样本。 | APK 只按可验证 App 指纹复用，miss 与 hit 均完成全部 Field 断言且 hit 跳过 Gradle/NDK/CMake；凭据服务仅记录无 payload 的请求结果，readiness 不产生请求且 App bootstrap 产生首个成功请求；Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
 
 ## 验收矩阵
 
@@ -548,6 +563,7 @@ node --test scripts/ci/android-field-run-dedup.test.cjs
 node --test scripts/ci/android-field-apk-reuse.test.cjs
 node --test packages/happy-app/mobileFieldConfig.test.cjs
 node --test scripts/ci/mobile-field-credential-server.test.cjs
+node --test scripts/ci/codex-mobile-recovery-launch.test.cjs
 node --test scripts/ci/workflow-action-security.test.cjs
 node --test scripts/ci/verify-release-source-gate.test.cjs
 node --test scripts/ci/release-candidate-promotion.test.cjs
@@ -575,7 +591,8 @@ git diff --cached --check
 - 同 SHA 的自动 `workflow_run` Field 成功 receipt 后，后继 `workflow_dispatch` 或 schedule run 必须保留
   `reason=prior-success` 与 skipped Android Field job；在 receipt 不存在、过期或校验失败时必须执行真实 Field。
 - APK 复用首次验收必须包含自动 cache miss 与同 main SHA 的显式 `force_full_field=true` cache hit；hit 只跳过
-  APK 构建相关步骤，仍须重复 provenance、APK 内容、模拟器和完整 Field 断言。默认手动、定时与自动事件不得
+  APK 构建相关步骤，仍须重复 provenance、APK 内容、模拟器和完整 Field 断言。自动 miss 的 readiness
+  不得请求 `/credentials`，且 App bootstrap 成功后必须记录首个 `GET 200`。默认手动、定时与自动事件不得
   绕过成功收据。
 - ruleset、Actions 安全设置和真实设备验收记录管理员、时间、URL 与结果，不以计划勾选代替外部证据。
 - 完成后重新采样至少 20 次相关 workflow，报告重复 run、runner 分钟、wall P50/P90、取消率和失败阶段分布。
@@ -597,9 +614,10 @@ git diff --cached --check
    x86_64 Field 和 rehearsal 不能替代物理设备、生产网络或外部账号证据。
 3. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
    和失败阶段；在有足够样本前不把单次 run 差值宣称为长期节省。
-4. 先完成 Android APK App 指纹分支的 PR/main、自动 miss 与显式手动 hit 云端对照，再依次处理 Relay
-   失败前移、超 SLA 告警和 cache mode A/B；Field 同输入并发已经过云端对照，每项后续优化仍以独立云端
-   对照证明，不删除最终交付验收。
+4. 先完成 Field loopback 精确路径修复的 PR/main；自动 miss 必须证明 readiness 未消费端点，并在 App
+   bootstrap 成功后记录首个 `GET 200`，随后在同一 main SHA 显式手动 hit，证明 APK 构建步骤 skipped 且
+   完整场景成功，再依次处理 Relay 失败前移、超 SLA 告警和 cache mode A/B；Field 同输入并发已经过云端
+   对照，每项后续优化仍以独立云端对照证明，不删除最终交付验收。
 5. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件

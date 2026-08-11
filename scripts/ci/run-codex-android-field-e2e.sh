@@ -23,6 +23,7 @@ DEBUG_OUTPUT_DIR="${ARTIFACT_DIR}/maestro-debug"
 VERIFICATION_FILE="${HAPPY_MOBILE_E2E_ROOT}/roundtrip-verified.json"
 DIAGNOSTICS_FILE="${HAPPY_MOBILE_E2E_ROOT}/field-diagnostics.json"
 APP_READY_FILE="${HAPPY_MOBILE_E2E_ROOT}/app-ready"
+CREDENTIAL_LOG="${RUNNER_TEMP}/happy-mobile-credential-server.log"
 
 mkdir -p "${ARTIFACT_DIR}" "${TEST_OUTPUT_DIR}" "${DEBUG_OUTPUT_DIR}"
 
@@ -47,6 +48,25 @@ capture_diagnostics() {
   return "${status}"
 }
 trap capture_diagnostics EXIT
+
+assert_first_credential_request() {
+  local expected_request='Mobile Field credential request 1: method=GET status=200'
+  local first_request_prefix='Mobile Field credential request 1:'
+  for _ in $(seq 1 300); do
+    if grep -Fqx "${expected_request}" "${CREDENTIAL_LOG}"; then
+      return 0
+    fi
+    if grep -Fq "${first_request_prefix}" "${CREDENTIAL_LOG}"; then
+      echo "The App did not fetch credentials from the exact loopback endpoint." >&2
+      tail -n 50 "${CREDENTIAL_LOG}" >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for the App to fetch loopback credentials." >&2
+  tail -n 50 "${CREDENTIAL_LOG}" >&2 || true
+  return 1
+}
 
 restart_app_after_process_death() {
   local launch_log="${ARTIFACT_DIR}/recovery-am-start.txt"
@@ -103,6 +123,7 @@ test -f "${FLOW_PATH}"
 test -f "${RECOVERY_FLOW_PATH}"
 test -x "${MAESTRO_BIN}"
 test -f "${HAPPY_MOBILE_E2E_PID_FILE}"
+test -f "${CREDENTIAL_LOG}"
 [[ "${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}" =~ ^[0-9]+$ ]]
 (( HAPPY_MOBILE_E2E_BOOTSTRAP_PORT >= 1 && HAPPY_MOBILE_E2E_BOOTSTRAP_PORT <= 65535 ))
 
@@ -122,6 +143,8 @@ adb logcat -c
   --test-output-dir "${TEST_OUTPUT_DIR}/bootstrap" \
   --debug-output "${DEBUG_OUTPUT_DIR}/bootstrap" \
   "${BOOTSTRAP_FLOW_PATH}"
+
+assert_first_credential_request
 
 "${MAESTRO_BIN}" \
   --no-ansi \
