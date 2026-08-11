@@ -74,8 +74,12 @@ export async function fetchMobileFieldCredentials(
     const url = assertLoopbackCredentialsUrl(bootstrapUrl);
     const response = await fetchImpl(url, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
+        // React Native's whatwg-fetch appends a cache-busting query for
+        // RequestInit.cache, which would violate the exact loopback route.
+        headers: {
+            Accept: 'application/json',
+            'Cache-Control': 'no-store',
+        },
         redirect: 'error',
     });
     if (!response.ok) {

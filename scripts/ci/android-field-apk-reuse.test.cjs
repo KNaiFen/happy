@@ -480,6 +480,19 @@ test('workflow separates APK production from Field execution and keeps the full 
     assert.match(fieldJob, /verify-android-field-apk\.sh/);
     assert.match(fieldJob, /Run API 36 Android field scenario/);
     assert.match(fieldJob, /android-field-run-dedup\.cjs write/);
+    const fixtureStepStart = fieldJob.indexOf('      - name: Start real relay and prepare App authentication');
+    const fixtureStepEnd = fieldJob.indexOf('\n      - name:', fixtureStepStart + 1);
+    assert(fixtureStepStart > 0 && fixtureStepEnd > fixtureStepStart);
+    const fixtureStep = fieldJob.slice(fixtureStepStart, fixtureStepEnd);
+    assert.match(
+        fixtureStep,
+        /grep -Fqx[\s\S]*Mobile Field credential server ready on 127\.0\.0\.1:\$\{HAPPY_MOBILE_E2E_BOOTSTRAP_PORT\}/,
+    );
+    assert.match(fixtureStep, /if grep -Fq 'Mobile Field credential request ' "\$CREDENTIAL_LOG"; then/);
+    const credentialServerStart = fieldJob.indexOf('          CREDENTIAL_LOG="$RUNNER_TEMP/happy-mobile-credential-server.log"');
+    const emulatorStepStart = fieldJob.indexOf('      - name: Run API 36 Android field scenario');
+    assert(credentialServerStart > 0 && emulatorStepStart > credentialServerStart);
+    assert.doesNotMatch(fieldJob.slice(credentialServerStart, emulatorStepStart), /\/credentials/);
     assert.doesNotMatch(fieldJob, /assembleRelease|expo prebuild|setup-gradle/);
     assert.doesNotMatch(field, /EXPO_PUBLIC_DEV_TOKEN|EXPO_PUBLIC_DEV_SECRET/);
 });

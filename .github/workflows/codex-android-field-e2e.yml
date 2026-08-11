@@ -437,8 +437,9 @@ jobs:
           CREDENTIAL_PID=$!
           printf '%s\n' "$CREDENTIAL_PID" > "$CREDENTIAL_PID_FILE"
           for _ in $(seq 1 300); do
-            if curl --fail --silent --output /dev/null \
-              "http://127.0.0.1:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}/credentials"; then
+            if grep -Fqx \
+              "Mobile Field credential server ready on 127.0.0.1:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}" \
+              "$CREDENTIAL_LOG"; then
               break
             fi
             if ! kill -0 "$CREDENTIAL_PID" 2>/dev/null; then
@@ -449,8 +450,14 @@ jobs:
             sleep 0.1
           done
           kill -0 "$CREDENTIAL_PID"
-          curl --fail --silent --output /dev/null \
-            "http://127.0.0.1:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}/credentials"
+          grep -Fqx \
+            "Mobile Field credential server ready on 127.0.0.1:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}" \
+            "$CREDENTIAL_LOG"
+          if grep -Fq 'Mobile Field credential request ' "$CREDENTIAL_LOG"; then
+            echo "Credential readiness must not consume the App endpoint." >&2
+            tail -n 50 "$CREDENTIAL_LOG" >&2
+            exit 1
+          fi
 
       - name: Install pinned Maestro CLI
         run: |

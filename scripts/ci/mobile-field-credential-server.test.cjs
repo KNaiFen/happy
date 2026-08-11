@@ -33,6 +33,10 @@ test('serves credentials only from the no-store loopback endpoint', async (conte
     const rejected = await fetch(`http://127.0.0.1:${address.port}/other`);
     assert.equal(rejected.status, 404);
     assert.equal(await rejected.text(), '');
+
+    const cacheBusted = await fetch(`http://127.0.0.1:${address.port}/credentials?_=123`);
+    assert.equal(cacheBusted.status, 404);
+    assert.equal(await cacheBusted.text(), '');
 });
 
 test('validates the state file and bounded TCP port without echoing credentials', () => {

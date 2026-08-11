@@ -78,6 +78,14 @@ async function main() {
     const credentials = parseCredentialsFile(statePath);
     const port = parsePort(process.env.HAPPY_MOBILE_E2E_BOOTSTRAP_PORT);
     const server = createCredentialServer(credentials);
+    let requestCount = 0;
+    server.on('request', (request) => {
+        requestCount += 1;
+        const accepted = request.method === 'GET' && request.url === '/credentials';
+        process.stdout.write(
+            `Mobile Field credential request ${requestCount}: method=${request.method ?? 'UNKNOWN'} status=${accepted ? 200 : 404}\n`,
+        );
+    });
     await new Promise((resolve, reject) => {
         server.once('error', reject);
         server.listen(port, '127.0.0.1', resolve);

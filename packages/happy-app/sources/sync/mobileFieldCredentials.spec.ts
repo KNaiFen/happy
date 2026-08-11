@@ -37,8 +37,12 @@ describe('fetchMobileFieldCredentials', () => {
         )).resolves.toEqual(credentials);
         expect(fetchImpl).toHaveBeenCalledWith(
             'http://127.0.0.1:53587/credentials',
-            expect.objectContaining({ cache: 'no-store', redirect: 'error' }),
+            expect.objectContaining({
+                headers: expect.objectContaining({ 'Cache-Control': 'no-store' }),
+                redirect: 'error',
+            }),
         );
+        expect(fetchImpl.mock.calls[0]?.[1]).not.toHaveProperty('cache');
     });
 
     it.each([
