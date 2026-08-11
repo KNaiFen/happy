@@ -44,7 +44,6 @@
 - [账户数据删除与保留契约实施计划](./plans/account-data-deletion-and-retention-contract.md)
 - [GitHub Actions 提交与 PR 触发去重及发布门禁整改计划](./plans/github-actions-trigger-gate-remediation.md)
 - [Happy Server 包安装与解析契约修复计划](./plans/happy-server-global-package-resolution.md)
-- [Happy Server standalone Docker 路径修复计划](./plans/happy-server-standalone-docker-path.md)
 
 ## 审查记录
 
@@ -149,6 +148,7 @@
 - [Generic ACP Runner](./plans/archive/generic-acp-runner.md)
 - [happy-agent CLI Tool](./plans/archive/happy-agent.md)
 - [happy server — bundled self-host mode](./plans/archive/happy-serve-self-host.md)
+- [Happy Server standalone Docker 路径修复记录](./plans/archive/happy-server-standalone-docker-path.md)
 - [Minimal Fix Plan for Happy-CLI Bugs with TDD](./plans/archive/legacy/bug-fix-plan-2025-01-15-athundt.md)
 - [Metadata-Driven Model and Mode Selection on Client](./plans/archive/metadata-driven-model-mode-selection.md)
 - [pnpm Migration [Draft]](./plans/archive/pnpm-migration.md)
