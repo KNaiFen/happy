@@ -2,12 +2,12 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。PR #44 已将 Field 凭据运行时注入、App 指纹、独立 APK producer job 与失败安全复用合并到 main；PR #45 修复了 React Native `whatwg-fetch` 对 `cache: no-store` 的 URL 改写并使 readiness 不再消费凭据端点。新的自动 cache miss 随后证明 APK producer/消费者链路可用，但在启动 credential server 时暴露 32 字节 Base64URL secret 末字符校验只接受 16 个合法值中的 4 个；当前修复已同步两端的 canonical 校验，仍待 PR/main、自动 miss 与受控手动 cache hit 云端证据。因此阶段 2 的 APK 项保持未完成。长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收也仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类、Official Codex 跨 run 制品复用与 Android Field APK App 指纹复用，阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。PR #44 已将 Field 凭据运行时注入、App 指纹、独立 APK producer job 与失败安全复用合并到 main；PR #45 修复了 React Native `whatwg-fetch` 对 `cache: no-store` 的 URL 改写；PR #46 修复 Field-only secret 的 canonical Base64URL 校验。PR #46 merge SHA 的自动 cache miss 和显式同 SHA cache hit 均已完整通过，因此阶段 2 的 APK 子项完成。长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@f8418d1c43da49975e9bc11a92ed50325bad79f9`（PR #45 squash merge）。
-- 当前实施分支：`codex/kb-maintenance-20260811-field-secret-validation`；`main` 已包含 Field 并发/成功收据
-  去重、APK producer 与 loopback 精确路径修复。本分支同步修正 Field-only 凭据 secret 的 canonical Base64URL
-  校验，不改变包版本或生产可分发行为。
+- 当前基线：`origin/main@b81e57609cfa5ace8a6fe3d98824dd5bbe72b264`（PR #46 squash merge）。
+- Field canonical secret 修复：PR [#46](https://github.com/KNaiFen/happy/pull/46)，PR head
+  `4b7c5de0a10bc513191133db197e21d4c4c16d1d`，已于 `2026-08-11T08:16:52Z` squash merge 为
+  `b81e57609cfa5ace8a6fe3d98824dd5bbe72b264`；它不改变包版本或生产可分发行为。
 - 本地复审：PR #41 的 Official Codex 复用 Node 12 项测试、Field 去重 Node 9 项测试、综合 Node
   61 项测试、Node syntax check、12 个 workflow 的 Ruby YAML 解析和 `git diff --check` 均通过；测试包含
   mock `gh api` 的空候选、可信 receipt ZIP 和 API 不可用回退。PR #42 的 PR/main 云端对照已补足同 recipe
@@ -148,9 +148,11 @@
   `sha256:221be555d0ac3fd6ec53b685a213c4fdcdc8cd081028a973a6823f99a3046956`）及下游 APK 下载/内容复验，
   但 credential server 在模拟器启动前以 `Mobile Field credential state is malformed` 失败，没有成功 receipt。
   根因是 fixture 的 `randomBytes(32).toString('base64url')` 可产生 16 种合法末字符，而 server 和 App 都只接受
-  `A/Q/g/w` 四种；该缺陷会随机拒绝约 75% 的有效 secret。当前分支以“43 位 Base64URL、解码后恰为 32 字节、
-  重编码完全相等”替代该错误集合校验，并以旧实现拒绝的 `E` 结尾向量覆盖两端；修复尚未取得新的 PR/main/Field
-  证据，不能勾选 APK 复用项。
+  `A/Q/g/w` 四种；该缺陷会随机拒绝约 75% 的有效 secret。PR #46 以“43 位 Base64URL、解码后恰为 32 字节、
+  重编码完全相等”替代该错误集合校验，并以旧实现拒绝的 `E` 结尾向量覆盖两端；其 PR CI 全绿，merge-SHA main CI
+  [31472510598](https://github.com/KNaiFen/happy/actions/runs/31472510598) 的 18 个 job 亦全部成功。其后的自动
+  cache miss Field [31473619456](https://github.com/KNaiFen/happy/actions/runs/31473619456) 与显式同 SHA cache hit
+  [31476678804](https://github.com/KNaiFen/happy/actions/runs/31476678804) 已完成，精确 APK 复用证据见阶段 2。
 - 负责范围：`.github/workflows/`、知识库活动计划与 GitHub 仓库治理设置。
 - 版本边界：本计划只改变文档和 CI/发行编排，不改变可分发行为，不提升任何包版本。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
@@ -259,7 +261,7 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
   Happy SHA/run，避免缓存命中伪造编译来源。PR #41 已将该实现合并到 main；其首个 main run
   `31433827550` 在没有可信 producer 时按预期 fresh 编译并上传 recipe artifact，PR/main/Field 的
   “复用命中”对照已由 PR #42 的 PR/main/Field 云端运行完成。
-- [ ] Android Field 将 App 源码指纹与 Codex 指纹分离；相同 App 指纹的定时运行复用已验证 APK，不重复 Gradle 构建。
+- [x] Android Field 将 App 源码指纹与 Codex 指纹分离；自动 cache miss 与同一 `main` SHA 的显式 cache hit 已证明相同 App 指纹复用已验证 APK，且不重复 Gradle 构建。
 - [ ] 用新的 run 样本比较 wall time、runner time、cache restore/export 和失败定位时间，不仅比较单次绿色耗时。
 
 当前 main 的 Field 去重实现按 `workflow_run.head_sha` 或当前 `github.sha` 建立
@@ -277,7 +279,7 @@ receipt `9086877640`；同 SHA 的手动 `workflow_dispatch`
 取消已开始的 Android job；待运行的同 SHA run 仍可能被更新事件替换，这是 GitHub concurrency 的平台语义，
 但不再产生已开始 job 的 runner 浪费。
 
-当前实施分支把 APK 复用拆为两个可独立判定的阶段，但在取得云端对照前不勾选本项：
+APK 复用实现拆为两个可独立判定的阶段；下述自动 cache miss 与受控同 SHA cache hit 已完成这两个阶段的云端对照：
 
 - Field APK 不再嵌入每次 run 生成的 `EXPO_PUBLIC_DEV_TOKEN/SECRET`。显式 Field build 只允许从
   `http://127.0.0.1:53587/credentials` 获取 Compact JWS 与 32 字节 Base64URL secret；workflow 在
@@ -303,6 +305,30 @@ receipt `9086877640`；同 SHA 的手动 `workflow_dispatch`
   显式强制一次完整 Field，证明 `reason=trusted-app-fingerprint`、Gradle/NDK/CMake/build steps 全部 skipped、
   下载后的完整场景成功。未取得这两个精确 run、artifact ID/digest、producer/compiled SHA 和阶段耗时前，
   不得把源码测试或 PR CI 当作 APK 复用完成证据。
+
+PR #46 merge SHA `b81e57609cfa5ace8a6fe3d98824dd5bbe72b264` 的自动 cache miss
+[31473619456](https://github.com/KNaiFen/happy/actions/runs/31473619456) 先完成真实 APK producer：
+`93722332840` 从 `08:32:29Z` 至 `08:53:10Z`，耗时 20 分 41 秒；selector 输出
+`selected=false`、`reason=no-trusted-app-fingerprint`，写入 App fingerprint
+`63c266ee33804a507aa4cf979fedd3999d278e0314e0e6bd0452d87ad713b898`。它上传的 APK artifact
+`9094897770` 为 132,119,009 bytes，Actions digest 为
+`sha256:7ce22f9692c53450b6bc5214d849a7ef821048ef39a306ebc111fa19995c4e82`；consumer
+`93727188018` 从 `08:53:12Z` 至 `09:06:36Z`，耗时 13 分 24 秒，在下载和内容复验后完整通过。
+成功收据为 [9095310921](https://github.com/KNaiFen/happy/actions/runs/31473619456/artifacts/9095310921)，
+digest `sha256:6526b587c7d77497f992bba6e231a6bbd50c03acbb58dc8f05e1d07461d13d7d`。
+
+同一 SHA 的显式 `force_full_field=true` cache hit
+[31476678804](https://github.com/KNaiFen/happy/actions/runs/31476678804) 随后提供受控对照：producer
+`93732173850` 从 `09:13:55Z` 至 `09:14:20Z`，仅 25 秒，selector 输出
+`selected=true`、`reason=trusted-app-fingerprint`，并回绑同一 artifact ID/digest 与
+`compiled_happy_source_sha=b81e5760...`。Gradle、NDK/CMake、依赖安装、Wire 构建和 APK assemble
+步骤均为 skipped；consumer `93732284748` 仍从 `09:14:29Z` 至 `09:28:43Z` 运行 14 分 14 秒的
+下载复验、Relay、API 36 emulator 与四段 Maestro。诊断 artifact
+[9095966518](https://github.com/KNaiFen/happy/actions/runs/31476678804/artifacts/9095966518) 显示 readiness
+之后的首条 credential 记录为精确 `GET 200`、`phase=verified`、`providerRequestCount=8` 与
+`v4LifecycleCompleted=true`；新的成功收据 [9095963589](https://github.com/KNaiFen/happy/actions/runs/31476678804/artifacts/9095963589)
+的 digest 为 `sha256:039bdd72b673663395086ec76e80511dbe96724a7d8823f1805c5f43ba08dda7`。这组配对样本使
+producer 墙钟减少 20 分 16 秒，但不能替代 B6 所需的长期 P50/P90 采样。
 
 历史实现（PR #35，schema 4）的路径只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI` 完成事件
 触发，先核验该精确 `head_sha` 的 `Required CI gate` 成功、唯一未过期
@@ -554,7 +580,7 @@ Environment 数量为零。Secret scanning 与 push protection 已启用，rules
 | B4：Environment/部署边界 | Environment 数量为零；当前仓库只有构建与 artifact 交付，没有已确认的自动生产部署目标。 | 维护者确认是否存在需要审批、健康检查和回滚的部署；没有部署则记录“不适用”的 ADR/长期决定。 | 有部署时 environment protection、审批人与回滚 runbook 经演练；无部署时文档明确 build-only，计划不再把 environment 当未决门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
 | B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |
-| B7：后续实现工作 | PR #42 已完成 Field admission、同 SHA `cancel-in-progress: false` 锁和同 recipe 成功 receipt 去重的 PR/main/手动同 SHA 云端对照。PR #44 的 APK App 指纹、独立 producer 与严格下载校验已合并；PR #45 修复了 `cache: no-store` URL 改写。自动 cache miss `31468020054` 已证明 producer 和消费者 APK 校验，但 credential server 与 App 对 32 字节 Base64URL secret 都错误地只接受 4 个合法末字符，导致约 75% 的随机有效 secret 在模拟器启动前失败。当前分支已将两端收敛为 canonical decode/re-encode 校验，且保留 readiness 无请求与 bootstrap 后首个无 payload 请求状态。Relay 前移检查、超 SLA 告警和 cache mode A/B 仍未实现。 | 先完成本修复分支 PR/main CI、自动 miss 和显式手动 hit；取得 artifact/provenance、App bootstrap 后首个请求为 `GET 200`、耗时证据后再关闭 APK 子项。Relay 前移、SLA 与 cache A/B 分别使用独立 PR；daily schedule 只作为新增样本。 | APK 只按可验证 App 指纹复用，miss 与 hit 均完成全部 Field 断言且 hit 跳过 Gradle/NDK/CMake；凭据服务仅记录无 payload 的请求结果，readiness 不产生请求且 App bootstrap 产生首个成功请求；Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
+| B7：后续实现工作 | PR #46 已关闭 canonical secret 缺陷；自动 miss `31473619456` 与显式同 SHA hit `31476678804` 已证明 APK App 指纹复用、严格下载复验、readiness 无请求、App 首个无 payload `GET 200` 与完整 Field 断言。APK 子项不再阻塞。Relay 前移检查、超 SLA 告警和 Relay cache mode A/B 仍未实现。 | Relay 前移、SLA 与 cache A/B 分别使用独立 PR；daily schedule 只作为 B6 的新增样本。 | Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
 
 ## 验收矩阵
 
@@ -599,10 +625,10 @@ git diff --cached --check
 - merge SHA 的 post-merge/main 工作流按设计运行；任何 release 候选物只能引用该精确 SHA。
 - 同 SHA 的自动 `workflow_run` Field 成功 receipt 后，后继 `workflow_dispatch` 或 schedule run 必须保留
   `reason=prior-success` 与 skipped Android Field job；在 receipt 不存在、过期或校验失败时必须执行真实 Field。
-- APK 复用首次验收必须包含自动 cache miss 与同 main SHA 的显式 `force_full_field=true` cache hit；hit 只跳过
-  APK 构建相关步骤，仍须重复 provenance、APK 内容、模拟器和完整 Field 断言。自动 miss 的 readiness
-  不得请求 `/credentials`，且 App bootstrap 成功后必须记录首个 `GET 200`。默认手动、定时与自动事件不得
-  绕过成功收据。
+- APK 复用首次验收已由自动 cache miss `31473619456` 与同 main SHA 的显式
+  `force_full_field=true` cache hit `31476678804` 满足；hit 只跳过 APK 构建相关步骤，仍重复 provenance、
+  APK 内容、模拟器和完整 Field 断言。自动 miss readiness 未请求 `/credentials`，且 App bootstrap 后记录首个
+  `GET 200`。默认手动、定时与自动事件仍不得绕过成功收据；未来变更 App 指纹契约时必须重新取得同等对照。
 - ruleset、Actions 安全设置和真实设备验收记录管理员、时间、URL 与结果，不以计划勾选代替外部证据。
 - 完成后重新采样至少 20 次相关 workflow，报告重复 run、runner 分钟、wall P50/P90、取消率和失败阶段分布。
 
@@ -623,10 +649,9 @@ git diff --cached --check
    x86_64 Field 和 rehearsal 不能替代物理设备、生产网络或外部账号证据。
 3. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
    和失败阶段；在有足够样本前不把单次 run 差值宣称为长期节省。
-4. 先完成 Field canonical secret 修复的 PR/main；自动 miss 必须证明 readiness 未消费端点，并在 App
-   bootstrap 成功后记录首个 `GET 200`，随后在同一 main SHA 显式手动 hit，证明 APK 构建步骤 skipped 且
-   完整场景成功，再依次处理 Relay 失败前移、超 SLA 告警和 cache mode A/B；Field 同输入并发已经过云端
-   对照，每项后续优化仍以独立云端对照证明，不删除最终交付验收。
+4. APK 复用的 automatic miss/hit 对照已经完成；接下来依次以独立 PR 处理 Relay 失败前移、超 SLA
+   告警和 cache mode A/B。Field 同输入并发已经过云端对照，每项后续优化仍以独立云端对照证明，不删除
+   最终交付验收。
 5. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
