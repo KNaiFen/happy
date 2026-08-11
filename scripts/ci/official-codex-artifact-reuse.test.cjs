@@ -287,6 +287,7 @@ test('rejects untrusted producer identity, gate, attempt, and artifact lifetime 
     };
     for (const [override, pattern] of [
         [{ event: 'pull_request' }, /push run/],
+        [{ event: 'workflow_dispatch' }, /push run/],
         [{ path: '.github/workflows/other.yml' }, /canonical CI/],
         [{ workflow_id: workflowId + 1 }, /canonical CI/],
         [{ run_attempt: 2 }, /first CI run/],

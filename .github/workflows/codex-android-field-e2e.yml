@@ -14,13 +14,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: codex-android-field-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: codex-android-field-${{ github.workflow }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   reuse_ci_artifact:
     name: Select verified CI Official Codex artifact
-    if: github.event_name == 'workflow_run'
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.run_attempt == 1 &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -51,14 +57,48 @@ jobs:
     if: github.event_name != 'workflow_run'
     uses: ./.github/workflows/build-official-codex-source.yml
 
-  android-field:
-    name: API 36 App to official Codex field round trip
+  field_dedup:
+    name: Check prior successful Android Field receipt
     needs: [reuse_ci_artifact, official_codex]
     if: >-
       always() && (
         (github.event_name == 'workflow_run' && needs.reuse_ci_artifact.result == 'success' && needs.reuse_ci_artifact.outputs.selected == 'true') ||
         (github.event_name != 'workflow_run' && needs.official_codex.result == 'success')
       )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.dedup.outputs.should_run }}
+      reason: ${{ steps.dedup.outputs.reason }}
+      receipt_run_id: ${{ steps.dedup.outputs.receipt_run_id }}
+      receipt_artifact_id: ${{ steps.dedup.outputs.receipt_artifact_id }}
+      receipt_artifact_digest: ${{ steps.dedup.outputs.receipt_artifact_digest }}
+    steps:
+      - name: Checkout target Field source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Find prior successful Field receipt
+        id: dedup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAPPY_FIELD_SOURCE_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
+          HAPPY_FIELD_SOURCE_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+          HAPPY_OFFICIAL_CODEX_RECIPE_FINGERPRINT: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.recipe_fingerprint || needs.official_codex.outputs.recipe_fingerprint }}
+        run: >-
+          node scripts/ci/android-field-run-dedup.cjs find
+          "$HAPPY_FIELD_SOURCE_SHA" "$HAPPY_OFFICIAL_CODEX_RECIPE_FINGERPRINT"
+          "$HAPPY_FIELD_SOURCE_BRANCH" "$GITHUB_RUN_ID"
+
+  android-field:
+    name: API 36 App to official Codex field round trip
+    needs: [reuse_ci_artifact, official_codex, field_dedup]
+    if: >-
+      always() &&
+      needs.field_dedup.result == 'success' &&
+      needs.field_dedup.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 100
     env:
@@ -72,6 +112,7 @@ jobs:
       MAESTRO_CLI_NO_ANALYTICS: "1"
       MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: "true"
       HAPPY_FIELD_SOURCE_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
+      HAPPY_FIELD_SOURCE_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
       HAPPY_OFFICIAL_CODEX_ATTESTED_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || needs.official_codex.outputs.attested_happy_source_sha }}
       HAPPY_OFFICIAL_CODEX_ATTESTATION_RUN_ID: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.source_run_id || needs.official_codex.outputs.attestation_run_id }}
       HAPPY_OFFICIAL_CODEX_RECIPE_FINGERPRINT: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.recipe_fingerprint || needs.official_codex.outputs.recipe_fingerprint }}
@@ -338,6 +379,24 @@ jobs:
           disable-animations: true
           disable-spellchecker: true
           script: bash scripts/ci/run-codex-android-field-e2e.sh
+
+      - name: Write successful Field receipt
+        id: field_receipt
+        if: env.HAPPY_FIELD_SOURCE_BRANCH == 'main' && github.run_attempt == 1
+        run: >-
+          node scripts/ci/android-field-run-dedup.cjs write
+          "$RUNNER_TEMP/happy-android-field-success/receipt.json"
+          "$HAPPY_FIELD_SOURCE_SHA" "$HAPPY_OFFICIAL_CODEX_RECIPE_FINGERPRINT"
+          "$HAPPY_OFFICIAL_CODEX_ATTESTATION_RUN_ID"
+
+      - name: Upload successful Field receipt
+        if: env.HAPPY_FIELD_SOURCE_BRANCH == 'main' && github.run_attempt == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.field_receipt.outputs.artifact_name }}
+          path: ${{ runner.temp }}/happy-android-field-success/receipt.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Stop fixture
         if: always()
