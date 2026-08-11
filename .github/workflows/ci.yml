@@ -71,6 +71,7 @@ jobs:
 
       - name: Test release and workflow security gates
         run: |
+          node --test scripts/ci/android-field-run-dedup.test.cjs
           node --test scripts/ci/workflow-action-security.test.cjs
           node --test scripts/ci/verify-release-source-gate.test.cjs
           node --test scripts/ci/release-candidate-promotion.test.cjs
