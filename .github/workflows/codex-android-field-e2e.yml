@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
+    inputs:
+      force_full_field:
+        description: Run the full Field scenario even when a success receipt exists
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -91,16 +97,130 @@ jobs:
           node scripts/ci/android-field-run-dedup.cjs find
           "$HAPPY_FIELD_SOURCE_SHA" "$HAPPY_OFFICIAL_CODEX_RECIPE_FINGERPRINT"
           "$HAPPY_FIELD_SOURCE_BRANCH" "$GITHUB_RUN_ID"
+          "${{ github.event_name == 'workflow_dispatch' && inputs.force_full_field || false }}"
 
-  android-field:
-    name: API 36 App to official Codex field round trip
+  field_apk:
+    name: Build or reuse Android Field APK
     needs: [reuse_ci_artifact, official_codex, field_dedup]
     if: >-
       always() &&
       needs.field_dedup.result == 'success' &&
       needs.field_dedup.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 45
+    env:
+      CI: "1"
+      HAPPY_FIELD_SOURCE_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
+    outputs:
+      app_fingerprint: ${{ steps.fingerprint.outputs.app_fingerprint }}
+      artifact_name: ${{ steps.fingerprint.outputs.artifact_name }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id || steps.reuse.outputs.artifact_id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest || steps.reuse.outputs.artifact_digest }}
+      reused: ${{ steps.reuse.outputs.selected }}
+      producer_run_id: ${{ steps.reuse.outputs.producer_run_id || github.run_id }}
+      compiled_happy_source_sha: ${{ steps.reuse.outputs.compiled_happy_source_sha || (github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha) }}
+    steps:
+      - name: Checkout App source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Compute Android Field App fingerprint
+        id: fingerprint
+        run: node scripts/ci/android-field-apk-reuse.cjs fingerprint
+
+      - name: Find verified Android Field APK
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/ci/android-field-apk-reuse.cjs find
+          "${{ steps.fingerprint.outputs.app_fingerprint }}" "$GITHUB_RUN_ID"
+
+      - name: Install pnpm for APK build
+        if: steps.reuse.outputs.selected != 'true'
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js for APK build
+        if: steps.reuse.outputs.selected != 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Java for APK build
+        if: steps.reuse.outputs.selected != 'true'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK for APK build
+        if: steps.reuse.outputs.selected != 'true'
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+
+      - name: Install Android APK build tools
+        if: steps.reuse.outputs.selected != 'true'
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+
+      - name: Configure Gradle cache for APK build
+        if: steps.reuse.outputs.selected != 'true'
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Install APK build dependencies
+        if: steps.reuse.outputs.selected != 'true'
+        run: timeout 5m pnpm install --frozen-lockfile
+
+      - name: Build Wire dependency for APK
+        if: steps.reuse.outputs.selected != 'true'
+        run: pnpm --filter @slopus/happy-wire build
+
+      - name: Report Android capacity before APK build
+        if: steps.reuse.outputs.selected != 'true'
+        run: df -h /
+
+      - name: Build and verify standalone New Architecture x86_64 APK
+        if: steps.reuse.outputs.selected != 'true'
+        run: bash scripts/ci/build-android-field-apk.sh "$RUNNER_TEMP/happy-field-apk-artifact"
+
+      - name: Write source-bound Android Field APK manifest
+        if: steps.reuse.outputs.selected != 'true'
+        run: >-
+          node scripts/ci/android-field-apk-reuse.cjs write
+          "$RUNNER_TEMP/happy-field-apk-artifact/app-release.apk"
+          "$RUNNER_TEMP/happy-field-apk-artifact/field-apk-manifest.json"
+          "${{ steps.fingerprint.outputs.app_fingerprint }}" "$HAPPY_FIELD_SOURCE_SHA"
+
+      - name: Upload reusable Android Field APK
+        id: upload
+        if: steps.reuse.outputs.selected != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.fingerprint.outputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/happy-field-apk-artifact/app-release.apk
+            ${{ runner.temp }}/happy-field-apk-artifact/field-apk-manifest.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Report Android capacity after APK build
+        if: always() && steps.reuse.outputs.selected != 'true'
+        run: df -h /
+
+  android-field:
+    name: API 36 App to official Codex field round trip
+    needs: [reuse_ci_artifact, official_codex, field_dedup, field_apk]
+    if: >-
+      always() &&
+      needs.field_dedup.result == 'success' &&
+      needs.field_dedup.outputs.should_run == 'true' &&
+      needs.field_apk.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
     env:
       CI: "1"
       HAPPY_MOBILE_E2E_PORT: "53586"
@@ -146,18 +266,33 @@ jobs:
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
 
       - name: Install Android build tools
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
-
-      - name: Configure Gradle cache
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: timeout 5m pnpm install --frozen-lockfile
 
       - name: Build Wire and CLI
         run: |
           pnpm --filter @slopus/happy-wire build
           pnpm --filter happy build
+
+      - name: Download verified Android Field APK
+        id: field_apk
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIELD_APK_ARTIFACT_ID: ${{ needs.field_apk.outputs.artifact_id }}
+          FIELD_APK_ARTIFACT_DIGEST: ${{ needs.field_apk.outputs.artifact_digest }}
+          FIELD_APK_FINGERPRINT: ${{ needs.field_apk.outputs.app_fingerprint }}
+        run: >-
+          node scripts/ci/android-field-apk-reuse.cjs download
+          "$FIELD_APK_ARTIFACT_ID" "$FIELD_APK_ARTIFACT_DIGEST"
+          "$FIELD_APK_FINGERPRINT" "$RUNNER_TEMP/verified-field-apk"
+
+      - name: Verify Android Field APK content
+        run: >-
+          bash scripts/ci/verify-android-field-apk.sh
+          "$HAPPY_FIELD_APK_PATH" "${{ steps.field_apk.outputs.compiled_happy_source_sha }}"
+          "${{ steps.field_apk.outputs.compiled_commit_timestamp }}"
 
       - name: Pack and install CLI under test
         run: |
@@ -317,85 +452,6 @@ jobs:
           curl --fail --silent --output /dev/null \
             "http://127.0.0.1:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}/credentials"
 
-      - name: Verify embedded mobile Field configuration
-        env:
-          APP_ENV: development
-          NODE_ENV: production
-          HAPPY_DISABLE_OTA: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
-          HAPPY_MOBILE_FIELD_E2E: "1"
-          HAPPY_MOBILE_FIELD_BOOTSTRAP_URL: http://127.0.0.1:53587/credentials
-          EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
-          EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
-        run: |
-          CONFIG="$RUNNER_TEMP/happy-mobile-field-app-config.json"
-          pnpm --filter happy-app exec expo config --type public --json > "$CONFIG"
-          node - "$CONFIG" <<'NODE'
-          const fs = require('node:fs');
-          const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const app = config?.extra?.app;
-          if (
-            app?.mobileFieldE2E !== true
-            || app?.mobileFieldBootstrapUrl !== 'http://127.0.0.1:53587/credentials'
-            || config?.updates?.enabled !== false
-            || config?.android?.package !== 'com.slopus.happy.dev'
-          ) {
-            throw new Error('Generated Expo config does not match the mobile Field contract');
-          }
-          NODE
-
-      - name: Generate Android development project
-        env:
-          APP_ENV: development
-          NODE_ENV: production
-          HAPPY_DISABLE_OTA: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
-          HAPPY_MOBILE_FIELD_E2E: "1"
-          HAPPY_MOBILE_FIELD_BOOTSTRAP_URL: http://127.0.0.1:53587/credentials
-          EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
-          EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
-        run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
-
-      - name: Report Android build capacity before packaging
-        run: df -h /
-
-      - name: Build standalone New Architecture x86_64 field APK
-        env:
-          APP_ENV: development
-          NODE_ENV: production
-          HAPPY_DISABLE_OTA: "1"
-          HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
-          HAPPY_MOBILE_FIELD_E2E: "1"
-          HAPPY_MOBILE_FIELD_BOOTSTRAP_URL: http://127.0.0.1:53587/credentials
-          EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
-          EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
-        run: |
-          APK="packages/happy-app/android/app/build/outputs/apk/release/app-release.apk"
-          GRADLE_PROPERTIES="packages/happy-app/android/gradle.properties"
-          sed -i \
-            's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx5120m -XX:MaxMetaspaceSize=1024m/' \
-            "$GRADLE_PROPERTIES"
-          grep -Fq \
-            'org.gradle.jvmargs=-Xmx5120m -XX:MaxMetaspaceSize=1024m' \
-            "$GRADLE_PROPERTIES"
-          packages/happy-app/android/gradlew \
-            -p packages/happy-app/android \
-            assembleRelease \
-            -PreactNativeArchitectures=x86_64 \
-            -PnewArchEnabled=true \
-            --no-daemon \
-            --max-workers=2 \
-            --stacktrace
-          test -f "$APK"
-          BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK")"
-          APK_ENTRIES="$(unzip -Z1 "$APK")"
-          grep -Fq "package: name='com.slopus.happy.dev'" <<< "$BADGING"
-          grep -Fq "assets/index.android.bundle" <<< "$APK_ENTRIES"
-
-      - name: Report Android build capacity after packaging
-        if: always()
-        run: df -h /
-
       - name: Install pinned Maestro CLI
         run: |
           ARCHIVE="$RUNNER_TEMP/maestro.zip"
@@ -498,7 +554,5 @@ jobs:
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/daemon.log
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/cli-home/logs/*.log
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/field-diagnostics.json
-            packages/happy-app/android/build/reports/problems
-            packages/happy-app/android/app/build/reports
           if-no-files-found: warn
           retention-days: 7

@@ -2,11 +2,11 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。阶段 2 的 APK 源码指纹复用与长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
+- 当前状态：进行中（阶段 1、阶段 2 的变更分类与 Official Codex 跨 run 制品复用、阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。当前实施分支已完成 Field 凭据运行时注入、App 指纹、独立 APK producer job 与失败安全复用的源码实现，但自动 cache miss 与受控手动 cache hit 尚无云端证据，因此阶段 2 的 APK 项仍保持未完成。长期性能采样、Android 独立 attestation、仓库级安全设置、阶段 4 的其余 Relay/队列优化和实体设备验收也仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@41814d01b42c3afa91a0e4c0eb6ab03050c1376d`（PR #42 squash merge）。
-- 当前实施分支：`main` 已包含 Field CI 编排、测试和本文档所述的并发/去重实现；本阶段不改变
-  包版本或可分发行为。
+- 当前基线：`origin/main@0bc54735862b1f097561971d7036643f6a92e626`（PR #43 squash merge）。
+- 当前实施分支：`codex/kb-maintenance-20260811-field-apk-reuse`；`main` 已包含 Field 并发/成功收据
+  去重的云端验收记录，本分支继续实现 App 指纹 APK 复用。本阶段不改变包版本或生产可分发行为。
 - 本地复审：PR #41 的 Official Codex 复用 Node 12 项测试、Field 去重 Node 9 项测试、综合 Node
   61 项测试、Node syntax check、12 个 workflow 的 Ruby YAML 解析和 `git diff --check` 均通过；测试包含
   mock `gh api` 的空候选、可信 receipt ZIP 和 API 不可用回退。PR #42 的 PR/main 云端对照已补足同 recipe
@@ -252,6 +252,33 @@ receipt `9086877640`；同 SHA 的手动 `workflow_dispatch`
 为 skipped（没有 APK、emulator 或 Maestro 步骤）。自动 run 的 `cancelled_by=null` 且成功结束，证明后继不会
 取消已开始的 Android job；待运行的同 SHA run 仍可能被更新事件替换，这是 GitHub concurrency 的平台语义，
 但不再产生已开始 job 的 runner 浪费。
+
+当前实施分支把 APK 复用拆为两个可独立判定的阶段，但在取得云端对照前不勾选本项：
+
+- Field APK 不再嵌入每次 run 生成的 `EXPO_PUBLIC_DEV_TOKEN/SECRET`。显式 Field build 只允许从
+  `http://127.0.0.1:53587/credentials` 获取 Compact JWS 与 32 字节 Base64URL secret；workflow 在
+  emulator 上通过 `adb reverse` 暴露只绑定 loopback、`no-store` 的短生命周期服务。普通生产配置不启用
+  Field 标记或提供该 URL，普通开发 build 的既有环境变量入口不变。
+- App 指纹由 Git 索引中的 `packages/happy-app`、`packages/happy-wire`、root 安装清单与锁文件、patch、
+  postinstall、Field workflow 和 APK build/verify/archive helper 的 mode、blob 与路径形成，再与固定 Node、
+  pnpm、Java、SDK 36、build-tools、NDK、CMake、x86_64/New Architecture、OTA/HTTP/loopback 和 Gradle recipe
+  做 canonical SHA-256。它明确不包含 run 级凭据、Official Codex recipe、Happy SHA 或提交时间戳；后两者
+  作为实际 producer 的动态编译元数据写入 manifest，避免把内容等价复用误报为当前 SHA fresh build。
+- `Build or reuse Android Field APK` 是独立 producer job。cache miss 才安装 NDK/CMake、配置 Gradle cache、
+  prebuild 和 `assembleRelease`，在上传前验证包名、SDK 36、仅 x86_64、OTA disabled、loopback 配置、签名和
+  16 KB zip alignment；完整 Field job 即使随后失败，成功 producer 的 artifact 仍可供后继 run 使用。
+- selector 只接受同仓库、`main`、首轮、正确 workflow/path、唯一成功 producer job 与唯一未过期同指纹
+  artifact；重新获取 artifact/run/jobs/run-artifacts 后回绑 ID、run、SHA、大小和 Actions digest。下载 ZIP
+  上限 192 MiB、APK 上限 160 MiB、manifest/中央目录上限 64 KiB，并拒绝 ZIP64、多盘、额外/重复/穿越、
+  符号链接/特殊文件、加密、高压缩比和 CRC/声明大小不一致；selector 的外层、manifest 与 APK 任一校验
+  失败均回退 fresh build。消费 job 再下载一次精确 ID/digest，并重复 APK 内容检查后才运行原有 CLI、Relay、
+  Official Codex、API 36 emulator、四段 Maestro 和成功收据断言；若已选 immutable artifact 在第二次下载时
+  出现新的 API/传输故障则失败闭合，不在消费 job 内临时构建未经独立 producer job 证明的 APK。
+- `workflow_dispatch.force_full_field` 默认关闭，只允许显式手动 dispatch 绕过完整成功收据；它不跳过任何
+  APK 或 Field 检查。合并后先由自动 run 证明 cache miss/fresh build/upload/consume，再对同一 main SHA
+  显式强制一次完整 Field，证明 `reason=trusted-app-fingerprint`、Gradle/NDK/CMake/build steps 全部 skipped、
+  下载后的完整场景成功。未取得这两个精确 run、artifact ID/digest、producer/compiled SHA 和阶段耗时前，
+  不得把源码测试或 PR CI 当作 APK 复用完成证据。
 
 历史实现（PR #35，schema 4）的路径只改变 `main` 的 Field 输入：Field 改由 `Happy monorepo CI` 完成事件
 触发，先核验该精确 `head_sha` 的 `Required CI gate` 成功、唯一未过期
@@ -503,7 +530,7 @@ Environment 数量为零。Secret scanning 与 push protection 已启用，rules
 | B4：Environment/部署边界 | Environment 数量为零；当前仓库只有构建与 artifact 交付，没有已确认的自动生产部署目标。 | 维护者确认是否存在需要审批、健康检查和回滚的部署；没有部署则记录“不适用”的 ADR/长期决定。 | 有部署时 environment protection、审批人与回滚 runbook 经演练；无部署时文档明确 build-only，计划不再把 environment 当未决门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
 | B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |
-| B7：后续实现工作 | PR #42 已完成 Field admission、同 SHA `cancel-in-progress: false` 锁和同 recipe 成功 receipt 去重的 PR/main/手动同 SHA 云端对照；Android Field 仍每次构建 APK，Relay 前移检查、超 SLA 告警和 cache mode A/B 仍未实现。 | 分别实施 APK App 指纹复用、Relay 前移、SLA 与 cache A/B，每项独立 PR；daily schedule 仅作为新增样本继续记录，不把它作为已完成的手动同 SHA 对照替代项。 | APK 只按可验证 App 指纹复用；Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
+| B7：后续实现工作 | PR #42 已完成 Field admission、同 SHA `cancel-in-progress: false` 锁和同 recipe 成功 receipt 去重的 PR/main/手动同 SHA 云端对照；当前分支已实现 APK App 指纹、独立 producer 与严格下载校验，但尚无 main cache miss + 强制手动 cache hit 的云端对照。Relay 前移检查、超 SLA 告警和 cache mode A/B 仍未实现。 | 先完成本分支 PR/main CI、自动 miss 和显式手动 hit；取得 artifact/provenance/耗时证据后再关闭 APK 子项。Relay 前移、SLA 与 cache A/B 分别使用独立 PR；daily schedule 只作为新增样本。 | APK 只按可验证 App 指纹复用，miss 与 hit 均完成全部 Field 断言且 hit 跳过 Gradle/NDK/CMake；Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
 
 ## 验收矩阵
 
@@ -515,12 +542,19 @@ node --check scripts/ci/official-codex-artifact-reuse.cjs
 node --check scripts/ci/official-codex-artifact-reuse.test.cjs
 node --check scripts/ci/android-field-run-dedup.cjs
 node --check scripts/ci/android-field-run-dedup.test.cjs
+node --check scripts/ci/android-field-apk-reuse.cjs
 node --test scripts/ci/official-codex-artifact-reuse.test.cjs
 node --test scripts/ci/android-field-run-dedup.test.cjs
+node --test scripts/ci/android-field-apk-reuse.test.cjs
+node --test packages/happy-app/mobileFieldConfig.test.cjs
+node --test scripts/ci/mobile-field-credential-server.test.cjs
 node --test scripts/ci/workflow-action-security.test.cjs
 node --test scripts/ci/verify-release-source-gate.test.cjs
 node --test scripts/ci/release-candidate-promotion.test.cjs
 python3 scripts/ci/release_candidate_archive_test.py
+python3 scripts/ci/android_field_apk_archive_test.py
+pnpm --filter happy-app exec vitest run sources/sync/mobileFieldCredentials.spec.ts sources/sync/devE2eBootstrap.spec.ts
+pnpm --filter happy-app typecheck
 node scripts/docs/knowledge-base.mjs --check
 git diff --check
 git diff --cached --check
@@ -540,6 +574,9 @@ git diff --cached --check
 - merge SHA 的 post-merge/main 工作流按设计运行；任何 release 候选物只能引用该精确 SHA。
 - 同 SHA 的自动 `workflow_run` Field 成功 receipt 后，后继 `workflow_dispatch` 或 schedule run 必须保留
   `reason=prior-success` 与 skipped Android Field job；在 receipt 不存在、过期或校验失败时必须执行真实 Field。
+- APK 复用首次验收必须包含自动 cache miss 与同 main SHA 的显式 `force_full_field=true` cache hit；hit 只跳过
+  APK 构建相关步骤，仍须重复 provenance、APK 内容、模拟器和完整 Field 断言。默认手动、定时与自动事件不得
+  绕过成功收据。
 - ruleset、Actions 安全设置和真实设备验收记录管理员、时间、URL 与结果，不以计划勾选代替外部证据。
 - 完成后重新采样至少 20 次相关 workflow，报告重复 run、runner 分钟、wall P50/P90、取消率和失败阶段分布。
 
@@ -560,8 +597,8 @@ git diff --cached --check
    x86_64 Field 和 rehearsal 不能替代物理设备、生产网络或外部账号证据。
 3. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
    和失败阶段；在有足够样本前不把单次 run 差值宣称为长期节省。
-4. 将 Android APK 的 App 指纹与 Codex 指纹分离，并依次处理 Relay 失败前移、超 SLA 告警和 cache
-   mode A/B；Field 同输入并发已经过云端对照，每项后续优化仍以独立云端
+4. 先完成 Android APK App 指纹分支的 PR/main、自动 miss 与显式手动 hit 云端对照，再依次处理 Relay
+   失败前移、超 SLA 告警和 cache mode A/B；Field 同输入并发已经过云端对照，每项后续优化仍以独立云端
    对照证明，不删除最终交付验收。
 5. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
