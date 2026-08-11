@@ -29,7 +29,8 @@ cd happy-relay
 
 宿主 secret 始终保存在 `root:root 0700` 的 `secrets/` 目录中，文件权限固定为
 `root:65532 0440`。Compose 将同一个文件只读挂载给 GID `65532` 的非 root
-服务进程；secret 不复制，也不进入容器环境或 `.env`。安装器和管理脚本会拒绝
+服务进程；secret 不复制，也不写入 Docker Config 环境或 `.env`。entrypoint 从只读
+挂载读取后，仅在服务进程运行期设置 `HANDY_MASTER_SECRET`。安装器和管理脚本会拒绝
 符号链接、非普通 secret 文件和多重硬链接，避免 root 命令跟随被替换的路径。
 
 新安装默认仅监听 `127.0.0.1:3005`，并始终使用 Codex Sync v4。常用管理命令：

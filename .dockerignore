@@ -1,5 +1,9 @@
 .git
 .DS_Store
+.env
+.env.*
+**/.env
+**/.env.*
 .claude
 .dev
 node_modules

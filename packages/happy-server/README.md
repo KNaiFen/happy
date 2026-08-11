@@ -43,12 +43,74 @@ not provide HTTPS transport protection and is outside that guarantee.
 
 ## Self-Hosting
 
-The Debian 13 amd64 Relay bundle below is the supported released self-hosted
-deployment. The repository-root `Dockerfile.server` is a legacy development
-image: it starts the standard Postgres-backed service and currently uses an
-obsolete workspace filter, so it is not a supported standalone/PGlite image.
-Do not use it for deployment. Its repair-or-retirement decision is tracked in
-[`docs/plans/happy-server-standalone-docker-path.md`](../../docs/plans/happy-server-standalone-docker-path.md).
+There are two supported self-hosting paths:
+
+- build the repository-root `Dockerfile.server` for a portable, single-container
+  PGlite deployment on the current host architecture;
+- use the versioned Debian 13 amd64 Relay bundle for an offline, prepackaged
+  release artifact with installer and lifecycle tooling.
+
+Neither path needs Postgres, Redis, or S3. Both store PGlite and local encrypted
+attachments in one `/data` volume and read the master secret from a narrowly
+mounted file.
+
+### Standalone Docker image (single container)
+
+The Docker command may be run by `root` on the host. Host `root` and anyone
+controlling the Docker daemon are trusted: they can read mounted secrets and
+volumes, replace the container, or execute a process as any user. The service
+process inside the container deliberately remains the unprivileged `65532:65532`
+user to reduce the permissions available after a service compromise; it does
+not protect against a host administrator.
+
+Build from the repository root:
+
+```bash
+docker build --file Dockerfile.server --tag happy-server-standalone:local .
+```
+
+Create one persistent data volume and one host-side secret file. Keep the same
+volume and secret across container replacement and upgrades:
+
+```bash
+install -d -o root -g 65532 -m 0750 /srv/happy-server/secrets
+umask 077
+openssl rand -hex 32 > /srv/happy-server/secrets/master-secret
+chown root:65532 /srv/happy-server/secrets/master-secret
+chmod 0440 /srv/happy-server/secrets/master-secret
+docker volume create happy-server-data
+```
+
+Run the single container. Replace `PUBLIC_URL` with the HTTPS address clients
+actually use; `http://localhost:3005` is appropriate only for same-host access.
+
+```bash
+docker run --detach \
+  --name happy-server \
+  --restart unless-stopped \
+  --init \
+  --publish 127.0.0.1:3005:3005 \
+  --volume happy-server-data:/data \
+  --mount type=bind,src=/srv/happy-server/secrets/master-secret,dst=/run/secrets/happy_master_secret,readonly \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --env PUBLIC_URL=https://relay.example.com \
+  happy-server-standalone:local
+```
+
+The entrypoint applies pending PGlite migrations before serving port `3005`.
+The image contains the Relay API only, not the Happy Web App. Do not pass the
+master secret through `docker run --env`, an image `ENV`, Compose `environment`,
+or logs. The entrypoint reads the mounted file and passes the value only to the
+running Server process as required by the existing runtime.
+
+The command binds only to loopback by default. To allow native App or CLI access
+on a trusted LAN, explicitly change both the published address and `PUBLIC_URL`
+to the host's LAN address, then restrict sources with the host firewall. Plain
+HTTP is only for that trusted-network opt-in; Web clients still require HTTPS or
+localhost.
 
 ### Standalone source mode
 
@@ -87,20 +149,22 @@ database migrations, and waits for a database-backed health check. It binds to
 shared v1-v3 compatibility infrastructure remains for retained features. See the
 bundled `README.md` before exposing plain HTTP on a trusted LAN.
 
-### Standalone source environment variables
+### Standalone environment variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HANDY_MASTER_SECRET` | Yes | - | Master secret for auth/encryption |
+| `HANDY_MASTER_SECRET` | Source mode | - | Master secret for source-mode auth/encryption; do not use it for the Docker image |
+| `HAPPY_MASTER_SECRET_FILE` | Docker | `/run/secrets/happy_master_secret` | Read-only file containing exactly 64 hexadecimal characters |
 | `PUBLIC_URL` | No | `http://localhost:3005` | Public base URL for file URLs sent to clients |
 | `PORT` | No | `3005` | Server port |
-| `DATA_DIR` | No | `./data` | Base data directory |
-| `PGLITE_DIR` | No | `./data/pglite` | PGlite database directory |
+| `DATA_DIR` | No | Source: `./data`; Docker: `/data` | Base data directory |
+| `PGLITE_DIR` | No | Source: `./data/pglite`; Docker: `/data/pglite` | PGlite database directory |
 
 ### Optional: External Services
 
 The standard service uses `DATABASE_URL` for Postgres. Standalone mode keeps
-PGlite, but external Redis and S3-compatible storage remain optional:
+PGlite. The documented single-container Docker path intentionally omits Redis
+and S3; source-mode or custom deployments may still configure them:
 
 | Variable | Description |
 |----------|-------------|

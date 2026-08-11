@@ -2,8 +2,8 @@
 
 ## 状态
 
-- 当前状态：进行中（仅剩实体 App 复验与归档收尾）。
-- 进度说明：`1.4.49` 实现已经 PR #26 合并为 `28d05371`，同 SHA 的 Documentation、CLI package、Monorepo CI 与 Android Field 都已成功。CLI tgz 已下载、校验、安装，daemon 与目标 Gateway worker 已重启并恢复原会话到 idle；仍缺少原实体 App 上的 `/clear` 后接普通消息复验。
+- 当前状态：已完成并归档。
+- 完成说明：`1.4.49` 实现已经 PR #26 合并为 `28d05371`，同 SHA 的 Documentation、CLI package、Monorepo CI 与 Android Field 都已成功。CLI tgz 已下载、校验、安装，daemon 与目标 Gateway worker 已重启并恢复原会话到 idle。维护者于 2026-08-11 确认已在实体 App 原会话完成 `/clear` 后接普通消息复验，未再出现失败控制卡、过期 thinking 状态或新消息无法正常回复的问题。
 - 建立日期：2026-08-09。
 - 实施分支：`fix/codex-v4-rollback-coordination`。
 - 当前基线：`origin/main@28d053713e09e3ddf0f9674c024f38995f65807f`。
@@ -232,9 +232,9 @@ git diff --check
 - [x] Coordinator barrier 与 Router orphan-before-snapshot 顺序已实现。
 - [x] 定向 mapper/Gateway/Router 测试已通过。
 - [x] HTTP relay rollback 前后迟到通知场景已通过。
-- [x] Field schema 14、post-clear 命令关联与安装包 CLI workflow 已实现并通过源码测试。
-- [x] `1.4.48` 已合并，Monorepo CI 与 CLI release 成功。
-- [x] Android Field `31313964459` 的 rollback command 失败已被确认为当前阻断项。
+- [x] Field schema 15、post-clear 命令关联与安装包 CLI workflow 已实现并通过源码测试。
+- [x] `1.4.48` 已合并且发布工作流成功，但其 Field rollback 语义失败，因此该版本已废弃且不得复用。
+- [x] Android Field `31313964459` 的 rollback command 失败曾是 `1.4.48` 的历史阻断项，并由 `1.4.49` 的后续修复与 run `31321425891` 关闭。
 - [x] barrier 纯顺序语义、三次本地协调、orphan 持久化失败的 fatal 语义和 schema 15 精确终态诊断完成本地验证与差异审查。
 - [x] `1.4.49` 提交、PR #26、合并及精确 SHA 云端验收完成：
   `28d05371` 的 Documentation `31321425763`、CLI package `31321425775`、
@@ -242,6 +242,6 @@ git diff --check
 - [x] `happy-1.4.49.tgz` 已下载、校验、安装；SHA-256 为
   `bf6ae339bc3e037fc889a009e0343c49f93726dd1feaa20bc01de8f04a9275ea`，包内
   版本与 macOS ARM64 `rg`/`difftastic` 归档均已核实。本机
-  daemon/worker 已恢复原会话到 idle；实体 App 复验仍未完成。
-- [ ] 在实体 App 的原会话上执行 `/clear` 后发送一条普通消息，确认无失败控制卡、无过期 thinking 状态且新消息正常回复。
-- [ ] 计划已归档并完成 docs-only 收尾提交。
+  daemon/worker 已恢复原会话到 idle。
+- [x] 维护者于 2026-08-11 确认实体 App 原会话的 `/clear -> 普通消息` 复验通过：无失败控制卡、无过期 thinking 状态且新消息正常回复。本记录不保存 prompt、账号、会话 ID 或其他 payload。
+- [x] 计划已归档；生成索引和 docs-only 收尾由本次知识库维护提交完成。
