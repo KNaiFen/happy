@@ -1,4 +1,5 @@
 import type { AuthCredentials } from '@/auth/tokenStorage';
+import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 
 const MAX_RESPONSE_CHARACTERS = 16 * 1024;
 const INVALID_BASE64URL_CHARACTER = /[^A-Za-z0-9_-]/;
@@ -14,9 +15,15 @@ function isCompactJws(value: string): boolean {
 }
 
 function isCanonical32ByteBase64Url(value: string): boolean {
-    return value.length === 43
-        && !INVALID_BASE64URL_CHARACTER.test(value)
-        && 'AQgw'.includes(value[42]);
+    if (value.length !== 43 || INVALID_BASE64URL_CHARACTER.test(value)) {
+        return false;
+    }
+    try {
+        const decoded = decodeBase64(value, 'base64url');
+        return decoded.length === 32 && encodeBase64(decoded, 'base64url') === value;
+    } catch {
+        return false;
+    }
 }
 
 function assertLoopbackCredentialsUrl(value: string): string {

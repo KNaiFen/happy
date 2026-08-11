@@ -16,10 +16,19 @@ function isCompactJws(value) {
 }
 
 function isCanonical32ByteBase64Url(value) {
-    return typeof value === 'string'
-        && value.length === 43
-        && !INVALID_BASE64URL_CHARACTER.test(value)
-        && 'AQgw'.includes(value[42]);
+    if (
+        typeof value !== 'string'
+        || value.length !== 43
+        || INVALID_BASE64URL_CHARACTER.test(value)
+    ) {
+        return false;
+    }
+    try {
+        const decoded = Buffer.from(value, 'base64url');
+        return decoded.length === 32 && decoded.toString('base64url') === value;
+    } catch {
+        return false;
+    }
 }
 
 function parseCredentialsFile(path) {
