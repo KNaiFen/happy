@@ -33,6 +33,17 @@ describe('MetadataSchema', () => {
         expect((metadata as any).futureCapability).toEqual({ supported: true });
     });
 
+    it('preserves an explicit legacy Codex marker for read-only history', () => {
+        const metadata = MetadataSchema.parse({
+            path: '/tmp/project',
+            host: 'local-machine',
+            flavor: 'codex',
+            codexSyncVersion: 3,
+        });
+
+        expect(metadata.codexSyncVersion).toBe(3);
+    });
+
     it('preserves Codex queue steering capability metadata', () => {
         const metadata = MetadataSchema.parse({
             path: '/tmp/project',

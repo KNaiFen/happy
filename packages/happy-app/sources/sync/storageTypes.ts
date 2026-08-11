@@ -27,8 +27,12 @@ export const MetadataSchema = z.object({
     }).optional(),
     machineId: z.string().optional(),
     codexThreadId: z.string().optional(), // Codex app-server thread ID
-    /** Encrypted marker proving the session owner selected canonical Sync v4. */
-    codexSyncVersion: z.literal(4).optional(),
+    /**
+     * Encrypted marker proving the session owner selected canonical Sync v4.
+     * Older explicit Codex markers remain parseable so their transcript can be
+     * retained as read-only history; they never qualify for a writable v4 path.
+     */
+    codexSyncVersion: z.number().int().nonnegative().optional(),
     codexCapabilities: z.object({
         queueSteering: z.boolean().optional(),
     }).passthrough().optional(),

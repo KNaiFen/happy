@@ -25,7 +25,7 @@ function session(overrides: Record<string, unknown> = {}) {
         activeAt: 10,
         archivedAt: null,
         presence: 'online',
-        metadata: { flavor: 'codex', machineId: 'machine-1' },
+        metadata: { flavor: 'codex', codexSyncVersion: 4, machineId: 'machine-1' },
         ...overrides,
     } as any;
 }
@@ -111,10 +111,20 @@ describe('session archive coordinator', () => {
     });
 
     it('rejects archive for read-only child sessions at the coordinator boundary', async () => {
-        current = session({ metadata: { flavor: 'codex', codexReadOnly: true } });
+        current = session({ metadata: { flavor: 'codex', codexSyncVersion: 4, codexReadOnly: true } });
         mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
 
         await expect(archiveSession('session-1')).rejects.toThrow('read-only');
+        expect(applySessions).not.toHaveBeenCalled();
+        expect(mocks.sessionArchive).not.toHaveBeenCalled();
+        expect(mocks.sessionKill).not.toHaveBeenCalled();
+    });
+
+    it('rejects archive for an explicit legacy Codex session at the coordinator boundary', async () => {
+        current = session({ metadata: { flavor: 'codex', codexSyncVersion: 3 } });
+        mocks.getState.mockImplementation(() => ({ sessions: { 'session-1': current }, applySessions }));
+
+        await expect(archiveSession('session-1')).rejects.toThrow('Legacy Codex sessions are read-only');
         expect(applySessions).not.toHaveBeenCalled();
         expect(mocks.sessionArchive).not.toHaveBeenCalled();
         expect(mocks.sessionKill).not.toHaveBeenCalled();

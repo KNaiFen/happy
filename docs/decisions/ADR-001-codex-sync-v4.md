@@ -46,9 +46,11 @@ The four distributables are upgraded as one coordinated compatibility set.
 The original rollout used a temporary feature flag and rollback adapter. That
 cutover is complete: v4 routes are registered unconditionally,
 `GET /v4/capabilities` reports `enabled: true`, and writable Codex sessions
-must explicitly carry `flavor=codex` and `codexSyncVersion=4`. Empty, unknown,
-and legacy provider metadata is unsupported. Database changes remain additive,
-and rollback never deletes Sync v4 data.
+must explicitly carry `flavor=codex` and `codexSyncVersion=4`. Explicit Codex
+records with a missing or non-v4 marker are retained only as read-only historical
+transcripts: they never send, resume, fork, archive, delete, or enter Sync v4.
+Empty, unknown, and non-Codex legacy provider metadata remains unsupported.
+Database changes remain additive, and rollback never deletes Sync v4 data.
 
 ### Outer synchronization protocol
 

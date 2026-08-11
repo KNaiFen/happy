@@ -35,6 +35,7 @@ import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { findActiveCodexV4Turn } from '@/sync/codexV4Commands';
 import { codexV4QueuedMessages } from '@/sync/codexV4Projection';
 import {
+    isCodexSessionReadOnly,
     resolveCodexGatewayBinding,
     resolveCodexV4SessionCapabilities,
 } from '@/sync/codexV4Capabilities';
@@ -48,7 +49,7 @@ import {
     mergeRecoveredCodexDraft,
 } from '@/sync/codexCommandDraftRecovery';
 import { codexCommandDraftRecovery } from '@/sync/codexCommandDraftRecovery.mmkv';
-import { isSupportedExistingSession } from '@/sync/sessionFlavor';
+import { isReadableExistingSession } from '@/sync/sessionFlavor';
 import { useSession } from '@/sync/storage';
 import { getSessionForkSource } from '@/utils/sessionFork';
 import { useHappyAction } from '@/hooks/useHappyAction';
@@ -229,7 +230,7 @@ export const SessionView = React.memo((props: { id: string }) => {
     // is no separate per-tab add button. Which side chat is focused lives here
     // (not in the panel) so the picker can create-and-focus a new one in one go.
     const rawSideChats = useSideChatSessions(sessionId);
-    const sideChatForkSource = session && session.metadata?.codexReadOnly !== true
+    const sideChatForkSource = session && !isCodexSessionReadOnly(session.metadata)
         ? getSessionForkSource(session)
         : null;
     const [activeSideChatId, setActiveSideChatId] = React.useState<string | null>(null);
@@ -474,7 +475,7 @@ export const SessionView = React.memo((props: { id: string }) => {
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <ActivityIndicator size="small" color={theme.colors.textSecondary} />
                     </View>
-                ) : !session || !isSupportedExistingSession(session.metadata) ? (
+                ) : !session || !isReadableExistingSession(session.metadata) ? (
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <Ionicons name="trash-outline" size={48} color={theme.colors.textSecondary} />
                         <Text style={{ color: theme.colors.text, fontSize: 20, marginTop: 16, fontWeight: '600' }}>{t('errors.sessionDeleted')}</Text>
