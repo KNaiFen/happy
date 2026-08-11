@@ -104,6 +104,7 @@ jobs:
     env:
       CI: "1"
       HAPPY_MOBILE_E2E_PORT: "53586"
+      HAPPY_MOBILE_E2E_BOOTSTRAP_PORT: "53587"
       HAPPY_MOBILE_E2E_ROUNDTRIP_TIMEOUT_MS: "900000"
       HAPPY_MOBILE_E2E_WAIT_FOR_APP_READY: "1"
       HAPPY_MOBILE_E2E_APP_READY_TIMEOUT_MS: "1800000"
@@ -283,14 +284,64 @@ jobs:
           fs.appendFileSync(
             envPath,
             [
-              `EXPO_PUBLIC_DEV_TOKEN=${state.appToken}`,
-              `EXPO_PUBLIC_DEV_SECRET=${state.appSecret}`,
               `HAPPY_MOBILE_E2E_ROOT=${state.root}`,
               `HAPPY_MOBILE_E2E_STATE_FILE=${statePath}`,
               `HAPPY_MOBILE_E2E_PID_FILE=${process.env.RUNNER_TEMP}/happy-mobile-e2e.pid`,
+              `HAPPY_MOBILE_E2E_CREDENTIAL_PID_FILE=${process.env.RUNNER_TEMP}/happy-mobile-credential-server.pid`,
               '',
             ].join('\n'),
           );
+          NODE
+
+          CREDENTIAL_LOG="$RUNNER_TEMP/happy-mobile-credential-server.log"
+          CREDENTIAL_PID_FILE="$RUNNER_TEMP/happy-mobile-credential-server.pid"
+          HAPPY_MOBILE_E2E_STATE_FILE="$STATE_FILE" \
+          HAPPY_MOBILE_E2E_BOOTSTRAP_PORT="$HAPPY_MOBILE_E2E_BOOTSTRAP_PORT" \
+          node scripts/ci/mobile-field-credential-server.cjs \
+            > "$CREDENTIAL_LOG" 2>&1 &
+          CREDENTIAL_PID=$!
+          printf '%s\n' "$CREDENTIAL_PID" > "$CREDENTIAL_PID_FILE"
+          for _ in $(seq 1 300); do
+            if curl --fail --silent --output /dev/null \
+              "http://127.0.0.1:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}/credentials"; then
+              break
+            fi
+            if ! kill -0 "$CREDENTIAL_PID" 2>/dev/null; then
+              echo "Mobile Field credential server exited during startup." >&2
+              tail -n 50 "$CREDENTIAL_LOG" >&2
+              exit 1
+            fi
+            sleep 0.1
+          done
+          kill -0 "$CREDENTIAL_PID"
+          curl --fail --silent --output /dev/null \
+            "http://127.0.0.1:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}/credentials"
+
+      - name: Verify embedded mobile Field configuration
+        env:
+          APP_ENV: development
+          NODE_ENV: production
+          HAPPY_DISABLE_OTA: "1"
+          HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
+          HAPPY_MOBILE_FIELD_E2E: "1"
+          HAPPY_MOBILE_FIELD_BOOTSTRAP_URL: http://127.0.0.1:53587/credentials
+          EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
+          EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
+        run: |
+          CONFIG="$RUNNER_TEMP/happy-mobile-field-app-config.json"
+          pnpm --filter happy-app exec expo config --type public --json > "$CONFIG"
+          node - "$CONFIG" <<'NODE'
+          const fs = require('node:fs');
+          const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const app = config?.extra?.app;
+          if (
+            app?.mobileFieldE2E !== true
+            || app?.mobileFieldBootstrapUrl !== 'http://127.0.0.1:53587/credentials'
+            || config?.updates?.enabled !== false
+            || config?.android?.package !== 'com.slopus.happy.dev'
+          ) {
+            throw new Error('Generated Expo config does not match the mobile Field contract');
+          }
           NODE
 
       - name: Generate Android development project
@@ -300,6 +351,7 @@ jobs:
           HAPPY_DISABLE_OTA: "1"
           HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
           HAPPY_MOBILE_FIELD_E2E: "1"
+          HAPPY_MOBILE_FIELD_BOOTSTRAP_URL: http://127.0.0.1:53587/credentials
           EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
           EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
         run: pnpm --filter happy-app exec expo prebuild --platform android --no-install
@@ -314,6 +366,7 @@ jobs:
           HAPPY_DISABLE_OTA: "1"
           HAPPY_BUILD_COMMIT_SHA: ${{ github.event_name == 'workflow_run' && needs.reuse_ci_artifact.outputs.head_sha || github.sha }}
           HAPPY_MOBILE_FIELD_E2E: "1"
+          HAPPY_MOBILE_FIELD_BOOTSTRAP_URL: http://127.0.0.1:53587/credentials
           EXPO_PUBLIC_HAPPY_SERVER_URL: http://127.0.0.1:53586
           EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP: "1"
         run: |
@@ -401,19 +454,22 @@ jobs:
       - name: Stop fixture
         if: always()
         run: |
-          PID_FILE="$RUNNER_TEMP/happy-mobile-e2e.pid"
-          if test -f "$PID_FILE"; then
-            PID="$(tr -d '[:space:]' < "$PID_FILE")"
-            if kill -0 "$PID" 2>/dev/null; then
-              kill -TERM "$PID"
-              for _ in $(seq 1 100); do
-                if ! kill -0 "$PID" 2>/dev/null; then
-                  break
-                fi
-                sleep 0.1
-              done
+          for PID_FILE in \
+            "$RUNNER_TEMP/happy-mobile-credential-server.pid" \
+            "$RUNNER_TEMP/happy-mobile-e2e.pid"; do
+            if test -f "$PID_FILE"; then
+              PID="$(tr -d '[:space:]' < "$PID_FILE")"
+              if kill -0 "$PID" 2>/dev/null; then
+                kill -TERM "$PID"
+                for _ in $(seq 1 100); do
+                  if ! kill -0 "$PID" 2>/dev/null; then
+                    break
+                  fi
+                  sleep 0.1
+                done
+              fi
             fi
-          fi
+          done
 
       - name: Upload Android field artifacts
         if: always()
@@ -423,6 +479,7 @@ jobs:
           path: |
             ${{ runner.temp }}/happy-mobile-field-artifacts
             ${{ runner.temp }}/happy-mobile-e2e-fixture.log
+            ${{ runner.temp }}/happy-mobile-credential-server.log
             ${{ runner.temp }}/official-codex/source.json
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/roundtrip-verified.json
             ${{ env.HAPPY_MOBILE_E2E_ROOT }}/field-diagnostics.json
