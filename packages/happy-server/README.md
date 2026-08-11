@@ -43,16 +43,36 @@ not provide HTTPS transport protection and is outside that guarantee.
 
 ## Self-Hosting
 
-There are two supported self-hosting paths:
+There are three supported self-hosting paths:
 
+- install `happy` and `happy-server-self-host` in the same global npm root, then
+  run `happy server` for a CLI-managed local PGlite relay;
 - build the repository-root `Dockerfile.server` for a portable, single-container
   PGlite deployment on the current host architecture;
 - use the versioned Debian 13 amd64 Relay bundle for an offline, prepackaged
   release artifact with installer and lifecycle tooling.
 
-Neither path needs Postgres, Redis, or S3. Both store PGlite and local encrypted
-attachments in one `/data` volume and read the master secret from a narrowly
-mounted file.
+None of these paths requires Postgres, Redis, or S3. The container and Debian
+paths store PGlite and local encrypted attachments in one `/data` volume and read
+the master secret from a narrowly mounted file.
+
+### CLI-managed local relay
+
+For a local relay owned by the current user account, install both npm packages in
+one command so they share the same npm global root:
+
+```bash
+npm install -g happy happy-server-self-host
+happy server
+```
+
+The CLI first uses normal Node package resolution and then resolves the sibling
+`happy-server-self-host` package beside the running global `happy` package. It does
+not use `NODE_PATH`, `npm root -g`, or a Docker daemon. This global installation
+path does not require a repository checkout; the lower-priority source fallback
+remains available only for development diagnostics.
+The relay stores PGlite and local encrypted attachments under the CLI's Happy data
+directory; use the Docker or Debian path when you need a host-managed service.
 
 ### Standalone Docker image (single container)
 

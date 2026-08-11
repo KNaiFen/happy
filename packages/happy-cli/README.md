@@ -12,6 +12,20 @@ npm install -g happy
 
 > Migrated from the `happy-coder` package. Thanks to [@franciscop](https://github.com/franciscop) for donating the `happy` package name!
 
+### Local self-hosted relay
+
+Install the CLI and Server package together in the same global npm root, then run
+the local PGlite relay:
+
+```bash
+npm install -g happy happy-server-self-host
+happy server
+```
+
+`happy server` resolves the normal local package first, then the sibling
+`happy-server-self-host` package next to the running global `happy` package. It does
+not require `NODE_PATH` or a repository checkout.
+
 ## Usage
 
 ### Codex (default)
