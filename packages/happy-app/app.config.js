@@ -1,14 +1,11 @@
 const { execFileSync } = require('node:child_process');
+const { loadMobileFieldConfig } = require('./mobileFieldConfig.cjs');
 
 const variant = process.env.APP_ENV || 'development';
 const disableOtaUpdates = process.env.HAPPY_DISABLE_OTA === '1';
 const isLocalRelease = process.env.HAPPY_LOCAL_RELEASE === '1';
-const mobileFieldE2E = process.env.HAPPY_MOBILE_FIELD_E2E === '1';
+const { mobileFieldE2E, mobileFieldBootstrapUrl } = loadMobileFieldConfig();
 const { version: appVersion } = require('./package.json');
-
-if (mobileFieldE2E && variant !== 'development') {
-    throw new Error('HAPPY_MOBILE_FIELD_E2E is allowed only for development builds');
-}
 
 function toAndroidVersionCode(version) {
     const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
@@ -266,6 +263,7 @@ export default {
                 buildCommitSha: buildMetadata.commitSha,
                 buildCommitTimestamp: buildMetadata.commitTimestamp,
                 mobileFieldE2E,
+                mobileFieldBootstrapUrl,
             }
         },
         owner: "bulkacorp"

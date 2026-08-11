@@ -5,9 +5,10 @@ set -euo pipefail
 : "${MAESTRO_BIN:?MAESTRO_BIN is required}"
 : "${HAPPY_MOBILE_E2E_ROOT:?HAPPY_MOBILE_E2E_ROOT is required}"
 : "${HAPPY_MOBILE_E2E_PID_FILE:?HAPPY_MOBILE_E2E_PID_FILE is required}"
+: "${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT:?HAPPY_MOBILE_E2E_BOOTSTRAP_PORT is required}"
 
 APP_ID="com.slopus.happy.dev"
-APK_PATH="packages/happy-app/android/app/build/outputs/apk/release/app-release.apk"
+APK_PATH="${HAPPY_FIELD_APK_PATH:-packages/happy-app/android/app/build/outputs/apk/release/app-release.apk}"
 BOOTSTRAP_FLOW_PATH="scripts/ci/maestro/codex-mobile-bootstrap.yml"
 ZERO_MACHINE_FLOW_PATH="scripts/ci/maestro/codex-mobile-zero-machine.yml"
 FLOW_PATH="scripts/ci/maestro/codex-mobile-field.yml"
@@ -102,8 +103,13 @@ test -f "${FLOW_PATH}"
 test -f "${RECOVERY_FLOW_PATH}"
 test -x "${MAESTRO_BIN}"
 test -f "${HAPPY_MOBILE_E2E_PID_FILE}"
+[[ "${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}" =~ ^[0-9]+$ ]]
+(( HAPPY_MOBILE_E2E_BOOTSTRAP_PORT >= 1 && HAPPY_MOBILE_E2E_BOOTSTRAP_PORT <= 65535 ))
 
 adb reverse tcp:53586 tcp:53586
+adb reverse \
+  "tcp:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}" \
+  "tcp:${HAPPY_MOBILE_E2E_BOOTSTRAP_PORT}"
 adb install --no-streaming -r "${APK_PATH}"
 adb shell pm path "${APP_ID}" | grep -Fq "package:"
 adb logcat -c

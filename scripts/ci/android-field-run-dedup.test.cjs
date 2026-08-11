@@ -99,7 +99,16 @@ function selection(overrides = {}) {
     });
 }
 
-function runFindWithFakeGh({ listedArtifacts, run, jobs, artifacts, archivePath, failApi = false }) {
+function runFindWithFakeGh({
+    listedArtifacts,
+    run,
+    jobs,
+    artifacts,
+    archivePath,
+    failApi = false,
+    forceRun,
+    eventName,
+}) {
     const root = mkdtempSync(join(tmpdir(), 'happy-android-field-dedup-gh-'));
     const ghPath = join(root, 'gh');
     const outputPath = join(root, 'output.txt');
@@ -118,16 +127,26 @@ else process.exit(3);
 `;
     writeFileSync(ghPath, fakeGh, { encoding: 'utf8', mode: 0o755 });
     chmodSync(ghPath, 0o755);
+    writeFileSync(outputPath, '');
     try {
         const result = spawnSync(
             process.execPath,
-            [join(__dirname, 'android-field-run-dedup.cjs'), 'find', happySourceSha, recipeFingerprint, 'main', '99'],
+            [
+                join(__dirname, 'android-field-run-dedup.cjs'),
+                'find',
+                happySourceSha,
+                recipeFingerprint,
+                'main',
+                '99',
+                ...(forceRun === undefined ? [] : [forceRun]),
+            ],
             {
                 encoding: 'utf8',
                 env: {
                     ...process.env,
                     PATH: `${root}:${process.env.PATH ?? ''}`,
                     GITHUB_REPOSITORY: repository,
+                    GITHUB_EVENT_NAME: eventName ?? 'workflow_run',
                     GITHUB_OUTPUT: outputPath,
                     FAKE_LISTED_ARTIFACTS: JSON.stringify(listedArtifacts),
                     FAKE_RUN: JSON.stringify(run),
@@ -280,6 +299,25 @@ test('find runs the real Field when the GitHub API is unavailable', () => {
     assert.match(result.output, /should_run=true/);
 });
 
+test('only an explicit manual dispatch may bypass a prior success receipt', () => {
+    const forced = runFindWithFakeGh({
+        failApi: true,
+        forceRun: 'true',
+        eventName: 'workflow_dispatch',
+    });
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.match(forced.output, /should_run=true/);
+    assert.match(forced.output, /reason=forced-manual-dispatch/);
+
+    const rejected = runFindWithFakeGh({
+        failApi: true,
+        forceRun: 'true',
+        eventName: 'schedule',
+    });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /Only workflow_dispatch/);
+});
+
 test('workflow serializes the same Happy SHA, admits only trusted CI, and records successful receipts', () => {
     const workflowRoot = join(__dirname, '../../.github/workflows');
     const field = readFileSync(join(workflowRoot, 'codex-android-field-e2e.yml'), 'utf8');
@@ -293,6 +331,7 @@ test('workflow serializes the same Happy SHA, admits only trusted CI, and record
     assert.match(field, /github\.event\.workflow_run\.run_attempt == 1/);
     assert.match(field, /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
     assert.match(field, /android-field-run-dedup\.cjs find/);
+    assert.match(field, /force_full_field/);
     assert.match(field, /needs\.field_dedup\.outputs\.should_run == 'true'/);
     assert.match(field, /android-field-run-dedup\.cjs write/);
     assert.equal((field.match(/if: env\.HAPPY_FIELD_SOURCE_BRANCH == 'main' && github\.run_attempt == 1/g) ?? []).length, 2);

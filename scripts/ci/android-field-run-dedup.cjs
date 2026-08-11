@@ -360,12 +360,20 @@ function writeReceiptFile(destination, happySourceSha, recipeFingerprint, source
     writeOutputs({ artifact_name: receiptArtifactName(happySourceSha, recipeFingerprint) });
 }
 
-function findPriorReceipt(happySourceSha, recipeFingerprint, sourceBranch, currentRunIdValue) {
+function findPriorReceipt(happySourceSha, recipeFingerprint, sourceBranch, currentRunIdValue, forceRunValue = 'false') {
     const repository = assertRepository(process.env.GITHUB_REPOSITORY);
     const expectedHappySourceSha = assertGitSha(happySourceSha);
     const expectedRecipeFingerprint = assertRecipeFingerprint(recipeFingerprint);
     const artifactName = receiptArtifactName(expectedHappySourceSha, expectedRecipeFingerprint);
     const currentRunId = assertPositiveInteger(currentRunIdValue, 'Current Field run id');
+    if (!['true', 'false'].includes(forceRunValue)) throw new Error('Force Field value is invalid');
+    if (forceRunValue === 'true') {
+        if (process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch') {
+            throw new Error('Only workflow_dispatch may force a full Field run');
+        }
+        writeOutputs({ should_run: true, reason: 'forced-manual-dispatch', artifact_name: artifactName });
+        return;
+    }
     if (sourceBranch !== 'main') {
         writeOutputs({ should_run: true, reason: 'non-main-source', artifact_name: artifactName });
         return;
@@ -430,8 +438,10 @@ function findPriorReceipt(happySourceSha, recipeFingerprint, sourceBranch, curre
 function main() {
     const [command, ...args] = process.argv.slice(2);
     if (command === 'find') {
-        if (args.length !== 4) {
-            throw new Error('Usage: find <happy-source-sha> <recipe-fingerprint> <source-branch> <current-run-id>');
+        if (args.length < 4 || args.length > 5) {
+            throw new Error(
+                'Usage: find <happy-source-sha> <recipe-fingerprint> <source-branch> <current-run-id> [force-run]',
+            );
         }
         findPriorReceipt(...args);
         return;

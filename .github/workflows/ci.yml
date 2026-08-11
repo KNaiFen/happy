@@ -72,9 +72,13 @@ jobs:
       - name: Test release and workflow security gates
         run: |
           node --test scripts/ci/android-field-run-dedup.test.cjs
+          node --test scripts/ci/android-field-apk-reuse.test.cjs
+          node --test packages/happy-app/mobileFieldConfig.test.cjs
+          node --test scripts/ci/mobile-field-credential-server.test.cjs
           node --test scripts/ci/workflow-action-security.test.cjs
           node --test scripts/ci/verify-release-source-gate.test.cjs
           node --test scripts/ci/release-candidate-promotion.test.cjs
+          python3 scripts/ci/android_field_apk_archive_test.py
           python3 scripts/ci/release_candidate_archive_test.py
 
   wire:

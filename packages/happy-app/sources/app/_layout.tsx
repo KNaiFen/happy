@@ -46,6 +46,7 @@ import {
     shouldAllowE2EBootstrap,
     shouldEnableDevE2eInsecureHttp,
 } from '@/sync/devE2eBootstrap';
+import { fetchMobileFieldCredentials } from '@/sync/mobileFieldCredentials';
 
 // Configure notification handler — suppress push display when app is in foreground
 Notifications.setNotificationHandler({
@@ -251,10 +252,13 @@ export default function RootLayout() {
                 await sodium.ready;
 
                 credentials = await TokenStorage.getCredentials();
-                const mobileFieldE2E = loadAppConfig().mobileFieldE2E === true;
+                const appConfig = loadAppConfig();
+                const mobileFieldE2E = appConfig.mobileFieldE2E === true;
                 const allowE2EBootstrap = shouldAllowE2EBootstrap(__DEV__, mobileFieldE2E);
                 const bootstrapCredentials = getDevWebQueryCredentials()
-                    ?? getE2EEnvironmentCredentials(allowE2EBootstrap);
+                    ?? (mobileFieldE2E
+                        ? await fetchMobileFieldCredentials(true, appConfig.mobileFieldBootstrapUrl)
+                        : getE2EEnvironmentCredentials(allowE2EBootstrap));
 
                 if (bootstrapCredentials) {
                     const credentialsChanged = credentials?.token !== bootstrapCredentials.token
