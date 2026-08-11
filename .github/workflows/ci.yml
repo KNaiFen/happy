@@ -78,6 +78,8 @@ jobs:
           node --test packages/happy-app/mobileFieldConfig.test.cjs
           node --test scripts/ci/mobile-field-credential-server.test.cjs
           node --test scripts/ci/workflow-action-security.test.cjs
+          node --test scripts/ci/audit-production-dependencies.test.cjs
+          node --test scripts/ci/codeql-change-classifier.test.cjs
           node --test scripts/ci/standalone-server-container-contract.test.cjs
           node --test scripts/ci/verify-release-source-gate.test.cjs
           node --test scripts/ci/release-candidate-promotion.test.cjs
@@ -746,7 +748,7 @@ jobs:
           retention-days: 7
 
   dependency-audit:
-    name: Production dependency critical audit
+    name: Production dependency high audit
     needs: classify
     if: needs.classify.outputs.dependency_audit == 'true'
     runs-on: ubuntu-latest
@@ -768,7 +770,7 @@ jobs:
           node-version: 24
 
       - name: Audit production dependencies
-        run: pnpm audit --prod --audit-level=critical
+        run: node scripts/ci/audit-production-dependencies.cjs
 
   codex_provider_boundary:
     name: Codex-only provider boundary

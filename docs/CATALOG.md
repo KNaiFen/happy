@@ -38,6 +38,7 @@
 - [ADR-003: Make Codex the only active default provider](./decisions/ADR-003-codex-only-provider.md)
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./decisions/ADR-004-codex-native-tui-gateway.md)
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
+- [ADR-006: Actions supply-chain controls and production dependency gates](./decisions/ADR-006-actions-security-and-production-dependency-gates.md)
 
 ## 活动计划
 

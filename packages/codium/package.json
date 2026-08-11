@@ -101,7 +101,7 @@
         "prosemirror-view": "^1.41.8",
         "qrcode": "^1.5.4",
         "react-intl": "^10.1.2",
-        "react-router-dom": "^7.14.1",
+        "react-router-dom": "^7.18.2",
         "remark": "^15.0.1",
         "remark-breaks": "^4.0.0",
         "remark-directive": "^4.0.0",

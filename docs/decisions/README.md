@@ -9,3 +9,4 @@ ADR 记录长期有效的架构取舍；如与代码冲突，以较新的 ADR �
 - [ADR-003: Make Codex the only active default provider](./ADR-003-codex-only-provider.md)
 - [ADR-004: 通过持久 Gateway 运行官方 Codex TUI](./ADR-004-codex-native-tui-gateway.md)
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./ADR-005-daemon-resume-eligibility-preflight.md)
+- [ADR-006: Actions supply-chain controls and production dependency gates](./ADR-006-actions-security-and-production-dependency-gates.md)
