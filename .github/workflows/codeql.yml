@@ -55,7 +55,6 @@ jobs:
       matrix:
         language:
           - actions
-          - go
           - javascript-typescript
           - python
           - rust

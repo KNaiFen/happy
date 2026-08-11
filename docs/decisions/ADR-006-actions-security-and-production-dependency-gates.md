@@ -41,8 +41,10 @@ deployment target to protect with approval gates.
 
 - Use a repository-owned advanced CodeQL workflow rather than GitHub's default setup,
   so all CodeQL Actions remain pinned to full commit SHAs.
-- Analyze `actions`, `go`, `javascript-typescript`, `python`, and `rust` with
-  `build-mode: none`. A docs-only pull request runs only the classifier and a stable
+- Analyze `actions`, `javascript-typescript`, `python`, and `rust` with
+  `build-mode: none`. The repository's only Go file is an unmoduleized seven-line CLI
+  demo, not a supported Go build surface, so it is not included merely to create a
+  failing or empty analysis. A docs-only pull request runs only the classifier and a stable
   `Required CodeQL gate`; source analysis is skipped without leaving a required check
   pending.
 - After the workflow succeeds once on `main`, add only `Required CodeQL gate` to the
