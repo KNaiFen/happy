@@ -42,7 +42,6 @@
 ## 活动计划
 
 - [账户数据删除与保留契约实施计划](./plans/account-data-deletion-and-retention-contract.md)
-- [Codex rollback 后迟到通知重激活修复计划](./plans/codex-rollback-late-notification-race.md)
 - [GitHub Actions 提交与 PR 触发去重及发布门禁整改计划](./plans/github-actions-trigger-gate-remediation.md)
 - [Happy Server 包安装与解析契约修复计划](./plans/happy-server-global-package-resolution.md)
 - [Happy Server standalone Docker 路径修复计划](./plans/happy-server-standalone-docker-path.md)
@@ -126,6 +125,7 @@
 - [Codex 生产执行链审计与修复台账](./plans/archive/codex-production-execution-audit-remediation.md)
 - [Codex 请求回答可靠性与重启恢复实施计划](./plans/archive/codex-request-resolution-recovery.md)
 - [Codex 过往会话选择与 Resume（已完成）](./plans/archive/codex-resume-thread-picker.md)
+- [Codex rollback 后迟到通知重激活修复计划](./plans/archive/codex-rollback-late-notification-race.md)
 - [Codex 会话生命周期、时间线与活动显示修复](./plans/archive/codex-session-lifecycle-ordering-activity.md)
 - [Codex Slash-Command Routing](./plans/archive/codex-slash-command-routing.md)
 - [Codex Sync v4 现场复验修复 R10](./plans/archive/codex-sync-v4-field-reacceptance-r10.md)
