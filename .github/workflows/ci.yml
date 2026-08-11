@@ -10,6 +10,8 @@ on:
       - "packages/happy-server/**"
       - "packages/happy-cli/**"
       - "packages/happy-app/**"
+      - ".dockerignore"
+      - "Dockerfile.server"
       - "scripts/ci/**"
       - "scripts/postinstall.cjs"
       - "patches/**"
@@ -76,6 +78,7 @@ jobs:
           node --test packages/happy-app/mobileFieldConfig.test.cjs
           node --test scripts/ci/mobile-field-credential-server.test.cjs
           node --test scripts/ci/workflow-action-security.test.cjs
+          node --test scripts/ci/standalone-server-container-contract.test.cjs
           node --test scripts/ci/verify-release-source-gate.test.cjs
           node --test scripts/ci/release-candidate-promotion.test.cjs
           python3 scripts/ci/android_field_apk_archive_test.py
@@ -219,11 +222,11 @@ jobs:
         run: pnpm --filter codium exec tsx ../../scripts/ci/codium-codex-runtime-smoke.ts
 
   server:
-    name: Server typecheck, test, and build
+    name: Server typecheck, test, and standalone image
     needs: classify
     if: needs.classify.outputs.server == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -261,8 +264,20 @@ jobs:
       - name: Test Server
         run: pnpm --filter happy-server-self-host test
 
-      - name: Build Server runtime
-        run: pnpm --filter happy-server-self-host build
+      - name: Build and exercise standalone Docker image
+        env:
+          IMAGE: happy-server-standalone:${{ github.sha }}
+        run: |
+          SERVER_VERSION="$(node -p "require('./packages/happy-server/package.json').version")"
+          shellcheck scripts/ci/test-standalone-server-container.sh
+          docker build \
+            --file Dockerfile.server \
+            --tag "$IMAGE" \
+            --build-arg "HAPPY_SERVER_VERSION=$SERVER_VERSION" \
+            --build-arg "VCS_REF=$GITHUB_SHA" \
+            --build-arg "SOURCE_URL=https://github.com/$GITHUB_REPOSITORY" \
+            .
+          GITHUB_ACTIONS=true scripts/ci/test-standalone-server-container.sh "$IMAGE"
 
   cli:
     name: CLI typecheck, unit test, and build

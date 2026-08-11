@@ -4,6 +4,8 @@ const test = require('node:test');
 const {
     classifyPaths,
     outputKeys,
+    standaloneDockerDirectoryInputs,
+    standaloneDockerFileInputs,
 } = require('./classify-workflow-changes.cjs');
 
 function selected(paths, options) {
@@ -75,6 +77,33 @@ test('keeps Server changes coupled to migrations, packed smoke, and Codex scenar
         'official_codex',
         'server',
     ]);
+});
+
+test('routes the root standalone Dockerfile to Server and migration checks', () => {
+    assert.deepEqual(selected(['Dockerfile.server']), [
+        'migration',
+        'server',
+    ]);
+});
+
+test('routes every direct standalone Docker build input to Server checks', () => {
+    const inputs = [
+        ...standaloneDockerFileInputs,
+        ...standaloneDockerDirectoryInputs.map((prefix) => `${prefix}fixture`),
+    ];
+
+    for (const input of inputs) {
+        const classification = classifyPaths([input]);
+        assert.equal(classification.server, true, input);
+        assert.equal(classification.migration, true, input);
+    }
+});
+
+test('keeps App checks selected for App-owned standalone Docker inputs', () => {
+    for (const input of standaloneDockerFileInputs.filter((path) => path.startsWith('packages/happy-app/'))) {
+        assert.equal(classifyPaths([input]).app, true, input);
+    }
+    assert.equal(classifyPaths(['packages/happy-app/patches/fixture']).app, true);
 });
 
 test('selects App and Tauri checks without widening to unrelated packages', () => {

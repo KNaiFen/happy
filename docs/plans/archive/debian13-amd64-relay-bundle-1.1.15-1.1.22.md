@@ -23,8 +23,9 @@
    Linux capabilities、使用只读根文件系统并为 `/tmp` 提供 tmpfs。
 4. `HANDY_MASTER_SECRET` 由以 root 运行的安装脚本首次生成到本地 secret 文件，
    权限固定为 `root:65532 0440`，并由 `0700` 的 root-owned 父目录保护。Compose
-   以 file secret 只读挂载，容器内固定 GID `65532` 可读；不得写入容器环境、
-   镜像、`.env`、日志或 Artifact 元数据。安装和管理命令明确要求宿主 root，
+   以 file secret 只读挂载，容器内固定 GID `65532` 可读；不得写入 Docker Config
+   环境、镜像、`.env`、日志或 Artifact 元数据；entrypoint 仅在服务进程运行期设置
+   `HANDY_MASTER_SECRET`。安装和管理命令明确要求宿主 root，
    但服务容器始终保持 UID/GID `65532` 非 root。root 脚本在修改所有权或启动
    Compose 前必须拒绝符号链接、非预期文件类型和多重硬链接，避免跟随或修改被
    替换的 secret 路径。

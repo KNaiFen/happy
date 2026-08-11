@@ -24,6 +24,26 @@ const monorepoOutputKeys = [
 
 const outputKeys = [...monorepoOutputKeys, 'cli_smoke'];
 const shaPattern = /^[0-9a-f]{40}$/;
+const standaloneDockerFileInputs = [
+    '.dockerignore',
+    'Dockerfile.server',
+    'packages/happy-app/package.json',
+    'packages/happy-server/package.json',
+    'packages/happy-cli/package.json',
+    'packages/happy-agent/package.json',
+    'packages/happy-wire/package.json',
+    'packages/happy-app-logs/package.json',
+    'packages/codium/package.json',
+    'packages/happy-app/sources/sync/apiTypes.ts',
+    'packages/happy-app/sources/sync/profile.ts',
+    'packages/happy-app/sources/sync/friendTypes.ts',
+    'packages/happy-app/sources/sync/feedTypes.ts',
+];
+const standaloneDockerDirectoryInputs = [
+    'packages/happy-app/patches/',
+    'packages/happy-cli/scripts/',
+    'packages/happy-cli/tools/',
+];
 
 function emptyClassification() {
     return Object.fromEntries(outputKeys.map((key) => [key, false]));
@@ -54,6 +74,11 @@ function isRootInstallInput(file) {
         || file === 'pnpm-workspace.yaml'
         || file === 'scripts/postinstall.cjs'
         || file.startsWith('patches/');
+}
+
+function isStandaloneDockerInput(file) {
+    return standaloneDockerFileInputs.includes(file)
+        || standaloneDockerDirectoryInputs.some((prefix) => file.startsWith(prefix));
 }
 
 function selectsCliSmoke(file) {
@@ -93,6 +118,12 @@ function classifyPaths(paths, { forceAll = false } = {}) {
         if (selectsCliSmoke(file)) classification.cli_smoke = true;
         if (file === 'pnpm-lock.yaml' || file.endsWith('/package.json')) {
             classification.dependency_audit = true;
+        }
+
+        if (isStandaloneDockerInput(file)) {
+            classification.server = true;
+            classification.migration = true;
+            if (file === 'Dockerfile.server') continue;
         }
 
         if (file.startsWith('packages/happy-wire/')) {
@@ -184,4 +215,6 @@ module.exports = {
     classifyPaths,
     monorepoOutputKeys,
     outputKeys,
+    standaloneDockerDirectoryInputs,
+    standaloneDockerFileInputs,
 };
