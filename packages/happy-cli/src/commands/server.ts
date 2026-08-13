@@ -53,6 +53,8 @@ interface ServerArtifacts {
     prismaQueryEngineLibrary?: string;
     /** Static web app directory served by the self-host server. */
     webappDir?: string;
+    /** Resolved entrypoint of the installed server package. */
+    packageEntry?: string;
 }
 
 interface HappyServerPackageArtifact {
@@ -63,6 +65,25 @@ interface HappyServerPackageArtifact {
     source?: string;
     prismaQueryEngineLibrary?: string;
     webappDir?: string;
+}
+
+type HappyServerPackageModule = {
+    resolveServerArtifact?: () => HappyServerPackageArtifact | undefined;
+};
+
+type PathOperations = Pick<typeof path, 'basename' | 'dirname' | 'join'>;
+
+interface InstalledServerPackageResolutionOptions {
+    loadPackage?: (request: string) => HappyServerPackageModule;
+    resolvePackage?: (request: string) => string;
+    siblingPackagePath?: () => string | undefined;
+}
+
+interface ServerArtifactResolutionOptions {
+    resolveInstalledServerPackage?: () => ServerArtifacts | undefined;
+    resolveLegacyBundledServer?: () => ServerArtifacts | undefined;
+    findSourceStandalone?: () => string | undefined;
+    findTsxBinary?: (cwd: string) => string;
 }
 
 export async function handleServerCommand(args: string[]): Promise<void> {
@@ -108,6 +129,9 @@ export async function handleServerCommand(args: string[]): Promise<void> {
     console.log(chalk.gray(`  local url:  ${urls.localUrl}`));
     console.log(chalk.gray(`  public url: ${urls.advertisedUrl}`));
     console.log(chalk.gray(`  mode:       ${serverArtifactMode(artifacts)}`));
+    if (artifacts.packageEntry) {
+        console.log(chalk.gray(`  package:    ${artifacts.packageEntry}`));
+    }
     if (staticDir) {
         console.log(chalk.gray(`  webapp:     ${staticDir}`));
     } else {
@@ -404,21 +428,16 @@ function serverArtifactMode(artifacts: ServerArtifacts): string {
  *   2. Legacy bundled binary at tools/server/<platform>/happy-server
  *   3. Source-mode fallback for monorepo dev: ../happy-server/sources/standalone.ts via tsx
  */
-function resolveServerArtifacts(): ServerArtifacts | undefined {
-    const packageArtifact = resolveInstalledServerPackage();
+export function resolveServerArtifacts(options: ServerArtifactResolutionOptions = {}): ServerArtifacts | undefined {
+    const packageArtifact = (options.resolveInstalledServerPackage ?? resolveInstalledServerPackage)();
     if (packageArtifact) return packageArtifact;
 
-    const toolsRoot = resolveToolsPath('server');
-    const binDir = path.join(toolsRoot, currentPlatform());
-    const binary = path.join(binDir, bundledBinaryName());
-    if (existsSync(binary)) {
-        ensureExecutable(binary);
-        return { command: binary, prefixArgs: [], cwd: binDir, bundled: true, source: 'legacy-bundled' };
-    }
+    const legacyArtifact = (options.resolveLegacyBundledServer ?? resolveLegacyBundledServer)();
+    if (legacyArtifact) return legacyArtifact;
 
-    const sourceEntry = findSourceStandalone();
+    const sourceEntry = (options.findSourceStandalone ?? findSourceStandalone)();
     if (sourceEntry) {
-        const tsx = findTsxBinary(path.dirname(path.dirname(sourceEntry)));
+        const tsx = (options.findTsxBinary ?? findTsxBinary)(path.dirname(path.dirname(sourceEntry)));
         const useNode = tsx !== 'tsx';
         return {
             command: useNode ? process.execPath : 'tsx',
@@ -432,27 +451,87 @@ function resolveServerArtifacts(): ServerArtifacts | undefined {
     return undefined;
 }
 
-function resolveInstalledServerPackage(): ServerArtifacts | undefined {
-    try {
-        const serverPackage = require_(SERVER_PACKAGE_NAME) as {
-            resolveServerArtifact?: () => HappyServerPackageArtifact | undefined;
-        };
-        const artifact = serverPackage.resolveServerArtifact?.();
-        if (!artifact || !artifact.command || !existsSync(artifact.command)) {
-            return undefined;
+function resolveLegacyBundledServer(): ServerArtifacts | undefined {
+    const toolsRoot = resolveToolsPath('server');
+    const binDir = path.join(toolsRoot, currentPlatform());
+    const binary = path.join(binDir, bundledBinaryName());
+    if (existsSync(binary)) {
+        ensureExecutable(binary);
+        return { command: binary, prefixArgs: [], cwd: binDir, bundled: true, source: 'legacy-bundled' };
+    }
+    return undefined;
+}
+
+export function resolveInstalledServerPackage(options: InstalledServerPackageResolutionOptions = {}): ServerArtifacts | undefined {
+    const loadPackage = options.loadPackage ?? ((request: string) => require_(request) as HappyServerPackageModule);
+    const resolvePackage = options.resolvePackage ?? ((request: string) => require_.resolve(request));
+    const siblingPackagePath = (options.siblingPackagePath ?? findSiblingServerPackagePath)();
+    const candidates = [SERVER_PACKAGE_NAME, siblingPackagePath];
+
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        try {
+            const serverPackage = loadPackage(candidate);
+            const packageEntry = resolvePackage(candidate);
+            const artifact = serverPackage.resolveServerArtifact?.();
+            if (!artifact || !artifact.command || !existsSync(artifact.command)) {
+                continue;
+            }
+            return {
+                command: artifact.command,
+                prefixArgs: artifact.prefixArgs ?? [],
+                cwd: artifact.cwd,
+                bundled: artifact.bundled ?? true,
+                source: 'package',
+                prismaQueryEngineLibrary: artifact.prismaQueryEngineLibrary,
+                webappDir: artifact.webappDir,
+                packageEntry,
+            };
+        } catch {
+            // Try the explicit sibling package root before falling back to legacy/source modes.
         }
-        return {
-            command: artifact.command,
-            prefixArgs: artifact.prefixArgs ?? [],
-            cwd: artifact.cwd,
-            bundled: artifact.bundled ?? true,
-            source: 'package',
-            prismaQueryEngineLibrary: artifact.prismaQueryEngineLibrary,
-            webappDir: artifact.webappDir,
-        };
-    } catch {
+    }
+
+    return undefined;
+}
+
+function findSiblingServerPackagePath(): string | undefined {
+    return findSiblingServerPackagePathFromCliPackageRoot(findInstalledCliPackageRoot());
+}
+
+function findInstalledCliPackageRoot(startDir = __dirname): string | undefined {
+    let directory = startDir;
+    for (let i = 0; i < 8; i += 1) {
+        try {
+            const manifest = JSON.parse(readFileSync(path.join(directory, 'package.json'), 'utf8')) as { name?: unknown };
+            if (manifest.name === 'happy' && path.basename(path.dirname(directory)) === 'node_modules') {
+                return directory;
+            }
+        } catch {
+            // Keep walking: source-mode and bundled layouts do not have a global package root.
+        }
+
+        const parent = path.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
+    }
+    return undefined;
+}
+
+export function findSiblingServerPackagePathFromCliPackageRoot(
+    cliPackageRoot: string | undefined,
+    pathOperations: PathOperations = path,
+): string | undefined {
+    if (!cliPackageRoot || pathOperations.basename(cliPackageRoot) !== 'happy') {
         return undefined;
     }
+
+    const nodeModulesRoot = pathOperations.dirname(cliPackageRoot);
+    if (pathOperations.basename(nodeModulesRoot) !== 'node_modules') {
+        return undefined;
+    }
+
+    return pathOperations.join(nodeModulesRoot, SERVER_PACKAGE_NAME);
 }
 
 function findSourceStandalone(): string | undefined {

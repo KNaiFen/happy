@@ -125,7 +125,7 @@ jobs:
         test -f artifacts/happy-wire.tgz
         test -f artifacts/happy-cli.tgz
         test -f artifacts/happy-server.tgz
-        npm install -g ./artifacts/happy-wire.tgz ./artifacts/happy-cli.tgz
+        npm install -g ./artifacts/happy-wire.tgz ./artifacts/happy-server.tgz ./artifacts/happy-cli.tgz
 
     - name: Test binary execution
       run: |
@@ -155,6 +155,33 @@ jobs:
         }
 
         echo "Binary smoke test passed on Linux!"
+
+    - name: Test globally installed server without NODE_PATH
+      run: |
+        test ! -e "$GITHUB_WORKSPACE/packages/happy-server/sources/standalone.ts"
+        HAPPY_BIN_REAL="$(readlink -f "$(command -v happy)")"
+        HAPPY_PACKAGE_ROOT="$(dirname "$(dirname "$HAPPY_BIN_REAL")")"
+        EXPECTED_SERVER_PACKAGE="$(realpath "$(dirname "$HAPPY_PACKAGE_ROOT")/happy-server-self-host")"
+        test -f "$EXPECTED_SERVER_PACKAGE/package.json"
+        export HAPPY_HOME_DIR="$(mktemp -d)"
+        timeout 90s env -u NODE_PATH happy server --port 4504 --host 127.0.0.1 --no-persist --reset > /tmp/happy-global-server.log 2>&1 &
+        SERVER_PID=$!
+        UP=0
+        for i in $(seq 1 60); do
+          if curl -sf -m 2 http://127.0.0.1:4504/ -o /dev/null; then UP=1; echo "server up after ${i}s"; break; fi
+          sleep 1
+        done
+        PK=$(node -e "console.log(Buffer.alloc(32).toString('base64'))")
+        BODY=$(curl -s -m 5 -G http://127.0.0.1:4504/v1/auth/request/status --data-urlencode "publicKey=$PK" || true)
+        kill "$SERVER_PID" 2>/dev/null || true
+        pkill -f happy-server || true
+        echo "=== globally installed happy server log ==="; cat /tmp/happy-global-server.log || true
+        if [ "$UP" != "1" ]; then echo "Error: globally installed happy server did not become healthy"; exit 1; fi
+        if ! echo "$BODY" | grep -q '"status"'; then echo "Error: global Prisma-backed endpoint did not respond"; exit 1; fi
+        if ! grep -q 'mode:       happy-server-self-host' /tmp/happy-global-server.log; then echo "Error: global smoke did not use the installed server package"; exit 1; fi
+        if ! grep -Fq "package:    $EXPECTED_SERVER_PACKAGE/" /tmp/happy-global-server.log; then echo "Error: global smoke did not resolve the server from happy's sibling package root"; exit 1; fi
+        if grep -qiE 'PrismaClientInitializationError|could not locate.*Query Engine' /tmp/happy-global-server.log; then echo "Error: global Prisma query engine failed to load"; exit 1; fi
+        echo "global happy server smoke test passed (sibling package + Prisma query engine OK)"
 
     - name: Test packaged server (happy server)
       run: |
