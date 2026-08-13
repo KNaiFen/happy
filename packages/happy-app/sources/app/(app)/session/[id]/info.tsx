@@ -25,7 +25,8 @@ import { useSessionQuickActions } from '@/hooks/useSessionQuickActions';
 import { copySessionMetadataToClipboard, copySessionMetadataAndLogsToClipboard } from '@/utils/copySessionMetadataToClipboard';
 import { HappyError } from '@/utils/errors';
 import { MobileGlassSurface } from '@/components/MobileGlass';
-import { isSupportedExistingSession } from '@/sync/sessionFlavor';
+import { isReadableExistingSession } from '@/sync/sessionFlavor';
+import { isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 
 // Animated status dot component
 function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: boolean; size?: number }) {
@@ -123,7 +124,7 @@ function SessionInfoContent({ session }: { session: Session }) {
     const devModeEnabled = __DEV__;
     const sessionName = getSessionName(session);
     const sessionStatus = useSessionStatus(session);
-    const isCodexReadOnly = session.metadata?.codexReadOnly === true;
+    const isCodexReadOnly = isCodexSessionReadOnly(session.metadata);
     const {
         canResume,
         canShowResume,
@@ -354,6 +355,14 @@ function SessionInfoContent({ session }: { session: Session }) {
 
                 {/* Quick Actions */}
                 <ItemGroup title={t('sessionInfo.quickActions')}>
+                    {isCodexReadOnly && (
+                        <Item
+                            title={t('agentInput.codexPermissionMode.readOnly')}
+                            subtitle={t('agentInput.codexPermissionMode.readOnlyDescription')}
+                            icon={<Ionicons name="lock-closed-outline" size={29} color="#8E8E93" />}
+                            showChevron={false}
+                        />
+                    )}
                     {session.metadata?.machineId && (
                         <Item
                             title={t('sessionInfo.viewMachine')}
@@ -652,7 +661,7 @@ export default React.memo(() => {
         );
     }
 
-    if (!isSupportedExistingSession(session.metadata)) {
+    if (!isReadableExistingSession(session.metadata)) {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Ionicons name="ban-outline" size={48} color={theme.colors.textSecondary} />

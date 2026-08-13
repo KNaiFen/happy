@@ -12,6 +12,8 @@ function sideChat(overrides: {
     archivedAt?: number | null;
     parentSessionId?: string;
     codexReadOnly?: boolean;
+    flavor?: string;
+    codexSyncVersion?: number;
 }): Session {
     return {
         id: overrides.id,
@@ -22,6 +24,8 @@ function sideChat(overrides: {
             isSideChat: true,
             parentSessionId: overrides.parentSessionId ?? 'parent',
             codexReadOnly: overrides.codexReadOnly ?? false,
+            flavor: overrides.flavor,
+            codexSyncVersion: overrides.codexSyncVersion,
         },
     } as Session;
 }
@@ -63,6 +67,16 @@ describe('shouldArchiveSideChatOnClose', () => {
             createdAt: 1,
             active: true,
             codexReadOnly: true,
+        }))).toBe(false);
+    });
+
+    it('keeps retained legacy Codex children local when their panel is closed', () => {
+        expect(shouldArchiveSideChatOnClose(sideChat({
+            id: 'legacy-codex-child',
+            createdAt: 1,
+            active: false,
+            flavor: 'codex',
+            codexSyncVersion: 3,
         }))).toBe(false);
     });
 

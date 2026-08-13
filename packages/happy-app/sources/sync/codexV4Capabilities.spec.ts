@@ -80,6 +80,20 @@ describe('Codex v4 App capabilities', () => {
         });
     });
 
+    it('treats explicit non-v4 Codex history as read-only', () => {
+        const legacy = metadata({ codexSyncVersion: 3 });
+        expect(isCodexSessionReadOnly(legacy)).toBe(true);
+        expect(resolveCodexV4SessionCapabilities(legacy, projection())).toMatchObject({
+            readOnly: true,
+            providerReadOnly: true,
+        });
+        expect(() => assertCodexV4CommandPublishAllowed({
+            command: command({ command: 'thread.read' }),
+            metadata: legacy,
+            projection: projection(),
+        })).toThrow('read-only');
+    });
+
     it('keeps deleted-machine read-only separate from provider child ownership', () => {
         expect(resolveCodexV4SessionCapabilities(
             metadata(),
