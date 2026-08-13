@@ -1,7 +1,8 @@
 import type { Session } from './storageTypes';
+import { isCodexSessionReadOnly } from './codexV4Capabilities';
 
 export function isProviderReadOnlySideChat(session: Pick<Session, 'metadata'>): boolean {
-    return session.metadata?.isSideChat === true && session.metadata.codexReadOnly === true;
+    return session.metadata?.isSideChat === true && isCodexSessionReadOnly(session.metadata);
 }
 
 export function shouldArchiveSideChatOnClose(session: Pick<Session, 'metadata'>): boolean {

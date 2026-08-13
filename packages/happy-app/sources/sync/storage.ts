@@ -49,7 +49,7 @@ import {
     type CodexV4RegistrySyncState,
 } from './codexV4ClientRegistry';
 import { isSessionMachineDeleted } from './sessionMachineAccess';
-import { isSupportedExistingSession } from './sessionFlavor';
+import { isReadableExistingSession } from './sessionFlavor';
 import { resolveSessionLifecycle } from './sessionLifecycle';
 import { selectVisibleSideChats } from './sideChatSessions';
 
@@ -333,7 +333,7 @@ function buildSessionListViewData(
     Object.values(sessions).forEach(session => {
         // Side chats are hidden children of another session — they render only
         // inside the parent's sidebar panel, never in the top-level list.
-        if (session.metadata?.isSideChat || !isSupportedExistingSession(session.metadata)) {
+        if (session.metadata?.isSideChat || !isReadableExistingSession(session.metadata)) {
             return;
         }
         if (isSessionActive(session)) {
@@ -1843,7 +1843,7 @@ export function useAllSessions(): Session[] {
         if (!state.isDataReady) return [];
         // Side chats are hidden children — exclude them from every list.
         return Object.values(state.sessions)
-            .filter((s) => !s.metadata?.isSideChat && isSupportedExistingSession(s.metadata))
+            .filter((s) => !s.metadata?.isSideChat && isReadableExistingSession(s.metadata))
             .sort((a, b) => b.updatedAt - a.updatedAt);
     }));
 }

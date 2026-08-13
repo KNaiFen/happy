@@ -35,7 +35,7 @@ import { useRouter } from 'expo-router';
 import { useSession } from '@/sync/storage';
 import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
-import { canStopCodexGatewaySession } from '@/sync/codexV4Capabilities';
+import { canStopCodexGatewaySession, isCodexSessionReadOnly } from '@/sync/codexV4Capabilities';
 import {
     buildResumeEligibilityFingerprint,
     ensureResumeEligibilityForSession,
@@ -71,7 +71,7 @@ function getResumeAvailability(
     resumeEligibility: ResumeEligibilityEntry | null,
 ): ResumeAvailability {
     if (
-        session.metadata?.codexReadOnly === true
+        isCodexSessionReadOnly(session.metadata)
         || session.metadata?.flavor !== 'codex'
         || session.metadata?.codexSyncVersion !== 4
     ) {
@@ -201,7 +201,7 @@ export function useSessionQuickActions(
     const router = useRouter();
     const navigateToSession = useNavigateToSession();
     const sessionStatus = useSessionStatus(session);
-    const isCodexReadOnly = session.metadata?.codexReadOnly === true;
+    const isCodexReadOnly = isCodexSessionReadOnly(session.metadata);
     const machineDeleted = useIsSessionMachineDeleted(session.id);
     const machineId = session.metadata?.machineId ?? '';
     const machine = useMachine(machineId);
@@ -248,6 +248,7 @@ export function useSessionQuickActions(
         session.metadata?.machineId,
         session.metadata?.path,
         session.metadata?.codexThreadId,
+        session.metadata?.codexSyncVersion,
         session.metadata?.codexReadOnly,
     ]);
     const canFork = Boolean(

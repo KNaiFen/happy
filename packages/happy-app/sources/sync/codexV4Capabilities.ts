@@ -1,6 +1,7 @@
 import type { CodexCommandEntityV4 } from '@slopus/happy-wire';
 import type { Metadata } from './storageTypes';
 import type { CodexV4Projection } from './codexV4Projection';
+import { isCodexLegacyReadOnlySession } from './sessionFlavor';
 
 export interface CodexV4SessionCapabilities {
     readOnly: boolean;
@@ -32,7 +33,7 @@ const COMMANDS_ALLOWED_BEFORE_THREAD_OWNERSHIP = new Set([
 ]);
 
 export function isCodexSessionReadOnly(metadata: Metadata | null | undefined): boolean {
-    return metadata?.codexReadOnly === true;
+    return metadata?.codexReadOnly === true || isCodexLegacyReadOnlySession(metadata);
 }
 
 export function isCodexGatewaySession(metadata: Metadata | null | undefined): boolean {
@@ -82,6 +83,9 @@ export function canStopCodexGatewaySession(
 }
 
 export function assertCodexSessionWritable(metadata: Metadata | null | undefined): void {
+    if (isCodexLegacyReadOnlySession(metadata)) {
+        throw new Error('Legacy Codex sessions are read-only');
+    }
     if (isCodexSessionReadOnly(metadata)) {
         throw new Error('Provider-created Codex child sessions are read-only');
     }
