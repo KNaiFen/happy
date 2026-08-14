@@ -2,7 +2,16 @@
 
 ## 状态
 
-- 当前状态：进行中（归档 runtime 云端 smoke 已通过；2026-08-12 已确定采用同一 npm global root 的显式同级包解析，正在实施与云端验收）。
+- 当前状态：已完成并归档。
+- 完成日期：2026-08-14。
+- 实现与合并基线：PR [#53](https://github.com/KNaiFen/happy/pull/53) 已合并为
+  `ac59cfe428efa277e701d4f7f0e65f7818a4ee82`。
+- 云端验收：[CLI Smoke](https://github.com/KNaiFen/happy/actions/runs/31657864766) 的 Linux Node 20/24
+  global-sibling smoke 均从无源码 checkout 的全局安装启动 `happy server`，验证根端点、
+  `/v1/auth/request/status`、同级 package entry 与 Prisma query engine。
+- 发行证据：同 SHA 的 [release workflow](https://github.com/KNaiFen/happy/actions/runs/31710115791)
+  成功，CLI `1.4.51` candidate artifact `9184986115` 与 promoted artifact `9185001095` 均可下载。
+- 直接验收声明：维护者于 2026-08-14 确认本计划所列需证明的直接验收均已测试且无问题。
 - 建立日期：2026-08-10。
 - 发现基线：PR [#28](https://github.com/KNaiFen/happy/pull/28) 的 CLI Smoke run [31335259939](https://github.com/KNaiFen/happy/actions/runs/31335259939)。
 - 负责范围：`packages/happy-cli/src/commands/server.ts`、`happy-server-self-host` 安装说明与 CLI package smoke。

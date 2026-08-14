@@ -259,7 +259,7 @@ GitHub API 同时确认：`main` 当前没有 branch protection，仓库 ruleset
 准备，合计 223 runner 秒，并因当前跨工作流并发组串行。这是阶段 2 不可变指纹与归档复用的
 当前量化基线，不应通过删除下游 app-server/TUI/Field 验收来回避。
 
-PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步由[专门活动计划](./happy-server-global-package-resolution.md)承接。
+PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步已由[归档计划](./archive/happy-server-global-package-resolution.md)完成。
 
 ### 阶段 2：变更影响规划与不可变制品复用
 

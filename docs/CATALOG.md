@@ -42,9 +42,7 @@
 
 ## 活动计划
 
-- [账户数据删除与保留契约实施计划](./plans/account-data-deletion-and-retention-contract.md)
 - [GitHub Actions 提交与 PR 触发去重及发布门禁整改计划](./plans/github-actions-trigger-gate-remediation.md)
-- [Happy Server 包安装与解析契约修复计划](./plans/happy-server-global-package-resolution.md)
 
 ## 审查记录
 
@@ -105,6 +103,7 @@
 ## 计划归档
 
 - [2026-08-06 安全、恢复与输入队列修复台账](./plans/archive/2026-08-06-remediation-ledger.md)
+- [账户数据删除与保留契约实施计划](./plans/archive/account-data-deletion-and-retention-contract.md)
 - [Agent SDK Upgrade + Plan Mode Fix + Integration Tests](./plans/archive/agent-sdk-upgrade-plan-mode-fix.md)
 - [Agent Testing Layers](./plans/archive/agent-testing-layers.md)
 - [App 排队消息连续堆叠与锚定菜单实施计划](./plans/archive/app-queue-dock-and-anchored-menu.md)
@@ -149,6 +148,7 @@
 - [Generic ACP Runner](./plans/archive/generic-acp-runner.md)
 - [happy-agent CLI Tool](./plans/archive/happy-agent.md)
 - [happy server — bundled self-host mode](./plans/archive/happy-serve-self-host.md)
+- [Happy Server 包安装与解析契约修复计划](./plans/archive/happy-server-global-package-resolution.md)
 - [Happy Server standalone Docker 路径修复记录](./plans/archive/happy-server-standalone-docker-path.md)
 - [Codex 历史会话只读保留计划](./plans/archive/legacy-codex-readonly-retention.md)
 - [Minimal Fix Plan for Happy-CLI Bugs with TDD](./plans/archive/legacy/bug-fix-plan-2025-01-15-athundt.md)

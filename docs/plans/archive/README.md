@@ -5,6 +5,7 @@
 这里保存已完成、取消或被替代的计划。归档保留决策与验收证据，但不代表当前路线图。
 
 - [2026-08-06 安全、恢复与输入队列修复台账](./2026-08-06-remediation-ledger.md)
+- [账户数据删除与保留契约实施计划](./account-data-deletion-and-retention-contract.md)
 - [Agent SDK Upgrade + Plan Mode Fix + Integration Tests](./agent-sdk-upgrade-plan-mode-fix.md)
 - [Agent Testing Layers](./agent-testing-layers.md)
 - [App 排队消息连续堆叠与锚定菜单实施计划](./app-queue-dock-and-anchored-menu.md)
@@ -49,6 +50,7 @@
 - [Generic ACP Runner](./generic-acp-runner.md)
 - [happy-agent CLI Tool](./happy-agent.md)
 - [happy server — bundled self-host mode](./happy-serve-self-host.md)
+- [Happy Server 包安装与解析契约修复计划](./happy-server-global-package-resolution.md)
 - [Happy Server standalone Docker 路径修复记录](./happy-server-standalone-docker-path.md)
 - [Codex 历史会话只读保留计划](./legacy-codex-readonly-retention.md)
 - [Minimal Fix Plan for Happy-CLI Bugs with TDD](./legacy/bug-fix-plan-2025-01-15-athundt.md)
