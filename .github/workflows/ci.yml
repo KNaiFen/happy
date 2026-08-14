@@ -388,6 +388,13 @@ jobs:
           cargo metadata --format-version 1 --manifest-path packages/happy-app/src-tauri/Cargo.toml > /dev/null
           git diff --exit-code -- packages/happy-app/src-tauri/Cargo.lock
 
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Audit Tauri production dependencies
+        working-directory: packages/happy-app/src-tauri
+        run: cargo audit
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path packages/happy-app/src-tauri/Cargo.toml -- --check
 

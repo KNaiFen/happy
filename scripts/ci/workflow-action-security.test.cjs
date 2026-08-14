@@ -138,3 +138,22 @@ test('all GitHub workflows pin external Actions and disable checkout credential 
     ));
     assert.deepEqual(violations, []);
 });
+
+test('Tauri CI enforces the pinned High/Critical Cargo audit policy', () => {
+    const workflow = readFileSync(path.join(workflowDirectory, 'ci.yml'), 'utf8');
+    const policy = readFileSync(path.join(
+        repositoryRoot,
+        'packages',
+        'happy-app',
+        'src-tauri',
+        '.cargo',
+        'audit.toml',
+    ), 'utf8');
+
+    assert.match(workflow, /cargo install cargo-audit --locked --version 0\.22\.2/);
+    assert.match(workflow, /working-directory: packages\/happy-app\/src-tauri\n\s+run: cargo audit/);
+    assert.match(policy, /^severity_threshold = "high"$/m);
+    assert.match(policy, /^ignore = \[\]$/m);
+    assert.match(policy, /^fetch = true$/m);
+    assert.match(policy, /^stale = false$/m);
+});
