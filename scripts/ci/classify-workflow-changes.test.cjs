@@ -109,12 +109,31 @@ test('keeps App checks selected for App-owned standalone Docker inputs', () => {
 test('selects App and Tauri checks without widening to unrelated packages', () => {
     assert.deepEqual(selected(['packages/happy-app/src-tauri/src/lib.rs']), [
         'app',
+        'tauri',
+    ]);
+});
+
+test('selects Android Field only for non-Tauri App changes', () => {
+    const app = classifyPaths(['packages/happy-app/sources/components/AgentInput.tsx']);
+    assert.equal(app.android_field, true);
+    assert.equal(app.official_codex, true);
+    assert.equal(classifyPaths(['packages/happy-app/sources/sync/sync.ts']).android_field, true);
+    const tauri = classifyPaths(['packages/happy-app/src-tauri/src/lib.rs']);
+    assert.equal(tauri.android_field, false);
+    assert.equal(tauri.official_codex, false);
+    assert.equal(classifyPaths(['scripts/ci/official-codex-artifact-reuse.cjs']).android_field, true);
+    const fieldFixture = classifyPaths(['scripts/ci/codex-mobile-field-fixture.ts']);
+    assert.equal(fieldFixture.android_field, true);
+    assert.equal(fieldFixture.official_codex, true);
+});
+
+test('selects official Field and Gateway scenarios for their shared MCP server', () => {
+    assert.deepEqual(selected(['scripts/ci/codex-field-mcp-server.mjs']), [
+        'android_field',
         'codex_gateway_tui',
         'codex_official_app_server',
-        'codex_provider_boundary',
-        'codex_transport_scenarios',
         'official_codex',
-        'tauri',
+        'workflow_contracts',
     ]);
 });
 
@@ -125,19 +144,30 @@ test('runs dependency audit for package manifests', () => {
     assert.equal(classification.cli_smoke, false);
 });
 
-test('treats root install, workflow, and CI fixture inputs as global', () => {
-    for (const path of [
-        'pnpm-lock.yaml',
-        '.github/workflows/ci.yml',
-        'scripts/ci/example.ts',
-    ]) {
-        const classification = classifyPaths([path]);
-        assert.deepEqual(
-            Object.keys(classification).filter((key) => classification[key]).sort(),
-            [...outputKeys].sort(),
-            path,
-        );
-    }
+test('treats root install inputs as global and CI fixtures as contract-only', () => {
+    const lockfile = classifyPaths(['pnpm-lock.yaml']);
+    assert.deepEqual(
+        Object.keys(lockfile).filter((key) => lockfile[key]).sort(),
+        [...outputKeys].sort(),
+    );
+    const fixture = classifyPaths(['scripts/ci/example.ts']);
+    assert.deepEqual(
+        Object.keys(fixture).filter((key) => fixture[key]).sort(),
+        ['workflow_contracts'],
+    );
+    const ci = classifyPaths(['.github/workflows/ci.yml']);
+    assert.deepEqual(
+        Object.keys(ci).filter((key) => ci[key]).sort(),
+        [...outputKeys].sort(),
+    );
+});
+
+test('runs every job when the classifier itself changes', () => {
+    const classification = classifyPaths(['scripts/ci/classify-workflow-changes.cjs']);
+    assert.deepEqual(
+        Object.keys(classification).filter((key) => classification[key]).sort(),
+        [...outputKeys].sort(),
+    );
 });
 
 test('forces every check for manual workflow dispatch', () => {

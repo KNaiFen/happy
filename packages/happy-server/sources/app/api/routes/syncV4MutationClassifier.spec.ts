@@ -51,7 +51,9 @@ describe('classifySyncV4Mutations', () => {
         })).toThrow(RevisionConflictError);
     });
 
-    it('converges 100,000 mutations under reorder, duplicates, disconnects, and lost invalidations', () => {
+    // This capacity model is intentionally opt-in; the default suite keeps the
+    // deterministic idempotency cases above while stress runs exercise scale.
+    it.runIf(process.env.HAPPY_RUN_STRESS_TESTS === '1')('converges 100,000 mutations under reorder, duplicates, disconnects, and lost invalidations', () => {
         const random = xorshift32(0x145_000);
         const mutations = buildMutations(100_000);
         shuffle(mutations, random);

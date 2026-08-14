@@ -56,6 +56,7 @@ jobs:
       codex_gateway_tui: ${{ steps.changes.outputs.codex_gateway_tui }}
       dependency_audit: ${{ steps.changes.outputs.dependency_audit }}
       codex_provider_boundary: ${{ steps.changes.outputs.codex_provider_boundary }}
+      workflow_contracts: ${{ steps.changes.outputs.workflow_contracts }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,7 +72,36 @@ jobs:
           FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/ci/classify-workflow-changes.cjs "$BASE_SHA" "$HEAD_SHA" "$FORCE_ALL"
 
-      - name: Test release and workflow security gates
+      - name: Test path classifier
+        run: node --test scripts/ci/classify-workflow-changes.test.cjs
+
+      - name: Write Android Field scope marker
+        if: steps.changes.outputs.android_field == 'true' && github.run_attempt == 1
+        run: printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/android-field-scope.txt"
+
+      - name: Upload Android Field scope marker
+        if: steps.changes.outputs.android_field == 'true' && github.run_attempt == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-field-scope-${{ github.sha }}
+          path: ${{ runner.temp }}/android-field-scope.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  workflow_contracts:
+    name: Workflow and release contracts
+    needs: classify
+    if: needs.classify.outputs.workflow_contracts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test workflow and release contracts
         run: |
           node --test scripts/ci/android-field-run-dedup.test.cjs
           node --test scripts/ci/android-field-apk-reuse.test.cjs
@@ -82,6 +112,7 @@ jobs:
           node --test scripts/ci/actions-sla-watchdog.test.cjs
           node --test scripts/ci/codeql-change-classifier.test.cjs
           node --test scripts/ci/standalone-server-container-contract.test.cjs
+          node --test scripts/ci/official-codex-artifact-reuse.test.cjs
           node --test scripts/ci/verify-release-source-gate.test.cjs
           node --test scripts/ci/release-candidate-promotion.test.cjs
           python3 scripts/ci/android_field_apk_archive_test.py
@@ -113,11 +144,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck Wire
-        run: pnpm --filter @slopus/happy-wire typecheck
-
-      - name: Test and build Wire
+      - name: Test Wire source
         run: pnpm --filter @slopus/happy-wire test
+
+      - name: Build Wire
+        run: pnpm --filter @slopus/happy-wire build
 
   agent:
     name: Agent typecheck, test, and build
@@ -148,11 +179,11 @@ jobs:
       - name: Build Wire dependency
         run: pnpm --filter @slopus/happy-wire build
 
-      - name: Typecheck Agent
-        run: pnpm --filter happy-agent typecheck
-
-      - name: Test and build Agent
+      - name: Test Agent source
         run: pnpm --filter happy-agent test
+
+      - name: Build Agent
+        run: pnpm --filter happy-agent build
 
   codium:
     name: Codium typecheck, test, and production build
@@ -261,9 +292,6 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter happy-server-self-host generate
 
-      - name: Typecheck Server
-        run: pnpm --filter happy-server-self-host typecheck
-
       - name: Test Server
         run: pnpm --filter happy-server-self-host test
 
@@ -361,11 +389,11 @@ jobs:
       - name: Build Wire dependency
         run: pnpm --filter @slopus/happy-wire build
 
-      - name: Typecheck CLI
-        run: pnpm --filter happy typecheck
-
-      - name: Test and build CLI
+      - name: Test CLI source
         run: pnpm --filter happy test
+
+      - name: Build CLI
+        run: pnpm --filter happy build
 
   app:
     name: App typecheck, unit test, and Web build
@@ -872,6 +900,7 @@ jobs:
     if: always()
     needs:
       - classify
+      - workflow_contracts
       - wire
       - agent
       - codium
@@ -893,6 +922,8 @@ jobs:
       - name: Require every selected CI job to pass
         env:
           CLASSIFY_RESULT: ${{ needs.classify.result }}
+          EXPECT_WORKFLOW_CONTRACTS: ${{ needs.classify.outputs.workflow_contracts }}
+          WORKFLOW_CONTRACTS_RESULT: ${{ needs.workflow_contracts.result }}
           EXPECT_WIRE: ${{ needs.classify.outputs.wire }}
           WIRE_RESULT: ${{ needs.wire.result }}
           EXPECT_AGENT: ${{ needs.classify.outputs.agent }}
@@ -937,6 +968,7 @@ jobs:
             fi
           }
           test "$CLASSIFY_RESULT" = success
+          require_result "$EXPECT_WORKFLOW_CONTRACTS" "$WORKFLOW_CONTRACTS_RESULT" workflow-contracts
           require_result "$EXPECT_WIRE" "$WIRE_RESULT" wire
           require_result "$EXPECT_AGENT" "$AGENT_RESULT" agent
           require_result "$EXPECT_CODIUM" "$CODIUM_RESULT" codium

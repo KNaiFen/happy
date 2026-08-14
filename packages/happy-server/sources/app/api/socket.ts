@@ -39,9 +39,8 @@ export function startSocket(app: Fastify) {
         // listener). Enabling this lets socket.io replay missed events from
         // the streams adapter (which implements restoreSession via the Redis
         // stream) so the client can skip the heavy refetch when
-        // socket.recovered === true. Verified working cross-replica via
-        // deploy/integration-tests/missed-events.mjs (event #2 fired during a
-        // forced engine.close() arrived after auto-reconnect, recovered=true).
+        // socket.recovered === true. A historical cross-replica probe verified
+        // that an event fired during engine.close() arrived after reconnect.
         // Ship parity first; turn this on as a follow-up.
         // connectionStateRecovery: {
         //     maxDisconnectionDuration: 2 * 60 * 1000,
