@@ -1,6 +1,6 @@
 [advisories]
 ignore = []
-# RustSec advisories without CVSS always match the threshold and fail closed.
+# Unscored RustSec vulnerability advisories match the threshold and fail closed.
 severity_threshold = "high"
 
 [database]

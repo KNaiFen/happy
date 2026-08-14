@@ -54,10 +54,11 @@ deployment target to protect with approval gates.
 ### Production dependency audit
 
 - Block production dependency changes containing High or Critical advisories.
-- For Cargo, use `cargo-audit`'s CVSS High threshold. RustSec advisories without
-  CVSS always match that threshold and remain blocking because their severity
-  cannot be proven below High; CVSS-scored Medium and Low advisories do not become
-  blocking findings.
+- For Cargo, use `cargo-audit`'s CVSS High threshold. Vulnerability advisories
+  without CVSS always match that threshold and remain blocking because their severity
+  cannot be proven below High. CVSS-scored Medium and Low advisories, plus purely
+  informational `unmaintained`, `unsound`, `notice`, and `yanked` entries, do not
+  become blocking findings.
 - The sole temporary exceptions are the two exact `image-size` GHSA advisories reached
   only through `packages__happy-app>expo>@expo/metro>metro>image-size`, because the
   upstream advisory reports no patched release. The exception expires on 2026-11-12
@@ -78,9 +79,10 @@ the environment, approvers, health checks, rollback procedure, and credentials.
   documentation-only changes.
 - Dependabot may open security-update pull requests that remain subject to the normal
   required CI gates.
-- High/Critical production dependency regressions and unscored RustSec advisories fail
-  before merge, while CVSS-scored Medium/Low findings do not become blocking and the
-  two narrowly scoped unfixable Metro findings stay visible and time-bounded.
+- High/Critical production dependency regressions and unscored vulnerability advisories
+  fail before merge, while CVSS-scored Medium/Low and purely informational findings do
+  not become blocking; the two narrowly scoped unfixable Metro findings stay visible
+  and time-bounded.
 - Repository security settings and ruleset changes remain explicit GitHub operations
   with audit evidence; they are not inferred from committed workflow files.
 

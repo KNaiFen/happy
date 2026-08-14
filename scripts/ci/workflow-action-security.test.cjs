@@ -73,6 +73,43 @@ function workflowViolations(name, source) {
     return violations;
 }
 
+function namedSteps(source, name) {
+    const lines = source.split(/\r?\n/);
+    const startLine = `      - name: ${name}`;
+    const steps = [];
+    for (let start = 0; start < lines.length; start += 1) {
+        if (lines[start] !== startLine) {
+            continue;
+        }
+        let end = start + 1;
+        while (end < lines.length && !/^      - /.test(lines[end])) {
+            end += 1;
+        }
+        steps.push(lines.slice(start, end).join('\n'));
+    }
+    return steps;
+}
+
+function requiredNamedStep(source, name) {
+    const steps = namedSteps(source, name);
+    assert.equal(steps.length, 1, `${name} must appear exactly once`);
+    return steps[0];
+}
+
+function assertUnconditionalStep(step, name) {
+    assert.doesNotMatch(step, /(?:^|\n)\s*["']?if["']?\s*:/, `${name} must not be conditional`);
+    assert.doesNotMatch(step, /(?:^|\n)\s*["']?continue-on-error["']?\s*:/, `${name} must not continue on error`);
+}
+
+function namedJob(source, name, nextName) {
+    const start = source.indexOf(`  ${name}:\n`);
+    if (start < 0) {
+        return null;
+    }
+    const end = source.indexOf(`\n  ${nextName}:\n`, start + 1);
+    return source.slice(start, end < 0 ? source.length : end);
+}
+
 test('workflow security scanner rejects mutable Actions and persisted checkout credentials', () => {
     const source = `
 jobs:
@@ -150,12 +187,62 @@ test('Tauri CI enforces the pinned High/Critical and unscored Cargo audit policy
         'audit.toml',
     ), 'utf8');
 
-    assert.match(workflow, /cargo install cargo-audit --locked --version 0\.22\.2/);
-    assert.match(workflow, /Audit Tauri High\/Critical and unscored production advisories/);
-    assert.match(workflow, /working-directory: packages\/happy-app\/src-tauri\n\s+run: cargo audit/);
-    assert.match(policy, /^# RustSec advisories without CVSS always match the threshold and fail closed\.$/m);
+    assert.equal((workflow.match(/^  tauri:$/gm) || []).length, 1, 'Tauri job must appear exactly once');
+    const tauriJob = namedJob(workflow, 'tauri', 'migration');
+
+    assert.ok(tauriJob, 'missing Tauri CI job');
+    const rustSetup = requiredNamedStep(tauriJob, 'Set up Rust');
+    const installAudit = requiredNamedStep(tauriJob, 'Install pinned cargo-audit');
+    const auditStep = requiredNamedStep(tauriJob, 'Audit Tauri High/Critical and unscored production advisories');
+
+    assert.match(tauriJob, /^    if: needs\.classify\.outputs\.tauri == 'true'$/m);
+    assert.match(rustSetup, /^        uses: dtolnay\/rust-toolchain@[0-9a-f]{40}(?:\s+#.*)?$/m);
+    assert.match(rustSetup, /^          toolchain: 1\.88\.0$/m);
+    assert.match(rustSetup, /^          components: rustfmt$/m);
+    assertUnconditionalStep(rustSetup, 'Set up Rust');
+    assert.match(tauriJob, /cargo metadata --locked --format-version 1/);
+    assert.match(installAudit, /^        run: cargo install cargo-audit --locked --version 0\.22\.2$/m);
+    assertUnconditionalStep(installAudit, 'Install pinned cargo-audit');
+    assert.match(auditStep, /^        working-directory: packages\/happy-app\/src-tauri$/m);
+    assert.match(auditStep, /^        run: cargo audit$/m);
+    assertUnconditionalStep(auditStep, 'Audit Tauri High/Critical and unscored production advisories');
+    assert.doesNotMatch(tauriJob, /(?:^|\n)\s*["']?continue-on-error["']?\s*:/);
+    assert.match(policy, /^# Unscored RustSec vulnerability advisories match the threshold and fail closed\.$/m);
     assert.match(policy, /^severity_threshold = "high"$/m);
     assert.match(policy, /^ignore = \[\]$/m);
+    assert.match(policy, /^deny = \[\]$/m);
     assert.match(policy, /^fetch = true$/m);
     assert.match(policy, /^stale = false$/m);
+});
+
+test('Tauri audit contract rejects duplicate, conditional, and soft-failing security steps', () => {
+    const installName = 'Install pinned cargo-audit';
+    const duplicate = `
+      - name: ${installName}
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: ${installName}
+        if: false
+        run: cargo install cargo-audit --locked --version 0.22.2
+`;
+    assert.throws(() => requiredNamedStep(duplicate, installName), /must appear exactly once/);
+
+    const conditional = `
+      - name: ${installName}
+        if: false
+        run: cargo install cargo-audit --locked --version 0.22.2
+`;
+    assert.throws(
+        () => assertUnconditionalStep(requiredNamedStep(conditional, installName), installName),
+        /must not be conditional/,
+    );
+
+    const softFailing = `
+      - name: ${installName}
+        continue-on-error: true
+        run: cargo install cargo-audit --locked --version 0.22.2
+`;
+    assert.throws(
+        () => assertUnconditionalStep(requiredNamedStep(softFailing, installName), installName),
+        /must not continue on error/,
+    );
 });
