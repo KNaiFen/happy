@@ -391,7 +391,7 @@ jobs:
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --locked --version 0.22.2
 
-      - name: Audit Tauri production dependencies
+      - name: Audit Tauri High/Critical and unscored production advisories
         working-directory: packages/happy-app/src-tauri
         run: cargo audit
 

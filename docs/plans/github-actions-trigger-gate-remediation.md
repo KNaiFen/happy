@@ -6,8 +6,9 @@
   复用和恢复均已有云端证据。PR #57 merge SHA `ec111f88` 上的 npm 生产依赖门禁、advanced CodeQL、
   `Required CodeQL gate`、vulnerability alerts 与 Dependabot security updates 已生效。2026-08-14 的独立
   生产依赖审计另发现 Tauri runtime High `GHSA-82j2-j2ch-gfr8`；本次独立修复将
-  `rustls-webpki 0.103.4` 更新到 `0.103.14`，并为云端 Tauri job 增加固定版本、仅阻断 High/Critical 的
-  Cargo audit。该修复仍待独立 PR、main CI 和 App `1.11.49` 发行证据。长期性能采样、Android 独立
+  `rustls-webpki 0.103.4` 更新到 `0.103.14`，并为云端 Tauri job 增加固定版本、阻断 High/Critical
+  且对无 CVSS RustSec 公告 fail closed 的 Cargo audit。该修复仍待独立 PR、main CI 和 App `1.11.49`
+  发行证据。长期性能采样、Android 独立
   attestation、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
 - 建立日期：2026-08-10。
 - 当前基线：`origin/main@ec111f88f25137daa94345500a500a3738c0977c`（PR #57 squash merge）。
@@ -565,8 +566,9 @@ PR #37 的 merge-SHA CI 暴露了另一类长时失败：job
   required gate，因为其范围会扩大到开发依赖，超出本计划的已批准策略。实现细节见
   [ADR-006](../decisions/ADR-006-actions-security-and-production-dependency-gates.md)。
 - [ ] 修复 Tauri runtime High `GHSA-82j2-j2ch-gfr8`，并在云端 Tauri job 以固定
-  `cargo-audit 0.22.2` 和 `severity_threshold = "high"` 覆盖 Cargo 生产依赖；不得把 Medium/Low 告警
-  提升为本次已批准门禁，也不得为 High 添加例外。
+  `cargo-audit 0.22.2` 和 `severity_threshold = "high"` 覆盖 Cargo 生产依赖；有 CVSS 的 Medium/Low
+  不得提升为本次已批准门禁，无 CVSS 的 RustSec 公告因无法证明低于 High 而 fail closed，且不得为
+  High 添加例外。
 - [ ] 在真实 ARM64 目标设备上安装生产签名 APK，验证升级安装、真实网络切换、relay reconnect 与关键 Codex 生命周期；保留精确 workflow、artifact 和设备证据。
 - [x] 当前无自动生产部署；GitHub Environment、部署审批、发布后健康检查与回滚门禁不适用。若未来引入部署目标，必须先按 ADR-006 新增明确决策与演练。
 
@@ -599,7 +601,7 @@ Dependency Review 对精确 base/head 的 `403 Forbidden` 不阻塞本计划，�
 | 编号 | 当前证据与影响 | 下一步 | 完成标准 |
 | --- | --- | --- | --- |
 | B2：仓库级 Action allowlist（已解决） | API 为 `allowed_actions=all`、`sha_pinning_required=true`；维护者已决定保留该策略。 | 无后续实现；继续由完整 SHA 固定、最小权限和 CI 测试补偿。 | ADR-006 与仓库 API 一致；不把“未使用 allowlist”误写成供应链控制缺失。 |
-| B3：依赖与 SAST 门禁 | npm 生产审计、alerts/security fixes、advanced CodeQL 和 ruleset gate 已生效；独立审计发现现有 Tauri job 尚未阻断 Cargo runtime High，且 main 存在可修复的 `GHSA-82j2-j2ch-gfr8`。 | 以独立 PR 更新 `rustls-webpki`，增加固定 cargo-audit High/Critical 门禁，并取得 PR/main Tauri 与 App `1.11.49` 发行证据。 | npm 与 Cargo 的生产 High/Critical 新发现均 fail-closed；Cargo 不忽略 High；两个精确 Metro 无修复例外在到期前可见且受限。 |
+| B3：依赖与 SAST 门禁 | npm 生产审计、alerts/security fixes、advanced CodeQL 和 ruleset gate 已生效；独立审计发现现有 Tauri job 尚未阻断 Cargo runtime High，且 main 存在可修复的 `GHSA-82j2-j2ch-gfr8`。 | 以独立 PR 更新 `rustls-webpki`，增加固定 cargo-audit High/Critical 与无 CVSS fail-closed 门禁，并取得 PR/main Tauri 与 App `1.11.49` 发行证据。 | npm 与 Cargo 的生产 High/Critical 新发现均 fail-closed；无 CVSS RustSec 公告保持阻断且有 CVSS 的 Medium/Low 不升级；两个精确 Metro 无修复例外在到期前可见且受限。 |
 | B4：Environment/部署边界（已解决） | 当前无 Environment、Deployment 或 Pages 自动生产部署；维护者确认保持 build-only。 | 不配置虚假的 deployment approval；未来先新增 ADR，再实施环境、审批、健康检查和回滚。 | ADR-006 明确 build-only 边界，计划不再将 Environment 当作当前门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
 | B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |

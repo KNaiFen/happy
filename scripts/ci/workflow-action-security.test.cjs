@@ -139,7 +139,7 @@ test('all GitHub workflows pin external Actions and disable checkout credential 
     assert.deepEqual(violations, []);
 });
 
-test('Tauri CI enforces the pinned High/Critical Cargo audit policy', () => {
+test('Tauri CI enforces the pinned High/Critical and unscored Cargo audit policy', () => {
     const workflow = readFileSync(path.join(workflowDirectory, 'ci.yml'), 'utf8');
     const policy = readFileSync(path.join(
         repositoryRoot,
@@ -151,7 +151,9 @@ test('Tauri CI enforces the pinned High/Critical Cargo audit policy', () => {
     ), 'utf8');
 
     assert.match(workflow, /cargo install cargo-audit --locked --version 0\.22\.2/);
+    assert.match(workflow, /Audit Tauri High\/Critical and unscored production advisories/);
     assert.match(workflow, /working-directory: packages\/happy-app\/src-tauri\n\s+run: cargo audit/);
+    assert.match(policy, /^# RustSec advisories without CVSS always match the threshold and fail closed\.$/m);
     assert.match(policy, /^severity_threshold = "high"$/m);
     assert.match(policy, /^ignore = \[\]$/m);
     assert.match(policy, /^fetch = true$/m);
