@@ -121,6 +121,7 @@ jobs:
     with:
       source_sha: ${{ needs.source_gate.outputs.source_sha }}
       version: ${{ needs.versions.outputs.relay_version }}
+      cache_to_mode: min
 
   agent:
     name: Build gated happy-agent package

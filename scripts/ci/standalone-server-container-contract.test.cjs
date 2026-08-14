@@ -11,6 +11,10 @@ const repositoryRoot = path.resolve(__dirname, '..', '..');
 const dockerfile = fs.readFileSync(path.join(repositoryRoot, 'Dockerfile.server'), 'utf8');
 const dockerignore = fs.readFileSync(path.join(repositoryRoot, '.dockerignore'), 'utf8');
 const workflow = fs.readFileSync(path.join(repositoryRoot, '.github', 'workflows', 'ci.yml'), 'utf8');
+const relayWorkflow = fs.readFileSync(
+    path.join(repositoryRoot, '.github', 'workflows', 'build-debian13-relay-release.yml'),
+    'utf8',
+);
 const lifecycle = fs.readFileSync(
     path.join(repositoryRoot, 'scripts', 'ci', 'test-standalone-server-container.sh'),
     'utf8',
@@ -71,5 +75,27 @@ test('cloud lifecycle covers persistence and runtime security boundaries', () =>
         'host attachment URL',
     ]) {
         assert.equal(lifecycle.includes(required), true, required);
+    }
+});
+
+test('Relay source and deployment contracts fail in the required Server CI job', () => {
+    for (const required of [
+        'name: Build Server runtime',
+        'name: Lint Debian relay deployment scripts',
+        'scripts/ci/test-verify-debian13-relay-bundle.sh',
+        'packages/happy-server/deploy/debian13-amd64/entrypoint.mjs',
+        'scripts/ci/verify-deployed-server-runtime.mjs',
+        'name: Validate Debian relay Compose configuration',
+    ]) {
+        assert.equal(workflow.includes(required), true, required);
+    }
+    assert.doesNotMatch(relayWorkflow, /^  validate:$/m);
+    assert.doesNotMatch(relayWorkflow, /needs: validate/);
+    for (const required of [
+        'name: Verify image identity and relay-only contents',
+        'name: Block Critical image vulnerabilities',
+        'name: Exercise delivered installer and relay lifecycle',
+    ]) {
+        assert.equal(relayWorkflow.includes(required), true, required);
     }
 });
