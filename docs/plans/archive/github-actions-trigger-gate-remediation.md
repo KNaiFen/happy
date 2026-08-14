@@ -2,22 +2,32 @@
 
 ## 状态
 
-- 当前状态：实现已完成，等待本分支的 PR 云端门禁后归档。阶段 1 至阶段 4 的触发去重、稳定门禁、
-  同 SHA 发行、候选提升、Official Codex/Field 复用和恢复已有云端证据；B7 的 Relay 失败前移、
-  Actions SLA 守护与 Relay cache mode A/B 已由提交 `f62159c1` 实现并通过本地静态契约。维护者于
-  2026-08-14 明确接受 B5 的现有制品完整性控制与实体 ARM64 实测结果，并接受 B6 的长期样本结果；
-  仓库不虚构独立 attestation、设备日志或未提供的 P50/P90 数值。
+- 当前状态：已完成并归档。阶段 1 至阶段 5 的触发去重、稳定门禁、同 SHA 发行、候选提升、
+  Official Codex/Field 复用、恢复、供应链门禁和 B7 均已实现并验收。维护者于 2026-08-14
+  明确接受 B5 的现有制品完整性控制与实体 ARM64 实测结果，并接受 B6 的长期样本结果；仓库不
+  虚构独立 attestation、设备日志或未提供的 P50/P90 数值。
+- 完成日期：2026-08-14。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@5fa56bd825c21c9ed36bb50a6cb9dfedb7b58864`；本分支 B7 提交 `f62159c1`，
-  可修复依赖更新提交 `4f34b3e2`。
+- 完成基线：`origin/main@a8458f2f6912d49fdf52979a1d9fbb6e881d11e2`。收尾 PR
+  [#60](https://github.com/KNaiFen/happy/pull/60) 的最终 head 为
+  `faa556394902a6ed62c59d0a35ad875e6bee524d`，于 `2026-08-14T10:57:29Z` squash merge；
+  其中 B7 实现提交为 `f62159c1`，可修复依赖更新提交为 `4f34b3e2`。
+- 收尾 PR 云端验收：Documentation
+  [31793080067](https://github.com/KNaiFen/happy/actions/runs/31793080067)、CLI Smoke
+  [31793080080](https://github.com/KNaiFen/happy/actions/runs/31793080080)、CodeQL
+  [31793080089](https://github.com/KNaiFen/happy/actions/runs/31793080089) 与 Monorepo CI
+  [31793080188](https://github.com/KNaiFen/happy/actions/runs/31793080188) 均成功；Required CI gate
+  job [94747548855](https://github.com/KNaiFen/happy/actions/runs/31793080188/job/94747548855)
+  成功。最终审阅还将正式 release router 的运行 SLA 调整为 120 分钟，并要求取消前状态保持一致，
+  防止合法的长时发布或 queued 转 running 竞态被误取消。
 - Field canonical secret 修复：PR [#46](https://github.com/KNaiFen/happy/pull/46)，PR head
   `4b7c5de0a10bc513191133db197e21d4c4c16d1d`，已于 `2026-08-11T08:16:52Z` squash merge 为
   `b81e57609cfa5ace8a6fe3d98824dd5bbe72b264`；它不改变包版本或生产可分发行为。
 - 本地复审：PR #41 的 Official Codex 复用 Node 12 项测试、Field 去重 Node 9 项测试、综合 Node
   61 项测试、Node syntax check、12 个 workflow 的 Ruby YAML 解析和 `git diff --check` 均通过；测试包含
   mock `gh api` 的空候选、可信 receipt ZIP 和 API 不可用回退。PR #42 的 PR/main 云端对照已补足同 recipe
-  main artifact 命中、main re-attestation、Field receipt 下载校验与同 SHA 后继跳过证据；外部环境验收继续按
-  下文保持未完成。
+  main artifact 命中、main re-attestation、Field receipt 下载校验与同 SHA 后继跳过证据；当时仍未完成的
+  外部环境验收后来已按维护者声明关闭。
 - 实施记录：PR [#28](https://github.com/KNaiFen/happy/pull/28)，PR head
   `580a64baef6383b3fb7aa012d9672f4edd1a8591`，squash merge
   `1bfc78994dede1a1ee4e65a9384db0d0350136f9`。
@@ -253,7 +263,7 @@ GitHub API 同时确认：`main` 当前没有 branch protection，仓库 ruleset
 准备，合计 223 runner 秒，并因当前跨工作流并发组串行。这是阶段 2 不可变指纹与归档复用的
 当前量化基线，不应通过删除下游 app-server/TUI/Field 验收来回避。
 
-PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步已由[归档计划](./archive/happy-server-global-package-resolution.md)完成。
+PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步已由[归档计划](./happy-server-global-package-resolution.md)完成。
 
 ### 阶段 2：变更影响规划与不可变制品复用
 
@@ -571,7 +581,7 @@ job 自身的 timeout 才发现长期 queued 或 superseded run。
 - [x] 实现并验收 npm Dependabot、GitHub vulnerability alerts/automated security fixes、advanced CodeQL 与
   npm 生产 High/Critical 依赖门禁；`Required CodeQL gate` 已进入 active ruleset。Dependency Review 不作为
   required gate，因为其范围会扩大到开发依赖，超出本计划的已批准策略。实现细节见
-  [ADR-006](../decisions/ADR-006-actions-security-and-production-dependency-gates.md)。
+  [ADR-006](../../decisions/ADR-006-actions-security-and-production-dependency-gates.md)。
 - [x] 修复 Tauri runtime High `GHSA-82j2-j2ch-gfr8` 以及新门禁发现的 `bytes`、`quick-xml`、`rkyv`
   漏洞，并在云端 Tauri job 以固定 `cargo-audit 0.22.2` 和 `severity_threshold = "high"` 覆盖 Cargo
   生产依赖；有 CVSS 的 Medium/Low 与纯信息性 `unmaintained`、`unsound`、`notice`、`yanked` 不得提升为
@@ -622,7 +632,7 @@ Dependabot alert #123 于 `2026-08-14T07:59:24Z` 标记为 fixed。
 | B4：Environment/部署边界（已解决） | 当前无 Environment、Deployment 或 Pages 自动生产部署；维护者确认保持 build-only。 | 不配置虚假的 deployment approval；未来先新增 ADR，再实施环境、审批、健康检查和回滚。 | ADR-006 明确 build-only 边界，计划不再将 Environment 当作当前门禁。 |
 | B5：Android 独立证明与实体设备（已解决） | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变；维护者于 2026-08-14 接受当前完整性控制并声明生产签名 ARM64 实机矩阵已测试无问题。 | 无待办；不把维护者声明扩写成不存在的独立 attestation 或设备日志。 | 以现有 source-bound digest/receipt 与维护者实机验收声明关闭。 |
 | B6：长期性能与取消率（已解决） | 维护者于 2026-08-14 确认长期 CI/Field/Smoke 样本已测试无问题并接受关闭；仓库没有收到原始统计表。 | 无待办；后续运维可继续观察，但不作为本计划尾项。 | 不虚构 P50/P90、命中率或取消率数字，维护者验收声明可追溯。 |
-| B7：Relay/SLA/cache（已解决） | 提交 `f62159c1` 将 Relay 源码契约前移到 Required CI，新增 fail-closed SLA watchdog，并把正式 Relay cache 固定为 `min`、rehearsal 限定为 `min|max`。相关 Node 35 项、全部 workflow YAML 解析与 diff 检查通过。 | 本分支通过 PR 云端门禁后归档本计划。 | 最终 bundle 验收保留；超 SLA 有取消、Issue 与原生失败告警；正式 cache 保守固定 `min`。 |
+| B7：Relay/SLA/cache（已解决） | PR #60 将 Relay 源码契约前移到 Required CI，新增 fail-closed SLA watchdog，并把正式 Relay cache 固定为 `min`、rehearsal 限定为 `min|max`；最终审阅补齐长时发布 SLA 与取消前状态竞态。相关源码测试、全部 workflow YAML 解析、PR 云端门禁与 Required CI gate 均通过。 | 无待办；常规运行继续由 watchdog 与既有门禁观察。 | 最终 bundle 验收保留；超 SLA 有取消、Issue 与原生失败告警；正式 cache 保守固定 `min`。 |
 
 ## 验收矩阵
 
@@ -686,9 +696,8 @@ git diff --cached --check
 
 ## 下一步
 
-本计划没有维护者验收尾项。本分支通过 PR 云端门禁后，将状态改为“已完成并归档”、补入精确 PR/run
-证据并移动到 `docs/plans/archive/`。两个无修复版 Metro `image-size` High 由生产依赖审计按到期日持续
-跟踪，属于常规安全门禁维护，不重新打开本计划。
+本计划没有维护者验收或实施尾项。两个无修复版 Metro `image-size` High 由生产依赖审计按
+`2026-11-12` 到期日持续跟踪，属于常规安全门禁维护，不重新打开本计划。
 
 ## 完成条件
 
@@ -697,4 +706,4 @@ git diff --cached --check
 - [x] docs-only 变更不运行代码、打包或 Android Field；root 打包输入不会漏掉 CLI Smoke。
 - [x] 所有正式 release 制品都在同一 SHA 的全局 gate 后由既有 digest 提升。
 - [x] Field 的取消率和真实失败已分别治理，实体 ARM64 结果由维护者验收声明负责。
-- [ ] 活动计划更新为已完成并移入 `docs/plans/archive/`，生成索引与本机记忆同步收尾。
+- [x] 活动计划更新为已完成并移入 `docs/plans/archive/`，生成索引与本机记忆同步收尾。

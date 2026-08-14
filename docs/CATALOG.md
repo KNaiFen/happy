@@ -40,10 +40,6 @@
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 - [ADR-006: Actions supply-chain controls and production dependency gates](./decisions/ADR-006-actions-security-and-production-dependency-gates.md)
 
-## 活动计划
-
-- [GitHub Actions 提交与 PR 触发去重及发布门禁整改计划](./plans/github-actions-trigger-gate-remediation.md)
-
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
@@ -146,6 +142,7 @@
 - [Experimental Chat File Links](./plans/archive/experimental-chat-file-links.md)
 - [Expo SDK 55 Upgrade](./plans/archive/expo-sdk-55-upgrade.md)
 - [Generic ACP Runner](./plans/archive/generic-acp-runner.md)
+- [GitHub Actions 提交与 PR 触发去重及发布门禁整改计划](./plans/archive/github-actions-trigger-gate-remediation.md)
 - [happy-agent CLI Tool](./plans/archive/happy-agent.md)
 - [happy server — bundled self-host mode](./plans/archive/happy-serve-self-host.md)
 - [Happy Server 包安装与解析契约修复计划](./plans/archive/happy-server-global-package-resolution.md)
