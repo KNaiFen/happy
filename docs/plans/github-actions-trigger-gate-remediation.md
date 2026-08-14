@@ -564,7 +564,7 @@ job 自身的 timeout 才发现长期 queued 或 superseded run。
 
 ### 阶段 5：供应链与外部验收
 
-- [x] 全部 12 个 workflow 的 113 个外部 Action 均固定到完整 commit SHA，36 个 checkout 均设置 `persist-credentials: false`；常驻 CI 的源码测试会拒绝可变引用和遗漏凭据关闭的 checkout，包括以 `id`/`if` 等合法键开头的步骤。
+- [x] 全部 14 个 workflow 的 122 个外部 Action 均固定到完整 commit SHA，40 个 checkout 均设置 `persist-credentials: false`；常驻 CI 的源码测试会拒绝可变引用和遗漏凭据关闭的 checkout，包括以 `id`/`if` 等合法键开头的步骤。
 - [x] 新增仅维护 GitHub Actions 的 Dependabot 周更配置，minor/patch 合并为一组且最多同时打开 5 个 PR；它不等同于仓库级 Dependabot security updates。
 - [x] 在 PR #42 与其 merge-SHA main 上验证 Node.js 24 Action 升级仍保留上传、下载、摘要、缓存和失败诊断语义；main CI、Field 与 release router 的相关日志未出现 Node.js 20 Action runtime 警告，Field receipt 上传/下载与 Official Codex artifact 重用均成功。
 - [x] 维护者已决定保留 `allowed_actions=all` 与完整 Action SHA 强制；不引入 allowlist。现有 secret scanning、push protection、Relay Trivy/SBOM 保持不变。

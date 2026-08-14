@@ -7,7 +7,7 @@ const WORKFLOW_SLA = Object.freeze({
     '.github/workflows/ci.yml': { queueMinutes: 20, runningMinutes: 90 },
     '.github/workflows/cli-smoke-test.yml': { queueMinutes: 20, runningMinutes: 50 },
     '.github/workflows/codex-android-field-e2e.yml': { queueMinutes: 30, runningMinutes: 150 },
-    '.github/workflows/release-after-required-ci.yml': { queueMinutes: 10, runningMinutes: 30 },
+    '.github/workflows/release-after-required-ci.yml': { queueMinutes: 10, runningMinutes: 120 },
     '.github/workflows/release-candidate-rehearsal.yml': { queueMinutes: 10, runningMinutes: 120 },
     '.github/workflows/build-cli-release.yml': { queueMinutes: 10, runningMinutes: 45 },
     '.github/workflows/build-android-release.yml': { queueMinutes: 10, runningMinutes: 75 },
@@ -159,7 +159,9 @@ function stillCancellable(run, decision) {
     return validRun(run)
         && run.id === decision.run.id
         && run.workflow_id === decision.run.workflow_id
-        && run.head_sha === decision.run.head_sha;
+        && run.head_sha === decision.run.head_sha
+        && run.path === decision.run.path
+        && run.status === decision.run.status;
 }
 
 function main() {

@@ -45,6 +45,26 @@ test('only cancels runs after, not at, their configured SLA', () => {
     assert.deepEqual(runningDecisions.map(({ run: candidate }) => candidate.id), [4]);
 });
 
+test('release router SLA covers its longest downstream release path', () => {
+    const releasePath = '.github/workflows/release-after-required-ci.yml';
+    assert.equal(WORKFLOW_SLA[releasePath].runningMinutes, 120);
+
+    const withinReleaseWindow = run({
+        id: 5,
+        path: releasePath,
+        run_started_at: '2026-08-14T10:00:00Z',
+        status: 'in_progress',
+    });
+    const expiredRelease = run({
+        id: 6,
+        path: releasePath,
+        run_started_at: '2026-08-14T09:59:59Z',
+        status: 'in_progress',
+    });
+    const decisions = decideCancellations([withinReleaseWindow, expiredRelease], now);
+    assert.deepEqual(decisions.map(({ run: candidate }) => candidate.id), [6]);
+});
+
 test('only supersedes older queued runs for the same workflow and source SHA', () => {
     const older = run({ id: 10, created_at: '2026-08-14T11:55:00Z' });
     const newer = run({ id: 11, created_at: '2026-08-14T11:56:00Z' });
@@ -60,9 +80,13 @@ test('fails safe for unknown workflows and malformed runs', () => {
     assert.deepEqual(decideCancellations([unknown, malformed, malformedUrl], now), []);
 });
 
-test('does not cancel a run that became terminal before the cancellation request', () => {
+test('does not cancel a run whose state changed before the cancellation request', () => {
     const decision = decideCancellations([run({ created_at: '2026-08-14T11:00:00Z' })], now)[0];
     assert.equal(stillCancellable(run({ status: 'completed' }), decision), false);
+    assert.equal(stillCancellable(run({
+        run_started_at: '2026-08-14T11:59:00Z',
+        status: 'in_progress',
+    }), decision), false);
     assert.equal(stillCancellable(run(), decision), true);
 });
 
