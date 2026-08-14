@@ -7,7 +7,13 @@ export class ArtifactEncryption {
     private encryptor: AES256Encryption;
     
     constructor(dataEncryptionKey: Uint8Array) {
-        this.encryptor = new AES256Encryption(dataEncryptionKey);
+        // The caller retains the key in its lifecycle map. Keep a private copy
+        // so disposing this short-lived context cannot erase that owner.
+        this.encryptor = new AES256Encryption(dataEncryptionKey.slice());
+    }
+
+    dispose(): void {
+        this.encryptor.dispose();
     }
     
     /**
@@ -43,8 +49,8 @@ export class ArtifactEncryption {
             return {
                 title: typeof header.title === 'string' ? header.title : null
             };
-        } catch (error) {
-            console.error('Failed to decrypt artifact header:', error);
+        } catch {
+            console.error('Failed to decrypt artifact header');
             return null;
         }
     }
@@ -75,8 +81,8 @@ export class ArtifactEncryption {
             return {
                 body: typeof body.body === 'string' ? body.body : null
             };
-        } catch (error) {
-            console.error('Failed to decrypt artifact body:', error);
+        } catch {
+            console.error('Failed to decrypt artifact body');
             return null;
         }
     }

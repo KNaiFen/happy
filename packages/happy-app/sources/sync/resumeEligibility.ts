@@ -102,6 +102,12 @@ export async function ensureResumeEligibilityForSessions(options: {
             continue;
         }
 
+        let dataEncryptionKey: string;
+        try {
+            dataEncryptionKey = encodeBase64(dataKey, 'base64');
+        } finally {
+            dataKey.fill(0);
+        }
         const candidate: PreflightCandidate = {
             sessionId: session.id,
             fingerprint,
@@ -110,7 +116,7 @@ export async function ensureResumeEligibilityForSessions(options: {
                 sessionId: session.id,
                 directory,
                 threadId,
-                dataEncryptionKey: encodeBase64(dataKey, 'base64'),
+                dataEncryptionKey,
             },
         };
         const machineCandidates = candidatesByMachine.get(machineId) ?? [];

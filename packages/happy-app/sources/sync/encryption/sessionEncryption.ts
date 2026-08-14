@@ -1,7 +1,7 @@
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { Metadata, MetadataSchema, AgentState, AgentStateSchema } from '../storageTypes';
 import { EncryptionCache } from './encryptionCache';
-import { Decryptor, Encryptor } from './encryptor';
+import { Decryptor, Encryptor, DisposableEncryption } from './encryptor';
 
 export class SessionEncryption {
     private sessionId: string;
@@ -16,6 +16,10 @@ export class SessionEncryption {
         this.sessionId = sessionId;
         this.encryptor = encryptor;
         this.cache = cache;
+    }
+
+    dispose(): void {
+        (this.encryptor as Partial<DisposableEncryption>).dispose?.();
     }
 
     /**

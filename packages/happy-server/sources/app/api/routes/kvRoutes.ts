@@ -5,6 +5,8 @@ import { kvList } from "@/app/kv/kvList";
 import { kvBulkGet } from "@/app/kv/kvBulkGet";
 import { kvMutate } from "@/app/kv/kvMutate";
 import { log } from "@/utils/log";
+import { acquireAccountRead, AccountWriteBlockedError } from "@/app/account/accountWriteGate";
+import { inTx } from "@/storage/inTx";
 
 export function kvRoutes(app: Fastify) {
     // GET /v1/kv/:key - Get single value
@@ -23,6 +25,9 @@ export function kvRoutes(app: Fastify) {
                 404: z.object({
                     error: z.literal('Key not found')
                 }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
+                }),
                 500: z.object({
                     error: z.literal('Failed to get value')
                 })
@@ -33,15 +38,21 @@ export function kvRoutes(app: Fastify) {
         const { key } = request.params;
 
         try {
-            const result = await kvGet({ uid: userId }, key);
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+                return { kind: 'ok' as const, value: await kvGet(tx, { uid: userId }, key) };
+            });
+            if (result.kind === 'deleting') {
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
 
-            if (!result) {
+            if (!result.value) {
                 return reply.code(404).send({ error: 'Key not found' });
             }
 
-            return reply.send(result);
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to get KV value: ${error}`);
+            return reply.send(result.value);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'kv.get' }, 'kv.get.failed');
             return reply.code(500).send({ error: 'Failed to get value' });
         }
     });
@@ -62,6 +73,9 @@ export function kvRoutes(app: Fastify) {
                         version: z.number()
                     }))
                 }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
+                }),
                 500: z.object({
                     error: z.literal('Failed to list items')
                 })
@@ -72,10 +86,16 @@ export function kvRoutes(app: Fastify) {
         const { prefix, limit } = request.query;
 
         try {
-            const result = await kvList({ uid: userId }, { prefix, limit });
-            return reply.send(result);
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to list KV items: ${error}`);
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+                return { kind: 'ok' as const, value: await kvList(tx, { uid: userId }, { prefix, limit }) };
+            });
+            if (result.kind === 'deleting') {
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
+            return reply.send(result.value);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'kv.list' }, 'kv.list.failed');
             return reply.code(500).send({ error: 'Failed to list items' });
         }
     });
@@ -95,6 +115,9 @@ export function kvRoutes(app: Fastify) {
                         version: z.number()
                     }))
                 }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
+                }),
                 500: z.object({
                     error: z.literal('Failed to get values')
                 })
@@ -105,10 +128,16 @@ export function kvRoutes(app: Fastify) {
         const { keys } = request.body;
 
         try {
-            const result = await kvBulkGet({ uid: userId }, keys);
-            return reply.send(result);
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to bulk get KV values: ${error}`);
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+                return { kind: 'ok' as const, value: await kvBulkGet(tx, { uid: userId }, keys) };
+            });
+            if (result.kind === 'deleting') {
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
+            return reply.send(result.value);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'kv.bulk_get' }, 'kv.bulk_get.failed');
             return reply.code(500).send({ error: 'Failed to get values' });
         }
     });
@@ -132,15 +161,18 @@ export function kvRoutes(app: Fastify) {
                         version: z.number()
                     }))
                 }),
-                409: z.object({
-                    success: z.literal(false),
-                    errors: z.array(z.object({
-                        key: z.string(),
-                        error: z.literal('version-mismatch'),
-                        version: z.number(),
-                        value: z.string().nullable()
-                    }))
-                }),
+                409: z.union([
+                    z.object({
+                        success: z.literal(false),
+                        errors: z.array(z.object({
+                            key: z.string(),
+                            error: z.literal('version-mismatch'),
+                            version: z.number(),
+                            value: z.string().nullable()
+                        }))
+                    }),
+                    z.object({ error: z.literal('Account deletion in progress') }),
+                ]),
                 500: z.object({
                     error: z.literal('Failed to mutate values')
                 })
@@ -165,7 +197,10 @@ export function kvRoutes(app: Fastify) {
                 results: result.results!
             });
         } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to mutate KV values: ${error}`);
+            if (error instanceof AccountWriteBlockedError) {
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
+            log({ module: 'api', level: 'error', operation: 'kv.mutate' }, 'kv.mutate.failed');
             return reply.code(500).send({ error: 'Failed to mutate values' });
         }
     });

@@ -43,6 +43,7 @@ const {
     invalidateCredentialTokensSpy,
     invalidateMachineSpy,
     invalidateSessionsSpy,
+    acquireAccountReadMock,
 } = vi.hoisted(() => {
     const now = () => new Date("2026-01-01T00:00:00.000Z");
     const emitUpdateSpy = vi.fn();
@@ -52,6 +53,7 @@ const {
     const invalidateCredentialTokensSpy = vi.fn();
     const invalidateMachineSpy = vi.fn();
     const invalidateSessionsSpy = vi.fn();
+    const acquireAccountReadMock = vi.fn(async () => true);
     const state = {
         machines: new Map<string, MachineRow>(),
         credential: null as null | {
@@ -84,6 +86,8 @@ const {
         state.sessions = [];
         state.accessKeys = [];
         state.seq = 0;
+        acquireAccountReadMock.mockReset();
+        acquireAccountReadMock.mockResolvedValue(true);
     };
 
     const machineCreate = vi.fn(async (args: any) => {
@@ -209,6 +213,9 @@ const {
     });
 
     const dbMock = {
+        account: {
+            updateMany: vi.fn(async () => ({ count: 1 })),
+        },
         terminalAuthRequest: {
             findFirst: terminalAuthRequestFindFirst,
             updateMany: terminalAuthRequestUpdateMany,
@@ -255,6 +262,7 @@ const {
         invalidateCredentialTokensSpy,
         invalidateMachineSpy,
         invalidateSessionsSpy,
+        acquireAccountReadMock,
     };
 });
 
@@ -282,6 +290,10 @@ vi.mock("@/app/presence/sessionCache", () => ({
 vi.mock("@/storage/db", () => ({ db: dbMock }));
 vi.mock("@/storage/seq", () => ({ allocateUserSeq: allocateUserSeqMock }));
 vi.mock("@/storage/inTx", () => ({ inTx: inTxMock, afterTx: afterTxMock }));
+vi.mock("@/app/account/accountWriteGate", async () => {
+    const actual = await vi.importActual<typeof import("@/app/account/accountWriteGate")>("@/app/account/accountWriteGate");
+    return { ...actual, acquireAccountRead: acquireAccountReadMock };
+});
 vi.mock("@/utils/log", () => ({ log: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 
 import { machinesRoutes } from "./machinesRoutes";
@@ -409,6 +421,28 @@ describe("machinesRoutes", () => {
 
         expect(response.statusCode).toBe(403);
         expect(state.machines.size).toBe(0);
+    });
+
+    it("rejects machine list and detail reads after account deletion begins", async () => {
+        app = await createApp();
+        seedMachine();
+        acquireAccountReadMock.mockResolvedValue(false);
+
+        const list = await app.inject({
+            method: "GET",
+            url: "/v1/machines",
+            headers: { "x-user-id": "user-1" },
+        });
+        const detail = await app.inject({
+            method: "GET",
+            url: "/v1/machines/machine-1",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(list.statusCode).toBe(409);
+        expect(detail.statusCode).toBe(409);
+        expect(dbMock.machine.findMany).not.toHaveBeenCalled();
+        expect(dbMock.machine.findFirst).not.toHaveBeenCalled();
     });
 
     it("lets a migrated version 1 credential bind an existing machine but not recreate a missing one", async () => {

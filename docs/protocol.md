@@ -114,6 +114,12 @@ Field names below match on-wire payloads.
 - `delete-artifact`
   - `body`: `{ t: "delete-artifact", artifactId }`
 
+For all three artifact event types, the containing `UpdatePayload.seq` is the
+account-global mutation sequence persisted as `Artifact.updateSeq` for create
+and update (and returned by delete). It is not duplicated inside the event
+`body`. Clients order artifact lifecycle changes and tombstones by this envelope
+sequence.
+
 - `relationship-updated`
   - `body`: `{ t: "relationship-updated", uid, status, timestamp }`
 

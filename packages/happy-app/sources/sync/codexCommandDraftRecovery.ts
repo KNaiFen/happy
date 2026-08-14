@@ -68,6 +68,11 @@ export class CodexCommandDraftRecovery {
         this.persist();
     }
 
+    clear(): void {
+        this.receipts.clear();
+        this.persist();
+    }
+
     reconcileSession(sessionId: string): void {
         for (const receipt of [...this.receipts.values()]) {
             if (receipt.sourceSessionId === sessionId) this.reconcileReceipt(receipt);

@@ -2,6 +2,7 @@ import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
 import { getServerUrl } from './serverConfig';
 import { getHappyClientId } from './apiSocket';
+import { createAccountFetch } from './accountOutboundFence';
 
 export interface GitHubOAuthParams {
     url: string;
@@ -26,9 +27,10 @@ export interface AccountProfile {
  */
 export async function getGitHubOAuthParams(credentials: AuthCredentials): Promise<GitHubOAuthParams> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/connect/github/params`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/connect/github/params`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -55,9 +57,10 @@ export async function getGitHubOAuthParams(credentials: AuthCredentials): Promis
  */
 export async function getAccountProfile(credentials: AuthCredentials): Promise<AccountProfile> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/account/profile`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/account/profile`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -80,9 +83,10 @@ export async function getAccountProfile(credentials: AuthCredentials): Promise<A
  */
 export async function disconnectGitHub(credentials: AuthCredentials): Promise<void> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/connect/github`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/connect/github`, {
             method: 'DELETE',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,

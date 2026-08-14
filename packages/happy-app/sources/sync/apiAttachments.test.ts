@@ -7,6 +7,7 @@ import {
     uploadEncryptedBlob,
 } from './apiAttachments';
 import { getAttachmentDiagnostic } from './attachmentDiagnostics';
+import { beginAccountOutboundLifecycle, endAccountOutboundLifecycle } from './accountOutboundFence';
 
 const { appendFormFile, cleanupFormFile } = vi.hoisted(() => ({
     appendFormFile: vi.fn(),
@@ -32,6 +33,7 @@ const apiBlobUrl = 'https://api.cluster-fluster.com/v1/sessions/session-1/attach
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+    beginAccountOutboundLifecycle(credentials.token);
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     cleanupFormFile.mockReset();
@@ -41,6 +43,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    endAccountOutboundLifecycle();
     vi.unstubAllGlobals();
 });
 
@@ -161,6 +164,26 @@ describe('uploadEncryptedBlob', () => {
         );
     });
 
+    it('sends authenticated upload requests only to the configured Server origin', async () => {
+        fetchMock.mockResolvedValueOnce(response({ ok: true }));
+
+        await uploadEncryptedBlob({
+            uploadUrl: 'https://proxy.example/forwarded/upload?token=opaque',
+            method: 'PUT',
+            requiresAuth: true,
+        }, new Uint8Array([1, 2, 3]), credentials);
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            'https://api.cluster-fluster.com/forwarded/upload?token=opaque',
+            expect.objectContaining({
+                headers: {
+                    'Content-Type': 'application/octet-stream',
+                    'Authorization': 'Bearer test-token',
+                },
+            }),
+        );
+    });
+
     it('classifies POST blob upload network failures without leaking presigned data', async () => {
         fetchMock.mockRejectedValueOnce(new Error('Failed to fetch'));
 
@@ -255,6 +278,27 @@ describe('downloadEncryptedAttachment', () => {
         expect(fetchMock).toHaveBeenNthCalledWith(2, lookalikeUrl, {
             headers: {},
         });
+    });
+
+    it('sends authenticated download requests only to the configured Server origin', async () => {
+        const forwardedUrl = 'https://proxy.example/forwarded/download?token=opaque';
+        fetchMock
+            .mockResolvedValueOnce(response({
+                ok: true,
+                json: { downloadUrl: forwardedUrl, requiresAuth: true },
+            }))
+            .mockResolvedValueOnce(response({ ok: true }));
+
+        await downloadEncryptedAttachment(
+            credentials,
+            'session-1',
+            'happy/session-1/ref',
+        );
+
+        expect(fetchMock).toHaveBeenNthCalledWith(2,
+            'https://api.cluster-fluster.com/forwarded/download?token=opaque',
+            { headers: { 'Authorization': 'Bearer test-token' } },
+        );
     });
 
     it('classifies request-download network failures without leaking attachment refs', async () => {

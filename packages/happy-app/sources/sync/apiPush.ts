@@ -3,6 +3,7 @@ import { backoff } from '@/utils/time';
 import { z } from 'zod';
 import { getServerUrl } from './serverConfig';
 import { getHappyClientId } from './apiSocket';
+import { createAccountFetch } from './accountOutboundFence';
 
 const PushTokenSchema = z.object({
     id: z.string(),
@@ -19,8 +20,9 @@ export type PushToken = z.infer<typeof PushTokenSchema>;
 
 export async function registerPushToken(credentials: AuthCredentials, token: string): Promise<void> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/push-tokens`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/push-tokens`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -43,8 +45,9 @@ export async function registerPushToken(credentials: AuthCredentials, token: str
 
 export async function fetchPushTokens(credentials: AuthCredentials): Promise<PushToken[]> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     return backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/push-tokens`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/push-tokens`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -62,10 +65,18 @@ export async function fetchPushTokens(credentials: AuthCredentials): Promise<Pus
     });
 }
 
-export async function unregisterPushToken(credentials: AuthCredentials, token: string): Promise<void> {
+export async function unregisterPushToken(
+    credentials: AuthCredentials,
+    token: string,
+    options?: { allowAfterRevocation?: boolean },
+): Promise<void> {
     const API_ENDPOINT = getServerUrl();
-    await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/push-tokens/${encodeURIComponent(token)}`, {
+    const allowAfterRevocation = options?.allowAfterRevocation === true;
+    const accountFetch = allowAfterRevocation
+        ? fetch
+        : createAccountFetch(credentials.token);
+    const request = async () => {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/push-tokens/${encodeURIComponent(token)}`, {
             method: 'DELETE',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -82,5 +93,14 @@ export async function unregisterPushToken(credentials: AuthCredentials, token: s
         if (!data.success) {
             throw new Error('Failed to unregister push token');
         }
-    });
+    };
+
+    // Normal logout has already revoked the local account lifecycle. Its
+    // best-effort cleanup may bypass that fence once, but must never retain
+    // old credentials in an unbounded background retry loop.
+    if (allowAfterRevocation) {
+        await request();
+        return;
+    }
+    await backoff(request);
 }

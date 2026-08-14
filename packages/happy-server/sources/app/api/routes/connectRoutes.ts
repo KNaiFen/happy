@@ -9,6 +9,13 @@ import { githubDisconnect } from "@/app/github/githubDisconnect";
 import { Context } from "@/context";
 import { db } from "@/storage/db";
 import { diagnosticHash } from "@/utils/diagnosticHash";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
+import {
+    beginGithubOAuthAdmission,
+    claimGithubOAuthAdmission,
+    settleGithubOAuthAdmission,
+} from "@/app/account/githubOAuthAdmission";
 
 export const supportedInferenceVendorSchema = z.literal('openai');
 const supportedInferenceVendors = ['openai'] as const;
@@ -65,6 +72,9 @@ export function connectRoutes(app: Fastify) {
                 400: z.object({
                     error: z.string()
                 }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
+                }),
                 500: z.object({
                     error: z.string()
                 })
@@ -78,15 +88,20 @@ export function connectRoutes(app: Fastify) {
             return reply.code(400).send({ error: 'GitHub OAuth not configured' });
         }
 
-        // Generate ephemeral state token (5 minutes TTL)
-        const state = await auth.createGithubToken(request.userId);
+        const pending = await beginGithubOAuthAdmission(
+            request.userId,
+            (admissionId) => auth.createGithubToken(request.userId, admissionId),
+        );
+        if (!pending) {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
 
         // Build complete OAuth URL
         const params = new URLSearchParams({
             client_id: clientId,
             redirect_uri: redirectUri,
             scope: 'read:user,user:email,read:org,codespace',
-            state: state
+            state: pending.state
         });
 
         const url = `https://github.com/login/oauth/authorize?${params.toString()}`;
@@ -116,65 +131,83 @@ export function connectRoutes(app: Fastify) {
         }
 
         const userId = tokenData.userId;
+        const admission = { id: tokenData.admissionId, accountId: userId };
+        if (!(await claimGithubOAuthAdmission(admission))) {
+            return reply.redirect('https://app.happy.engineering?error=invalid_state');
+        }
         const clientId = process.env.GITHUB_CLIENT_ID;
         const clientSecret = process.env.GITHUB_CLIENT_SECRET;
 
-        if (!clientId || !clientSecret) {
-            return reply.redirect('https://app.happy.engineering?error=server_config');
-        }
-
+        let redirectUrl: string;
+        let tokenExchangeOutcomeKnown = false;
         try {
-            // Exchange code for access token
-            const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
-                method: 'POST',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    client_id: clientId,
-                    client_secret: clientSecret,
-                    code: code
-                })
-            });
-
-            const tokenResponseData = await tokenResponse.json() as {
-                access_token?: string;
-                error?: string;
-                error_description?: string;
-            };
-
-            if (tokenResponseData.error) {
-                return reply.redirect(`https://app.happy.engineering?error=${encodeURIComponent(tokenResponseData.error)}`);
-            }
-
-            const accessToken = tokenResponseData.access_token;
-
-            // Get user info from GitHub
-            const userResponse = await fetch('https://api.github.com/user', {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'Accept': 'application/vnd.github.v3+json',
+            redirectUrl = await (async () => {
+                if (!clientId || !clientSecret) {
+                    tokenExchangeOutcomeKnown = true;
+                    return 'https://app.happy.engineering?error=server_config';
                 }
-            });
+                // Exchange code for access token
+                const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        code: code
+                    })
+                });
 
-            const userData = await userResponse.json() as GitHubProfile;
+                if (!tokenResponse.ok) {
+                    tokenExchangeOutcomeKnown = true;
+                    return 'https://app.happy.engineering?error=github_token_exchange_failed';
+                }
+                const tokenResponseData = await tokenResponse.json() as {
+                    access_token?: string;
+                    error?: string;
+                    error_description?: string;
+                };
+                tokenExchangeOutcomeKnown = true;
 
-            if (!userResponse.ok) {
-                return reply.redirect('https://app.happy.engineering?error=github_user_fetch_failed');
-            }
+                if (tokenResponseData.error || !tokenResponseData.access_token) {
+                    return 'https://app.happy.engineering?error=github_token_exchange_failed';
+                }
 
-            // Use the new githubConnect operation
-            const ctx = Context.create(userId);
-            await githubConnect(ctx, userData, accessToken!);
+                const accessToken = tokenResponseData.access_token;
 
-            // Redirect to app with success
-            return reply.redirect(`https://app.happy.engineering?github=connected&user=${encodeURIComponent(userData.login)}`);
+                // Get user info from GitHub
+                const userResponse = await fetch('https://api.github.com/user', {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Accept': 'application/vnd.github.v3+json',
+                    }
+                });
 
+                const userData = await userResponse.json() as GitHubProfile;
+
+                if (!userResponse.ok) {
+                    return 'https://app.happy.engineering?error=github_user_fetch_failed';
+                }
+
+                const ctx = Context.create(userId);
+                await githubConnect(ctx, userData, accessToken);
+
+                return `https://app.happy.engineering?github=connected&user=${encodeURIComponent(userData.login)}`;
+            })();
         } catch {
             log({ module: 'github-oauth', level: 'error' }, 'GitHub callback failed');
-            return reply.redirect('https://app.happy.engineering?error=server_error');
+            redirectUrl = 'https://app.happy.engineering?error=server_error';
         }
+
+        // A rejected or unparseable token exchange has an unknown provider
+        // outcome, so its claimed fence remains open for operator resolution.
+        // Known outcomes are persisted before any terminal redirect is sent.
+        if (tokenExchangeOutcomeKnown) {
+            await settleGithubOAuthAdmission(admission);
+        }
+        return reply.redirect(redirectUrl);
     });
 
     // GitHub webhook handler with type safety
@@ -271,11 +304,16 @@ export function connectRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const encrypted = encryptString(['user', userId, 'vendors', request.params.vendor, 'token'], request.body.token);
-        await db.serviceAccountToken.upsert({
-            where: { accountId_vendor: { accountId: userId, vendor: request.params.vendor } },
-            update: { updatedAt: new Date(), token: encrypted },
-            create: { accountId: userId, vendor: request.params.vendor, token: encrypted }
+        const admitted = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return false;
+            await tx.serviceAccountToken.upsert({
+                where: { accountId_vendor: { accountId: userId, vendor: request.params.vendor } },
+                update: { updatedAt: new Date(), token: encrypted },
+                create: { accountId: userId, vendor: request.params.vendor, token: encrypted }
+            });
+            return true;
         });
+        if (!admitted) return reply.code(409).send({ error: 'Account deletion in progress' });
         reply.send({ success: true });
     });
 
@@ -293,9 +331,12 @@ export function connectRoutes(app: Fastify) {
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        const token = await db.serviceAccountToken.findUnique({
-            where: { accountId_vendor: { accountId: userId, vendor: request.params.vendor } },
-            select: { token: true }
+        const token = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return null;
+            return tx.serviceAccountToken.findUnique({
+                where: { accountId_vendor: { accountId: userId, vendor: request.params.vendor } },
+                select: { token: true },
+            });
         });
         if (!token) {
             return reply.send({ token: null });
@@ -313,12 +354,20 @@ export function connectRoutes(app: Fastify) {
             response: {
                 200: z.object({
                     success: z.literal(true)
+                }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
                 })
             }
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        await db.serviceAccountToken.delete({ where: { accountId_vendor: { accountId: userId, vendor: request.params.vendor } } });
+        const admitted = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return false;
+            await tx.serviceAccountToken.deleteMany({ where: { accountId: userId, vendor: request.params.vendor } });
+            return true;
+        });
+        if (!admitted) return reply.code(409).send({ error: 'Account deletion in progress' });
         reply.send({ success: true });
     });
 
@@ -336,12 +385,17 @@ export function connectRoutes(app: Fastify) {
         }
     }, async (request, reply) => {
         const userId = request.userId;
-        const tokens = await db.serviceAccountToken.findMany({
-            where: {
-                accountId: userId,
-                vendor: { in: [...supportedInferenceVendors] },
-            },
+        const tokens = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return null;
+            return tx.serviceAccountToken.findMany({
+                where: {
+                    accountId: userId,
+                    account: { is: { deletionRequestedAt: null } },
+                    vendor: { in: [...supportedInferenceVendors] },
+                },
+            });
         });
+        if (!tokens) return reply.send({ tokens: [] });
         let decrypted = [];
         for (const token of tokens) {
             decrypted.push({ vendor: token.vendor, token: decryptString(['user', userId, 'vendors', token.vendor, 'token'], token.token) });

@@ -4,6 +4,8 @@ import { log } from "@/utils/log";
 import type { ClientConnection } from "@/app/events/eventRouter";
 import { sessionWhereForConnection } from "./sessionScope";
 import { diagnosticHash } from "@/utils/diagnosticHash";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead } from "@/app/account/accountWriteGate";
 
 export function accessKeyHandler(
     userId: string,
@@ -44,24 +46,28 @@ export function accessKeyHandler(
                 return;
             }
 
-            // Verify session and machine belong to user
-            const [session, machine] = await Promise.all([
-                db.session.findFirst({
-                    where: sessionWhere,
-                }),
-                db.machine.findFirst({
-                    where: {
-                        id: machineId,
-                        accountId: userId,
-                        deletedAt: null,
-                        ...(connection.credentialId
-                            ? { credentialId: connection.credentialId }
-                            : {}),
-                    }
-                })
-            ]);
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return null;
+                const [session, machine] = await Promise.all([
+                    tx.session.findFirst({ where: sessionWhere }),
+                    tx.machine.findFirst({
+                        where: {
+                            id: machineId,
+                            accountId: userId,
+                            deletedAt: null,
+                            account: { is: { deletionRequestedAt: null } },
+                            ...(connection.credentialId ? { credentialId: connection.credentialId } : {}),
+                        },
+                    }),
+                ]);
+                if (!session || !machine) return null;
+                const accessKey = await tx.accessKey.findUnique({
+                    where: { accountId_machineId_sessionId: { accountId: userId, machineId, sessionId } },
+                });
+                return { session, accessKey };
+            });
 
-            if (!session || !machine) {
+            if (!result) {
                 if (callback) {
                     callback({
                         ok: false,
@@ -71,26 +77,15 @@ export function accessKeyHandler(
                 return;
             }
 
-            // Get access key
-            const accessKey = await db.accessKey.findUnique({
-                where: {
-                    accountId_machineId_sessionId: {
-                        accountId: userId,
-                        machineId,
-                        sessionId
-                    }
-                }
-            });
-
             if (callback) {
-                if (accessKey) {
+                if (result.accessKey) {
                     callback({
                         ok: true,
                         accessKey: {
-                            data: accessKey.data,
-                            dataVersion: accessKey.dataVersion,
-                            createdAt: accessKey.createdAt.getTime(),
-                            updatedAt: accessKey.updatedAt.getTime()
+                            data: result.accessKey.data,
+                            dataVersion: result.accessKey.dataVersion,
+                            createdAt: result.accessKey.createdAt.getTime(),
+                            updatedAt: result.accessKey.updatedAt.getTime()
                         }
                     });
                 } else {

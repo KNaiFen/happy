@@ -23,6 +23,8 @@ import { useHappyAction } from '@/hooks/useHappyAction';
 import { disconnectGitHub } from '@/sync/apiGithub';
 import { disconnectService } from '@/sync/apiServices';
 import { fetchPushTokens, type PushToken } from '@/sync/apiPush';
+import { deleteAccount } from '@/sync/apiAccountDeletion';
+import { HappyError } from '@/utils/errors';
 import {
     getCurrentExpoPushToken,
     getCurrentPushDeviceMetadata,
@@ -222,6 +224,43 @@ export default React.memo(() => {
             auth.logout();
         }
     };
+
+    const [deletingAccount, handleDeleteAccount] = useHappyAction(async () => {
+        if (!auth.credentials) {
+            throw new HappyError(t('settingsAccount.deleteAccountFailed'), false);
+        }
+        const confirmed = await Modal.confirm(
+            t('settingsAccount.deleteAccount'),
+            t('settingsAccount.deleteAccountConfirm'),
+            { confirmText: t('settingsAccount.deleteAccount'), destructive: true },
+        );
+        if (!confirmed) {
+            return;
+        }
+        try {
+            const deletionCredentials = auth.credentials;
+            const deletionResult = await deleteAccount(deletionCredentials, {
+                beforeProofSubmission: async () => {
+                    const revoked = await auth.logoutLocal({ reload: false });
+                    if (!revoked) {
+                        throw new Error('Local account revocation failed');
+                    }
+                },
+            });
+            if (deletionResult === 'uncertain') {
+                // The single-use proof may already have been accepted. Clear
+                // local state without reloading so the user can see the
+                // fail-closed notice. The pre-submission hook already revoked it.
+                Modal.alert(
+                    t('settingsAccount.deleteAccount'),
+                    t('settingsAccount.deleteAccountUncertain'),
+                );
+                return;
+            }
+        } catch {
+            throw new HappyError(t('settingsAccount.deleteAccountFailed'), true);
+        }
+    });
 
     const handlePushPermissionRequest = useCallback(async () => {
         if (!auth.credentials) {
@@ -584,6 +623,15 @@ export default React.memo(() => {
 
                 {/* Danger Zone */}
                 <ItemGroup title={t('settingsAccount.dangerZone')}>
+                    <Item
+                        title={t('settingsAccount.deleteAccount')}
+                        subtitle={t('settingsAccount.deleteAccountSubtitle')}
+                        icon={<Ionicons name="trash-outline" size={29} color="#FF3B30" />}
+                        destructive
+                        onPress={handleDeleteAccount}
+                        loading={deletingAccount}
+                        disabled={deletingAccount || !auth.credentials}
+                    />
                     <Item
                         title={t('settingsAccount.logout')}
                         subtitle={t('settingsAccount.logoutSubtitle')}

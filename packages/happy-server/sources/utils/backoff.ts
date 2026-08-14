@@ -26,13 +26,18 @@ export function createBackoff(
         while (true) {
             try {
                 return await callback();
-            } catch (e: any) {
+            } catch (e: unknown) {
                 // Check if error is due to abort
                 if (AbortedExeption.isAborted(e)) {
                     throw e;
                 }
-                warn(e);
+                warn({
+                    module: 'backoff',
+                    level: 'warn',
+                    retry: currentFailureCount + 1,
+                }, 'Retrying operation');
                 let waitForRequest = exponentialRandomizedBackoffDelay(currentFailureCount, minDelay, maxDelay, factor);
+                currentFailureCount += 1;
                 await delay(waitForRequest, signal);
             }
         }

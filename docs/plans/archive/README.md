@@ -50,6 +50,7 @@
 - [happy-agent CLI Tool](./happy-agent.md)
 - [happy server — bundled self-host mode](./happy-serve-self-host.md)
 - [Happy Server standalone Docker 路径修复记录](./happy-server-standalone-docker-path.md)
+- [Codex 历史会话只读保留计划](./legacy-codex-readonly-retention.md)
 - [Minimal Fix Plan for Happy-CLI Bugs with TDD](./legacy/bug-fix-plan-2025-01-15-athundt.md)
 - [Metadata-Driven Model and Mode Selection on Client](./metadata-driven-model-mode-selection.md)
 - [pnpm Migration [Draft]](./pnpm-migration.md)

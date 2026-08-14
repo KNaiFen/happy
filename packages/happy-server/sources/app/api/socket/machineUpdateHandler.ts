@@ -6,6 +6,8 @@ import { db } from "@/storage/db";
 import { Socket } from "socket.io";
 import { allocateUserSeq } from "@/storage/seq";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
+import { afterTx, inTx } from "@/storage/inTx";
+import { acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 export function machineUpdateHandler(userId: string, socket: Socket) {
     const labels = getMetricsLabelsFromSocket(socket);
@@ -78,39 +80,26 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 return;
             }
 
-            // Resolve machine
-            const machine = await db.machine.findFirst({
-                where: {
-                    accountId: userId,
-                    id: machineId,
-                    deletedAt: null,
-                    ...(credentialId ? { credentialId } : {}),
-                }
-            });
-            if (!machine) {
-                if (callback) {
-                    callback({ result: 'error', message: 'Machine not found' });
-                }
-                return;
-            }
-
-            // Check version
-            if (machine.metadataVersion !== expectedVersion) {
-                callback({
-                    result: 'version-mismatch',
-                    version: machine.metadataVersion,
-                    metadata: machine.metadata
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
+                const machine = await tx.machine.findFirst({
+                    where: {
+                        accountId: userId, id: machineId, deletedAt: null,
+                        account: { is: { deletionRequestedAt: null } },
+                        ...(credentialId ? { credentialId } : {}),
+                    }
                 });
-                return;
-            }
-
-            // Update metadata with atomic version check
-            const { count } = await db.machine.updateMany({
+                if (!machine) return { kind: 'missing' as const };
+                if (machine.metadataVersion !== expectedVersion) {
+                    return { kind: 'version-mismatch' as const, version: machine.metadataVersion, metadata: machine.metadata };
+                }
+                const updated = await tx.machine.updateMany({
                 where: {
                     accountId: userId,
                     id: machineId,
                     metadataVersion: expectedVersion,
                     deletedAt: null,
+                    account: { is: { deletionRequestedAt: null } },
                     ...(credentialId ? { credentialId } : {}),
                 },
                 data: {
@@ -118,38 +107,30 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                     metadataVersion: expectedVersion + 1
                     // NOT updating active or lastActiveAt here
                 }
-            });
-
-            if (count === 0) {
-                // Re-fetch current version
-                const current = await db.machine.findFirst({
-                    where: {
-                        accountId: userId,
-                        id: machineId,
-                        deletedAt: null,
-                        ...(credentialId ? { credentialId } : {}),
-                    }
                 });
+                if (updated.count !== 1) return { kind: 'version-mismatch' as const, version: machine.metadataVersion, metadata: machine.metadata };
+                const updSeq = await allocateUserSeq(userId, tx);
+                const metadataUpdate = { value: metadata, version: expectedVersion + 1 };
+                const updatePayload = buildUpdateMachineUpdate(machineId, updSeq, randomKeyNaked(12), metadataUpdate);
+                afterTx(tx, () => eventRouter.emitUpdate({ userId, payload: updatePayload, recipientFilter: { type: 'machine-scoped-only', machineId } }));
+                return { kind: 'success' as const };
+            });
+            if (result.kind === 'deleting') {
+                callback?.({ result: 'error', message: 'Account deletion in progress' });
+                return;
+            }
+            if (result.kind === 'missing') {
+                callback?.({ result: 'error', message: 'Machine not found' });
+                return;
+            }
+            if (result.kind === 'version-mismatch') {
                 callback({
                     result: 'version-mismatch',
-                    version: current?.metadataVersion || 0,
-                    metadata: current?.metadata
+                    version: result.version,
+                    metadata: result.metadata
                 });
                 return;
             }
-
-            // Generate machine metadata update
-            const updSeq = await allocateUserSeq(userId);
-            const metadataUpdate = {
-                value: metadata,
-                version: expectedVersion + 1
-            };
-            const updatePayload = buildUpdateMachineUpdate(machineId, updSeq, randomKeyNaked(12), metadataUpdate);
-            eventRouter.emitUpdate({
-                userId,
-                payload: updatePayload,
-                recipientFilter: { type: 'machine-scoped-only', machineId }
-            });
 
             // Send success response with new version
             callback({
@@ -182,39 +163,26 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 return;
             }
 
-            // Resolve machine
-            const machine = await db.machine.findFirst({
-                where: {
-                    accountId: userId,
-                    id: machineId,
-                    deletedAt: null,
-                    ...(credentialId ? { credentialId } : {}),
-                }
-            });
-            if (!machine) {
-                if (callback) {
-                    callback({ result: 'error', message: 'Machine not found' });
-                }
-                return;
-            }
-
-            // Check version
-            if (machine.daemonStateVersion !== expectedVersion) {
-                callback({
-                    result: 'version-mismatch',
-                    version: machine.daemonStateVersion,
-                    daemonState: machine.daemonState
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
+                const machine = await tx.machine.findFirst({
+                    where: {
+                        accountId: userId, id: machineId, deletedAt: null,
+                        account: { is: { deletionRequestedAt: null } },
+                        ...(credentialId ? { credentialId } : {}),
+                    }
                 });
-                return;
-            }
-
-            // Update daemon state with atomic version check
-            const { count } = await db.machine.updateMany({
+                if (!machine) return { kind: 'missing' as const };
+                if (machine.daemonStateVersion !== expectedVersion) {
+                    return { kind: 'version-mismatch' as const, version: machine.daemonStateVersion, daemonState: machine.daemonState };
+                }
+                const updated = await tx.machine.updateMany({
                 where: {
                     accountId: userId,
                     id: machineId,
                     daemonStateVersion: expectedVersion,
                     deletedAt: null,
+                    account: { is: { deletionRequestedAt: null } },
                     ...(credentialId ? { credentialId } : {}),
                 },
                 data: {
@@ -223,38 +191,30 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                     active: true,
                     lastActiveAt: new Date()
                 }
-            });
-
-            if (count === 0) {
-                // Re-fetch current version
-                const current = await db.machine.findFirst({
-                    where: {
-                        accountId: userId,
-                        id: machineId,
-                        deletedAt: null,
-                        ...(credentialId ? { credentialId } : {}),
-                    }
                 });
+                if (updated.count !== 1) return { kind: 'version-mismatch' as const, version: machine.daemonStateVersion, daemonState: machine.daemonState };
+                const updSeq = await allocateUserSeq(userId, tx);
+                const daemonStateUpdate = { value: daemonState, version: expectedVersion + 1 };
+                const updatePayload = buildUpdateMachineUpdate(machineId, updSeq, randomKeyNaked(12), undefined, daemonStateUpdate);
+                afterTx(tx, () => eventRouter.emitUpdate({ userId, payload: updatePayload, recipientFilter: { type: 'machine-scoped-only', machineId } }));
+                return { kind: 'success' as const };
+            });
+            if (result.kind === 'deleting') {
+                callback?.({ result: 'error', message: 'Account deletion in progress' });
+                return;
+            }
+            if (result.kind === 'missing') {
+                callback?.({ result: 'error', message: 'Machine not found' });
+                return;
+            }
+            if (result.kind === 'version-mismatch') {
                 callback({
                     result: 'version-mismatch',
-                    version: current?.daemonStateVersion || 0,
-                    daemonState: current?.daemonState
+                    version: result.version,
+                    daemonState: result.daemonState
                 });
                 return;
             }
-
-            // Generate machine daemon state update
-            const updSeq = await allocateUserSeq(userId);
-            const daemonStateUpdate = {
-                value: daemonState,
-                version: expectedVersion + 1
-            };
-            const updatePayload = buildUpdateMachineUpdate(machineId, updSeq, randomKeyNaked(12), undefined, daemonStateUpdate);
-            eventRouter.emitUpdate({
-                userId,
-                payload: updatePayload,
-                recipientFilter: { type: 'machine-scoped-only', machineId }
-            });
 
             // Send success response with new version
             callback({

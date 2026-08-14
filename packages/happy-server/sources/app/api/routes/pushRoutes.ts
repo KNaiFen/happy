@@ -4,9 +4,10 @@ import {
     buildSessionAccessWhere,
     sessionAccessIdentityFromRequest,
 } from "@/app/api/utils/sessionAccess";
-import { db } from "@/storage/db";
 import { dispatchSessionEventPush } from "@/app/push/pushDispatch";
 import { buildSessionEventEphemeral, eventRouter } from "@/app/events/eventRouter";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 export function pushRoutes(app: Fastify) {
     
@@ -20,6 +21,9 @@ export function pushRoutes(app: Fastify) {
                 200: z.object({
                     success: z.literal(true)
                 }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
+                }),
                 500: z.object({
                     error: z.literal('Failed to register push token')
                 })
@@ -31,21 +35,16 @@ export function pushRoutes(app: Fastify) {
         const { token } = request.body;
 
         try {
-            await db.accountPushToken.upsert({
-                where: {
-                    accountId_token: {
-                        accountId: userId,
-                        token: token
-                    }
-                },
-                update: {
-                    updatedAt: new Date()
-                },
-                create: {
-                    accountId: userId,
-                    token: token
-                }
+            const admitted = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) return false;
+                await tx.accountPushToken.upsert({
+                    where: { accountId_token: { accountId: userId, token } },
+                    update: { updatedAt: new Date() },
+                    create: { accountId: userId, token }
+                });
+                return true;
             });
+            if (!admitted) return reply.code(409).send({ error: 'Account deletion in progress' });
 
             return reply.send({ success: true });
         } catch (error) {
@@ -63,6 +62,9 @@ export function pushRoutes(app: Fastify) {
                 200: z.object({
                     success: z.literal(true)
                 }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
+                }),
                 500: z.object({
                     error: z.literal('Failed to delete push token')
                 })
@@ -74,12 +76,12 @@ export function pushRoutes(app: Fastify) {
         const { token } = request.params;
 
         try {
-            await db.accountPushToken.deleteMany({
-                where: {
-                    accountId: userId,
-                    token: token
-                }
+            const admitted = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) return false;
+                await tx.accountPushToken.deleteMany({ where: { accountId: userId, token } });
+                return true;
             });
+            if (!admitted) return reply.code(409).send({ error: 'Account deletion in progress' });
 
             return reply.send({ success: true });
         } catch (error) {
@@ -107,6 +109,9 @@ export function pushRoutes(app: Fastify) {
                 }),
                 404: z.object({
                     error: z.literal('Session not found')
+                }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
                 })
             }
         },
@@ -120,21 +125,31 @@ export function pushRoutes(app: Fastify) {
             sessionAccessIdentityFromRequest(request),
             { id: sessionId },
         );
-        const session = accessWhere && await db.session.findFirst({
-            where: accessWhere,
-            select: { id: true }
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return { kind: 'blocked' as const };
+            const session = accessWhere && await tx.session.findFirst({
+                where: accessWhere,
+                select: { id: true },
+            });
+            if (!session) return { kind: 'missing' as const };
+            return { kind: 'admitted' as const };
         });
-        if (!session) {
+
+        if (result.kind === 'blocked') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
+        if (result.kind === 'missing') {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
-        // Fan out the event to user's connected clients (web tabs use this to
-        // bump tab-title unread counter for "user attention needed" moments only,
-        // instead of pinging on every encrypted message).
+        // Fan out only after the read-admission transaction commits. The
+        // dispatch path performs another admission check immediately before
+        // reading tokens; already admitted Socket/Expo sends are best effort
+        // because an external delivery cannot be rolled back atomically.
         eventRouter.emitEphemeral({
             userId,
             payload: buildSessionEventEphemeral(sessionId, kind, title, body),
-            recipientFilter: { type: 'all-interested-in-session', sessionId }
+            recipientFilter: { type: 'all-interested-in-session', sessionId },
         });
 
         void dispatchSessionEventPush({
@@ -142,7 +157,7 @@ export function pushRoutes(app: Fastify) {
             sessionId,
             title,
             body,
-            data: { ...(data ?? {}), kind }
+            data: { ...(data ?? {}), kind },
         });
 
         return reply.send({ success: true });
@@ -155,14 +170,19 @@ export function pushRoutes(app: Fastify) {
         const userId = request.userId;
 
         try {
-            const tokens = await db.accountPushToken.findMany({
-                where: {
-                    accountId: userId
-                },
-                orderBy: {
-                    createdAt: 'desc'
-                }
+            const tokens = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return null;
+                return tx.accountPushToken.findMany({
+                    where: {
+                        accountId: userId,
+                        account: { is: { deletionRequestedAt: null } },
+                    },
+                    orderBy: {
+                        createdAt: 'desc'
+                    }
+                });
             });
+            if (!tokens) return reply.code(409).send({ error: 'Account deletion in progress' });
 
             return reply.send({
                 tokens: tokens.map(t => ({

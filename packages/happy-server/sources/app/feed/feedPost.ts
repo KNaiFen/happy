@@ -4,6 +4,7 @@ import { afterTx, Tx } from "@/storage/inTx";
 import { allocateUserSeq } from "@/storage/seq";
 import { eventRouter, buildNewFeedPostUpdate } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
+import { requireAccountWrite } from "@/app/account/accountWriteGate";
 
 /**
  * Add a post to user's feed.
@@ -17,6 +18,7 @@ export async function feedPost(
     repeatKey?: string | null
 ): Promise<UserFeedItem> {
 
+    await requireAccountWrite(tx, ctx.uid);
 
     // Delete existing items with the same repeatKey
     if (repeatKey) {
@@ -52,8 +54,9 @@ export async function feedPost(
     };
 
     // Emit socket event after transaction completes
-    afterTx(tx, async () => {
-        const updateSeq = await allocateUserSeq(ctx.uid);
+        afterTx(tx, async () => {
+            const updateSeq = await allocateUserSeq(ctx.uid);
+            if (updateSeq === null) return;
         const updatePayload = buildNewFeedPostUpdate(result, updateSeq, randomKeyNaked(12));
 
         eventRouter.emitUpdate({

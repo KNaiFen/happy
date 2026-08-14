@@ -9,6 +9,8 @@ import { log } from '@/utils/log';
 import { randomKeyNaked } from '@/utils/randomKeyNaked';
 import type { Socket } from 'socket.io';
 import { sessionWriteWhereForConnection } from './sessionScope';
+import { afterTx, inTx } from '@/storage/inTx';
+import { acquireAccountWrite } from '@/app/account/accountWriteGate';
 
 export function sessionUpdateHandler(
     userId: string,
@@ -36,42 +38,23 @@ export function sessionUpdateHandler(
                 callback?.({ result: 'error' });
                 return;
             }
-            const session = await db.session.findFirst({ where: accessWhere });
-            if (!session) {
-                callback?.({ result: 'error' });
-                return;
-            }
-            if (session.metadataVersion !== expectedVersion) {
-                callback?.({
-                    result: 'version-mismatch',
-                    version: session.metadataVersion,
-                    metadata: session.metadata,
-                });
-                return;
-            }
-            const { count } = await db.session.updateMany({
-                where: { ...accessWhere, metadataVersion: expectedVersion },
-                data: { metadata, metadataVersion: expectedVersion + 1 },
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) return { kind: 'missing' as const };
+                const session = await tx.session.findFirst({ where: accessWhere });
+                if (!session) return { kind: 'missing' as const };
+                if (session.metadataVersion !== expectedVersion) return { kind: 'version-mismatch' as const, session };
+                const updated = await tx.session.updateMany({ where: { ...accessWhere, metadataVersion: expectedVersion }, data: { metadata, metadataVersion: expectedVersion + 1 } });
+                if (updated.count !== 1) return { kind: 'version-mismatch' as const, session };
+                const updateSeq = await allocateUserSeq(userId, tx);
+                const payload = buildUpdateSessionUpdate(sid, updateSeq, randomKeyNaked(12), { value: metadata, version: expectedVersion + 1 });
+                afterTx(tx, () => eventRouter.emitUpdate({ userId, payload, recipientFilter: { type: 'all-interested-in-session', sessionId: sid } }));
+                return { kind: 'updated' as const };
             });
-            if (count === 0) {
-                callback?.({
-                    result: 'version-mismatch',
-                    version: session.metadataVersion,
-                    metadata: session.metadata,
-                });
+            if (result.kind === 'missing') { callback?.({ result: 'error' }); return; }
+            if (result.kind === 'version-mismatch') {
+                callback?.({ result: 'version-mismatch', version: result.session.metadataVersion, metadata: result.session.metadata });
                 return;
             }
-            const updateSeq = await allocateUserSeq(userId);
-            eventRouter.emitUpdate({
-                userId,
-                payload: buildUpdateSessionUpdate(
-                    sid,
-                    updateSeq,
-                    randomKeyNaked(12),
-                    { value: metadata, version: expectedVersion + 1 },
-                ),
-                recipientFilter: { type: 'all-interested-in-session', sessionId: sid },
-            });
             callback?.({
                 result: 'success',
                 version: expectedVersion + 1,

@@ -8,6 +8,7 @@ import { AuthCredentials } from '@/auth/tokenStorage';
 import { getServerUrl } from './serverConfig';
 import { getHappyClientId } from './apiSocket';
 import { config } from '@/config';
+import { createAccountFetch } from './accountOutboundFence';
 
 export type { VoiceConversationResponse, VoiceUsageResponse };
 
@@ -16,6 +17,7 @@ export async function fetchVoiceCredentials(
     sessionId: string
 ): Promise<VoiceConversationResponse> {
     const serverUrl = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     const agentId = config.elevenLabsAgentId;
 
@@ -23,7 +25,7 @@ export async function fetchVoiceCredentials(
         throw new Error('Agent ID not configured');
     }
 
-    const response = await fetch(`${serverUrl}/v1/voice/conversations`, {
+    const response = await accountFetch(`${serverUrl}/v1/voice/conversations`, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${credentials.token}`,
@@ -46,8 +48,9 @@ export async function fetchVoiceUsage(
     credentials: AuthCredentials
 ): Promise<VoiceUsageResponse> {
     const serverUrl = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
-    const response = await fetch(`${serverUrl}/v1/voice/usage`, {
+    const response = await accountFetch(`${serverUrl}/v1/voice/usage`, {
         method: 'GET',
         headers: {
             'Authorization': `Bearer ${credentials.token}`,

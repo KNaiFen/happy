@@ -468,12 +468,18 @@ export async function machineResumeSession(options: ResumeSessionOptions & { mod
                     reason: 'invalidBinding',
                 };
             }
+            let dataEncryptionKey: string;
+            try {
+                dataEncryptionKey = encodeBase64(key, 'base64');
+            } finally {
+                key.fill(0);
+            }
             result = ResumeSessionRpcResultSchema.parse(await apiSocket.machineRPC<unknown, ResumeSessionRpcRequest>(
                 machineId,
                 'resume-happy-session',
                 {
                     ...request,
-                    dataEncryptionKey: encodeBase64(key, 'base64'),
+                    dataEncryptionKey,
                 },
                 { timeoutMs: RESUME_SESSION_RPC_TIMEOUT_MS },
             ));
@@ -590,6 +596,7 @@ export async function machineUpdateMetadata(
     }
 
     while (retryCount < maxRetries) {
+        const permit = apiSocket.captureLifecyclePermit();
         const encryptedMetadata = await machineEncryption.encryptRaw(currentMetadata);
 
         const result = await apiSocket.emitWithAck<{
@@ -601,7 +608,7 @@ export async function machineUpdateMetadata(
             machineId,
             metadata: encryptedMetadata,
             expectedVersion: currentVersion
-        });
+        }, permit);
 
         if (result.result === 'success') {
             return {
@@ -658,6 +665,7 @@ async function sessionUpdateAgentModesMetadata(
     let currentMetadata = { ...session.metadata, ...pendingPatch };
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const permit = apiSocket.captureLifecyclePermit();
         const encrypted = await encryption.encryptRaw(currentMetadata);
         const result = await apiSocket.emitWithAck<{
             result: 'success' | 'version-mismatch' | 'error';
@@ -667,7 +675,7 @@ async function sessionUpdateAgentModesMetadata(
             sid: sessionId,
             metadata: encrypted,
             expectedVersion: currentVersion
-        });
+        }, permit);
 
         if (result.result === 'success') {
             return;

@@ -98,4 +98,12 @@ describe('SyncV4Crypto interoperability', () => {
         await expect(crypto.decryptEntity(aad, encodeBase64(tampered)))
             .rejects.toBeInstanceOf(SyncV4DecryptionError);
     });
+
+    it('zeroes derived keys when disposed and rejects further use', async () => {
+        const crypto = await createCrypto();
+        crypto.dispose();
+
+        await expect(crypto.opaqueEntityId(entity.entityType, entity.providerId))
+            .rejects.toThrow('disposed');
+    });
 });

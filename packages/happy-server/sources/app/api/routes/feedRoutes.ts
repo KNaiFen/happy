@@ -3,7 +3,8 @@ import { Fastify } from "../types";
 import { FeedBodySchema } from "@/app/feed/types";
 import { feedGet } from "@/app/feed/feedGet";
 import { Context } from "@/context";
-import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead } from "@/app/account/accountWriteGate";
 
 export function feedRoutes(app: Fastify) {
     app.get('/v1/feed', {
@@ -24,17 +25,27 @@ export function feedRoutes(app: Fastify) {
                         createdAt: z.number()
                     })),
                     hasMore: z.boolean()
+                }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
                 })
             }
         }
     }, async (request, reply) => {
-        const items = await feedGet(db, Context.create(request.userId), {
-            cursor: {
-                before: request.query?.before,
-                after: request.query?.after
-            },
-            limit: request.query?.limit
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return { kind: 'deleting' as const };
+            const items = await feedGet(tx, Context.create(request.userId), {
+                cursor: {
+                    before: request.query?.before,
+                    after: request.query?.after
+                },
+                limit: request.query?.limit
+            });
+            return { kind: 'ok' as const, items };
         });
-        return reply.send({ items: items.items, hasMore: items.hasMore });
+        if (result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
+        return reply.send({ items: result.items.items, hasMore: result.items.hasMore });
     });
 }

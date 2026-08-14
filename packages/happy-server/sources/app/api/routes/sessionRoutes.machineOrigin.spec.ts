@@ -15,12 +15,14 @@ const {
     const now = new Date("2026-01-01T00:00:00.000Z");
     const state = {
         machineAuthorized: true,
+        accountWritable: true,
         existingSession: null as any,
         createdData: null as any,
         listSessions: [] as any[],
     };
     const resetState = () => {
         state.machineAuthorized = true;
+        state.accountWritable = true;
         state.existingSession = null;
         state.createdData = null;
         state.listSessions = [];
@@ -49,6 +51,9 @@ const {
         ),
     });
     const dbMock = {
+        account: {
+            updateMany: vi.fn(async () => ({ count: state.accountWritable ? 1 : 0 })),
+        },
         machine: {
             findFirst: vi.fn(async () => (
                 state.machineAuthorized ? { id: "machine-1" } : null
@@ -371,6 +376,7 @@ describe("sessionRoutes terminal machine origin", () => {
         expect(dbMock.session.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
             where: {
                 accountId: "user-1",
+                account: { is: { deletionRequestedAt: null } },
                 originMachineId: "machine-1",
                 id: { lt: "session-3" },
             },
@@ -621,5 +627,27 @@ describe("sessionRoutes terminal machine origin", () => {
 
         expect(response.statusCode).toBe(409);
         expect(response.json()).toEqual({ error: "sessionArchived" });
+    });
+
+    it("rejects session mutations while account deletion is in progress", async () => {
+        app = await createApp();
+        state.accountWritable = false;
+        state.existingSession = row({ id: "session-1", originMachineId: "machine-1" });
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/sessions",
+            headers: terminalHeaders,
+            payload: {
+                tag: supportedTag,
+                metadata: "encrypted-metadata",
+                machineId: "machine-1",
+            },
+        });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toEqual({ error: "Account deletion in progress" });
+        expect(dbMock.session.create).not.toHaveBeenCalled();
+        expect(emitUpdateMock).not.toHaveBeenCalled();
     });
 });

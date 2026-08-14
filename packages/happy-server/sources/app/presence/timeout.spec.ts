@@ -48,6 +48,7 @@ describe("expireTimedOutSessions", () => {
         });
         expect(dbMock.session.updateManyAndReturn).toHaveBeenCalledWith({
             where: {
+                account: { is: { deletionRequestedAt: null } },
                 id: "session-1",
                 active: true,
                 archivedAt: null,

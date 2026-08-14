@@ -24,6 +24,7 @@ export function buildSessionAccessWhere(
     const base = {
         ...constraints,
         accountId: identity.userId,
+        account: { is: { deletionRequestedAt: null } },
     };
     if (!identity.credentialId) return base;
     if (!identity.machineId) return null;

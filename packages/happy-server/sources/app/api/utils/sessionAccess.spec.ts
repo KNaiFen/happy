@@ -9,6 +9,7 @@ describe("buildSessionAccessWhere", () => {
         )).toEqual({
             id: "session-1",
             accountId: "user-1",
+            account: { is: { deletionRequestedAt: null } },
         });
     });
 
@@ -23,6 +24,7 @@ describe("buildSessionAccessWhere", () => {
         )).toEqual({
             id: "session-1",
             accountId: "user-1",
+            account: { is: { deletionRequestedAt: null } },
             originMachineId: "machine-1",
             originMachine: {
                 is: {

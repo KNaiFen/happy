@@ -2,6 +2,7 @@ import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
 import { getServerUrl } from './serverConfig';
 import { getHappyClientId } from './apiSocket';
+import { createAccountFetch } from './accountOutboundFence';
 
 /**
  * Connect a service to the user's account
@@ -12,9 +13,10 @@ export async function connectService(
     token: any
 ): Promise<void> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/connect/${service}/register`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/connect/${service}/register`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -40,9 +42,10 @@ export async function connectService(
  */
 export async function disconnectService(credentials: AuthCredentials, service: string): Promise<void> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/connect/${service}`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/connect/${service}`, {
             method: 'DELETE',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,

@@ -146,6 +146,52 @@ describe('Codex thread history App coordination', () => {
         });
     });
 
+    it.each([
+        ['v3', 3],
+        ['missing version', undefined],
+    ])('keeps Codex %s history readable but blocks writable resume', async (_label, codexSyncVersion) => {
+        const raw = rawSession(3);
+        metadataByCiphertext.set(raw.metadata, {
+            path: '/tmp/project',
+            host: 'test-host',
+            machineId: 'machine-1',
+            flavor: 'codex',
+            ...(codexSyncVersion === undefined ? {} : { codexSyncVersion }),
+            codexThreadId: 'thread-readonly',
+        });
+        request.mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({ sessions: [raw], nextCursor: null, hasNext: false }),
+        });
+
+        const { scanCodexThreadBindings, openCodexThread } = await import('./codexThreadHistory');
+        const scanned = await scanCodexThreadBindings('machine-1');
+        const binding = scanned.byThreadId.get('thread-readonly');
+        expect(binding).toMatchObject({ type: 'bound', legacy: true });
+
+        const result = await openCodexThread({
+            machineId: 'machine-1',
+            directory: '/tmp/project',
+            thread: {
+                threadId: 'thread-readonly',
+                title: 'Thread',
+                preview: '',
+                cwd: '/tmp/project',
+                createdAt: 1,
+                updatedAt: 1,
+                recencyAt: 1,
+                source: 'cli',
+                status: 'idle',
+            },
+            binding,
+            defaults: { permissionMode: 'read-only', modelMode: 'gpt-5.5', effortLevel: 'max' },
+        });
+        expect(result).toMatchObject({ type: 'blocked', reason: 'legacySession' });
+        expect(machineRPC).not.toHaveBeenCalled();
+        expect(hydrateSessionFromHistory).not.toHaveBeenCalled();
+    });
+
     it('sends an existing session key only after the daemon requests resume material', async () => {
         machineRPC
             .mockResolvedValueOnce({ type: 'resumeMaterialRequired', sessionId: 'session-1' })

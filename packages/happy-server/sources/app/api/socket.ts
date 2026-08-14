@@ -128,6 +128,7 @@ export function startSocket(app: Fastify) {
 
             socket.data.userId = verified.userId;
             socket.data.credentialId = verified.credentialId;
+            socket.data.authToken = token;
             socket.data.clientType = clientType;
             socket.data.sessionId = sessionId;
             socket.data.machineId = machineId;
@@ -193,6 +194,30 @@ export function startSocket(app: Fastify) {
         }
         eventRouter.addConnection(userId, connection);
         websocketConnectionsGauge.inc({ type: connection.connectionType, ...labels });
+
+        // A connection can outlive its initial handshake by hours. Re-check the
+        // persistent account state before every incoming event so a deletion
+        // marker stops writes on every replica, not only the one that happened
+        // to disconnect the socket first.
+        socket.use((_event, next) => {
+            void auth.verifyToken(socket.data.authToken as string)
+                .then((verified) => {
+                    if (
+                        !verified
+                        || verified.userId !== userId
+                        || verified.credentialId !== credentialId
+                    ) {
+                        socket.disconnect(true);
+                        next(new Error('Authentication is no longer valid'));
+                        return;
+                    }
+                    next();
+                })
+                .catch(() => {
+                    socket.disconnect(true);
+                    next(new Error('Authentication is no longer valid'));
+                });
+        });
 
         // Broadcast daemon online status
         if (connection.connectionType === 'machine-scoped') {

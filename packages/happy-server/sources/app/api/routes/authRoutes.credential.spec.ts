@@ -6,15 +6,21 @@ import { type Fastify } from "../types";
 const {
     state,
     upsertAuthRequest,
+    accountAuthUpsert,
     createToken,
+    isAccountActive,
     terminalAuthFindUnique,
     terminalAuthUpdateMany,
     accountAuthFindUnique,
     accountAuthUpdateMany,
+    accountUpdateMany,
+    accountCreateMany,
+    dbMock,
 } = vi.hoisted(() => {
     const state = {
         authorized: false,
         revoked: false,
+        accountWritable: true,
         upsertArgs: null as any,
         terminalResponse: null as string | null,
         terminalOwner: null as string | null,
@@ -57,6 +63,10 @@ const {
         responseAccountId: state.accountOwner,
     });
     const accountAuthFindUnique = vi.fn(async () => accountRecord());
+    const accountAuthUpsert = vi.fn(async (args: any) => ({
+        ...accountRecord(),
+        publicKey: args.create.publicKey,
+    }));
     const accountAuthUpdateMany = vi.fn(async (args: any) => {
         if (state.accountResponse || state.accountOwner) {
             return { count: 0 };
@@ -65,19 +75,9 @@ const {
         state.accountOwner = args.data.responseAccountId;
         return { count: 1 };
     });
-    return {
-        state,
-        upsertAuthRequest,
-        createToken: vi.fn(async () => "terminal-token"),
-        terminalAuthFindUnique,
-        terminalAuthUpdateMany,
-        accountAuthFindUnique,
-        accountAuthUpdateMany,
-    };
-});
-
-vi.mock("@/storage/db", () => ({
-    db: {
+    const accountUpdateMany = vi.fn(async () => ({ count: state.accountWritable ? 1 : 0 }));
+    const accountCreateMany = vi.fn(async () => ({ count: 1 }));
+    const dbMock = {
         terminalAuthRequest: {
             upsert: upsertAuthRequest,
             findUnique: terminalAuthFindUnique,
@@ -86,17 +86,39 @@ vi.mock("@/storage/db", () => ({
         },
         account: {
             upsert: vi.fn(),
+            createMany: accountCreateMany,
+            updateMany: accountUpdateMany,
+            findUniqueOrThrow: vi.fn(async () => ({ id: "user-1" })),
         },
         accountAuthRequest: {
-            upsert: vi.fn(),
+            upsert: accountAuthUpsert,
             findUnique: accountAuthFindUnique,
             update: vi.fn(),
             updateMany: accountAuthUpdateMany,
         },
-    },
+    };
+    return {
+        state,
+        upsertAuthRequest,
+        accountAuthUpsert,
+        createToken: vi.fn(async () => "terminal-token"),
+        isAccountActive: vi.fn(async () => true),
+        terminalAuthFindUnique,
+        terminalAuthUpdateMany,
+        accountAuthFindUnique,
+        accountAuthUpdateMany,
+        accountUpdateMany,
+        accountCreateMany,
+        dbMock,
+    };
+});
+
+vi.mock("@/storage/db", () => ({ db: dbMock }));
+vi.mock("@/storage/inTx", () => ({
+    inTx: async (callback: (tx: typeof dbMock) => Promise<unknown>) => callback(dbMock),
 }));
 vi.mock("@/app/auth/auth", () => ({
-    auth: { createToken },
+    auth: { createToken, isAccountActive },
 }));
 vi.mock("@/utils/log", () => ({ log: vi.fn() }));
 
@@ -126,11 +148,16 @@ describe("authRoutes terminal credential lifecycle", () => {
         vi.clearAllMocks();
         state.authorized = false;
         state.revoked = false;
+        state.accountWritable = true;
         state.upsertArgs = null;
         state.terminalResponse = null;
         state.terminalOwner = null;
         state.accountResponse = null;
         state.accountOwner = null;
+        upsertAuthRequest.mockClear();
+        accountAuthUpsert.mockClear();
+        accountUpdateMany.mockClear();
+        accountCreateMany.mockClear();
     });
 
     afterEach(async () => {
@@ -171,6 +198,50 @@ describe("authRoutes terminal credential lifecycle", () => {
             credentialId: "credential-1",
             session: "credential-1",
         });
+    });
+
+    it("does not return a fresh terminal token while the account is deleting", async () => {
+        app = await createApp();
+        state.authorized = true;
+        isAccountActive.mockResolvedValueOnce(false);
+
+        const response = await app.inject({
+            method: "POST",
+            url: "/v1/auth/request",
+            payload: { publicKey, supportsV2: true },
+        });
+
+        expect(response.statusCode).toBe(410);
+        expect(response.json()).toEqual({ error: "Account deletion in progress" });
+        expect(createToken).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        {
+            url: "/v1/auth/request",
+            owner: () => { state.terminalOwner = "user-1"; },
+            upsert: () => upsertAuthRequest,
+        },
+        {
+            url: "/v1/auth/account/request",
+            owner: () => { state.accountOwner = "user-1"; },
+            upsert: () => accountAuthUpsert,
+        },
+    ])("does not mutate an auth request owned by an account being deleted at $url", async ({ url, owner, upsert }) => {
+        app = await createApp();
+        owner();
+        state.accountWritable = false;
+
+        const response = await app.inject({
+            method: "POST",
+            url,
+            payload: { publicKey, supportsV2: true },
+        });
+
+        expect(response.statusCode).toBe(410);
+        expect(response.json()).toEqual({ error: "Account deletion in progress" });
+        expect(upsert()).not.toHaveBeenCalled();
+        expect(createToken).not.toHaveBeenCalled();
     });
 
     it("does not reissue a token for a revoked QR credential", async () => {
@@ -238,5 +309,28 @@ describe("authRoutes terminal credential lifecycle", () => {
         const winningUser = owner()!;
         const retry = await approve(winningUser);
         expect(retry.statusCode).toBe(200);
+    });
+
+    it.each([
+        "/v1/auth/response",
+        "/v1/auth/account/response",
+    ])("rejects %s while the approving account is deleting", async (url) => {
+        app = await createApp();
+        state.accountWritable = false;
+
+        const response = await app.inject({
+            method: "POST",
+            url,
+            headers: { "x-user-id": "user-1" },
+            payload: {
+                publicKey,
+                response: "encrypted-response",
+            },
+        });
+
+        expect(response.statusCode).toBe(410);
+        expect(response.json()).toEqual({ error: "Account deletion in progress" });
+        expect(terminalAuthUpdateMany).not.toHaveBeenCalled();
+        expect(accountAuthUpdateMany).not.toHaveBeenCalled();
     });
 });

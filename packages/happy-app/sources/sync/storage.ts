@@ -17,11 +17,11 @@ import { Message } from "./typesMessage";
 import { NormalizedMessage } from "./typesRaw";
 import { isMachineOnline } from '@/utils/machineUtils';
 import { getSessionName, getSessionSubtitle, getSessionAvatarId, type SessionState } from '@/utils/sessionUtils';
-import { applySettings, Settings } from "./settings";
-import { LocalSettings, applyLocalSettings, migrateAgentDefaultOverridesToLocal } from "./localSettings";
+import { applySettings, Settings, settingsDefaults } from "./settings";
+import { LocalSettings, applyLocalSettings, localSettingsDefaults, migrateAgentDefaultOverridesToLocal } from "./localSettings";
 import type { AgentDefaultOverrides } from './agentDefaults';
-import { Purchases, customerInfoToPurchases } from "./purchases";
-import { Profile } from "./profile";
+import { Purchases, customerInfoToPurchases, purchasesDefaults } from "./purchases";
+import { Profile, profileDefaults } from "./profile";
 import { UserProfile, RelationshipUpdatedEvent } from "./friendTypes";
 import { loadSettings, loadLocalSettings, saveLocalSettings, saveSettings, loadPurchases, savePurchases, loadProfile, saveProfile, loadSessionDrafts, saveSessionDrafts } from "./persistence";
 import { isAgentModePushPending } from "./agentModesPending";
@@ -297,6 +297,7 @@ interface StorageState {
     markSessionMessageSent: (sessionId: string) => void;
     // Artifact methods
     applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
+    applyArtifactSnapshot: (artifacts: DecryptedArtifact[], deletedArtifactIds: string[]) => void;
     addArtifact: (artifact: DecryptedArtifact) => void;
     updateArtifact: (artifact: DecryptedArtifact) => void;
     deleteArtifact: (artifactId: string) => void;
@@ -319,6 +320,7 @@ interface StorageState {
     markSessionRead: (sessionId: string) => void;
     markSessionUnread: (sessionId: string) => void;
     setCurrentViewingSession: (sessionId: string | null) => void;
+    resetForAccountSwitch: () => void;
 }
 
 // Helper function to build unified list view data from sessions and machines
@@ -481,6 +483,53 @@ export const storage = create<StorageState>()((set, get) => {
         nativeUpdateStatus: null,
         unreadSessionIds: new Set<string>(),
         currentViewingSessionId: null,
+        resetForAccountSwitch: () => {
+            sessionDrafts = {};
+            sessionLastMessageSentAt = {};
+            if (realtimeModeDebounceTimer) {
+                clearTimeout(realtimeModeDebounceTimer);
+                realtimeModeDebounceTimer = null;
+            }
+            set((state) => ({
+                ...state,
+                settings: { ...settingsDefaults },
+                settingsVersion: null,
+                localSettings: { ...localSettingsDefaults },
+                purchases: { ...purchasesDefaults },
+                profile: { ...profileDefaults },
+                sessions: {},
+                sessionsData: null,
+                sessionListViewData: null,
+                sessionMessages: {},
+                codexV4Sessions: {},
+                pathGitStatus: {},
+                pathGitStatusFiles: {},
+                pathProjectFiles: {},
+                sessionFileCache: {},
+                machines: {},
+                machinesLoaded: false,
+                resumeEligibilityBySessionId: {},
+                artifacts: {},
+                friends: {},
+                users: {},
+                feedItems: [],
+                feedHead: null,
+                feedTail: null,
+                feedHasMore: false,
+                feedLoaded: false,
+                friendsLoaded: false,
+                realtimeStatus: 'disconnected',
+                realtimeMode: 'idle',
+                voiceSessionGeneration: state.voiceSessionGeneration + 1,
+                socketStatus: 'disconnected',
+                socketLastConnectedAt: null,
+                socketLastDisconnectedAt: null,
+                isDataReady: false,
+                nativeUpdateStatus: null,
+                unreadSessionIds: new Set<string>(),
+                currentViewingSessionId: null,
+            }));
+        },
         applyResumeEligibility: (entries) => set((state) => {
             let changed = false;
             const next = { ...state.resumeEligibilityBySessionId };
@@ -1369,6 +1418,12 @@ export const storage = create<StorageState>()((set, get) => {
                 ...state,
                 artifacts: mergedArtifacts
             };
+        }),
+        applyArtifactSnapshot: (artifacts: DecryptedArtifact[], deletedArtifactIds: string[]) => set((state) => {
+            const reconciledArtifacts = { ...state.artifacts };
+            for (const artifactId of deletedArtifactIds) delete reconciledArtifacts[artifactId];
+            for (const artifact of artifacts) reconciledArtifacts[artifact.id] = artifact;
+            return { ...state, artifacts: reconciledArtifacts };
         }),
         addArtifact: (artifact: DecryptedArtifact) => set((state) => {
             const updatedArtifacts = {

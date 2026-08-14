@@ -45,6 +45,7 @@ import { loadAppConfig } from '@/sync/appConfig';
 import {
     shouldAllowE2EBootstrap,
     shouldEnableDevE2eInsecureHttp,
+    stripDevE2ECredentialsFromSearch,
 } from '@/sync/devE2eBootstrap';
 import { fetchMobileFieldCredentials } from '@/sync/mobileFieldCredentials';
 
@@ -251,25 +252,30 @@ export default function RootLayout() {
                 await loadFonts();
                 await sodium.ready;
 
-                credentials = await TokenStorage.getCredentials();
+                let credentialsRevoked = await TokenStorage.hasCredentialsRevoked();
+                if (credentialsRevoked && Platform.OS === 'web' && typeof window !== 'undefined') {
+                    const search = stripDevE2ECredentialsFromSearch(window.location.search);
+                    window.history.replaceState(
+                        {},
+                        '',
+                        `${window.location.pathname}${search}${window.location.hash}`,
+                    );
+                }
+                credentials = credentialsRevoked ? null : await TokenStorage.getCredentials();
                 const appConfig = loadAppConfig();
                 const mobileFieldE2E = appConfig.mobileFieldE2E === true;
-                const allowE2EBootstrap = shouldAllowE2EBootstrap(__DEV__, mobileFieldE2E);
-                const bootstrapCredentials = getDevWebQueryCredentials()
-                    ?? (mobileFieldE2E
-                        ? await fetchMobileFieldCredentials(true, appConfig.mobileFieldBootstrapUrl)
-                        : getE2EEnvironmentCredentials(allowE2EBootstrap));
+                const allowE2EBootstrap = shouldAllowE2EBootstrap(__DEV__, mobileFieldE2E, credentialsRevoked);
+                const bootstrapCredentials = !allowE2EBootstrap
+                    ? null
+                    : getDevWebQueryCredentials()
+                        ?? (mobileFieldE2E
+                            ? await fetchMobileFieldCredentials(true, appConfig.mobileFieldBootstrapUrl)
+                            : getE2EEnvironmentCredentials(allowE2EBootstrap));
 
                 if (bootstrapCredentials) {
-                    const credentialsChanged = credentials?.token !== bootstrapCredentials.token
-                        || credentials?.secret !== bootstrapCredentials.secret;
-
-                    if (credentialsChanged) {
-                        const saved = await TokenStorage.setCredentials(bootstrapCredentials);
-                        if (saved) {
-                            credentials = bootstrapCredentials;
-                        }
-                    }
+                    const saved = await TokenStorage.setE2EBootstrapCredentialsIfNotRevoked(bootstrapCredentials);
+                    credentialsRevoked = !saved || await TokenStorage.hasCredentialsRevoked();
+                    credentials = credentialsRevoked ? null : bootstrapCredentials;
 
                     if (Platform.OS === 'web' && typeof window !== 'undefined') {
                         window.history.replaceState({}, '', window.location.pathname);
@@ -280,6 +286,7 @@ export default function RootLayout() {
                     __DEV__,
                     process.env.EXPO_PUBLIC_DEV_ALLOW_INSECURE_HTTP,
                     mobileFieldE2E,
+                    credentialsRevoked,
                 )) {
                     setAllowInsecureHttp(true);
                 }
@@ -293,7 +300,7 @@ export default function RootLayout() {
                     if (!(error instanceof ServerUrlPolicyError)) {
                         throw error;
                     }
-                    console.error('Error restoring sync:', error);
+                    console.error('Error restoring sync');
                     // Keep server settings reachable when a persisted relay
                     // is offline or now requires first-time HTTP approval.
                     setInitState({ credentials });
@@ -301,8 +308,8 @@ export default function RootLayout() {
                 }
 
                 setInitState({ credentials });
-            } catch (error) {
-                console.error('Error initializing:', error);
+            } catch {
+                console.error('Error initializing');
             }
         })();
     }, []);

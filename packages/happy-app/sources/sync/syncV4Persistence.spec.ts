@@ -394,4 +394,15 @@ describe('SyncV4Persistence', () => {
             entities: [expect.objectContaining({ entityId: 'replacement-entity' })],
         });
     });
+
+    it('clears every v4 key, including the account producer id', () => {
+        const storage = new MemoryStorage();
+        const persistence = new SyncV4Persistence(storage);
+        persistence.loadProducerId();
+        persistence.enqueueMutations('session-1', [mutation]);
+
+        persistence.clearAll();
+
+        expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:'))).toEqual([]);
+    });
 });

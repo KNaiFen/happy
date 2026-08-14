@@ -7,15 +7,39 @@ function resolveClient(tx?: SeqClient) {
     return tx ?? db;
 }
 
-export async function allocateUserSeq(accountId: string, tx?: SeqClient) {
-    const client = resolveClient(tx);
-    const user = await client.account.update({
-        where: { id: accountId },
+export async function allocateUserSeq(accountId: string, tx: SeqClient): Promise<number>;
+export async function allocateUserSeq(accountId: string, tx?: undefined): Promise<number | null>;
+export async function allocateUserSeq(accountId: string, tx?: SeqClient): Promise<number | null> {
+    if (tx) {
+        const user = await tx.account.update({
+            where: { id: accountId },
+            select: { seq: true },
+            data: { seq: { increment: 1 } }
+        });
+        return user.seq;
+    }
+
+    const updated = await db.account.updateManyAndReturn({
+        where: { id: accountId, deletionRequestedAt: null },
         select: { seq: true },
-        data: { seq: { increment: 1 } }
+        data: { seq: { increment: 1 } },
     });
-    const seq = user.seq;
-    return seq;
+    return updated[0]?.seq ?? null;
+}
+
+export async function allocateArtifactMutation(
+    accountId: string,
+    tx: SeqClient,
+): Promise<{ seq: number; artifactRevision: number }> {
+    const account = await tx.account.update({
+        where: { id: accountId },
+        select: { seq: true, artifactRevision: true },
+        data: {
+            seq: { increment: 1 },
+            artifactRevision: { increment: 1 },
+        },
+    });
+    return account;
 }
 
 export async function allocateSessionSeq(sessionId: string, tx?: SeqClient) {

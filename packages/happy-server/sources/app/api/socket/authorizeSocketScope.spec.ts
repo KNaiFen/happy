@@ -6,6 +6,10 @@ const { dbMock } = vi.hoisted(() => ({
             findFirst: vi.fn(),
             updateMany: vi.fn(),
         },
+        account: {
+            findFirst: vi.fn(),
+            updateMany: vi.fn(),
+        },
         session: {
             findFirst: vi.fn(),
             updateMany: vi.fn(),
@@ -14,12 +18,17 @@ const { dbMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/storage/db", () => ({ db: dbMock }));
+vi.mock("@/storage/inTx", () => ({
+    inTx: vi.fn(async (callback: (tx: typeof dbMock) => Promise<unknown>) => callback(dbMock)),
+}));
 
 import { authorizeSocketScope } from "./authorizeSocketScope";
 
 describe("authorizeSocketScope", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        dbMock.account.findFirst.mockResolvedValue({ id: "user-1" });
+        dbMock.account.updateMany.mockResolvedValue({ count: 1 });
     });
 
     it("allows account tokens but rejects terminal credentials in user scope", async () => {
@@ -73,5 +82,17 @@ describe("authorizeSocketScope", () => {
             machineId: "machine-1",
         })).resolves.toBe(false);
         expect(dbMock.session.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("rejects user-scoped authorization while account deletion is pending", async () => {
+        dbMock.account.updateMany.mockResolvedValueOnce({ count: 0 });
+
+        await expect(authorizeSocketScope({
+            userId: "user-1",
+            clientType: "user-scoped",
+        })).resolves.toBe(false);
+        expect(dbMock.account.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: { id: "user-1", deletionRequestedAt: null },
+        }));
     });
 });

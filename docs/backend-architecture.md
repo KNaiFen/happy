@@ -71,6 +71,57 @@ mutation 先持久化再 ACK；发送 ACK、接收 cursor 和 snapshot watermark
 interrupt ACK 和经过一段时间都不能把 turn 标记为完成。child Codex thread 映射为隔离、
 只读的 side session；child 更新不能覆盖 parent runtime。
 
+## 账户删除与对象访问
+
+账户删除是不可撤回的两步操作：账户凭据先获取服务端生成、五分钟有效且单次消费的 challenge，
+再提交与账户公钥匹配的 Ed25519 签名。确认操作在事务中消费 proof、标记账户删除进行中并创建
+持久删除请求；普通 token、terminal token、Socket.IO 握手及后续入站事件和活动缓存都会重新检查
+账户状态。确认同时通过 Redis adapter 断开所有副本的既有用户 scope 连接。逐事件检查发生在 handler
+准入前，不等同于把账户状态原子加入每条业务写入。
+确认后会拒绝新认证和新的 HTTP/Socket 读写准入。删除标记前已经进入普通处理器的数据库写入
+可能先完成；最终删除事务会重新读取并清除这些主数据，不把连接断开误当成事务回滚。附件、头像和
+presence 等会产生外部或长期状态的路径在最终写入处另有账户删除标记门槛。GitHub OAuth params 在
+同一 Serializable 事务中取得账户写入准入、生成绑定 admission 的 state 并持久化 admission，只有事务
+成功后才返回 state；callback 必须先原子 claim，claim 失败或重放不会交换 code、读取 profile 或上传
+头像。删除器等待所有已 claim callback 通过 `completedAt` 明确结算；token POST 的传输或解析结果未知时
+admission 不按 state TTL 自动释放。
+
+App 在删除 proof 离开客户端前同步结束 token-bound outbound generation，停止全部 Sync 队列、Sync v4
+client 与 git status sync，卸载 AppState/Web listener，并 reset user-scoped Socket；随后才持久化
+revocation fence。每个账户 HTTP/backoff 物理请求和 Socket/RPC continuation 都携带初始化期 permit，
+在加密、凭据读取或 ACK 等 `await` 后必须再次验证 generation，旧账户 continuation 不能借新登录的
+token 或 Socket 外发。revocation 或未完成 bootstrap fence 存在、读取失败或竞争时，启动恢复与开发
+E2E bootstrap 都 fail-closed，不会自动恢复旧凭据。另一设备已提交删除时，challenge 的 `409` 也必须
+先完成同一本地撤销再报告 pending；proof 创建前的 `401/403` 不触发撤销。普通登出可在本地撤销后对
+push token 发送一次 best-effort DELETE，但不得以旧凭据无限后台重试；账户删除不发送该请求。
+Artifact REST/Socket create、update、delete 在账户写入事务中分配用户级 `updateSeq`；App 以删除
+tombstone 阻止较旧 update 和延迟 fetch 复活对象，只有更大的 `new-artifact` 序号可以越过 tombstone。
+每次真实 Artifact mutation 在同一事务递增 `Account.artifactRevision`；幂等重复 create 不递增、不发事件。
+Artifact REST 列表使用账户绑定且签名的 opaque cursor 固定 `{ highWatermark, artifactRevision }`，按 id
+分页读取 `updateSeq <= highWatermark` 的行。无关账户写入只推进全局 `Account.seq`，不会打断续页；
+Artifact mutation 会使续页返回 409 并要求从首页重建。App 只有在取得全部页面后才提交快照：缺席项
+会建立 tombstone、清除本地对象与解密 key，但 watermark 后到达的较新 lifecycle event 始终优先。
+
+附件下载、Push dispatch 和 Socket RPC 在外部动作前取得账户行准入，等待或查找后还会重新核验；
+删除标记后不再开始新的动作。删除标记前已经打开的响应流可完成，已经交给 Socket、Expo 或远端
+provider 的请求只能尽力中止，不能与数据库事务原子撤回。
+
+删除器先等待旧版直接 S3 上传能力的最长 15 分钟失效，并等待所有删除前获准的代理上传和头像写入
+持久操作取得确认成功；操作记录对象 key 和完成时间，没有 TTL，失败或未知写入会让删除保持 pending。
+随后才对当前 session 附件和 `public/users/<accountId>/` 执行唯一的最终对象 sweep，以 1000 条为上限
+串行批删并复查所有 object version 和 delete marker。
+S3 升级必须由部署者记录所有旧签发器已排空的时刻，最终 sweep 仅在该时刻至少过去 16 分钟后进行；
+历史 orphan 附件由持久、全局限流的 GC 扫描，而不是由每个账户删除重试扫描整个 bucket。对象删除
+失败会保留账户锁定和删除请求，随后重试。
+最终事务先锁定已标记的 Account 行，再删除账户关联的会话、Sync v4 entities/mutations、设备、认证
+请求、token、artifact、KV、语音、社交/Feed 引用、GitHub OAuth 记录及已结算 admission；不再被任何 Account 引用的
+历史 GitHub 记录也会一并清理。对象访问始终经 Server：S3 bucket 必须保持私有，头像 `/files/*`
+在流式读取前检查账户状态，附件 `PUT`/`GET` 需要会话授权。
+
+应用无法控制托管备份和运维日志，也无法清除自托管部署者或第三方服务保留的副本；这些边界和
+三天托管保留目标见 [隐私政策](../PRIVACY.md) 与当前
+[账户删除计划](plans/account-data-deletion-and-retention-contract.md)。
+
 ## 可选集成
 
 - ElevenLabs 语音：`/v1/voice/conversations` 与 `/v1/voice/usage`；
@@ -87,5 +138,7 @@ interrupt ACK 和经过一段时间都不能把 turn 标记为完成。child Cod
 [部署文档](deployment.md)。可交付 Server/镜像只由
 `.github/workflows/build-debian13-relay-release.yml` 构建；工作流验证 distroless、
 非 root、只读根文件系统、迁移/重启、secret 权限、SBOM 和 Critical 漏洞门禁。
-语音 payload 日志脱敏由 App/Server 的白名单 logger canary 和 monorepo CI 验收；部署
-workflow 维持镜像与运行时安全验证，详见[部署文档](deployment.md)。
+语音、GitHub OAuth/disconnect、Artifact、Push、Fastify 请求失败、受控调试、迁移与 retry 日志脱敏由
+App/Server 的白名单 logger canary 和 hostile sentinel 测试验收；原始账户、会话、artifact、provider ID、
+payload、token、data key、外部错误和堆栈不进入运维日志。部署 workflow 维持镜像与运行时安全验证，
+详见[部署文档](deployment.md)。

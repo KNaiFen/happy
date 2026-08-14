@@ -20,10 +20,12 @@
  *   - On disconnect the socket (and its state) disappears automatically.
  */
 
-import { db } from "@/storage/db";
 import { isUserActive } from "@/app/push/focusTracker";
 import { sendPushNotifications } from "@/app/push/pushSend";
 import { log } from "@/utils/log";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 
 async function fetchTokensAndSend(params: {
     userId: string;
@@ -33,13 +35,24 @@ async function fetchTokensAndSend(params: {
     data: Record<string, unknown>;
     channelId: string;
 }): Promise<void> {
+    const diagnosticFields = {
+        module: 'push',
+        userHash: diagnosticHash(params.userId),
+        sessionHash: diagnosticHash(params.sessionId),
+    };
     // All push tokens are mobile — web/CLI never register Expo tokens.
-    const tokens = await db.accountPushToken.findMany({
-        where: { accountId: params.userId }
+    const tokens = await inTx(async (tx) => {
+        if (!await acquireAccountRead(tx, params.userId)) return null;
+        return tx.accountPushToken.findMany({
+            where: {
+                accountId: params.userId,
+                account: { is: { deletionRequestedAt: null } },
+            }
+        });
     });
 
-    if (tokens.length === 0) {
-        log({ module: 'push' }, `No push tokens for user ${params.userId} session ${params.sessionId} — skipped`);
+    if (!tokens || tokens.length === 0) {
+        log({ ...diagnosticFields, outcome: 'skipped', tokenCount: 0 }, 'Push dispatch completed');
         return;
     }
 
@@ -55,25 +68,37 @@ async function fetchTokensAndSend(params: {
     );
 
     let okCount = 0;
-    const errors: string[] = [];
+    let failedCount = 0;
+    let deviceNotRegisteredCount = 0;
     for (let i = 0; i < tickets.length; i++) {
         const ticket = tickets[i];
         if (ticket.status === 'ok') {
             okCount++;
             continue;
         }
-        errors.push(ticket.details?.error || ticket.message || 'unknown');
+        failedCount++;
         if (ticket.details?.error === 'DeviceNotRegistered') {
-            void db.accountPushToken.deleteMany({
-                where: { id: tokens[i].id }
+            deviceNotRegisteredCount++;
+            void inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, params.userId)) return;
+                await tx.accountPushToken.deleteMany({
+                    where: { id: tokens[i].id, accountId: params.userId }
+                });
             });
         }
     }
 
-    if (errors.length === 0) {
-        log({ module: 'push' }, `Push sent for user ${params.userId} session ${params.sessionId}: ${okCount} token(s)`);
+    if (failedCount === 0) {
+        log({ ...diagnosticFields, outcome: 'success', okCount, failedCount }, 'Push dispatch completed');
     } else {
-        log({ module: 'push', level: 'warn' }, `Push partial for user ${params.userId} session ${params.sessionId}: ok=${okCount} errors=${JSON.stringify(errors)}`);
+        log({
+            ...diagnosticFields,
+            level: 'warn',
+            outcome: 'partial',
+            okCount,
+            failedCount,
+            deviceNotRegisteredCount,
+        }, 'Push dispatch completed');
     }
 }
 
@@ -85,15 +110,20 @@ export async function dispatchSessionEventPush(params: {
     data?: Record<string, unknown>;
 }): Promise<void> {
     const { userId, sessionId, title, body, data } = params;
+    const diagnosticFields = {
+        module: 'push',
+        userHash: diagnosticHash(userId),
+        sessionHash: diagnosticHash(sessionId),
+    };
 
     try {
         try {
             if (await isUserActive(userId)) {
-                log({ module: 'push' }, `Suppressed session-event push for user ${userId} session ${sessionId}: user active`);
+                log({ ...diagnosticFields, outcome: 'suppressed' }, 'Push dispatch completed');
                 return;
             }
-        } catch (presenceError) {
-            log({ module: 'push', level: 'error' }, `Presence check failed, sending push anyway: ${presenceError}`);
+        } catch {
+            log({ ...diagnosticFields, level: 'error', operation: 'presence.check' }, 'Push prerequisite failed');
         }
 
         await fetchTokensAndSend({
@@ -104,7 +134,7 @@ export async function dispatchSessionEventPush(params: {
             data: { sessionId, ...(data ?? {}) },
             channelId: 'messages'
         });
-    } catch (error) {
-        log({ module: 'push', level: 'error' }, `Session-event push dispatch failed: ${error}`);
+    } catch {
+        log({ ...diagnosticFields, level: 'error', operation: 'push.send' }, 'Push dispatch failed');
     }
 }

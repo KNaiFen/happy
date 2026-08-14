@@ -4,6 +4,12 @@ import { db } from "@/storage/db";
 import { log } from "@/utils/log";
 
 export type Tx = Prisma.TransactionClient;
+export type TransactionHost = {
+    $transaction<T>(
+        callback: (tx: Tx) => Promise<T>,
+        options: { isolationLevel: 'Serializable'; timeout: number },
+    ): Promise<T>;
+};
 
 const symbol = Symbol();
 
@@ -14,7 +20,7 @@ export function afterTx(tx: Tx, callback: AfterTxCallback) {
     callbacks.push(callback);
 }
 
-export async function inTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+export async function inTx<T>(fn: (tx: Tx) => Promise<T>, transactionHost: TransactionHost = db): Promise<T> {
     let counter = 0;
     let wrapped = async (tx: Tx) => {
         (tx as any)[symbol] = [];
@@ -24,7 +30,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     }
     while (true) {
         try {
-            let result = await db.$transaction(wrapped, { isolationLevel: 'Serializable', timeout: 10000 });
+            let result = await transactionHost.$transaction(wrapped, { isolationLevel: 'Serializable', timeout: 10000 });
             for (let callback of result.callbacks) {
                 try {
                     Promise.resolve(callback()).catch(() => {

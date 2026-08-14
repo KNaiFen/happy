@@ -11,6 +11,7 @@ import {
     FriendsResponseSchema,
     UsersSearchResponseSchema
 } from './friendTypes';
+import { createAccountFetch } from './accountOutboundFence';
 
 /**
  * Search for users by username (returns multiple results)
@@ -20,9 +21,10 @@ export async function searchUsersByUsername(
     username: string
 ): Promise<UserProfile[]> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(
+        const response = await accountFetch(
             `${API_ENDPOINT}/v1/user/search?${new URLSearchParams({ query: username })}`,
             {
                 method: 'GET',
@@ -59,9 +61,10 @@ export async function getUserProfile(
     userId: string
 ): Promise<UserProfile | null> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(
+        const response = await accountFetch(
             `${API_ENDPOINT}/v1/user/${userId}`,
             {
                 method: 'GET',
@@ -115,9 +118,10 @@ export async function sendFriendRequest(
     recipientId: string
 ): Promise<UserProfile | null> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/friends/add`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/friends/add`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -158,9 +162,10 @@ export async function getFriendsList(
     credentials: AuthCredentials
 ): Promise<UserProfile[]> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/friends`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/friends`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -191,9 +196,10 @@ export async function removeFriend(
     friendId: string
 ): Promise<UserProfile | null> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/friends/remove`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/friends/remove`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,

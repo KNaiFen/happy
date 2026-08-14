@@ -9,8 +9,6 @@ import { layout } from '@/components/layout';
 import { Ionicons } from '@expo/vector-icons';
 import { Modal } from '@/modal';
 import { sync } from '@/sync/sync';
-import { deleteArtifact } from '@/sync/apiArtifacts';
-import { storage } from '@/sync/storage';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -105,10 +103,7 @@ export default function ArtifactDetailScreen() {
                 }
                 
                 // Fetch full artifact with body
-                const fullArtifact = await sync.fetchArtifactWithBody(id);
-                if (!cancelled && fullArtifact) {
-                    storage.getState().updateArtifact(fullArtifact);
-                }
+                await sync.fetchArtifactWithBody(id);
             } catch (err) {
                 if (!cancelled) {
                     console.error('Failed to load artifact:', err);
@@ -145,18 +140,12 @@ export default function ArtifactDetailScreen() {
         try {
             setIsDeleting(true);
             
-            const credentials = sync.getCredentials();
-            if (!credentials) {
-                throw new Error('Not authenticated');
-            }
-
-            await deleteArtifact(credentials, id);
-            storage.getState().deleteArtifact(id);
+            await sync.deleteArtifact(id);
             
             // Navigate back
             router.back();
-        } catch (err) {
-            console.error('Failed to delete artifact:', err);
+        } catch {
+            console.error('Failed to delete artifact');
             Modal.alert(
                 t('common.error'),
                 'Failed to delete artifact'

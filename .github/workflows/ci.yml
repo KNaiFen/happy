@@ -443,6 +443,19 @@ jobs:
       - name: Verify clean deploy, old-schema upgrade, and drift
         run: pnpm --filter happy-server-self-host test:migration:sync-v4
 
+      - name: Generate Prisma client for PostgreSQL concurrency tests
+        run: pnpm --filter happy-server-self-host generate
+
+      - name: Test account deletion and artifact concurrency ordering
+        env:
+          DB_PROVIDER: postgres
+          HAPPY_POSTGRES_INTEGRATION_TEST: "1"
+          DATA_DIR: ${{ runner.temp }}/happy-postgres-integration
+        run: >-
+          pnpm --filter happy-server-self-host exec vitest run
+          sources/app/account/githubOAuthAdmission.postgres.integration.spec.ts
+          sources/app/artifacts/artifactCreate.postgres.integration.spec.ts
+
   official_codex:
     name: Build latest stable official Codex source
     needs: classify

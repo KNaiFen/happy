@@ -1,9 +1,10 @@
-import { db } from "@/storage/db";
 import { Context } from "@/context";
 import { log } from "@/utils/log";
 import { allocateUserSeq } from "@/storage/seq";
 import { buildUpdateAccountUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
+import { inTx } from "@/storage/inTx";
+import { diagnosticHash } from "@/utils/diagnosticHash";
 
 /**
  * Disconnects a GitHub account from a user profile.
@@ -18,40 +19,55 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 export async function githubDisconnect(ctx: Context): Promise<void> {
     const userId = ctx.uid;
 
-    // Step 1: Check if user has GitHub connection
-    const user = await db.account.findUnique({
-        where: { id: userId },
-        select: { githubUserId: true }
+    const githubUserId = await inTx(async (tx) => {
+        const user = await tx.account.findUnique({
+            where: { id: userId },
+            select: { githubUserId: true },
+        });
+        if (!user?.githubUserId) return null;
+
+        // Match the identifier we read so a reconnect cannot clear a newer
+        // link, and do not mutate an account that has entered deletion.
+        const disconnected = await tx.account.updateMany({
+            where: {
+                id: userId,
+                githubUserId: user.githubUserId,
+                deletionRequestedAt: null,
+            },
+            data: {
+                githubUserId: null,
+                username: null,
+            },
+        });
+        if (disconnected.count !== 1) return null;
+
+        await tx.githubUser.deleteMany({
+            where: {
+                id: user.githubUserId,
+                Account: { none: {} },
+            },
+        });
+        return user.githubUserId;
     });
 
-    // Early exit if no GitHub connection
-    if (!user?.githubUserId) {
-        log({ module: 'github-disconnect' }, `User ${userId} has no GitHub account connected`);
+    if (!githubUserId) {
+        log({
+            module: 'github-disconnect',
+            userHash: diagnosticHash(userId),
+        }, 'GitHub disconnect skipped');
         return;
     }
 
-    const githubUserId = user.githubUserId;
-    log({ module: 'github-disconnect' }, `Disconnecting GitHub account ${githubUserId} from user ${userId}`);
+    const diagnosticFields = {
+        module: 'github-disconnect',
+        userHash: diagnosticHash(userId),
+        githubUserHash: diagnosticHash(githubUserId),
+    };
+    log(diagnosticFields, 'Disconnecting GitHub account');
 
-    // Step 2: Transaction for atomic database operations
-    await db.$transaction(async (tx) => {
-        // Clear GitHub connection and username from account (keep avatar)
-        await tx.account.update({
-            where: { id: userId },
-            data: {
-                githubUserId: null,
-                username: null
-            }
-        });
-
-        // Delete GitHub user record (includes token)
-        await tx.githubUser.delete({
-            where: { id: githubUserId }
-        });
-    });
-
-    // Step 3: Send update via socket (after transaction completes)
+    // Send update via socket after the transaction completes.
     const updSeq = await allocateUserSeq(userId);
+    if (updSeq === null) return;
     const updatePayload = buildUpdateAccountUpdate(userId, {
         github: null,
         username: null
@@ -63,5 +79,5 @@ export async function githubDisconnect(ctx: Context): Promise<void> {
         recipientFilter: { type: 'user-scoped-only' }
     });
 
-    log({ module: 'github-disconnect' }, `GitHub account ${githubUserId} disconnected successfully from user ${userId}`);
+    log(diagnosticFields, 'GitHub account disconnected');
 }

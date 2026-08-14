@@ -9,6 +9,7 @@ import {
 } from "@/app/api/utils/sessionAccess";
 import { diagnosticHash } from "@/utils/diagnosticHash";
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 async function canAccessSessionMachine(
     store: Pick<Tx, "session" | "machine">,
@@ -30,6 +31,7 @@ async function canAccessSessionMachine(
                 id: machineId,
                 accountId: identity.userId,
                 deletedAt: null,
+                account: { is: { deletionRequestedAt: null } },
                 ...(identity.credentialId
                     ? { credentialId: identity.credentialId }
                     : {}),
@@ -71,36 +73,42 @@ export function accessKeysRoutes(app: Fastify) {
         const { sessionId, machineId } = request.params;
 
         try {
-            if (!await canAccessSessionMachine(
-                db,
-                sessionAccessIdentityFromRequest(request),
-                sessionId,
-                machineId,
-            )) {
+            const accessKey = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return { kind: 'not-found' as const };
+                if (!await canAccessSessionMachine(
+                    tx,
+                    sessionAccessIdentityFromRequest(request),
+                    sessionId,
+                    machineId,
+                )) {
+                    return { kind: 'not-found' as const };
+                }
+                const key = await tx.accessKey.findUnique({
+                    where: {
+                        accountId_machineId_sessionId: {
+                            accountId: userId,
+                            machineId,
+                            sessionId
+                        }
+                    }
+                });
+                return { kind: 'ok' as const, key };
+            });
+
+            if (accessKey.kind === 'not-found') {
                 return reply.code(404).send({ error: 'Session or machine not found' });
             }
 
-            // Get access key
-            const accessKey = await db.accessKey.findUnique({
-                where: {
-                    accountId_machineId_sessionId: {
-                        accountId: userId,
-                        machineId,
-                        sessionId
-                    }
-                }
-            });
-
-            if (!accessKey) {
+            if (!accessKey.key) {
                 return reply.send({ accessKey: null });
             }
 
             return reply.send({
                 accessKey: {
-                    data: accessKey.data,
-                    dataVersion: accessKey.dataVersion,
-                    createdAt: accessKey.createdAt.getTime(),
-                    updatedAt: accessKey.updatedAt.getTime()
+                    data: accessKey.key.data,
+                    dataVersion: accessKey.key.dataVersion,
+                    createdAt: accessKey.key.createdAt.getTime(),
+                    updatedAt: accessKey.key.updatedAt.getTime()
                 }
             });
         } catch {
@@ -149,6 +157,9 @@ export function accessKeysRoutes(app: Fastify) {
 
         try {
             const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) {
+                    return { kind: 'not-found' as const };
+                }
                 if (!await canAccessSessionMachine(
                     tx,
                     sessionAccessIdentityFromRequest(request),
@@ -255,6 +266,9 @@ export function accessKeysRoutes(app: Fastify) {
 
         try {
             const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) {
+                    return { kind: 'not-found' as const };
+                }
                 if (!await canAccessSessionMachine(
                     tx,
                     sessionAccessIdentityFromRequest(request),
@@ -289,7 +303,8 @@ export function accessKeysRoutes(app: Fastify) {
                         accountId: userId,
                         machineId,
                         sessionId,
-                        dataVersion: expectedVersion
+                        dataVersion: expectedVersion,
+                        session: { account: { is: { deletionRequestedAt: null } } },
                     },
                     data: {
                         data,

@@ -17,7 +17,8 @@ images:
 
 # Patches: minimal local-only overrides (replicas match prod)
 patches:
-  # Point S3_PUBLIC_URL at local MinIO instead of prod
+  # Do not inherit the hosted PUBLIC_URL. The documented local port-forward
+  # exposes this explicit base URL to clients and to request-independent events.
   - target:
       kind: Deployment
       name: handy-server
@@ -32,8 +33,8 @@ patches:
             containers:
             - name: handy
               env:
-              - name: S3_PUBLIC_URL
-                value: http://localhost:9000/happy
+              - name: PUBLIC_URL
+                value: http://localhost:3005
 
   # NodePort so tests connect through kube-proxy (real load balancing).
   # kubectl port-forward tunnels to ONE pod — when that pod dies,

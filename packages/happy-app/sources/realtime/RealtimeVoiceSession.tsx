@@ -1,6 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import { useConversation } from '@elevenlabs/react-native';
-import { registerVoiceSession } from './RealtimeSession';
+import {
+    isCurrentVoiceProviderGeneration,
+    isRegisteredVoiceSession,
+    registerVoiceSession,
+    unregisterVoiceSession,
+} from './RealtimeSession';
 import { storage } from '@/sync/storage';
 import { realtimeClientTools } from './realtimeClientTools';
 import { getElevenLabsCodeFromPreference } from '@/constants/Languages';
@@ -18,9 +23,11 @@ let agentIsSpeaking = false;
 
 // Global voice session implementation
 class RealtimeVoiceSessionImpl implements VoiceSession {
+    constructor(private readonly conversation: ReturnType<typeof useConversation>) {}
+
     
     async startSession(config: VoiceSessionConfig): Promise<string | null> {
-        if (!conversationInstance) {
+        if (!this.conversation) {
             voiceLog('session.unavailable', undefined, 'warn');
             throw new Error('Realtime voice session not initialized');
         }
@@ -55,8 +62,8 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
                 },
             };
             
-            await conversationInstance.startSession(sessionConfig);
-            return conversationInstance.getId?.() ?? null;
+            await this.conversation.startSession(sessionConfig);
+            return this.conversation.getId?.() ?? null;
         } catch (error) {
             voiceLog('provider.error', { outcome: 'failed' }, 'error');
             storage.getState().setRealtimeStatus('error');
@@ -65,41 +72,43 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
     }
 
     async endSession(): Promise<void> {
-        if (!conversationInstance) {
+        if (!this.conversation) {
             storage.getState().setRealtimeStatus('disconnected');
             return;
         }
 
         try {
-            await conversationInstance.endSession();
+            await this.conversation.endSession();
         } catch {
             voiceLog('provider.error', { outcome: 'failed' }, 'error');
         } finally {
-            storage.getState().setRealtimeStatus('disconnected');
+            if (isRegisteredVoiceSession(this)) {
+                storage.getState().setRealtimeStatus('disconnected');
+            }
         }
     }
 
     sendTextMessage(message: string): void {
-        if (!conversationInstance) {
+        if (!this.conversation) {
             voiceLog('session.unavailable', undefined, 'warn');
             return;
         }
 
         try {
-            conversationInstance.sendUserMessage(message);
+            this.conversation.sendUserMessage(message);
         } catch {
             voiceLog('provider.send.failed', { outcome: 'failed' }, 'error');
         }
     }
 
     sendContextualUpdate(update: string): void {
-        if (!conversationInstance) {
+        if (!this.conversation) {
             voiceLog('session.unavailable', undefined, 'warn');
             return;
         }
 
         try {
-            conversationInstance.sendContextualUpdate(update);
+            this.conversation.sendContextualUpdate(update);
         } catch {
             voiceLog('provider.send.failed', { outcome: 'failed' }, 'error');
         }
@@ -107,14 +116,17 @@ class RealtimeVoiceSessionImpl implements VoiceSession {
 }
 
 export const RealtimeVoiceSession: React.FC = () => {
+    const providerGenerationRef = useRef<number | null>(null);
     const conversation = useConversation({
         clientTools: realtimeClientTools,
         onConnect: () => {
+            if (providerGenerationRef.current === null || !isCurrentVoiceProviderGeneration(providerGenerationRef.current)) return;
             voiceLog('provider.connected', { outcome: 'success' }, 'info');
             storage.getState().setRealtimeStatus('connected');
             storage.getState().setRealtimeMode('idle');
         },
         onDisconnect: () => {
+            if (providerGenerationRef.current === null || !isCurrentVoiceProviderGeneration(providerGenerationRef.current)) return;
             voiceLog('provider.disconnected', undefined, 'info');
             // Bump generation only when an active session ends — skipping the
             // initial 'disconnected' state avoids remounting on cold launch
@@ -187,6 +199,7 @@ export const RealtimeVoiceSession: React.FC = () => {
     });
 
     const hasRegistered = useRef(false);
+    const voiceSessionRef = useRef<RealtimeVoiceSessionImpl | null>(null);
 
     useEffect(() => {
         // Store the conversation instance globally
@@ -195,7 +208,9 @@ export const RealtimeVoiceSession: React.FC = () => {
         // Register the voice session once
         if (!hasRegistered.current) {
             try {
-                registerVoiceSession(new RealtimeVoiceSessionImpl());
+                const registeredSession = new RealtimeVoiceSessionImpl(conversation);
+                voiceSessionRef.current = registeredSession;
+                providerGenerationRef.current = registerVoiceSession(registeredSession);
                 hasRegistered.current = true;
             } catch {
                 voiceLog('provider.registration.failed', { outcome: 'failed' }, 'error');
@@ -205,6 +220,10 @@ export const RealtimeVoiceSession: React.FC = () => {
         return () => {
             // Clean up on unmount
             conversationInstance = null;
+            providerGenerationRef.current = null;
+            unregisterVoiceSession(voiceSessionRef.current ?? undefined);
+            voiceSessionRef.current = null;
+            hasRegistered.current = false;
         };
     }, [conversation]);
 

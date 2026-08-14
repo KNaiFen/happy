@@ -15,6 +15,8 @@ import {
     buildSessionAccessWhere,
     sessionAccessIdentityFromRequest,
 } from "@/app/api/utils/sessionAccess";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
+import { AccountWriteBlockedError } from "@/app/account/accountWriteGate";
 
 function sessionResponse(session: {
     id: string;
@@ -95,41 +97,50 @@ export function sessionRoutes(app: Fastify) {
             return reply.code(403).send({ error: 'Machine is not authorized' });
         }
 
-        const sessions = await db.session.findMany({
-            where: accessWhere,
-            orderBy: { updatedAt: 'desc' },
-            take: 150,
-            select: {
-                id: true,
-                seq: true,
-                createdAt: true,
-                updatedAt: true,
-                metadata: true,
-                metadataVersion: true,
-                agentState: true,
-                agentStateVersion: true,
-                dataEncryptionKey: true,
-                active: true,
-                archivedAt: true,
-                lastActiveAt: true,
-                originMachineId: true,
-                originMachine: { select: { deletedAt: true } },
-                // messages: {
-                //     orderBy: { seq: 'desc' },
-                //     take: 1,
-                //     select: {
-                //         id: true,
-                //         seq: true,
-                //         content: true,
-                //         localId: true,
-                //         createdAt: true
-                //     }
-                // }
-            }
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+            return {
+                kind: 'ok' as const,
+                sessions: await tx.session.findMany({
+                where: accessWhere,
+                orderBy: { updatedAt: 'desc' },
+                take: 150,
+                select: {
+                    id: true,
+                    seq: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    metadata: true,
+                    metadataVersion: true,
+                    agentState: true,
+                    agentStateVersion: true,
+                    dataEncryptionKey: true,
+                    active: true,
+                    archivedAt: true,
+                    lastActiveAt: true,
+                    originMachineId: true,
+                    originMachine: { select: { deletedAt: true } },
+                    // messages: {
+                    //     orderBy: { seq: 'desc' },
+                    //     take: 1,
+                    //     select: {
+                    //         id: true,
+                    //         seq: true,
+                    //         content: true,
+                    //         localId: true,
+                    //         createdAt: true
+                    //     }
+                    // }
+                }
+                }),
+            };
         });
+        if (result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
 
         return reply.send({
-            sessions: sessions.map(sessionResponse)
+            sessions: result.sessions.map(sessionResponse)
         });
     });
 
@@ -155,30 +166,39 @@ export function sessionRoutes(app: Fastify) {
             return reply.code(403).send({ error: 'Machine is not authorized' });
         }
 
-        const sessions = await db.session.findMany({
-            where: accessWhere,
-            orderBy: { lastActiveAt: 'desc' },
-            take: limit,
-            select: {
-                id: true,
-                seq: true,
-                createdAt: true,
-                updatedAt: true,
-                metadata: true,
-                metadataVersion: true,
-                agentState: true,
-                agentStateVersion: true,
-                dataEncryptionKey: true,
-                active: true,
-                archivedAt: true,
-                lastActiveAt: true,
-                originMachineId: true,
-                originMachine: { select: { deletedAt: true } },
-            }
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+            return {
+                kind: 'ok' as const,
+                sessions: await tx.session.findMany({
+                where: accessWhere,
+                orderBy: { lastActiveAt: 'desc' },
+                take: limit,
+                select: {
+                    id: true,
+                    seq: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    metadata: true,
+                    metadataVersion: true,
+                    agentState: true,
+                    agentStateVersion: true,
+                    dataEncryptionKey: true,
+                    active: true,
+                    archivedAt: true,
+                    lastActiveAt: true,
+                    originMachineId: true,
+                    originMachine: { select: { deletedAt: true } },
+                }
+                }),
+            };
         });
+        if (result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
 
         return reply.send({
-            sessions: sessions.map(sessionResponse)
+            sessions: result.sessions.map(sessionResponse)
         });
     });
 
@@ -241,31 +261,40 @@ export function sessionRoutes(app: Fastify) {
         // Always sort by ID descending for consistent pagination
         const orderBy = { id: 'desc' as const };
 
-        const sessions = await db.session.findMany({
-            where,
-            orderBy,
-            take: limit + 1, // Fetch one extra to determine if there are more
-            select: {
-                id: true,
-                seq: true,
-                createdAt: true,
-                updatedAt: true,
-                metadata: true,
-                metadataVersion: true,
-                agentState: true,
-                agentStateVersion: true,
-                dataEncryptionKey: true,
-                active: true,
-                archivedAt: true,
-                lastActiveAt: true,
-                originMachineId: true,
-                originMachine: { select: { deletedAt: true } },
-            }
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+            return {
+                kind: 'ok' as const,
+                sessions: await tx.session.findMany({
+                where,
+                orderBy,
+                take: limit + 1, // Fetch one extra to determine if there are more
+                select: {
+                    id: true,
+                    seq: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    metadata: true,
+                    metadataVersion: true,
+                    agentState: true,
+                    agentStateVersion: true,
+                    dataEncryptionKey: true,
+                    active: true,
+                    archivedAt: true,
+                    lastActiveAt: true,
+                    originMachineId: true,
+                    originMachine: { select: { deletedAt: true } },
+                }
+                }),
+            };
         });
+        if (result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
 
         // Check if there are more results
-        const hasNext = sessions.length > limit;
-        const resultSessions = hasNext ? sessions.slice(0, limit) : sessions;
+        const hasNext = result.sessions.length > limit;
+        const resultSessions = hasNext ? result.sessions.slice(0, limit) : result.sessions;
 
         // Generate next cursor - simple ID-based cursor
         let nextCursor: string | null = null;
@@ -308,6 +337,9 @@ export function sessionRoutes(app: Fastify) {
         }
 
         const result = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) {
+                return { kind: 'deleting' as const };
+            }
             if (credentialId) {
                 const machine = await tx.machine.findFirst({
                     where: {
@@ -368,6 +400,9 @@ export function sessionRoutes(app: Fastify) {
         if (result.kind === 'machine-not-authorized') {
             return reply.code(403).send({ error: 'Machine is not authorized' });
         }
+        if (result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
         if (result.kind === 'machine-conflict') {
             return reply.code(409).send({ error: 'Session belongs to another machine' });
         }
@@ -384,6 +419,9 @@ export function sessionRoutes(app: Fastify) {
         }
 
         const updSeq = await allocateUserSeq(userId);
+        if (updSeq === null) {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
         log({
             module: 'session-create',
             sessionHash: diagnosticHash(result.session.id),
@@ -425,6 +463,7 @@ export function sessionRoutes(app: Fastify) {
         }
 
         const result = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
             const session = await tx.session.findFirst({
                 where: accessWhere,
                 select: { archivedAt: true, active: true, lastActiveAt: true },
@@ -442,6 +481,7 @@ export function sessionRoutes(app: Fastify) {
             return { kind: 'claimed' as const, activeAt, activated: !wasActive };
         });
         if (result.kind === 'missing') return reply.code(404).send({ error: 'Session not found' });
+        if (result.kind === 'deleting') return reply.code(409).send({ error: 'Account deletion in progress' });
         if (result.kind === 'archived') return reply.code(409).send({ error: 'sessionArchived' });
 
         activityCache.invalidateSessions([sessionId]);
@@ -473,6 +513,7 @@ export function sessionRoutes(app: Fastify) {
         }
 
         const result = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
             const session = await tx.session.findFirst({
                 where: accessWhere,
                 select: { archivedAt: true, presenceLeaseId: true, active: true, lastActiveAt: true },
@@ -499,6 +540,7 @@ export function sessionRoutes(app: Fastify) {
             return { kind: 'touched' as const, activeAt, activated: !wasActive };
         });
         if (result.kind === 'missing') return reply.code(404).send({ error: 'Session not found' });
+        if (result.kind === 'deleting') return reply.code(409).send({ error: 'Account deletion in progress' });
         if (result.kind === 'archived') return reply.code(409).send({ error: 'sessionArchived' });
         if (result.kind === 'superseded') return reply.code(409).send({ error: 'presenceLeaseSuperseded' });
 
@@ -531,6 +573,7 @@ export function sessionRoutes(app: Fastify) {
         }
 
         const result = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
             const session = await tx.session.findFirst({
                 where: accessWhere,
                 select: { archivedAt: true, presenceLeaseId: true, active: true, lastActiveAt: true },
@@ -557,6 +600,7 @@ export function sessionRoutes(app: Fastify) {
             return { kind: 'released' as const, inactiveAt, deactivated: wasActive };
         });
         if (result.kind === 'missing') return reply.code(404).send({ error: 'Session not found' });
+        if (result.kind === 'deleting') return reply.code(409).send({ error: 'Account deletion in progress' });
         if (result.kind === 'archived') return reply.code(409).send({ error: 'sessionArchived' });
         if (result.kind === 'superseded') return reply.code(409).send({ error: 'presenceLeaseSuperseded' });
 
@@ -587,6 +631,7 @@ export function sessionRoutes(app: Fastify) {
             return reply.code(403).send({ error: 'Machine is not authorized' });
         }
         const result = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
             const session = await tx.session.findFirst({
                 where: accessWhere,
                 select: { archivedAt: true },
@@ -613,6 +658,9 @@ export function sessionRoutes(app: Fastify) {
 
         if (!result) {
             return reply.code(404).send({ error: 'Session not found' });
+        }
+        if ('kind' in result && result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
         }
 
         activityCache.invalidateSessions([sessionId]);
@@ -649,6 +697,7 @@ export function sessionRoutes(app: Fastify) {
         }
 
         const result = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
             const session = await tx.session.findFirst({
                 where: accessWhere,
                 select: { archivedAt: true, active: true, lastActiveAt: true },
@@ -676,6 +725,9 @@ export function sessionRoutes(app: Fastify) {
         if (!result) {
             return reply.code(404).send({ error: 'Session not found' });
         }
+        if ('kind' in result && result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
 
         activityCache.invalidateSessions([sessionId]);
         if (!result.alreadyUnarchived) {
@@ -702,11 +754,19 @@ export function sessionRoutes(app: Fastify) {
         const userId = request.userId;
         const { sessionId } = request.params;
 
-        const deleted = await sessionDelete(
-            { uid: userId },
-            sessionId,
-            sessionAccessIdentityFromRequest(request),
-        );
+        let deleted: boolean;
+        try {
+            deleted = await sessionDelete(
+                { uid: userId },
+                sessionId,
+                sessionAccessIdentityFromRequest(request),
+            );
+        } catch (error) {
+            if (error instanceof AccountWriteBlockedError) {
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
+            throw error;
+        }
 
         if (!deleted) {
             return reply.code(404).send({ error: 'Session not found or not owned by user' });

@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 const syncV4Migration = "20260728123500_add_codex_sync_v4";
 const terminalCredentialMigration = "20260730123000_bind_terminal_credentials_to_machines";
 const archiveTombstoneMigration = "20260731143000_add_session_archive_tombstone";
+const githubOAuthAdmissionMigration = "20260813000000_add_account_deletion_github_oauth_admission";
+const artifactSnapshotMigration = "20260814000000_add_artifact_update_seq";
 const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = join(serverRoot, "prisma", "schema.prisma");
 const migrationsPath = join(serverRoot, "prisma", "migrations");
@@ -322,6 +324,117 @@ function assertArchiveTombstoneSchema({ expectExistingUnarchived }) {
     `);
 }
 
+function assertGithubOAuthAdmissionSchema() {
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        DO $$
+        BEGIN
+            IF to_regclass('"AccountDeletionGithubOAuthAdmission"') IS NULL THEN
+                RAISE EXCEPTION 'GitHub OAuth admission table is missing';
+            END IF;
+            IF to_regclass('"AccountDeletionGithubOAuthAdmission_state_idx"') IS NULL THEN
+                RAISE EXCEPTION 'GitHub OAuth admission index is missing';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'AccountDeletionGithubOAuthAdmission_accountId_fkey'
+                  AND confdeltype = 'c'
+            ) THEN
+                RAISE EXCEPTION 'GitHub OAuth admission cascade foreign key is missing';
+            END IF;
+        END
+        $$;
+
+        INSERT INTO "Account" ("id", "publicKey", "updatedAt")
+        VALUES ('migration-github-admission-account', 'migration-github-admission-key', CURRENT_TIMESTAMP);
+        INSERT INTO "AccountDeletionGithubOAuthAdmission" (
+            "id", "accountId", "expiresAt"
+        )
+        VALUES (
+            'migration-github-admission-row',
+            'migration-github-admission-account',
+            CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+        );
+
+        DELETE FROM "Account" WHERE "id" = 'migration-github-admission-account';
+
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM "AccountDeletionGithubOAuthAdmission"
+                WHERE "id" = 'migration-github-admission-row'
+            ) THEN
+                RAISE EXCEPTION 'GitHub OAuth admission account cascade did not remove child row';
+            END IF;
+        END
+        $$;
+    `);
+}
+
+function assertAccountDeletionAdmissionIndexes() {
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        DO $$
+        BEGIN
+            IF to_regclass('"AccountDeletionVoiceAdmission_accountId_state_idx"') IS NULL THEN
+                RAISE EXCEPTION 'Account deletion voice admission index is missing';
+            END IF;
+        END
+        $$;
+    `);
+}
+
+function assertArtifactSnapshotSchema({ expectHistoricalBackfill }) {
+    const historicalChecks = expectHistoricalBackfill
+        ? `
+            IF NOT EXISTS (
+                SELECT 1 FROM "Account"
+                WHERE "id" = 'migration-pre-artifact-snapshot-account'
+                  AND "artifactRevision" = 0
+            ) THEN
+                RAISE EXCEPTION 'existing Account artifact revision default was not preserved';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM "Artifact"
+                WHERE "id" = 'migration-pre-artifact-snapshot-row'
+                  AND "updateSeq" = 0
+            ) THEN
+                RAISE EXCEPTION 'existing Artifact update sequence default was not preserved';
+            END IF;
+        `
+        : "";
+
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'Account'
+                  AND column_name = 'artifactRevision'
+                  AND is_nullable = 'NO'
+                  AND column_default = '0'
+            ) THEN
+                RAISE EXCEPTION 'Account artifactRevision is missing or has the wrong default';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'Artifact'
+                  AND column_name = 'updateSeq'
+                  AND is_nullable = 'NO'
+                  AND column_default = '0'
+            ) THEN
+                RAISE EXCEPTION 'Artifact updateSeq is missing or has the wrong default';
+            END IF;
+            IF to_regclass('"Artifact_accountId_updateSeq_id_idx"') IS NULL THEN
+                RAISE EXCEPTION 'Artifact snapshot index is missing';
+            END IF;
+            ${historicalChecks}
+        END
+        $$;
+    `);
+}
+
 function createMigrationTreeBefore(tempRoot, migrationName) {
     const tempPrismaPath = join(tempRoot, "prisma");
     const tempMigrationsPath = join(tempPrismaPath, "migrations");
@@ -349,6 +462,9 @@ assertNoSchemaDrift();
 assertSyncV4Schema({ expectMigratedSession: false });
 assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
 assertArchiveTombstoneSchema({ expectExistingUnarchived: false });
+assertGithubOAuthAdmissionSchema();
+assertAccountDeletionAdmissionIndexes();
+assertArtifactSnapshotSchema({ expectHistoricalBackfill: false });
 
 const tempRoot = mkdtempSync(join(tmpdir(), "happy-sync-v4-migration-"));
 try {
@@ -376,6 +492,9 @@ try {
     assertSyncV4Schema({ expectMigratedSession: true });
     assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
     assertArchiveTombstoneSchema({ expectExistingUnarchived: false });
+    assertGithubOAuthAdmissionSchema();
+    assertAccountDeletionAdmissionIndexes();
+    assertArtifactSnapshotSchema({ expectHistoricalBackfill: false });
 
     console.log("Verifying terminal credential migration from the R8 PostgreSQL schema...");
     resetPublicSchema();
@@ -481,6 +600,9 @@ try {
     assertSyncV4Schema({ expectMigratedSession: false });
     assertTerminalCredentialSchema({ expectHistoricalBackfill: true });
     assertArchiveTombstoneSchema({ expectExistingUnarchived: false });
+    assertGithubOAuthAdmissionSchema();
+    assertAccountDeletionAdmissionIndexes();
+    assertArtifactSnapshotSchema({ expectHistoricalBackfill: false });
 
     console.log("Verifying session archive tombstone migration from the previous PostgreSQL schema...");
     resetPublicSchema();
@@ -506,6 +628,52 @@ try {
     assertSyncV4Schema({ expectMigratedSession: false });
     assertTerminalCredentialSchema({ expectHistoricalBackfill: false });
     assertArchiveTombstoneSchema({ expectExistingUnarchived: true });
+    assertGithubOAuthAdmissionSchema();
+    assertAccountDeletionAdmissionIndexes();
+    assertArtifactSnapshotSchema({ expectHistoricalBackfill: false });
+
+    console.log("Verifying GitHub OAuth admission migration from the previous PostgreSQL schema...");
+    resetPublicSchema();
+    const preGithubAdmissionSchemaPath = createMigrationTreeBefore(
+        join(tempRoot, "pre-github-oauth-admission"),
+        githubOAuthAdmissionMigration,
+    );
+    deploy(preGithubAdmissionSchemaPath);
+    deploy(schemaPath);
+    assertNoSchemaDrift();
+    assertGithubOAuthAdmissionSchema();
+    assertAccountDeletionAdmissionIndexes();
+    assertArtifactSnapshotSchema({ expectHistoricalBackfill: false });
+
+    console.log("Verifying artifact snapshot migration from the previous PostgreSQL schema...");
+    resetPublicSchema();
+    const preArtifactSnapshotSchemaPath = createMigrationTreeBefore(
+        join(tempRoot, "pre-artifact-snapshot"),
+        artifactSnapshotMigration,
+    );
+    deploy(preArtifactSnapshotSchemaPath);
+    runPrisma(["db", "execute", "--stdin", "--schema", schemaPath], `
+        INSERT INTO "Account" ("id", "publicKey", "updatedAt")
+        VALUES (
+            'migration-pre-artifact-snapshot-account',
+            'migration-pre-artifact-snapshot-key',
+            CURRENT_TIMESTAMP
+        );
+        INSERT INTO "Artifact" (
+            "id", "accountId", "header", "body", "dataEncryptionKey", "updatedAt"
+        )
+        VALUES (
+            'migration-pre-artifact-snapshot-row',
+            'migration-pre-artifact-snapshot-account',
+            decode('01', 'hex'),
+            decode('02', 'hex'),
+            decode('03', 'hex'),
+            CURRENT_TIMESTAMP
+        );
+    `);
+    deploy(schemaPath);
+    assertNoSchemaDrift();
+    assertArtifactSnapshotSchema({ expectHistoricalBackfill: true });
 } finally {
     rmSync(tempRoot, { recursive: true, force: true });
 }

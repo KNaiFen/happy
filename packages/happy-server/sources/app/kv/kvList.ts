@@ -1,4 +1,4 @@
-import { db } from "@/storage/db";
+import { Tx } from "@/storage/inTx";
 import * as privacyKit from "privacy-kit";
 
 export interface KVListOptions {
@@ -19,6 +19,7 @@ export interface KVListResult {
  * Returns keys, values, and versions. Excludes entries with null values (deleted).
  */
 export async function kvList(
+    tx: Pick<Tx, 'userKVStore'>,
     ctx: { uid: string },
     options?: KVListOptions
 ): Promise<KVListResult> {
@@ -36,7 +37,7 @@ export async function kvList(
         };
     }
 
-    const results = await db.userKVStore.findMany({
+    const results = await tx.userKVStore.findMany({
         where,
         orderBy: {
             key: 'asc'

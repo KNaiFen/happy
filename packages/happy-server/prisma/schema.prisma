@@ -23,9 +23,11 @@ model Account {
     id              String      @id @default(cuid())
     publicKey       String      @unique
     seq             Int         @default(0)
+    artifactRevision Int        @default(0)
     feedSeq         BigInt      @default(0)
     createdAt       DateTime    @default(now())
     updatedAt       DateTime    @updatedAt
+    deletionRequestedAt DateTime?
     settings        String?
     settingsVersion Int         @default(0)
     githubUserId    String?     @unique
@@ -53,6 +55,82 @@ model Account {
     UserFeedItem        UserFeedItem[]
     UserKVStore         UserKVStore[]
     VoiceConversation   VoiceConversation[]
+    AccountDeletionChallenge AccountDeletionChallenge[]
+    AccountDeletionRequest   AccountDeletionRequest?
+    AccountDeletionUploadOperation AccountDeletionUploadOperation[]
+    AccountDeletionVoiceAdmission AccountDeletionVoiceAdmission[]
+    AccountDeletionGithubOAuthAdmission AccountDeletionGithubOAuthAdmission[]
+}
+
+model AccountDeletionChallenge {
+    id            String   @id @default(cuid())
+    accountId     String
+    account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    challengeHash String
+    expiresAt     DateTime
+    consumedAt    DateTime?
+    createdAt     DateTime @default(now())
+
+    @@index([accountId, expiresAt])
+}
+
+model AccountDeletionRequest {
+    id                String   @id @default(cuid())
+    accountId         String   @unique
+    account           Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    requestedAt       DateTime @default(now())
+    finalSweepAfter   DateTime
+    leaseExpiresAt    DateTime?
+    leaseToken        String?
+    lastAttemptedAt   DateTime?
+
+    @@index([leaseExpiresAt])
+    @@index([lastAttemptedAt])
+}
+
+// An upload operation is created in the same transaction that checks an
+// account is still writable. It is removed only after the object-store write
+// succeeds, so deletion never mistakes an elapsed timer or ambiguous error for
+// a stopped write.
+model AccountDeletionUploadOperation {
+    id          String    @id @default(cuid())
+    accountId   String
+    account     Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    objectKey   String
+    completedAt DateTime?
+    createdAt   DateTime  @default(now())
+
+    @@index([accountId, completedAt])
+}
+
+// A voice credential admission remains durable until the provider response is
+// known. Before a signed JWT exists, expiresAt is null: a local timer cannot
+// prove that a suspended provider request did not issue a credential.
+model AccountDeletionVoiceAdmission {
+    id          String    @id @default(cuid())
+    accountId   String
+    account     Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    completedAt DateTime?
+    credentialIssuedAt DateTime?
+    expiresAt   DateTime?
+    createdAt   DateTime  @default(now())
+
+    @@index([accountId, completedAt, credentialIssuedAt, expiresAt], map: "AccountDeletionVoiceAdmission_accountId_state_idx")
+}
+
+// An unclaimed OAuth admission expires with its signed state. Once the
+// callback claims it, only completedAt can prove that every external GitHub
+// side effect reached a known result; claimed rows never expire implicitly.
+model AccountDeletionGithubOAuthAdmission {
+    id                String    @id
+    accountId         String
+    account           Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    callbackStartedAt DateTime?
+    completedAt       DateTime?
+    expiresAt         DateTime
+    createdAt         DateTime  @default(now())
+
+    @@index([accountId, callbackStartedAt, completedAt, expiresAt], map: "AccountDeletionGithubOAuthAdmission_state_idx")
 }
 
 model TerminalAuthRequest {
@@ -324,11 +402,13 @@ model Artifact {
     bodyVersion       Int      @default(0)
     dataEncryptionKey Bytes // Encryption key for this artifact
     seq               Int      @default(0)
+    updateSeq         Int      @default(0)
     createdAt         DateTime @default(now())
     updatedAt         DateTime @updatedAt
 
     @@index([accountId])
     @@index([accountId, updatedAt(sort: Desc)])
+    @@index([accountId, updateSeq, id])
 }
 
 //

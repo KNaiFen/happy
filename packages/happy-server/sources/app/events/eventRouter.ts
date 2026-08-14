@@ -120,6 +120,7 @@ export type UpdateEvent = {
 } | {
     type: 'update-artifact';
     artifactId: string;
+    seq?: number;
     header?: {
         value: string;
         version: number;
@@ -256,6 +257,12 @@ class EventRouter {
     disconnectMachine(userId: string, machineId: string): void {
         this.io
             .in(`user:${userId}:machine:${machineId}`)
+            .disconnectSockets(true);
+    }
+
+    disconnectUser(userId: string): void {
+        this.io
+            .in(`user:${userId}`)
             .disconnectSockets(true);
     }
 
@@ -576,13 +583,14 @@ export function buildNewArtifactUpdate(artifact: {
     };
 }
 
-export function buildUpdateArtifactUpdate(artifactId: string, updateSeq: number, updateId: string, header?: { value: string; version: number }, body?: { value: string; version: number }): UpdatePayload {
+export function buildUpdateArtifactUpdate(artifactId: string, seq: number, updateSeq: number, updateId: string, header?: { value: string; version: number }, body?: { value: string; version: number }): UpdatePayload {
     return {
         id: updateId,
         seq: updateSeq,
         body: {
             t: 'update-artifact',
             artifactId,
+            seq,
             header,
             body
         },

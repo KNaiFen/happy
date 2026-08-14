@@ -6,6 +6,8 @@ import { log } from "@/utils/log";
 import type { ClientConnection } from "@/app/events/eventRouter";
 import { sessionWriteWhereForConnection } from "./sessionScope";
 import { diagnosticHash } from "@/utils/diagnosticHash";
+import { afterTx, inTx } from "@/storage/inTx";
+import { acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 export function usageHandler(
     userId: string,
@@ -82,8 +84,13 @@ export function usageHandler(
                         cost
                     };
 
-                    // Upsert the usage report
-                    const report = await db.usageReport.upsert({
+                    const result = await inTx(async (tx) => {
+                        if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
+                        if (sessionId) {
+                            const session = await tx.session.findFirst({ where: sessionWriteWhereForConnection(userId, connection, sessionId)! });
+                            if (!session) return { kind: 'missing-session' as const };
+                        }
+                        const report = await tx.usageReport.upsert({
                         where: {
                             accountId_sessionId_key: {
                                 accountId: userId,
@@ -101,23 +108,28 @@ export function usageHandler(
                             key,
                             data: usageData
                         }
+                        });
+                        if (sessionId) {
+                            const usageEvent = buildUsageEphemeral(sessionId, key, usageData.tokens, usageData.cost);
+                            afterTx(tx, () => eventRouter.emitEphemeral({
+                                userId,
+                                payload: usageEvent,
+                                recipientFilter: { type: 'user-scoped-only' }
+                            }));
+                        }
+                        return { kind: 'saved' as const, report };
                     });
+                    if (result.kind !== 'saved') {
+                        callback?.({ success: false, error: result.kind === 'missing-session' ? 'Session not found' : 'Failed to save usage report' });
+                        return;
+                    }
+                    const report = result.report;
 
                     log({
                         module: 'websocket',
                         userHash: diagnosticHash(userId),
                         sessionHash: sessionId ? diagnosticHash(sessionId) : undefined,
                     }, 'Usage report saved');
-
-                    // Emit usage ephemeral update if sessionId is provided
-                    if (sessionId) {
-                        const usageEvent = buildUsageEphemeral(sessionId, key, usageData.tokens, usageData.cost);
-                        eventRouter.emitEphemeral({
-                            userId,
-                            payload: usageEvent,
-                            recipientFilter: { type: 'user-scoped-only' }
-                        });
-                    }
 
                     if (callback) {
                         callback({

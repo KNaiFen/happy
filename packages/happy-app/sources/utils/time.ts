@@ -1,3 +1,5 @@
+import { BackoffAbortError } from './backoffAbort';
+
 export async function delay(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -25,6 +27,7 @@ export function createBackoff(
             try {
                 return await callback();
             } catch (e) {
+                if (e instanceof BackoffAbortError) throw e;
                 if (currentFailureCount < maxFailureCount) {
                     currentFailureCount++;
                 }

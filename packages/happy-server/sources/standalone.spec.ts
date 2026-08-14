@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isStandaloneEntrypoint } from "./standalone";
+import { isStandaloneEntrypoint, reportStandaloneFailure } from "./standalone";
 
 describe("isStandaloneEntrypoint", () => {
     it("recognizes standalone script paths on Windows and POSIX", () => {
@@ -12,5 +12,17 @@ describe("isStandaloneEntrypoint", () => {
     it("rejects unrelated entrypoints", () => {
         expect(isStandaloneEntrypoint("C:\\repo\\node_modules\\vitest\\vitest.mjs")).toBe(false);
         expect(isStandaloneEntrypoint("/repo/packages/happy-server/sources/main.ts")).toBe(false);
+    });
+});
+
+describe("reportStandaloneFailure", () => {
+    it("never serializes underlying migration or startup errors", () => {
+        const hostile = "prompt-reasoning-tool-output-standalone";
+        const error = ((...args: unknown[]) => {
+            expect(JSON.stringify(args)).not.toContain(hostile);
+        });
+
+        reportStandaloneFailure("migration", { error });
+        reportStandaloneFailure("server", { error });
     });
 });

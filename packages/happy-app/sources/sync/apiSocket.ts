@@ -8,6 +8,12 @@ import { isTauri } from '@/utils/isTauri';
 import { assertServerUrlAllowed } from './serverConfig';
 import { serverFetch } from './serverTransport';
 import { createAuthenticatedRequestHeaders } from './requestHeaders';
+import {
+    AccountOutboundCancelledError,
+    assertAccountOutboundPermit,
+    captureAccountOutboundPermit,
+    type AccountOutboundPermit,
+} from './accountOutboundFence';
 
 export function getHappyClientId(): string {
     let platform: string = Platform.OS; // 'ios' | 'android' | 'web'
@@ -67,18 +73,23 @@ class ApiSocket {
     private reconnectedListeners: Set<() => void> = new Set();
     private statusListeners: Set<(status: 'disconnected' | 'connecting' | 'connected' | 'error') => void> = new Set();
     private currentStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
+    private lifecycleGeneration = 0;
+    private accountPermit: AccountOutboundPermit | null = null;
 
     //
     // Initialization
     //
 
-    initialize(config: SyncSocketConfig, encryption: Encryption) {
+    initialize(config: SyncSocketConfig, encryption: Encryption): ApiSocketLifecyclePermit {
+        this.lifecycleGeneration += 1;
         this.config = {
             ...config,
             endpoint: assertServerUrlAllowed(config.endpoint),
         };
+        this.accountPermit = captureAccountOutboundPermit(config.token);
         this.encryption = encryption;
         this.connect();
+        return this.captureLifecyclePermit();
     }
 
     //
@@ -112,11 +123,27 @@ class ApiSocket {
     }
 
     disconnect() {
-        if (this.socket) {
-            this.socket.disconnect();
-            this.socket = null;
-        }
+        this.lifecycleGeneration += 1;
+        const socket = this.socket;
+        this.socket = null;
+        socket?.disconnect();
         this.updateStatus('disconnected');
+    }
+
+    /**
+     * End the current account lifecycle. Unlike disconnect(), reset removes
+     * every credential-bearing reference and listener so a failed app reload
+     * cannot leave the deleted account usable in memory.
+     */
+    reset() {
+        this.disconnect();
+        this.config = null;
+        this.encryption = null;
+        this.accountPermit = null;
+        this.messageHandlers.clear();
+        this.reconnectedListeners.clear();
+        this.statusListeners.clear();
+        this.currentStatus = 'disconnected';
     }
 
     //
@@ -157,19 +184,26 @@ class ApiSocket {
         params: A,
         options: { timeoutMs?: number } = {},
     ): Promise<R> {
-        const sessionEncryption = this.encryption!.getSessionEncryption(sessionId);
+        const permit = this.captureLifecyclePermit();
+        const encryption = this.encryption;
+        const socket = this.socket;
+        const sessionEncryption = encryption?.getSessionEncryption(sessionId);
         if (!sessionEncryption) {
             throw new Error(`Session encryption not found for ${sessionId}`);
         }
-        
-        const socket = options.timeoutMs === undefined
-            ? this.socket!
-            : this.socket!.timeout(options.timeoutMs);
-        const result = await socket.emitWithAck('rpc-call', {
+
+        if (!socket) throw new Error('Socket not connected');
+        const encryptedParams = await sessionEncryption.encryptRaw(params);
+        this.assertLifecyclePermit(permit, socket, encryption);
+        const emitter = options.timeoutMs === undefined
+            ? socket
+            : socket.timeout(options.timeoutMs);
+        const result = await emitter.emitWithAck('rpc-call', {
             method: `${sessionId}:${method}`,
-            params: await sessionEncryption.encryptRaw(params)
+            params: encryptedParams,
         });
-        
+
+        this.assertLifecyclePermit(permit, socket, encryption);
         if (result.ok) {
             return await sessionEncryption.decryptRaw(result.result) as R;
         }
@@ -185,19 +219,26 @@ class ApiSocket {
         params: A,
         options: { timeoutMs?: number } = {},
     ): Promise<R> {
-        const machineEncryption = this.encryption!.getMachineEncryption(machineId);
+        const permit = this.captureLifecyclePermit();
+        const encryption = this.encryption;
+        const socket = this.socket;
+        const machineEncryption = encryption?.getMachineEncryption(machineId);
         if (!machineEncryption) {
             throw new Error(`Machine encryption not found for ${machineId}`);
         }
 
-        const socket = options.timeoutMs === undefined
-            ? this.socket!
-            : this.socket!.timeout(options.timeoutMs);
-        const result = await socket.emitWithAck('rpc-call', {
+        if (!socket) throw new Error('Socket not connected');
+        const encryptedParams = await machineEncryption.encryptRaw(params);
+        this.assertLifecyclePermit(permit, socket, encryption);
+        const emitter = options.timeoutMs === undefined
+            ? socket
+            : socket.timeout(options.timeoutMs);
+        const result = await emitter.emitWithAck('rpc-call', {
             method: `${machineId}:${method}`,
-            params: await machineEncryption.encryptRaw(params)
+            params: encryptedParams,
         });
 
+        this.assertLifecyclePermit(permit, socket, encryption);
         if (result.ok) {
             return await machineEncryption.decryptRaw(result.result) as R;
         }
@@ -208,20 +249,34 @@ class ApiSocket {
      * Sends app focus state to server for push notification routing.
      * Server uses this to suppress pushes when the mobile app is in foreground.
      */
-    sendAppState(state: string) {
-        this.socket?.emit('app-state', { state });
+    sendAppState(state: string, permit: ApiSocketLifecyclePermit): void {
+        const socket = this.socket;
+        if (!socket) throw new AccountOutboundCancelledError();
+        this.assertLifecyclePermit(permit, socket, this.encryption);
+        socket.emit('app-state', { state });
     }
 
-    send(event: string, data: any) {
-        this.socket!.emit(event, data);
-        return true;
+    captureLifecyclePermit(): ApiSocketLifecyclePermit {
+        const accountPermit = this.accountPermit;
+        if (!accountPermit) throw new AccountOutboundCancelledError();
+        assertAccountOutboundPermit(accountPermit);
+        return {
+            generation: this.lifecycleGeneration,
+            accountPermit,
+        };
     }
 
-    async emitWithAck<T = any>(event: string, data: any): Promise<T> {
-        if (!this.socket) {
-            throw new Error('Socket not connected');
-        }
-        return await this.socket.emitWithAck(event, data);
+    async emitWithAck<T = any>(
+        event: string,
+        data: any,
+        permit: ApiSocketLifecyclePermit = this.captureLifecyclePermit(),
+    ): Promise<T> {
+        const socket = this.socket;
+        if (!socket) throw new Error('Socket not connected');
+        this.assertLifecyclePermit(permit, socket, this.encryption);
+        const result = await socket.emitWithAck(event, data);
+        this.assertLifecyclePermit(permit, socket, this.encryption);
+        return result;
     }
 
     //
@@ -229,16 +284,20 @@ class ApiSocket {
     //
 
     async request(path: string, options?: RequestInit): Promise<Response> {
-        if (!this.config) {
-            throw new Error('SyncSocket not initialized');
-        }
+        const permit = this.captureLifecyclePermit();
+        const config = this.config;
+        if (!config) throw new Error('SyncSocket not initialized');
 
         const credentials = await TokenStorage.getCredentials();
         if (!credentials) {
             throw new Error('No authentication credentials');
         }
+        this.assertLifecyclePermit(permit, this.socket, this.encryption, false);
+        if (credentials.token !== config.token || this.config !== config) {
+            throw new AccountOutboundCancelledError();
+        }
 
-        const url = `${this.config.endpoint}${path}`;
+        const url = `${config.endpoint}${path}`;
         const headers = createAuthenticatedRequestHeaders(
             credentials.token,
             getHappyClientId(),
@@ -249,21 +308,6 @@ class ApiSocket {
             ...options,
             headers
         });
-    }
-
-    //
-    // Token Management
-    //
-
-    updateToken(newToken: string) {
-        if (this.config && this.config.token !== newToken) {
-            this.config.token = newToken;
-
-            if (this.socket) {
-                this.disconnect();
-                this.connect();
-            }
-        }
     }
 
     //
@@ -278,6 +322,22 @@ class ApiSocket {
         }
     }
 
+    private assertLifecyclePermit(
+        permit: ApiSocketLifecyclePermit,
+        socket: Socket | null,
+        encryption: Encryption | null,
+        requireSocket = true,
+    ): void {
+        assertAccountOutboundPermit(permit.accountPermit);
+        if (
+            permit.generation !== this.lifecycleGeneration
+            || (requireSocket && (!socket || this.socket !== socket))
+            || this.encryption !== encryption
+        ) {
+            throw new AccountOutboundCancelledError();
+        }
+    }
+
     private updateStatus(status: 'disconnected' | 'connecting' | 'connected' | 'error') {
         if (this.currentStatus !== status) {
             this.currentStatus = status;
@@ -286,21 +346,26 @@ class ApiSocket {
     }
 
     private setupEventHandlers() {
-        if (!this.socket) return;
+        const socket = this.socket;
+        if (!socket) return;
+        const generation = this.lifecycleGeneration;
+        const isCurrent = () => this.socket === socket && this.lifecycleGeneration === generation;
 
         // Connection events
-        this.socket.on('connect', () => {
+        socket.on('connect', () => {
+            if (!isCurrent()) return;
             if (this.isVerboseLogging()) {
-                console.log('🔌 SyncSocket: Connected, recovered: ' + this.socket?.recovered);
-                console.log('🔌 SyncSocket: Socket ID:', this.socket?.id);
+                console.log('🔌 SyncSocket: Connected, recovered: ' + socket.recovered);
+                console.log('🔌 SyncSocket: Socket ID:', socket.id);
             }
             this.updateStatus('connected');
-            if (!this.socket?.recovered) {
+            if (!socket.recovered) {
                 this.reconnectedListeners.forEach(listener => listener());
             }
         });
 
-        this.socket.on('disconnect', (reason) => {
+        socket.on('disconnect', (reason) => {
+            if (!isCurrent()) return;
             if (this.isVerboseLogging()) {
                 console.log('🔌 SyncSocket: Disconnected', reason);
             }
@@ -308,14 +373,16 @@ class ApiSocket {
         });
 
         // Error events
-        this.socket.on('connect_error', () => {
+        socket.on('connect_error', () => {
+            if (!isCurrent()) return;
             if (this.isVerboseLogging()) {
                 console.error('SyncSocket: Connection error');
             }
             this.updateStatus('error');
         });
 
-        this.socket.on('error', () => {
+        socket.on('error', () => {
+            if (!isCurrent()) return;
             if (this.isVerboseLogging()) {
                 console.error('SyncSocket: Error');
             }
@@ -323,7 +390,8 @@ class ApiSocket {
         });
 
         // Message handling
-        this.socket.onAny((event, data) => {
+        socket.onAny((event, data) => {
+            if (!isCurrent()) return;
             if (this.isVerboseLogging()) {
                 console.log(`SyncSocket: Received event '${event}'`);
             }
@@ -340,3 +408,8 @@ class ApiSocket {
 //
 
 export const apiSocket = new ApiSocket();
+
+export type ApiSocketLifecyclePermit = {
+    readonly generation: number;
+    readonly accountPermit: AccountOutboundPermit;
+};

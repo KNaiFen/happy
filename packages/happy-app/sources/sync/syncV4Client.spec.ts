@@ -1289,6 +1289,53 @@ describe('AppSyncV4Client', () => {
         expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:session:'))).toEqual([]);
     });
 
+    it('does not send a second outbound batch when the account fence closes during the first POST', async () => {
+        const storage = new MemoryStorage();
+        const transport = new FakeTransport();
+        let outboundAllowed = true;
+        const sender = await client(
+            storage,
+            transport,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fakeCrypto,
+            undefined,
+            undefined,
+            undefined,
+            () => outboundAllowed,
+        );
+        for (let index = 0; index < 101; index += 1) {
+            await sender.publishEntity(command(`queued-command-${index}`));
+        }
+        const postStarted = new Deferred<void>();
+        const postResponse = new Deferred<SyncMutationBatchResponseV4>();
+        transport.postMutations = async (_sessionId, mutations) => {
+            transport.posted.push(mutations);
+            postStarted.resolve();
+            return await postResponse.promise;
+        };
+
+        const flush = sender.flushOutboundOnce();
+        await postStarted.promise;
+        outboundAllowed = false;
+        postResponse.resolve({
+            acknowledgements: transport.posted[0].map((mutation, index) => ({
+                mutationId: mutation.mutationId,
+                seq: index + 1,
+                revision: mutation.revision,
+                status: 'accepted' as const,
+            })),
+        });
+        await flush;
+
+        expect(transport.posted).toHaveLength(1);
+        expect(transport.posted[0]).toHaveLength(100);
+        expect(persistence(storage).loadSession('session-1').outbox).toHaveLength(1);
+    });
+
     it('does not stage changes or advance the cursor after stop and session cleanup', async () => {
         const storage = new MemoryStorage();
         const transport = new FakeTransport();
