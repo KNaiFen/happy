@@ -1,0 +1,13 @@
+[advisories]
+ignore = []
+# Unscored RustSec vulnerability advisories match the threshold and fail closed.
+severity_threshold = "high"
+
+[database]
+fetch = true
+stale = false
+
+[output]
+deny = []
+quiet = false
+show_tree = true

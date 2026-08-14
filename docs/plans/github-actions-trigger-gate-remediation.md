@@ -2,9 +2,20 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1、阶段 2 的变更分类、Official Codex 跨 run 制品复用与 Android Field APK App 指纹复用，阶段 3 的稳定 PR gate/ruleset、release same-SHA gate、统一 promotion 与四产品不发布 rehearsal，以及阶段 4 的 Field recovery 和同输入并发/成功收据去重均已完成并有云端证据。PR #40 的供应链与 Action 运行时升级、PR #41 的 Official Codex schema 5 canonical recipe fingerprint、可信 main producer 选择、main 重新 attestation 和 target-cache 编译 provenance 继承，以及 PR #42 的 Field admission、同 SHA 非取消并发锁和同 recipe receipt 去重均已合并到 main。PR #44 已将 Field 凭据运行时注入、App 指纹、独立 APK producer job 与失败安全复用合并到 main；PR #45 修复了 React Native `whatwg-fetch` 对 `cache: no-store` 的 URL 改写；PR #46 修复 Field-only secret 的 canonical Base64URL 校验。PR #46 merge SHA 的自动 cache miss 和显式同 SHA cache hit 均已完整通过，因此阶段 2 的 APK 子项完成。2026-08-12 维护者已确定保留 `allowed_actions=all`、启用 Dependabot 与 CodeQL、仅拦截生产 High/Critical 依赖风险，并确认没有自动生产部署；相应源码和 GitHub 设置仍须按本计划完成云端验收。长期性能采样、Android 独立 attestation、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
+- 当前状态：进行中（阶段 1 至阶段 4 的触发去重、稳定门禁、同 SHA 发行、候选提升、Official Codex/Field
+  复用和恢复均已有云端证据。PR #57 merge SHA `ec111f88` 上的 npm 生产依赖门禁、advanced CodeQL、
+  `Required CodeQL gate`、vulnerability alerts 与 Dependabot security updates 已生效。2026-08-14 的独立
+  生产依赖审计先发现 Tauri runtime High `GHSA-82j2-j2ch-gfr8`，将 `rustls-webpki 0.103.4` 更新到
+  `0.103.14`，并为云端 Tauri job 增加固定版本、阻断 High/Critical 与无 CVSS vulnerability 的 Cargo
+  audit。门禁随后发现既有锁图中的 `RUSTSEC-2026-0007`（`bytes 1.10.1`）、
+  `RUSTSEC-2026-0194`/`RUSTSEC-2026-0195`（`quick-xml 0.38.2`）及
+  `RUSTSEC-2026-0001`/`RUSTSEC-2026-0235`（`rkyv 0.7.45`）。修复将 Tauri 升至 `2.10.3`、
+  `tauri-plugin-log` 升至 `2.9.0`、Rust MSRV 升至 `1.88`，使锁图使用 `bytes 1.11.1` 和
+  `quick-xml 0.41.0` 并移除 `rkyv` 链。Tauri CI 已固定 Rust `1.88.0`，尚待新 head 的云端执行
+  验证该 MSRV。该修复仍待独立 PR、main CI 和 App `1.11.49` 发行证据。长期性能采样、Android 独立
+  attestation、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@3ef5ef1ee7ad1cd0a1c235d9217d151ea1e42959`（PR #49 squash merge）。
+- 当前基线：`origin/main@ec111f88f25137daa94345500a500a3738c0977c`（PR #57 squash merge）。
 - Field canonical secret 修复：PR [#46](https://github.com/KNaiFen/happy/pull/46)，PR head
   `4b7c5de0a10bc513191133db197e21d4c4c16d1d`，已于 `2026-08-11T08:16:52Z` squash merge 为
   `b81e57609cfa5ace8a6fe3d98824dd5bbe72b264`；它不改变包版本或生产可分发行为。
@@ -154,7 +165,9 @@
   cache miss Field [31473619456](https://github.com/KNaiFen/happy/actions/runs/31473619456) 与显式同 SHA cache hit
   [31476678804](https://github.com/KNaiFen/happy/actions/runs/31476678804) 已完成，精确 APK 复用证据见阶段 2。
 - 负责范围：`.github/workflows/`、依赖审计脚本、根/工作区依赖清单与锁文件、知识库活动计划及 GitHub 仓库治理设置。
-- 版本边界：Actions、文档和索引本身不改变可分发行为；本次生产依赖修复会提升受影响包的 patch 版本（CLI `1.4.50`、App `1.11.46`、Server `1.1.43`、happy-agent `0.1.10`），并只由既有云端发行工作流构建相应制品。
+- 版本边界：Actions、文档和索引本身不改变可分发行为。PR #57 已使用 CLI `1.4.51`、App `1.11.48`、
+  Server `1.1.44` 和 happy-agent `0.1.10`；已进入发行工作流的版本不复用。本次 Tauri runtime High 修复
+  将 App 提升到 `1.11.49`，仍只由既有云端发行工作流构建制品。
 - 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
 
 ## 背景与事实证据
@@ -552,7 +565,14 @@ PR #37 的 merge-SHA CI 暴露了另一类长时失败：job
 - [x] 新增仅维护 GitHub Actions 的 Dependabot 周更配置，minor/patch 合并为一组且最多同时打开 5 个 PR；它不等同于仓库级 Dependabot security updates。
 - [x] 在 PR #42 与其 merge-SHA main 上验证 Node.js 24 Action 升级仍保留上传、下载、摘要、缓存和失败诊断语义；main CI、Field 与 release router 的相关日志未出现 Node.js 20 Action runtime 警告，Field receipt 上传/下载与 Official Codex artifact 重用均成功。
 - [x] 维护者已决定保留 `allowed_actions=all` 与完整 Action SHA 强制；不引入 allowlist。现有 secret scanning、push protection、Relay Trivy/SBOM 保持不变。
-- [ ] 实现并验收 npm Dependabot、GitHub vulnerability alerts/automated security fixes、advanced CodeQL 与生产 High/Critical 依赖门禁。Dependency Review 不作为 required gate，因为其范围会扩大到开发依赖，超出本计划的已批准策略。实现细节见 [ADR-006](../decisions/ADR-006-actions-security-and-production-dependency-gates.md)。
+- [x] 实现并验收 npm Dependabot、GitHub vulnerability alerts/automated security fixes、advanced CodeQL 与
+  npm 生产 High/Critical 依赖门禁；`Required CodeQL gate` 已进入 active ruleset。Dependency Review 不作为
+  required gate，因为其范围会扩大到开发依赖，超出本计划的已批准策略。实现细节见
+  [ADR-006](../decisions/ADR-006-actions-security-and-production-dependency-gates.md)。
+- [ ] 修复 Tauri runtime High `GHSA-82j2-j2ch-gfr8` 以及新门禁发现的 `bytes`、`quick-xml`、`rkyv`
+  漏洞，并在云端 Tauri job 以固定 `cargo-audit 0.22.2` 和 `severity_threshold = "high"` 覆盖 Cargo
+  生产依赖；有 CVSS 的 Medium/Low 与纯信息性 `unmaintained`、`unsound`、`notice`、`yanked` 不得提升为
+  本次已批准门禁，无 CVSS vulnerability 因无法证明低于 High 而 fail closed，且不得为 High 添加例外。
 - [ ] 在真实 ARM64 目标设备上安装生产签名 APK，验证升级安装、真实网络切换、relay reconnect 与关键 Codex 生命周期；保留精确 workflow、artifact 和设备证据。
 - [x] 当前无自动生产部署；GitHub Environment、部署审批、发布后健康检查与回滚门禁不适用。若未来引入部署目标，必须先按 ADR-006 新增明确决策与演练。
 
@@ -566,19 +586,26 @@ checkout `v7.0.1`、setup-node `v7.0.0`、pnpm/action-setup `v6.0.10` 和 setup-
 本仓库只使用 GitHub-hosted runner，没有 self-hosted 兼容性阻塞。
 
 2026-08-12 的仓库设置与维护者决策为：Actions 已启用、`allowed_actions=all`，且
-`sha_pinning_required=true`；维持该策略，不新增 allowlist。维护者已授权启用 Dependabot
-security updates 与 CodeQL；它们仍需在相应源码合并后由 GitHub API/workflow 取得生效证据。
+`sha_pinning_required=true`；维持该策略，不新增 allowlist。2026-08-14 的 GitHub API 复核确认
+Dependabot security updates 已启用，ruleset `20624143` 已要求 `Required CodeQL gate`，PR #57 的
+CodeQL 与 main CodeQL 均成功。
 Dependency Review 对精确 base/head 的 `403 Forbidden` 不阻塞本计划，因为该检查不在已批准的
 生产 High/Critical 审计范围内。当前 GitHub Environment 数量为零且无自动生产部署，故不建立
 虚假的审批/回滚流程。Secret scanning 与 push protection 已启用，ruleset `20624143` 保持 active
 且没有 bypass actor。上述仓库设置不由源码 PR 隐式修改，必须记录设置 URL、操作者和时间证据。
+
+同日从 `origin/main@ec111f88` 执行的 npm production audit 通过，只接受两个无修复版本、路径和到期日均
+精确受限的 `image-size` 临时例外。GitHub alerts 另显示 Tauri `Cargo.lock` 有一个 runtime High：
+`rustls-webpki 0.103.4` 的 `GHSA-82j2-j2ch-gfr8`，修复版为 `0.103.13`，现有 Dependabot PR #55 已选择
+`0.103.14`。五个自动更新失败均已定位为当前约束无法解析修复版：`tauri`、`time`、`glib`、
+`serde_with` 为 Medium，`rand` 为 Low；它们保持可见但不冒充本次 High/Critical 阻断项。
 
 ## 当前阻塞项
 
 | 编号 | 当前证据与影响 | 下一步 | 完成标准 |
 | --- | --- | --- | --- |
 | B2：仓库级 Action allowlist（已解决） | API 为 `allowed_actions=all`、`sha_pinning_required=true`；维护者已决定保留该策略。 | 无后续实现；继续由完整 SHA 固定、最小权限和 CI 测试补偿。 | ADR-006 与仓库 API 一致；不把“未使用 allowlist”误写成供应链控制缺失。 |
-| B3：依赖与 SAST 门禁 | 已批准 npm Dependabot、GitHub security updates、advanced CodeQL 和仅生产 High/Critical audit。源码实现待 PR/main CodeQL 运行；Dependency Review API 的 403 不影响该已批准范围。 | 合并源码后启用 alerts/security fixes；确认 main CodeQL 成功，再将稳定 gate 加入 ruleset。 | API 显示 alerts 与 automated fixes 已启用；CodeQL 在源码与 docs-only PR 均产生成功稳定 gate；生产 High/Critical 新发现 fail-closed，两个精确 Metro 无修复例外在到期前可见且受限。 |
+| B3：依赖与 SAST 门禁 | npm 生产审计、alerts/security fixes、advanced CodeQL 和 ruleset gate 已生效；独立审计先修复 `rustls-webpki` High，新增 Cargo 门禁又在旧锁图中发现 5 项 `bytes`、`quick-xml`、`rkyv` 生产漏洞。 | 以独立 PR 更新 `rustls-webpki`、Tauri 依赖图和 MSRV，保留固定 cargo-audit High/Critical 与无 CVSS vulnerability fail-closed 门禁，并取得新 head 的 PR/main Tauri 与 App `1.11.49` 发行证据。 | npm 与 Cargo 的生产 High/Critical、无 CVSS vulnerability 新发现均 fail-closed；有 CVSS 的 Medium/Low 和纯信息性类别不升级；两个精确 Metro 无修复例外在到期前可见且受限。 |
 | B4：Environment/部署边界（已解决） | 当前无 Environment、Deployment 或 Pages 自动生产部署；维护者确认保持 build-only。 | 不配置虚假的 deployment approval；未来先新增 ADR，再实施环境、审批、健康检查和回滚。 | ADR-006 明确 build-only 边界，计划不再将 Environment 当作当前门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
 | B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |
@@ -644,9 +671,9 @@ git diff --cached --check
 
 ## 下一步
 
-1. 完成本次供应链 PR 的云端验证；随后启用 vulnerability alerts 与 automated security fixes，确认
-   main CodeQL 成功后才向既有 ruleset 增加 `Required CodeQL gate`。保留 `allowed_actions=all`，不把
-   Dependency Review 或 Environment 引入已批准范围。
+1. 完成 Tauri runtime High 及新增 `bytes`、`quick-xml`、`rkyv` 漏洞独立修复的新 head PR/main Tauri、
+   CodeQL 和 App `1.11.49` 云端发行验证；确认 `GHSA-82j2-j2ch-gfr8` 关闭后再将该子项标记完成。保留
+   `allowed_actions=all`，不把 Dependency Review 或 Environment 引入已批准范围。
 2. 为 Android 正式交付增加独立 checksum/attestation，并安排 B5 的实体 ARM64 设备验收；本次
    x86_64 Field 和 rehearsal 不能替代物理设备、生产网络或外部账号证据。
 3. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
