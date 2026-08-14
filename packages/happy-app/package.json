@@ -1,7 +1,7 @@
 {
   "name": "happy-app",
   "main": "index.ts",
-  "version": "1.11.49",
+  "version": "1.11.50",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
@@ -194,12 +194,12 @@
     "rn-encryption": "^2.5.0",
     "socket.io-client": "^4.8.3",
     "thumbhash": "^0.1.1",
-    "uuid": "^11.1.0",
+    "uuid": "^11.1.1",
     "zod": "^4.0.0",
     "zustand": "^5.0.6"
   },
   "devDependencies": {
-    "@babel/core": "^7.25.2",
+    "@babel/core": "^7.29.6",
     "@expo/config-plugins": "~55.0.0",
     "@expo/ngrok": "^4.1.0",
     "@material/material-color-utilities": "^0.3.0",
