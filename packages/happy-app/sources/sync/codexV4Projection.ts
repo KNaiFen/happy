@@ -1057,8 +1057,21 @@ function projectCommand(
         || command.command === 'turn.queue'
         || command.command === 'request.resolve'
     ) return null;
-    const displayText = jsonObject(command.payload).displayText;
+    const payload = jsonObject(command.payload);
+    const displayText = payload.displayText;
     if (typeof displayText !== 'string' || displayText.length === 0) return null;
+    if (
+        command.command === 'thread.rollback'
+        && payload.allTurns === true
+        && result?.status === 'succeeded'
+    ) {
+        return {
+            kind: 'timeline-event',
+            id: commandMessageId(command.providerId),
+            createdAt: result.updatedAt,
+            event: 'session-cleared',
+        };
+    }
     const threadId = result?.threadId ?? command.threadId;
     const turnId = result?.turnId ?? command.expectedTurnId;
     const initialTurnOrder = command.command === 'turn.start' && threadId && turnId

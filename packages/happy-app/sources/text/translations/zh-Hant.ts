@@ -175,15 +175,8 @@ export const zhHant: TranslationStructure = {
         },
         chat: '聊天',
         chatDescription: '自訂聊天訊息外觀',
-        sessionStatusBar: '工作階段狀態資訊',
-        sessionStatusBarDescription: '選擇分支、模型、工作量和上下文的顯示位置',
-        sessionStatusDisplayOptions: {
-            hidden: '隱藏',
-            above: '輸入框上方',
-            below: '輸入框下方',
-        },
-        usageLimitShowRemaining: '顯示剩餘額度',
-        usageLimitShowRemainingDescription: '額度指示器顯示剩餘量，而非已用量',
+        showVoiceInput: '顯示語音輸入按鈕',
+        showVoiceInputDescription: '在訊息輸入框中顯示麥克風按鈕',
         userMessageBubbleColor: '使用者氣泡顏色',
         userMessageBubbleColorDescription: '讓您的訊息在長聊天中更容易找到',
         userMessageBubbleColorOptions: {
@@ -484,14 +477,6 @@ export const zhHant: TranslationStructure = {
             stopGoal: '停止目標',
             editGoal: '編輯目標',
         },
-        sessionStatusBar: {
-            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `上下文 ${used}/${total} 個權杖，${percent}%`,
-            limitFiveHour: '5 小時額度',
-            limitSevenDay: '7 天額度',
-            limitResets: ({ time }: { time: string }) => `${time} 重置`,
-            limitAsOf: ({ age }: { age: string }) => `數據為 ${age} 前`,
-            limitRemaining: ({ percent }: { percent: number }) => `剩餘 ${percent}%`,
-        },
     },
 
     agentInput: {
@@ -542,6 +527,9 @@ export const zhHant: TranslationStructure = {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `剩餘 ${percent}%`,
+            detailsTitle: '上下文用量',
+            usage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `上下文已使用 ${used}/${total} 個權杖（${percent}%）`,
+            remainingTokens: ({ remaining }: { remaining: string }) => `剩餘 ${remaining} 個權杖`,
         },
         suggestion: {
             fileLabel: '檔案',
@@ -978,6 +966,7 @@ export const zhHant: TranslationStructure = {
         sentAsGoal: 'Sent as goal',
         unknownTime: '未知時間',
         contextCompaction: '上下文壓縮',
+        sessionCleared: '新工作階段視窗',
         reviewStarted: '開始審查',
         reviewFinished: '結束審查',
     },

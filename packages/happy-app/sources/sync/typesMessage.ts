@@ -72,7 +72,7 @@ export type TimelineEventMessage = {
     kind: 'timeline-event';
     id: string;
     createdAt: number;
-    event: 'context-compaction' | 'review-started' | 'review-finished';
+    event: 'context-compaction' | 'session-cleared' | 'review-started' | 'review-finished';
 } & CodexMessageOrder;
 
 export type AgentTextMessage = {

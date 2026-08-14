@@ -1487,6 +1487,57 @@ describe('Codex v4 projection', () => {
         });
     });
 
+    it('replaces a successful clear command with a new-session timeline divider', () => {
+        const clearCommand: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-clear',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'command-clear',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'thread.rollback',
+            payload: { displayText: '/clear', allTurns: true },
+            clientUserMessageId: 'command-clear',
+            replacesCommandId: null,
+        };
+        const result: CodexCommandResultEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'result-clear',
+            createdAt: 11,
+            updatedAt: 12,
+            commandId: 'command-clear',
+            threadId: 'thread-1',
+            turnId: null,
+            status: 'executing',
+            providerRequestId: null,
+            result: null,
+            error: null,
+        };
+
+        let projection = apply(createCodexV4Projection(), clearCommand);
+        projection = apply(projection, result);
+        expect(projection.messages).toMatchObject([{
+            id: 'codex-v4:command:command-clear',
+            kind: 'user-text',
+            text: '/clear',
+        }]);
+
+        projection = apply(projection, {
+            ...result,
+            status: 'succeeded',
+            result: { rolledBackTurns: 3 },
+        }, 2);
+        expect(projection.messages).toEqual([{
+            id: 'codex-v4:command:command-clear',
+            kind: 'timeline-event',
+            createdAt: 12,
+            event: 'session-cleared',
+        }]);
+    });
+
     it('keeps query command results as one compact row', () => {
         const command: CodexCommandEntityV4 = {
             schemaVersion: 1,

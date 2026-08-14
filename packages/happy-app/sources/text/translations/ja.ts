@@ -176,15 +176,8 @@ export const ja: TranslationStructure = {
         },
         chat: 'チャット',
         chatDescription: 'チャットメッセージの見た目をカスタマイズ',
-        sessionStatusBar: 'セッションステータス情報',
-        sessionStatusBarDescription: 'ブランチ、モデル、エフォート、コンテキストの表示場所を選択',
-        sessionStatusDisplayOptions: {
-            hidden: '非表示',
-            above: '入力欄の上',
-            below: '入力欄の下',
-        },
-        usageLimitShowRemaining: '残量を表示',
-        usageLimitShowRemainingDescription: '上限を使用量ではなく残量で表示します',
+        showVoiceInput: '音声入力ボタン',
+        showVoiceInputDescription: 'メッセージ入力欄にマイクボタンを表示',
         userMessageBubbleColor: 'ユーザーバブルの色',
         userMessageBubbleColorDescription: '長いチャットで自分のメッセージを見つけやすくします',
         userMessageBubbleColorOptions: {
@@ -485,14 +478,6 @@ export const ja: TranslationStructure = {
             stopGoal: '目標を停止',
             editGoal: '目標を編集',
         },
-        sessionStatusBar: {
-            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `コンテキスト ${total}トークン中${used}、${percent}%`,
-            limitFiveHour: '5時間の上限',
-            limitSevenDay: '7日間の上限',
-            limitResets: ({ time }: { time: string }) => `${time} リセット`,
-            limitAsOf: ({ age }: { age: string }) => `${age}前のデータ`,
-            limitRemaining: ({ percent }: { percent: number }) => `残り ${percent}%`,
-        },
     },
 
     agentInput: {
@@ -543,6 +528,9 @@ export const ja: TranslationStructure = {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `残り ${percent}%`,
+            detailsTitle: 'コンテキスト使用量',
+            usage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `コンテキスト ${used}/${total} トークン、${percent}%`,
+            remainingTokens: ({ remaining }: { remaining: string }) => `残り ${remaining} トークン`,
         },
         suggestion: {
             fileLabel: 'ファイル',
@@ -979,6 +967,7 @@ export const ja: TranslationStructure = {
         sentAsGoal: 'Sent as goal',
         unknownTime: '不明な時間',
         contextCompaction: 'コンテキストを圧縮',
+        sessionCleared: '新しいセッションウィンドウ',
         reviewStarted: 'レビュー開始',
         reviewFinished: 'レビュー終了',
     },

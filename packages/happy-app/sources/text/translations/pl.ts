@@ -192,15 +192,8 @@ export const pl: TranslationStructure = {
         },
         chat: 'Czat',
         chatDescription: 'Dostosuj wygląd wiadomości czatu',
-        sessionStatusBar: 'Informacje o stanie sesji',
-        sessionStatusBarDescription: 'Wybierz, gdzie wyświetlać gałąź, model, wysiłek i kontekst',
-        sessionStatusDisplayOptions: {
-            hidden: 'Ukryte',
-            above: 'Nad polem wprowadzania',
-            below: 'Pod polem wprowadzania',
-        },
-        usageLimitShowRemaining: 'Pokaż pozostały limit',
-        usageLimitShowRemainingDescription: 'Wskaźniki limitu odliczają w dół zamiast w górę',
+        showVoiceInput: 'Przycisk wprowadzania głosowego',
+        showVoiceInputDescription: 'Pokaż przycisk mikrofonu w polu wiadomości',
         userMessageBubbleColor: 'Kolor Twoich wiadomości',
         userMessageBubbleColorDescription: 'Ułatw znajdowanie swoich wiadomości w długich czatach',
         userMessageBubbleColorOptions: {
@@ -500,14 +493,6 @@ export const pl: TranslationStructure = {
             stopGoal: 'Zatrzymaj cel',
             editGoal: 'Edytuj cel',
         },
-        sessionStatusBar: {
-            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Kontekst ${used} z ${total} tokenów, ${percent}%`,
-            limitFiveHour: 'Limit 5-godzinny',
-            limitSevenDay: 'Limit 7-dniowy',
-            limitResets: ({ time }: { time: string }) => `reset ${time}`,
-            limitAsOf: ({ age }: { age: string }) => `sprzed ${age}`,
-            limitRemaining: ({ percent }: { percent: number }) => `pozostało ${percent}%`,
-        },
     },
 
     agentInput: {
@@ -558,6 +543,9 @@ export const pl: TranslationStructure = {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `Pozostało ${percent}%`,
+            detailsTitle: 'Wykorzystanie kontekstu',
+            usage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Kontekst: ${used} z ${total} tokenów, ${percent}%`,
+            remainingTokens: ({ remaining }: { remaining: string }) => `Pozostało tokenów: ${remaining}`,
         },
         suggestion: {
             fileLabel: 'PLIK',
@@ -994,6 +982,7 @@ export const pl: TranslationStructure = {
         sentAsGoal: 'Sent as goal',
         unknownTime: 'nieznany czas',
         contextCompaction: 'Kontekst skompresowany',
+        sessionCleared: 'Nowe okno sesji',
         reviewStarted: 'Przegląd rozpoczęty',
         reviewFinished: 'Przegląd zakończony',
     },

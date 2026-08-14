@@ -92,20 +92,25 @@ function RenderBlock(props: {
 }
 
 function TimelineEventBlock(props: { message: TimelineEventMessage }) {
+  const { theme } = useUnistyles();
+  const isSessionCleared = props.message.event === 'session-cleared';
   const label = props.message.event === 'context-compaction'
     ? t('message.contextCompaction')
-    : props.message.event === 'review-started'
-      ? t('message.reviewStarted')
-      : t('message.reviewFinished');
+    : isSessionCleared
+      ? t('message.sessionCleared')
+      : props.message.event === 'review-started'
+        ? t('message.reviewStarted')
+        : t('message.reviewFinished');
+  const sessionClearedColor = isSessionCleared ? theme.colors.permission.acceptEdits : undefined;
   return (
     <View
       style={styles.timelineEventContainer}
       accessibilityLabel={label}
       testID={`codex-timeline-${props.message.event}`}
     >
-      <View style={styles.timelineEventLine} />
-      <Text style={styles.timelineEventText}>{label}</Text>
-      <View style={styles.timelineEventLine} />
+      <View style={[styles.timelineEventLine, sessionClearedColor ? { backgroundColor: sessionClearedColor, opacity: 0.28 } : undefined]} />
+      <Text style={[styles.timelineEventText, sessionClearedColor ? { color: sessionClearedColor, opacity: 0.76 } : undefined]}>{label}</Text>
+      <View style={[styles.timelineEventLine, sessionClearedColor ? { backgroundColor: sessionClearedColor, opacity: 0.28 } : undefined]} />
     </View>
   );
 }
