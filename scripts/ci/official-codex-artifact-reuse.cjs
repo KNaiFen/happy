@@ -285,6 +285,31 @@ function artifactNameForFingerprint(fingerprint) {
     return `${artifactNamePrefix}${assertSha256(fingerprint, 'Recipe fingerprint')}`;
 }
 
+function androidFieldScopeArtifactName(headSha) {
+    return `android-field-scope-${assertGitSha(headSha, 'Android Field scope SHA')}`;
+}
+
+function hasAndroidFieldScopeArtifact(artifacts, runIdValue, headShaValue) {
+    if (!Array.isArray(artifacts)) throw new Error('CI artifacts response is malformed');
+    const runId = assertPositiveInteger(runIdValue, 'Android Field scope workflow run id');
+    const headSha = assertGitSha(headShaValue, 'Android Field scope SHA');
+    const expectedName = androidFieldScopeArtifactName(headSha);
+    const matches = artifacts.filter((artifact) => artifact?.name === expectedName);
+    if (matches.length > 1) throw new Error('Expected at most one Android Field scope artifact');
+    if (matches.length === 0 || matches[0].expired !== false) return false;
+    const [artifact] = matches;
+    if (!isPlainObject(artifact.workflow_run)) {
+        throw new Error('Android Field scope artifact workflow provenance is missing');
+    }
+    if (assertPositiveInteger(artifact.workflow_run.id, 'Android Field scope workflow run id') !== runId) {
+        throw new Error('Android Field scope artifact workflow run does not match its producer');
+    }
+    if (artifact.workflow_run.head_sha !== headSha) {
+        throw new Error('Android Field scope artifact workflow SHA does not match its producer');
+    }
+    return true;
+}
+
 function parseArtifactName(value) {
     if (typeof value !== 'string') throw new Error('Official Codex artifact name is missing');
     const match = artifactNamePattern.exec(value);
@@ -378,6 +403,7 @@ function selectReusableArtifact({
     expectedArtifactName = '',
     expectedWorkflowId,
     repository,
+    requireAndroidFieldScope = false,
 }) {
     const { headSha, runId } = assertCiRunIdentity({
         run,
@@ -393,6 +419,12 @@ function selectReusableArtifact({
     }
 
     assertSuccessfulCiGate(jobs);
+    if (requireAndroidFieldScope && !hasAndroidFieldScopeArtifact(artifacts, runId, headSha)) {
+        return {
+            selected: false,
+            reason: 'android-field-not-selected',
+        };
+    }
     const artifact = selectUnexpiredArtifact(artifacts, expectedArtifactName, runId, headSha);
     if (!artifact) {
         return {
@@ -676,6 +708,7 @@ function resolveReusableArtifact(runIdValue, expectedHeadSha) {
         expectedHeadSha,
         expectedWorkflowId,
         repository,
+        requireAndroidFieldScope: true,
     });
     if (decision.selected) {
         writeOutputs({
@@ -905,6 +938,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+    androidFieldScopeArtifactName,
     artifactBinaryPaths,
     artifactCargoLockPaths,
     artifactNameForFingerprint,
@@ -917,6 +951,7 @@ module.exports = {
     canonicalJson,
     collectPaginatedCollection,
     downloadArtifactArchive,
+    hasAndroidFieldScopeArtifact,
     parseArtifactDigest,
     parseArtifactName,
     recipeFingerprint,

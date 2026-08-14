@@ -183,32 +183,24 @@ socketId Redis keys with a 60-second TTL refreshed by `machine-alive` /
         at ~200k entries. Crossing this off the list.
 ```
 
-The historical postmortem is at
-[`packages/happy-server/deploy/integration-tests/POSTMORTEM.md`](../packages/happy-server/deploy/integration-tests/POSTMORTEM.md).
-It records an earlier reproduction and is not the current operational guide.
+## Manual multi-replica RPC regression
 
-## How we tested it
+The minikube harness under
+`packages/happy-server/deploy/integration-tests/` is retained because it is the
+only cross-replica RPC registration, reconnect, and pod-loss exercise. It is a
+manual, opt-in diagnostic suite and is not part of routine or required CI.
 
-The current minikube harness is
-`packages/happy-server/deploy/integration-tests/`. Start from that directory:
+Run it only when changing the shared Socket.IO RPC or multi-replica routing
+path:
 
 ```bash
+cd packages/happy-server/deploy/integration-tests
 bash local.sh
-./run-all.sh
+./run-all.sh --safe-only
 ```
 
-`run-all.sh` uses a NodePort `minikube service` tunnel when available, so its
-normal route survives pod kills. Its default suite runs `stress-prod-realistic.mjs`,
-the eight current `stress-rpc-registration.mjs` scenarios (including the
-destructive `rolling-deploy` scenario), and `test-rpc-dead-daemon.mjs`. Use
-`./run-all.sh --safe-only` to skip `rolling-deploy` and the dead-daemon test, or
-`./run-all.sh --deploy` to provision before the suite. A plain
-`kubectl port-forward` is a fallback only and is not suitable for pod-kill cases.
-
-The current scenario names are `fire-and-forget`, `register-race-timing`,
-`reconnect-no-ack`, `rapid-sessions`, `rolling-deploy`, `ios-session-flow`,
-`high-concurrency`, and `cross-replica-3pod`. Historical command names and
-measurements in the postmortem must not be used as current acceptance evidence.
+The adjacent postmortem records the historical failure context. It is evidence,
+not current implementation authority.
 
 ## Tunable constants
 

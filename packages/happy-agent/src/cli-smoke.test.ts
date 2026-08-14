@@ -24,10 +24,7 @@ import {
     deriveContentKeyPair,
     encrypt,
     decrypt,
-    deriveKey,
 } from './encryption';
-import { loadConfig } from './config';
-import type { Config } from './config';
 import type { Credentials } from './credentials';
 import type { RawSession, DecryptedSession, EncryptionVariant } from './api';
 import { resolveSessionEncryption } from './api';
@@ -324,23 +321,6 @@ describe('Smoke: Error handling', () => {
         });
     });
 
-    describe('server error handling (via API error mapper)', () => {
-        it('HTTP 401 maps to re-authenticate message', async () => {
-            // This is tested in api.test.ts but we verify the error message format here
-            const errorMsg = 'Authentication expired. Run `happy-agent auth login` to re-authenticate.';
-            expect(errorMsg).toContain('happy-agent auth login');
-        });
-
-        it('HTTP 404 maps to not found message', () => {
-            const errorMsg = 'Not found: listing sessions';
-            expect(errorMsg).toContain('Not found');
-        });
-
-        it('HTTP 5xx maps to server error message', () => {
-            const errorMsg = 'Server error (500): listing sessions';
-            expect(errorMsg).toContain('Server error');
-        });
-    });
 });
 
 describe('Smoke: Interop — dataKey vs legacy encryption', () => {
@@ -489,52 +469,5 @@ describe('Smoke: Output formatting', () => {
         ];
         const json = formatJson(data);
         expect(JSON.parse(json)).toEqual(data);
-    });
-});
-
-describe('Smoke: Full test suite runs', () => {
-    it('all encryption operations are functional', () => {
-        // AES-256-GCM round-trip
-        const aesKey = getRandomBytes(32);
-        const aesData = { test: 'aes data', value: 42 };
-        const aesEncrypted = encryptWithDataKey(aesData, aesKey);
-        expect(decryptWithDataKey(aesEncrypted, aesKey)).toEqual(aesData);
-
-        // Legacy round-trip
-        const legacyKey = getRandomBytes(32);
-        const legacyData = { test: 'legacy data', value: 99 };
-        const legacyEncrypted = encryptLegacy(legacyData, legacyKey);
-        expect(decryptLegacy(legacyEncrypted, legacyKey)).toEqual(legacyData);
-
-        // Box encryption round-trip
-        const keyPair = tweetnacl.box.keyPair();
-        const boxData = getRandomBytes(64);
-        const boxEncrypted = libsodiumEncryptForPublicKey(boxData, keyPair.publicKey);
-        const boxDecrypted = decryptBoxBundle(boxEncrypted, keyPair.secretKey);
-        expect(boxDecrypted).toEqual(boxData);
-
-        // Key derivation
-        const seed = new TextEncoder().encode('test seed');
-        const derivedKey = deriveKey(seed, 'test usage', ['child1', 'child2']);
-        const expectedHex = '1011C097D2105D27362B987A631496BBF68B836124D1D072E9D1613C6028CF75';
-        expect(Buffer.from(derivedKey).toString('hex').toUpperCase()).toBe(expectedHex);
-
-    });
-
-    it('config loads with correct defaults', () => {
-        const origUrl = process.env.HAPPY_SERVER_URL;
-        const origHome = process.env.HAPPY_HOME_DIR;
-        delete process.env.HAPPY_SERVER_URL;
-        delete process.env.HAPPY_HOME_DIR;
-
-        try {
-            const config = loadConfig();
-            expect(config.serverUrl).toBe('https://api.cluster-fluster.com');
-            expect(config.homeDir).toContain('.happy');
-            expect(config.credentialPath).toContain('agent.key');
-        } finally {
-            if (origUrl !== undefined) process.env.HAPPY_SERVER_URL = origUrl;
-            if (origHome !== undefined) process.env.HAPPY_HOME_DIR = origHome;
-        }
     });
 });

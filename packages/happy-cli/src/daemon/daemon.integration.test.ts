@@ -8,9 +8,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { execSync, spawn } from 'child_process';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
-import path from 'path';
+import { spawn } from 'child_process';
+import { existsSync, readFileSync } from 'fs';
 import type { Metadata } from '@/api/types';
 import { getIntegrationEnv } from '@/testing/currentIntegrationEnv';
 import { configuration } from '@/configuration';
@@ -358,99 +357,4 @@ describe('Daemon Integration Tests', { timeout: 180_000 }, () => {
     await clearDaemonState();
   });
 
-  /**
-   * Version mismatch detection test - control flow:
-   * 
-   * 1. Test starts daemon with original version (e.g., 0.9.0-6) compiled into dist/
-   * 2. Test modifies package.json to new version (e.g., 0.0.0-integration-test-*)
-   * 3. Test runs `yarn build` to recompile with new version
-   * 4. Daemon's heartbeat (every 30s) reads package.json and compares to its compiled version
-   * 5. Daemon detects mismatch: package.json != configuration.currentCliVersion
-   * 6. Daemon spawns new daemon via spawnHappyCLI(['daemon', 'start'])
-   * 7. New daemon starts, reads daemon.state.json, sees old version != its compiled version
-   * 8. New daemon calls stopDaemon() to kill old daemon, then takes over
-   * 
-   * This simulates what happens during `npm upgrade happy`:
-   * - Running daemon has OLD version loaded in memory (configuration.currentCliVersion)
-   * - npm replaces node_modules/happy/ with NEW version files
-   * - package.json on disk now has NEW version
-   * - Daemon reads package.json, detects mismatch, triggers self-update
-   * - Key difference: npm atomically replaces the entire module directory, while
-   *   our test must carefully rebuild to avoid missing entrypoint errors
-   * 
-   * Critical timing constraints:
-   * - Heartbeat must be long enough (30s) for yarn build to complete before daemon tries to spawn
-   * - If heartbeat fires during rebuild, spawn fails (dist/index.mjs missing) and test fails
-   * - pkgroll doesn't reliably update compiled version, must use full yarn build
-   * - Test modifies package.json BEFORE rebuild to ensure new version is compiled in
-   * 
-   * Common failure modes:
-   * - Heartbeat too short: daemon tries to spawn while dist/ is being rebuilt
-   * - Using pkgroll alone: doesn't update compiled configuration.currentCliVersion
-   * - Modifying package.json after daemon starts: triggers immediate version check on startup
-   */
-  // Keep this skipped. It is destructive (modifies package.json, rebuilds dist, restarts daemon)
-  // and it exercises a hand-rolled self-restart path we probably do not want long-term anyway.
-  // A native system daemon model (like OpenClaw's) would make upgrades and startup/start-at-login
-  // the OS's job instead of something we hand-roll and test this way.
-  it.skip('[skipped] should detect version mismatch and kill old daemon', { timeout: 100_000 }, async () => {
-    // Read current package.json to get version
-    const packagePath = path.join(process.cwd(), 'package.json');
-    const packageJsonOriginalRawText = readFileSync(packagePath, 'utf8');
-    const originalPackage = JSON.parse(packageJsonOriginalRawText);
-    const originalVersion = originalPackage.version;
-    const testVersion = `0.0.0-integration-test-should-be-auto-cleaned-up-${Math.floor(Math.random() * 100000).toString().padStart(5, '0')}`;
-
-    expect(originalVersion, 'Your current cli version was not cleaned up from previous test it seems').not.toBe(testVersion);
-    
-    // Modify package.json version
-    const modifiedPackage = { ...originalPackage, version: testVersion };
-    writeFileSync(packagePath, JSON.stringify(modifiedPackage, null, 2));
-
-    try {
-      // Get initial daemon state
-      const initialState = await readDaemonState();
-      expect(initialState).toBeDefined();
-      expect(initialState!.startedWithCliVersion).toBe(originalVersion);
-      const initialPid = initialState!.pid;
-
-      // Re-build the CLI so dist/ has the test version baked in.
-      // The daemon's heartbeat will detect package.json != compiled version,
-      // then spawn a new daemon which will use the rebuilt dist.
-      console.log(`[TEST] Rebuilding CLI with test version ${testVersion}...`);
-      execSync('pnpm build', { stdio: 'pipe' });
-
-      // Verify the build actually has the test version
-      const distFiles = execSync('grep -rl "' + testVersion + '" dist/ || echo "NOT_FOUND"', { encoding: 'utf8' }).trim();
-      console.log(`[TEST] Test version in dist: ${distFiles}`);
-      
-      console.log(`[TEST] Current daemon running with version ${originalVersion}, PID: ${initialPid}`);
-      
-      console.log(`[TEST] Changed package.json version to ${testVersion}`);
-
-      // The daemon should automatically detect the version mismatch and restart itself
-      // We check once per minute, wait for a little longer than that
-      await new Promise(resolve => setTimeout(resolve, parseInt(process.env.HAPPY_DAEMON_HEARTBEAT_INTERVAL || '30000') + 10_000));
-
-      // Check that the daemon is running with the new version
-      const finalState = await readDaemonState();
-      expect(finalState).toBeDefined();
-      expect(finalState!.startedWithCliVersion).toBe(testVersion);
-      expect(finalState!.pid).not.toBe(initialPid);
-      console.log('[TEST] Daemon version mismatch detection successful');
-    } finally {
-      // CRITICAL: Restore original package.json version
-      writeFileSync(packagePath, packageJsonOriginalRawText);
-      console.log(`[TEST] Restored package.json version to ${originalVersion}`);
-
-      // Lets rebuild it so we keep it as we found it
-      execSync('pnpm build', { stdio: 'ignore' });
-    }
-  });
-
-  // TODO: Add a test to see if a corrupted file will work
-  
-  // TODO: Test npm uninstall scenario - daemon should gracefully handle when happy is uninstalled
-  // Current behavior: daemon tries to spawn new daemon on version mismatch but dist/index.mjs is gone
-  // Expected: daemon should detect missing entrypoint and either exit cleanly or at minimum not respawn infinitely
 });

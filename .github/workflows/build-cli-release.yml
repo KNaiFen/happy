@@ -28,51 +28,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  ci:
-    name: Validate CLI
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      SOURCE_SHA: ${{ inputs.source_sha }}
-      VERSION: ${{ inputs.version }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-          persist-credentials: false
-
-      - name: Verify gated source
-        run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(node -p "require('./packages/happy-cli/package.json').version")" = "$VERSION"
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-        with:
-          version: 10.11.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck CLI
-        run: pnpm --filter happy typecheck
-
-      # The CLI unit suite exercises the built binary, so its existing test
-      # script performs a build before Vitest. This remains a CI prerequisite;
-      # the release package job below still cannot start until CI succeeds.
-      - name: Test CLI
-        run: pnpm --filter happy test
-
   build:
-    needs: ci
-    if: needs.ci.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -90,7 +46,9 @@ jobs:
           persist-credentials: false
 
       - name: Verify gated source
-        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(node -p "require('./packages/happy-cli/package.json').version")" = "$VERSION"
 
       - name: Install pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10

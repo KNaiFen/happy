@@ -1,20 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { RelationshipStatus } from "@prisma/client";
 
-// Mock the dependencies that require environment variables
-vi.mock("@/storage/files", () => ({
-    getPublicUrl: vi.fn((path: string) => `https://example.com/${path}`)
-}));
-
-vi.mock("@/app/feed/feedPost", () => ({
-    feedPost: vi.fn()
-}));
-
-vi.mock("@/storage/inTx", () => ({
-    afterTx: vi.fn()
-}));
-
-// Import after mocking
 import { shouldSendNotification } from "./friendNotification";
 
 describe("friendNotification", () => {

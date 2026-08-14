@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const {
     evaluateAuditReport,
@@ -74,4 +76,23 @@ test('fails closed for malformed or registry-error reports', () => {
         () => evaluateAuditReport(reportWith([null])),
         /invalid advisory/,
     );
+});
+
+test('weekly workflow keeps the production audit narrow and reproducible', () => {
+    const workflow = readFileSync(
+        path.join(__dirname, '../../.github/workflows/production-dependency-audit.yml'),
+        'utf8',
+    );
+    assert.match(workflow, /schedule:\n\s+- cron: '[^']+'/);
+    assert.match(workflow, /workflow_dispatch:/);
+    assert.match(workflow, /permissions:\n\s+contents: read\n/);
+    assert.match(workflow, /timeout-minutes: 15/);
+    assert.match(workflow, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
+    assert.match(workflow, /pnpm\/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86/);
+    assert.match(workflow, /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/);
+    assert.match(workflow, /persist-credentials: false/);
+    assert.match(workflow, /version: 10\.11\.0/);
+    assert.match(workflow, /node-version: 24/);
+    assert.match(workflow, /run: node scripts\/ci\/audit-production-dependencies\.cjs/);
+    assert.doesNotMatch(workflow, /pnpm install|pnpm build|pnpm pack/);
 });

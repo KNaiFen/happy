@@ -12,6 +12,7 @@ const { join } = require('node:path');
 const test = require('node:test');
 
 const {
+    androidFieldScopeArtifactName,
     artifactBinaryPaths,
     artifactCargoLockPaths,
     artifactNameForFingerprint,
@@ -19,6 +20,7 @@ const {
     assertSourceManifest,
     attestArtifact,
     collectPaginatedCollection,
+    hasAndroidFieldScopeArtifact,
     parseArtifactDigest,
     parseArtifactName,
     recipeFingerprint,
@@ -144,6 +146,16 @@ function reusableArtifact(overrides = {}) {
         workflow_run: { id: 42, head_sha: happySha },
         ...overrides,
     }];
+}
+
+function androidFieldScopeArtifact(overrides = {}) {
+    return {
+        id: 74,
+        name: androidFieldScopeArtifactName(happySha),
+        expired: false,
+        workflow_run: { id: 42, head_sha: happySha },
+        ...overrides,
+    };
 }
 
 function manifest(binarySha256, overrides = {}) {
@@ -275,6 +287,41 @@ test('skips reuse when the exact CI run did not pass or did not select Official 
         selected: false,
         reason: 'official-codex-not-selected',
     });
+});
+
+test('requires the exact source CI Android Field scope marker when resolving Field input', () => {
+    const base = {
+        run: successfulRun(),
+        jobs: successfulGate(),
+        artifacts: [...reusableArtifact(), androidFieldScopeArtifact()],
+        expectedHeadSha: happySha,
+        expectedWorkflowId: workflowId,
+        repository,
+        requireAndroidFieldScope: true,
+    };
+    assert.equal(hasAndroidFieldScopeArtifact(base.artifacts, 42, happySha), true);
+    assert.equal(selectReusableArtifact(base).selected, true);
+    assert.deepEqual(selectReusableArtifact({ ...base, artifacts: reusableArtifact() }), {
+        selected: false,
+        reason: 'android-field-not-selected',
+    });
+    assert.throws(
+        () => selectReusableArtifact({
+            ...base,
+            artifacts: [
+                ...reusableArtifact(),
+                androidFieldScopeArtifact(),
+                androidFieldScopeArtifact({ id: 75 }),
+            ],
+        }),
+        /at most one Android Field scope artifact/,
+    );
+    assert.throws(
+        () => hasAndroidFieldScopeArtifact([
+            androidFieldScopeArtifact({ workflow_run: { id: 41, head_sha: happySha } }),
+        ], 42, happySha),
+        /workflow run does not match/,
+    );
 });
 
 test('rejects untrusted producer identity, gate, attempt, and artifact lifetime mismatches', () => {
@@ -467,13 +514,23 @@ test('workflow contracts preserve trusted cross-run provenance and exact Field c
     const sourceBuild = readFileSync(join(workflowRoot, 'build-official-codex-source.yml'), 'utf8');
     const ci = readFileSync(join(workflowRoot, 'ci.yml'), 'utf8');
     const field = readFileSync(join(workflowRoot, 'codex-android-field-e2e.yml'), 'utf8');
+    const docs = readFileSync(join(workflowRoot, 'docs-knowledge-base.yml'), 'utf8');
 
     assert.match(sourceBuild, /permissions:\n  actions: read\n  contents: read/);
-    assert.match(sourceBuild, /group: official-codex-source-\$\{\{ github\.repository \}\}/);
+    assert.match(sourceBuild, /group: official-codex-source-\$\{\{ github\.repository \}\}-\$\{\{ github\.sha \}\}/);
+    assert.doesNotMatch(sourceBuild, /group: official-codex-source-\$\{\{ github\.repository \}\}\n/);
     assert.doesNotMatch(sourceBuild, /official-codex-source-\$\{\{ github\.repository \}\}-\$\{\{ github\.ref \}\}/);
     assert.match(sourceBuild, /official-codex-artifact-reuse\.cjs fingerprint/);
     assert.match(sourceBuild, /official-codex-artifact-reuse\.cjs find/);
     assert.match(sourceBuild, /official-codex-artifact-reuse\.cjs attest/);
+    assert.match(ci, /name: android-field-scope-\$\{\{ github\.sha \}\}/);
+    assert.equal(
+        (ci.match(/if: steps\.changes\.outputs\.android_field == 'true' && github\.run_attempt == 1/g) ?? []).length,
+        2,
+    );
+    assert.match(ci, /node --test scripts\/ci\/official-codex-artifact-reuse\.test\.cjs/);
+    assert.doesNotMatch(field, /git rev-parse HEAD\^/);
+    assert.doesNotMatch(field, /steps\.scope\.outputs\.android_field/);
     assert.ok(
         sourceBuild.indexOf('rustc -vV > "$RUNNER_TEMP/rustc-vV.txt"')
         > sourceBuild.indexOf('rustup override set'),
@@ -501,4 +558,5 @@ test('workflow contracts preserve trusted cross-run provenance and exact Field c
     assert.match(field, /HAPPY_OFFICIAL_CODEX_RECIPE_FINGERPRINT/);
     assert.match(field, /official-codex-artifact-reuse\.cjs resolve/);
     assert.match(field, /official-codex-artifact-reuse\.cjs verify/);
+    assert.match(docs, /- "\.github\/workflows\/build-official-codex-source\.yml"/);
 });

@@ -43,7 +43,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: official-codex-source-${{ github.repository }}
+  # GitHub retains only one pending run in a concurrency group. Keep required
+  # acceptance runs for different commits from evicting one another.
+  group: official-codex-source-${{ github.repository }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:

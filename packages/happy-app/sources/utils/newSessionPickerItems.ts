@@ -1,8 +1,3 @@
-type AgentPickerSource = {
-    key: string;
-    label: string;
-};
-
 type ModePickerSource = {
     key: string;
     name: string;
@@ -14,13 +9,6 @@ export type NewSessionPickerItem = {
     label: string;
     subtitle?: string;
 };
-
-export function getAgentPickerItems(agents: AgentPickerSource[]): NewSessionPickerItem[] {
-    return agents.map((agent) => ({
-        key: agent.key,
-        label: agent.label,
-    }));
-}
 
 export function getModePickerItems(options: ModePickerSource[]): NewSessionPickerItem[] {
     return options.map((option) => ({

@@ -1,29 +1,13 @@
 /**
  * Vitest global setup — runs ONCE before all tests.
  *
- * We only build the CLI here. Integration suites now provision their own
- * isolated environments so each suite can get a fresh lab-rat project copy.
+ * Integration suites provision their own isolated environments. Any suite
+ * that needs packaged output must build it explicitly before Vitest starts.
  */
-
-import { spawnSync } from 'node:child_process'
 
 export async function setup() {
     process.env.VITEST_POOL_TIMEOUT = '60000'
     process.env.HAPPY_RUN_SANDBOX_NETWORK_TESTS = '1'
-
-    // Focused local runs already typecheck explicitly and should not trigger
-    // pnpm's dependency-state repair in a non-interactive process.
-    if (process.env.HAPPY_SKIP_CLI_TEST_BUILD === '1') return
-
-    const buildResult = spawnSync('pnpm', ['build'], { stdio: 'pipe' })
-    if (buildResult.stderr && buildResult.stderr.length > 0) {
-        const errorOutput = buildResult.stderr.toString()
-        console.error(`Build stderr (could be debugger output): ${errorOutput}`)
-        console.log(`Build stdout: ${buildResult.stdout.toString()}`)
-        if (errorOutput.includes('Command failed with exit code')) {
-            throw new Error(`Build failed STDERR: ${errorOutput}`)
-        }
-    }
 }
 
 export async function teardown() {
