@@ -48,6 +48,7 @@
 - [Experimental Chat File Links](./experimental-chat-file-links.md)
 - [Expo SDK 55 Upgrade](./expo-sdk-55-upgrade.md)
 - [Generic ACP Runner](./generic-acp-runner.md)
+- [GitHub Actions 提交与 PR 触发去重及发布门禁整改计划](./github-actions-trigger-gate-remediation.md)
 - [happy-agent CLI Tool](./happy-agent.md)
 - [happy server — bundled self-host mode](./happy-serve-self-host.md)
 - [Happy Server 包安装与解析契约修复计划](./happy-server-global-package-resolution.md)
