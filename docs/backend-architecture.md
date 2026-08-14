@@ -120,7 +120,7 @@ S3 升级必须由部署者记录所有旧签发器已排空的时刻，最终 s
 
 应用无法控制托管备份和运维日志，也无法清除自托管部署者或第三方服务保留的副本；这些边界和
 三天托管保留目标见 [隐私政策](../PRIVACY.md) 与当前
-[账户删除计划](plans/account-data-deletion-and-retention-contract.md)。
+[账户删除归档计划](plans/archive/account-data-deletion-and-retention-contract.md)。
 
 ## 可选集成
 

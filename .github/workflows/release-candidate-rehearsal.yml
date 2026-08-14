@@ -20,6 +20,14 @@ on:
         description: Exact successful Happy monorepo CI run ID for source_sha.
         required: true
         type: string
+      relay_cache_to_mode:
+        description: Cache export mode for a Relay-only rehearsal.
+        required: false
+        default: min
+        type: choice
+        options:
+          - min
+          - max
 
 permissions:
   actions: read
@@ -130,6 +138,7 @@ jobs:
     with:
       source_sha: ${{ needs.source_gate.outputs.source_sha }}
       version: ${{ needs.versions.outputs.relay_version }}
+      cache_to_mode: ${{ inputs.relay_cache_to_mode }}
 
   agent:
     name: Build rehearsed happy-agent candidate
@@ -230,6 +239,7 @@ jobs:
       ANDROID_PROMOTION_RESULT: ${{ needs.promote_android.result }}
       RELAY_BUILD_RESULT: ${{ needs.relay.result }}
       RELAY_PROMOTION_RESULT: ${{ needs.promote_relay.result }}
+      RELAY_CACHE_TO_MODE: ${{ inputs.relay_cache_to_mode }}
       AGENT_BUILD_RESULT: ${{ needs.agent.result }}
       AGENT_PROMOTION_RESULT: ${{ needs.promote_agent.result }}
     steps:
@@ -260,10 +270,15 @@ jobs:
           require_path android "$ANDROID_BUILD_RESULT" "$ANDROID_PROMOTION_RESULT"
           require_path relay "$RELAY_BUILD_RESULT" "$RELAY_PROMOTION_RESULT"
           require_path agent "$AGENT_BUILD_RESULT" "$AGENT_PROMOTION_RESULT"
+          case "$RELAY_CACHE_TO_MODE" in
+            min|max) ;;
+            *) exit 1 ;;
+          esac
 
           {
             echo "product=$SELECTED_PRODUCT"
             echo "source_sha=${{ needs.source_gate.outputs.source_sha }}"
             echo "source_run_url=${{ needs.source_gate.outputs.source_run_url }}"
+            echo "relay_cache_to_mode=$RELAY_CACHE_TO_MODE"
             echo "result=success"
           } >> "$GITHUB_STEP_SUMMARY"

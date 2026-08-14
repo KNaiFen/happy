@@ -1,0 +1,31 @@
+name: Actions SLA watchdog
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: actions-sla-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout watchdog
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cancel expired or superseded Actions runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/actions-sla-watchdog.cjs

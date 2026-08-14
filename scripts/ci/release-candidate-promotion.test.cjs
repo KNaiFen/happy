@@ -748,14 +748,20 @@ test('release workflows expose short-lived candidates and the router promotes wi
         assert.doesNotMatch(workflow, /\n  push:\n/);
         if (product === 'relay') {
             assert.match(workflow, /DOCKER_BUILD_RECORD_UPLOAD: "false"/);
+            assert.match(workflow, /cache_to_mode:\n        required: false\n        type: string\n        default: min/);
+            assert.match(workflow, /name: Validate relay cache export mode[\s\S]*case "\$CACHE_TO_MODE" in[\s\S]*min\|max\)/);
+            assert.match(workflow, /cache-to: type=gha,mode=\$\{\{ inputs\.cache_to_mode \}\},scope=debian13-relay-amd64/);
+            assert.doesNotMatch(workflow, /cache-to: type=gha,mode=max,scope=debian13-relay-amd64/);
         }
     }
-
     const router = readFileSync(
         path.join(repositoryRoot, '.github/workflows/release-after-required-ci.yml'),
         'utf8',
     );
     assertPinnedWorkflowActions(router, 'release-after-required-ci.yml');
+    const relayRouterJob = /  relay:([\s\S]*?)(?=\n  [a-z_]+:|$)/.exec(router)?.[1];
+    assert.ok(relayRouterJob, 'missing relay release job');
+    assert.match(relayRouterJob, /cache_to_mode: min/);
     for (const product of workflows.map(([name]) => name)) {
         const job = new RegExp(`  promote_${product}:([\\s\\S]*?)(?=\\n  promote_|$)`).exec(router)?.[1];
         assert.ok(job, `missing promotion job for ${product}`);
@@ -800,6 +806,7 @@ test('release workflows expose short-lived candidates and the router promotes wi
     assert.match(rehearsal, /inputs\.source_sha == github\.sha/);
     assert.match(rehearsal, /EXPECTED_SOURCE_SHA: \$\{\{ inputs\.source_sha \}\}/);
     assert.match(rehearsal, /SOURCE_RUN_ID: \$\{\{ inputs\.source_run_id \}\}/);
+    assert.match(rehearsal, /relay_cache_to_mode:\n        description: Cache export mode for a Relay-only rehearsal\.[\s\S]*type: choice[\s\S]*- min[\s\S]*- max/);
     assert.match(rehearsal, /node scripts\/ci\/verify-release-source-gate\.cjs/);
     assert.equal(
         [...rehearsal.matchAll(/uses: \.\/\.github\/workflows\/build-[^\n]+/g)].length,
@@ -815,6 +822,11 @@ test('release workflows expose short-lived candidates and the router promotes wi
     assert.match(rehearsal, /require_path cli/);
     assert.match(rehearsal, /cli\|android\|relay\|agent/);
     assert.match(rehearsal, /ANDROID_KEYSTORE_BASE64: \$\{\{ secrets\.ANDROID_KEYSTORE_BASE64 \}\}/);
+    const relayRehearsalJob = /  relay:([\s\S]*?)(?=\n  [a-z_]+:|$)/.exec(rehearsal)?.[1];
+    assert.ok(relayRehearsalJob, 'missing relay rehearsal job');
+    assert.match(relayRehearsalJob, /cache_to_mode: \$\{\{ inputs\.relay_cache_to_mode \}\}/);
+    assert.match(rehearsal, /RELAY_CACHE_TO_MODE: \$\{\{ inputs\.relay_cache_to_mode \}\}/);
+    assert.match(rehearsal, /echo "relay_cache_to_mode=\$RELAY_CACHE_TO_MODE"/);
     assert.doesNotMatch(rehearsal, /secrets: inherit/);
     const ciWorkflow = readFileSync(path.join(repositoryRoot, '.github/workflows/ci.yml'), 'utf8');
     assertPinnedWorkflowActions(ciWorkflow, 'ci.yml');

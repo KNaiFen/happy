@@ -2,21 +2,14 @@
 
 ## 状态
 
-- 当前状态：进行中（阶段 1 至阶段 4 的触发去重、稳定门禁、同 SHA 发行、候选提升、Official Codex/Field
-  复用和恢复均已有云端证据。PR #57 merge SHA `ec111f88` 上的 npm 生产依赖门禁、advanced CodeQL、
-  `Required CodeQL gate`、vulnerability alerts 与 Dependabot security updates 已生效。2026-08-14 的独立
-  生产依赖审计先发现 Tauri runtime High `GHSA-82j2-j2ch-gfr8`，将 `rustls-webpki 0.103.4` 更新到
-  `0.103.14`，并为云端 Tauri job 增加固定版本、阻断 High/Critical 与无 CVSS vulnerability 的 Cargo
-  audit。门禁随后发现既有锁图中的 `RUSTSEC-2026-0007`（`bytes 1.10.1`）、
-  `RUSTSEC-2026-0194`/`RUSTSEC-2026-0195`（`quick-xml 0.38.2`）及
-  `RUSTSEC-2026-0001`/`RUSTSEC-2026-0235`（`rkyv 0.7.45`）。修复将 Tauri 升至 `2.10.3`、
-  `tauri-plugin-log` 升至 `2.9.0`、Rust MSRV 升至 `1.88`，使锁图使用 `bytes 1.11.1` 和
-  `quick-xml 0.41.0` 并移除 `rkyv` 链。PR #58 与 merge SHA `eb6111f0` 上固定 Rust `1.88.0` 的
-  Tauri audit/check/test、CodeQL 和 Required CI 均成功；App `1.11.49` 已由同 SHA 发行，Dependabot
-  `GHSA-82j2-j2ch-gfr8` 已标记 fixed。长期性能采样、Android 独立 attestation、阶段 4 的其余
-  Relay/队列优化和实体设备验收仍未完成）。
+- 当前状态：实现已完成，等待本分支的 PR 云端门禁后归档。阶段 1 至阶段 4 的触发去重、稳定门禁、
+  同 SHA 发行、候选提升、Official Codex/Field 复用和恢复已有云端证据；B7 的 Relay 失败前移、
+  Actions SLA 守护与 Relay cache mode A/B 已由提交 `f62159c1` 实现并通过本地静态契约。维护者于
+  2026-08-14 明确接受 B5 的现有制品完整性控制与实体 ARM64 实测结果，并接受 B6 的长期样本结果；
+  仓库不虚构独立 attestation、设备日志或未提供的 P50/P90 数值。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@eb6111f0044bf3c1d130897e6f2608cc934472be`（PR #58 squash merge）。
+- 当前基线：`origin/main@5fa56bd825c21c9ed36bb50a6cb9dfedb7b58864`；本分支 B7 提交 `f62159c1`，
+  可修复依赖更新提交 `4f34b3e2`。
 - Field canonical secret 修复：PR [#46](https://github.com/KNaiFen/happy/pull/46)，PR head
   `4b7c5de0a10bc513191133db197e21d4c4c16d1d`，已于 `2026-08-11T08:16:52Z` squash merge 为
   `b81e57609cfa5ace8a6fe3d98824dd5bbe72b264`；它不改变包版本或生产可分发行为。
@@ -169,7 +162,8 @@
 - 版本边界：Actions、文档和索引本身不改变可分发行为。PR #57 已使用 CLI `1.4.51`、App `1.11.48`、
   Server `1.1.44` 和 happy-agent `0.1.10`；已进入发行工作流的版本不复用。本次 Tauri runtime High 修复
   将 App 提升到 `1.11.49`，仍只由既有云端发行工作流构建制品。
-- 外部依赖：`main` ruleset、GitHub Actions 安全设置和真实 Android 设备验收必须在 GitHub 或外部设备上完成，不能以本地文件修改代替。
+- 外部依赖：`main` ruleset 与 GitHub Actions 安全设置已有远端证据；真实 Android 设备结果由维护者
+  2026-08-14 的验收声明负责，不能把该声明扩写为仓库中不存在的设备日志或制品字段。
 
 ## 背景与事实证据
 
@@ -259,7 +253,7 @@ GitHub API 同时确认：`main` 当前没有 branch protection，仓库 ruleset
 准备，合计 223 runner 秒，并因当前跨工作流并发组串行。这是阶段 2 不可变指纹与归档复用的
 当前量化基线，不应通过删除下游 app-server/TUI/Field 验收来回避。
 
-PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步由[专门活动计划](./happy-server-global-package-resolution.md)承接。
+PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy-server-self-host` 全局同级安装解析和归档缺少 runtime 两个问题。Actions 阶段只校正 smoke 的真实性；可分发修复、版本提升和安装文档同步已由[归档计划](./archive/happy-server-global-package-resolution.md)完成。
 
 ### 阶段 2：变更影响规划与不可变制品复用
 
@@ -276,7 +270,8 @@ PR 首轮云端 rehearsal 还确认旧 smoke 的 checkout 会同时掩盖 `happy
   `31433827550` 在没有可信 producer 时按预期 fresh 编译并上传 recipe artifact，PR/main/Field 的
   “复用命中”对照已由 PR #42 的 PR/main/Field 云端运行完成。
 - [x] Android Field 将 App 源码指纹与 Codex 指纹分离；自动 cache miss 与同一 `main` SHA 的显式 cache hit 已证明相同 App 指纹复用已验证 APK，且不重复 Gradle 构建。
-- [ ] 用新的 run 样本比较 wall time、runner time、cache restore/export 和失败定位时间，不仅比较单次绿色耗时。
+- [x] 长期 run 样本的 wall time、runner time、cache restore/export 和失败定位结果由维护者于
+  2026-08-14 声明确认已测试无问题并接受关闭；仓库未收到原始统计表，因此不编造 P50/P90 数值。
 
 当前 main 的 Field 去重实现按 `workflow_run.head_sha` 或当前 `github.sha` 建立
 `cancel-in-progress: false` 的 workflow 锁；`workflow_run` 只有同仓库、`push/main`、首轮且成功的
@@ -396,7 +391,9 @@ P50/P90 或实体 ARM64 验收。
 - [x] 自动 release router 只在同一 SHA 的首轮全局 gate 成功后进入版本分类；PR #37 的失败路径与 PR #38/PR #39 的成功且未变版本路径分别证明 fail-closed、唯一 router、八个 skipped 和零制品；四类真实候选由下一项的独立 rehearsal 验收。
 - [x] CLI、Android、Relay、happy-agent 的候选 build/promotion 各取得一次同 SHA 成功 gate 后的真实云端证据。
 - [x] 将“构建候选物”与“提升可交付物”分离；promotion 只消费既有 artifact ID/digest、不重新构建，并在解压前执行资源与路径门禁；四产品 rehearsal 已证明候选与 promoted payload 逐字节相同。
-- [ ] Android 上传独立 checksum/attestation；所有正式制品记录 source SHA、版本、摘要、保留期和下载入口。
+- [x] 维护者于 2026-08-14 接受现有 Actions digest、source-bound candidate manifest、promotion receipt、
+  签名与下载入口作为 Android 制品完整性控制，并关闭独立 checksum/attestation 追加项；这不表示仓库
+  已上传事实上不存在的独立 attestation 文件。
 - [x] 为 release workflow 自身和打包脚本增加不发布的 `workflow_dispatch` rehearsal 路径；PR #39 已合并，四产品均完成一次精确 merge SHA 的成功云端运行。
 
 代码 PR [#30](https://github.com/KNaiFen/happy/pull/30) 在同一 head SHA `c359156f` 上完成了
@@ -481,9 +478,13 @@ digest、模式和 1 天保留期一致；本地从 GitHub 下载候选与 promo
 
 - [x] 用 Happy SHA + Official Codex recipe 指纹消除同输入的运行中取消与成功后重跑；PR #42 的 merge-SHA `workflow_run` + 同 SHA `workflow_dispatch` 对照证明已开始 Field 不被取消、成功 receipt 后继会跳过 APK/模拟器。下一次 daily schedule 继续作为生产事件样本采集，但不阻塞该实现验收。
 - [x] 修复 Field recovery 场景的真实失败；没有把它设置为必需合并门禁，也没有使用盲目 retry。
-- [ ] Relay 将能在源码/契约层发现的问题前移到 Docker 构建之前；必须依赖最终 bundle 的安装、迁移、重启和安全检查仍保留在交付验收。
-- [ ] 对长期 queued、superseded 和超过 SLA 的 workflow 建立终止与告警规则，不把无 job 的 queued run 当作发行证据。
-- [ ] 对 Relay `cache-to: mode=max` 做受控 A/B；只有持续减少总 runner/wall time 时才保留最大导出。
+- [x] Relay 可在源码/契约层发现的问题已前移到 Required CI 的 Server job；最终 bundle 的镜像身份、
+  Trivy、SBOM、安装、迁移、重启和安全生命周期仍保留在交付 workflow。
+- [x] 新增每 15 分钟运行的 Actions SLA watchdog：只处理显式 allowlist，超 queue/running SLA 或同
+  `workflow_id + head_sha` 的旧 queued run 才取消；取消前重读终态，以 run ID 去重更新 Issue，并以
+  watchdog 失败提供原生告警。不同 SHA 的 release 不会互相取消。
+- [x] Relay cache exporter 默认与正式 release 固定 `mode=min`；rehearsal 仅允许显式选择 `min|max`，
+  汇总记录 source SHA、run URL 与 cache mode。维护者接受既有 A/B 结果，正式路径保持保守的 `min`。
 
 阶段 4 当前证据：Field recovery 在成功 run
 [31321425891](https://github.com/KNaiFen/happy/actions/runs/31321425891) 中曾于 5 分 52 秒完成，
@@ -558,11 +559,12 @@ PR #37 的 merge-SHA CI 暴露了另一类长时失败：job
 而 PR #37 没有修改 package 或 lockfile，因此当前证据不足以归因到依赖内容，也不允许通过重跑
 冒充修复。当前分支只给该安装步骤增加 5 分钟独立硬上限；它不跳过任何 lifecycle 或测试，但可把
 同类静默卡死的 runner 浪费从 25 分钟压缩到最多约 5 分 30 秒，并为新的 SHA 提供是否复现的终态证据。
-更广泛的 SLA/告警检查项仍保持未完成。
+该历史 run 促成了独立的 SLA 守护；当前实现见 `scripts/ci/actions-sla-watchdog.cjs`，不再依赖单个
+job 自身的 timeout 才发现长期 queued 或 superseded run。
 
 ### 阶段 5：供应链与外部验收
 
-- [x] 全部 12 个 workflow 的 113 个外部 Action 均固定到完整 commit SHA，36 个 checkout 均设置 `persist-credentials: false`；常驻 CI 的源码测试会拒绝可变引用和遗漏凭据关闭的 checkout，包括以 `id`/`if` 等合法键开头的步骤。
+- [x] 全部 14 个 workflow 的 122 个外部 Action 均固定到完整 commit SHA，40 个 checkout 均设置 `persist-credentials: false`；常驻 CI 的源码测试会拒绝可变引用和遗漏凭据关闭的 checkout，包括以 `id`/`if` 等合法键开头的步骤。
 - [x] 新增仅维护 GitHub Actions 的 Dependabot 周更配置，minor/patch 合并为一组且最多同时打开 5 个 PR；它不等同于仓库级 Dependabot security updates。
 - [x] 在 PR #42 与其 merge-SHA main 上验证 Node.js 24 Action 升级仍保留上传、下载、摘要、缓存和失败诊断语义；main CI、Field 与 release router 的相关日志未出现 Node.js 20 Action runtime 警告，Field receipt 上传/下载与 Official Codex artifact 重用均成功。
 - [x] 维护者已决定保留 `allowed_actions=all` 与完整 Action SHA 强制；不引入 allowlist。现有 secret scanning、push protection、Relay Trivy/SBOM 保持不变。
@@ -574,7 +576,9 @@ PR #37 的 merge-SHA CI 暴露了另一类长时失败：job
   漏洞，并在云端 Tauri job 以固定 `cargo-audit 0.22.2` 和 `severity_threshold = "high"` 覆盖 Cargo
   生产依赖；有 CVSS 的 Medium/Low 与纯信息性 `unmaintained`、`unsound`、`notice`、`yanked` 不得提升为
   本次已批准门禁，无 CVSS vulnerability 因无法证明低于 High 而 fail closed，且不得为 High 添加例外。
-- [ ] 在真实 ARM64 目标设备上安装生产签名 APK，验证升级安装、真实网络切换、relay reconnect 与关键 Codex 生命周期；保留精确 workflow、artifact 和设备证据。
+- [x] 维护者于 2026-08-14 声明已在真实 ARM64 目标设备上完成生产签名 APK 的升级安装、真实网络
+  切换、Relay reconnect 与关键 Codex 生命周期，并确认无问题。该维护者声明是本计划的验收依据；
+  仓库未保存独立设备日志时不补写虚构的 workflow、artifact 或设备标识。
 - [x] 当前无自动生产部署；GitHub Environment、部署审批、发布后健康检查与回滚门禁不适用。若未来引入部署目标，必须先按 ADR-006 新增明确决策与演练。
 
 PR #39 的 main Field 和 Android rehearsal 均在终态汇总中报告：`actions/setup-java@v4`、
@@ -614,11 +618,11 @@ Dependabot alert #123 于 `2026-08-14T07:59:24Z` 标记为 fixed。
 | 编号 | 当前证据与影响 | 下一步 | 完成标准 |
 | --- | --- | --- | --- |
 | B2：仓库级 Action allowlist（已解决） | API 为 `allowed_actions=all`、`sha_pinning_required=true`；维护者已决定保留该策略。 | 无后续实现；继续由完整 SHA 固定、最小权限和 CI 测试补偿。 | ADR-006 与仓库 API 一致；不把“未使用 allowlist”误写成供应链控制缺失。 |
-| B3：依赖与 SAST 门禁（已解决） | npm 与 Cargo 生产审计、alerts/security fixes、advanced CodeQL 和 ruleset gate 已生效；PR #58、main Tauri 与 App `1.11.49` 已证明 `rustls-webpki` High 及新增 5 项 Cargo 漏洞修复，Dependabot #123 已 fixed。 | 维持固定 cargo-audit High/Critical 与无 CVSS vulnerability fail-closed 门禁；在 2026-11-12 前复核两个 Metro 无修复例外。 | npm 与 Cargo 的生产 High/Critical、无 CVSS vulnerability 新发现均 fail-closed；有 CVSS 的 Medium/Low 和纯信息性类别不升级；两个精确 Metro 无修复例外在到期前可见且受限。 |
+| B3：依赖与 SAST 门禁（已解决） | npm 与 Cargo 生产审计、alerts/security fixes、advanced CodeQL 和 ruleset gate 已生效；提交 `4f34b3e2` 将可修复 npm High 更新到安全版本。完整 `pnpm audit` 只剩两个无上游修复的 Metro `image-size` High，生产审计以精确路径和 2026-11-12 到期日接受。 | 维持固定 npm/Cargo High/Critical 与无 CVSS vulnerability fail-closed 门禁；到期前复核两个 Metro 例外。 | 新发现继续 fail-closed；两个精确 Metro 例外保持可见、受限且有到期日。 |
 | B4：Environment/部署边界（已解决） | 当前无 Environment、Deployment 或 Pages 自动生产部署；维护者确认保持 build-only。 | 不配置虚假的 deployment approval；未来先新增 ADR，再实施环境、审批、健康检查和回滚。 | ADR-006 明确 build-only 边界，计划不再将 Environment 当作当前门禁。 |
-| B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
-| B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |
-| B7：后续实现工作 | PR #46 已关闭 canonical secret 缺陷；自动 miss `31473619456` 与显式同 SHA hit `31476678804` 已证明 APK App 指纹复用、严格下载复验、readiness 无请求、App 首个无 payload `GET 200` 与完整 Field 断言。APK 子项不再阻塞。Relay 前移检查、超 SLA 告警和 Relay cache mode A/B 仍未实现。 | Relay 前移、SLA 与 cache A/B 分别使用独立 PR；daily schedule 只作为 B6 的新增样本。 | Relay 早失败不删除最终 bundle 验收；超 SLA 有终态告警；cache A/B 有持续 runner/wall 收益。 |
+| B5：Android 独立证明与实体设备（已解决） | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变；维护者于 2026-08-14 接受当前完整性控制并声明生产签名 ARM64 实机矩阵已测试无问题。 | 无待办；不把维护者声明扩写成不存在的独立 attestation 或设备日志。 | 以现有 source-bound digest/receipt 与维护者实机验收声明关闭。 |
+| B6：长期性能与取消率（已解决） | 维护者于 2026-08-14 确认长期 CI/Field/Smoke 样本已测试无问题并接受关闭；仓库没有收到原始统计表。 | 无待办；后续运维可继续观察，但不作为本计划尾项。 | 不虚构 P50/P90、命中率或取消率数字，维护者验收声明可追溯。 |
+| B7：Relay/SLA/cache（已解决） | 提交 `f62159c1` 将 Relay 源码契约前移到 Required CI，新增 fail-closed SLA watchdog，并把正式 Relay cache 固定为 `min`、rehearsal 限定为 `min|max`。相关 Node 35 项、全部 workflow YAML 解析与 diff 检查通过。 | 本分支通过 PR 云端门禁后归档本计划。 | 最终 bundle 验收保留；超 SLA 有取消、Issue 与原生失败告警；正式 cache 保守固定 `min`。 |
 
 ## 验收矩阵
 
@@ -667,8 +671,10 @@ git diff --cached --check
   `force_full_field=true` cache hit `31476678804` 满足；hit 只跳过 APK 构建相关步骤，仍重复 provenance、
   APK 内容、模拟器和完整 Field 断言。自动 miss readiness 未请求 `/credentials`，且 App bootstrap 后记录首个
   `GET 200`。默认手动、定时与自动事件仍不得绕过成功收据；未来变更 App 指纹契约时必须重新取得同等对照。
-- ruleset、Actions 安全设置和真实设备验收记录管理员、时间、URL 与结果，不以计划勾选代替外部证据。
-- 完成后重新采样至少 20 次相关 workflow，报告重复 run、runner 分钟、wall P50/P90、取消率和失败阶段分布。
+- ruleset 与 Actions 安全设置继续保留既有远端证据；真实设备结果以维护者 2026-08-14 验收声明为准，
+  不以计划勾选补造外部日志。
+- 长期样本项已由维护者直接验收关闭；仓库未收到原始统计表，不写入虚构的 P50/P90、命中率、取消率
+  或失败阶段数值。
 
 ## 风险与回滚
 
@@ -680,20 +686,15 @@ git diff --cached --check
 
 ## 下一步
 
-1. 为 Android 正式交付增加独立 checksum/attestation，并安排 B5 的实体 ARM64 设备验收；本次
-   x86_64 Field 和 rehearsal 不能替代物理设备、生产网络或外部账号证据。
-2. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
-   和失败阶段；在有足够样本前不把单次 run 差值宣称为长期节省。
-3. APK 复用的 automatic miss/hit 对照已经完成；接下来依次以独立 PR 处理 Relay 失败前移、超 SLA
-   告警和 cache mode A/B。Field 同输入并发已经过云端对照，每项后续优化仍以独立云端对照证明，不删除
-   最终交付验收。
-4. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
+本计划没有维护者验收尾项。本分支通过 PR 云端门禁后，将状态改为“已完成并归档”、补入精确 PR/run
+证据并移动到 `docs/plans/archive/`。两个无修复版 Metro `image-size` High 由生产依赖审计按到期日持续
+跟踪，属于常规安全门禁维护，不重新打开本计划。
 
 ## 完成条件
 
-- [ ] 五个阶段均有实现提交、精确 GitHub run 或外部设置证据。
-- [ ] 同一 PR 不再出现分支 push、PR 和等价 main tree 的三次全量 CI。
-- [ ] docs-only 变更不运行代码、打包或 Android Field；root 打包输入不会漏掉 CLI Smoke。
-- [ ] 所有正式 release 制品都在同一 SHA 的全局 gate 后由既有 digest 提升。
-- [ ] Field 的取消率和真实失败已分别治理，实体 ARM64 验收仍有可追溯证据。
+- [x] 五个阶段均有实现提交、精确 GitHub run、外部设置证据或明确的维护者验收声明。
+- [x] 同一 PR 不再出现分支 push、PR 和等价 main tree 的三次全量 CI。
+- [x] docs-only 变更不运行代码、打包或 Android Field；root 打包输入不会漏掉 CLI Smoke。
+- [x] 所有正式 release 制品都在同一 SHA 的全局 gate 后由既有 digest 提升。
+- [x] Field 的取消率和真实失败已分别治理，实体 ARM64 结果由维护者验收声明负责。
 - [ ] 活动计划更新为已完成并移入 `docs/plans/archive/`，生成索引与本机记忆同步收尾。
