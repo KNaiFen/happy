@@ -1,9 +1,9 @@
 /**
  * Server API for image attachment upload/download.
  *
- * Two storage modes are transparent to the client:
- * - Local: uploadUrl points to the server itself (PUT endpoint)
- * - S3: uploadUrl is a presigned PUT URL
+ * New Servers proxy both local and S3 blobs through an authenticated PUT/GET
+ * path. The legacy presigned-POST branch remains only for compatibility while
+ * older self-hosted Servers are upgraded.
  *
  * The client always follows the same flow:
  *   1. POST request-upload → get { ref, uploadUrl }
@@ -17,6 +17,7 @@ import {
 } from './attachmentDiagnostics';
 import { getServerUrl } from './serverConfig';
 import { appendFormFile } from './uploadFormFile';
+import { createAccountFetch } from './accountOutboundFence';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -47,12 +48,14 @@ export type RequestUploadResult = {
     ref: string;
     uploadUrl: string;
     method: 'PUT' | 'POST';
+    /** Present on current Servers; requires Bearer auth even through a proxy origin. */
+    requiresAuth?: boolean;
     /** Required form fields when method is POST (S3 presigned POST policy). */
     formFields?: Record<string, string>;
 };
 
 /**
- * Request a presigned (or server-hosted) upload URL for an attachment.
+ * Request a server-hosted upload URL for an attachment.
  * Returns the ref (storage path) and uploadUrl to PUT the encrypted blob.
  */
 export async function requestAttachmentUpload(
@@ -62,11 +65,12 @@ export async function requestAttachmentUpload(
     size: number,
 ): Promise<RequestUploadResult> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     const requestUrl = `${API_ENDPOINT}/v1/sessions/${sessionId}/attachments/request-upload`;
 
     let response: Response;
     try {
-        response = await fetch(requestUrl, {
+        response = await accountFetch(requestUrl, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -132,19 +136,16 @@ export async function requestAttachmentUpload(
 /**
  * Upload an encrypted blob to the URL returned by requestAttachmentUpload.
  *
- * Two transport modes are supported, picked by the server:
- * - PUT: local-storage mode (our own server) — raw octet-stream body with
- *   Bearer auth so the server can verify session membership before writing.
- * - POST: S3-presigned POST policy — multipart/form-data with the policy's
- *   formFields plus the file. S3 enforces the content-length-range from the
- *   policy, so the client cannot upload more than the agreed limit.
+ * Current Servers use authenticated PUT for both storage backends. The POST
+ * branch only supports older self-hosted Servers that still return S3 policies.
  */
 export async function uploadEncryptedBlob(
-    upload: { uploadUrl: string; method: 'PUT' | 'POST'; formFields?: Record<string, string> },
+    upload: { uploadUrl: string; method: 'PUT' | 'POST'; requiresAuth?: boolean; formFields?: Record<string, string> },
     encryptedData: Uint8Array,
     credentials: AuthCredentials,
 ): Promise<void> {
     const serverUrl = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     if (upload.method === 'POST') {
         const formData = new FormData();
@@ -160,7 +161,7 @@ export async function uploadEncryptedBlob(
         let response: Response;
         try {
             cleanup = await appendFormFile(formData, encryptedData, 'file', 'blob', 'application/octet-stream');
-            response = await fetch(upload.uploadUrl, {
+            response = await accountFetch(upload.uploadUrl, {
                 method: 'POST',
                 body: formData,
             });
@@ -188,12 +189,17 @@ export async function uploadEncryptedBlob(
         return;
     }
 
-    // PUT (local-storage mode): direct upload to our server.
-    const isServerUrl = hasSameOrigin(upload.uploadUrl, serverUrl);
+    // PUT: current Servers proxy the configured backend and require auth. The
+    // response can include a proxy-derived host, but a Bearer token may only
+    // ever travel to the Server origin the client already configured.
+    const uploadUrl = upload.requiresAuth
+        ? useConfiguredServerOrigin(upload.uploadUrl, serverUrl)
+        : upload.uploadUrl;
+    const isServerUrl = hasSameOrigin(uploadUrl, serverUrl);
     const headers: Record<string, string> = {
         'Content-Type': 'application/octet-stream',
     };
-    if (isServerUrl) {
+    if (upload.requiresAuth || isServerUrl) {
         headers['Authorization'] = `Bearer ${credentials.token}`;
     }
 
@@ -212,7 +218,7 @@ export async function uploadEncryptedBlob(
 
     let response: Response;
     try {
-        response = await fetch(upload.uploadUrl, {
+        response = await accountFetch(uploadUrl, {
             method: 'PUT',
             headers,
             body,
@@ -222,7 +228,7 @@ export async function uploadEncryptedBlob(
         throw createAttachmentDiagnosticError(formatNetworkErrorMessage('Blob upload (PUT) network error', message), {
             leg: 'blob-upload',
             method: 'PUT',
-            url: upload.uploadUrl,
+            url: uploadUrl,
             serverUrl,
             message,
         });
@@ -232,7 +238,7 @@ export async function uploadEncryptedBlob(
         throw createAttachmentDiagnosticError(`Blob upload (PUT) failed: ${response.status} ${response.statusText}`, {
             leg: 'blob-upload',
             method: 'PUT',
-            url: upload.uploadUrl,
+            url: uploadUrl,
             serverUrl,
             response,
         });
@@ -244,10 +250,8 @@ export async function uploadEncryptedBlob(
  *
  * Two-step protocol mirroring the design spec:
  *   1. POST /request-download with the ref → server returns a downloadUrl
- *      (server-relative URL with auth in local mode; presigned S3 GET
- *      otherwise).
- *   2. GET that URL — local mode requires the Bearer header, S3 presigned
- *      URLs reject extra headers.
+ *      (server-relative URL with auth on current Servers).
+ *   2. GET that URL with its required Bearer header.
  */
 export async function downloadEncryptedAttachment(
     credentials: AuthCredentials,
@@ -255,11 +259,12 @@ export async function downloadEncryptedAttachment(
     ref: string,
 ): Promise<Uint8Array> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     const requestUrl = `${API_ENDPOINT}/v1/sessions/${sessionId}/attachments/request-download`;
 
     let requestRes: Response;
     try {
-        requestRes = await fetch(requestUrl, {
+        requestRes = await accountFetch(requestUrl, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -286,9 +291,9 @@ export async function downloadEncryptedAttachment(
             response: requestRes,
         });
     }
-    let rawDownloadUrl: string;
+    let download: { downloadUrl: string; requiresAuth?: boolean };
     try {
-        ({ downloadUrl: rawDownloadUrl } = await requestRes.json() as { downloadUrl: string });
+        download = await requestRes.json() as { downloadUrl: string; requiresAuth?: boolean };
     } catch (err) {
         const message = errorMessageFromUnknown(err);
         throw createAttachmentDiagnosticError(formatNetworkErrorMessage('request-download response parse error', message), {
@@ -299,16 +304,19 @@ export async function downloadEncryptedAttachment(
             message,
         });
     }
-    const downloadUrl = rewriteLoopbackHost(rawDownloadUrl);
+    const reportedDownloadUrl = rewriteLoopbackHost(download.downloadUrl);
+    const downloadUrl = download.requiresAuth
+        ? useConfiguredServerOrigin(reportedDownloadUrl, API_ENDPOINT)
+        : reportedDownloadUrl;
 
     const isServerUrl = hasSameOrigin(downloadUrl, API_ENDPOINT);
     const headers: Record<string, string> = {};
-    if (isServerUrl) {
+    if (download.requiresAuth || isServerUrl) {
         headers['Authorization'] = `Bearer ${credentials.token}`;
     }
     let blobRes: Response;
     try {
-        blobRes = await fetch(downloadUrl, { headers });
+        blobRes = await accountFetch(downloadUrl, { headers });
     } catch (err) {
         const message = errorMessageFromUnknown(err);
         throw createAttachmentDiagnosticError(formatNetworkErrorMessage('Attachment download network error', message), {
@@ -350,6 +358,18 @@ function hasSameOrigin(candidateUrl: string, serverUrl: string): boolean {
     } catch {
         return false;
     }
+}
+
+/**
+ * Current attachment transfers require Bearer authentication. The server may
+ * build an absolute URL from proxy headers, which are not a client trust
+ * signal. Retain only its path/query and always send credentials to the
+ * endpoint the user configured.
+ */
+function useConfiguredServerOrigin(candidateUrl: string, serverUrl: string): string {
+    const candidate = new URL(candidateUrl, serverUrl);
+    const server = new URL(serverUrl);
+    return new URL(`${candidate.pathname}${candidate.search}${candidate.hash}`, server).toString();
 }
 
 function formatNetworkErrorMessage(prefix: string, message: string): string {

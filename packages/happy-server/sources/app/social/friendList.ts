@@ -2,12 +2,17 @@ import { Context } from "@/context";
 import { buildUserProfile, UserProfile } from "./type";
 import { db } from "@/storage/db";
 import { RelationshipStatus } from "@prisma/client";
+import { type Prisma } from "@prisma/client";
 
-export async function friendList(ctx: Context): Promise<UserProfile[]> {
+export async function friendList(
+    ctx: Context,
+    store: Pick<Prisma.TransactionClient, 'userRelationship'> = db,
+): Promise<UserProfile[]> {
     // Query all relationships where current user is fromUserId with friend, pending, or requested status
-    const relationships = await db.userRelationship.findMany({
+    const relationships = await store.userRelationship.findMany({
         where: {
             fromUserId: ctx.uid,
+            toUser: { is: { deletionRequestedAt: null } },
             status: {
                 in: [RelationshipStatus.friend, RelationshipStatus.pending, RelationshipStatus.requested]
             }

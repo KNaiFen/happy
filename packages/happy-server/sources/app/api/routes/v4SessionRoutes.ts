@@ -42,6 +42,7 @@ import {
     persistSyncV4MutationWrites,
     type SequencedSyncV4Mutation,
 } from "./syncV4MutationPersistence";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 const JOURNAL_MINIMUM_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const JOURNAL_MINIMUM_RECENT_RECORDS = 100_000;
@@ -215,6 +216,7 @@ function sessionAccessWhere(
     return {
         id: sessionId,
         accountId: request.userId,
+        account: { is: { deletionRequestedAt: null } },
         ...(request.authCredentialId ? {
             originMachineId: access.machineId,
             originMachine: {
@@ -292,6 +294,7 @@ async function collectByteBoundedPage<Row extends CiphertextRow, Cursor>(
  * idempotency after the ciphertext journal payload expires.
  */
 async function pruneMutationJournal(
+    accountId: string,
     sessionId: string,
     previousHighWatermark: number,
     highWatermark: number,
@@ -301,23 +304,29 @@ async function pruneMutationJournal(
     if (currentCleanupBucket <= previousCleanupBucket) return { attempted: false, pruned: 0 };
     const maximumPrunableSeq = highWatermark - JOURNAL_MINIMUM_RECENT_RECORDS;
     if (maximumPrunableSeq <= 0) return { attempted: false, pruned: 0 };
-    const result = await db.sessionMutationV4.updateMany({
-        where: {
-            sessionId,
-            seq: { lte: maximumPrunableSeq },
-            createdAt: { lt: new Date(Date.now() - JOURNAL_MINIMUM_AGE_MS) },
-            prunedAt: null,
-        },
-        data: {
-            ciphertext: "",
-            prunedAt: new Date(),
-        },
+    const result = await inTx(async (tx) => {
+        if (!await acquireAccountWrite(tx, accountId)) return 0;
+        const updated = await tx.sessionMutationV4.updateMany({
+            where: {
+                sessionId,
+                session: { accountId, account: { deletionRequestedAt: null } },
+                seq: { lte: maximumPrunableSeq },
+                createdAt: { lt: new Date(Date.now() - JOURNAL_MINIMUM_AGE_MS) },
+                prunedAt: null,
+            },
+            data: {
+                ciphertext: "",
+                prunedAt: new Date(),
+            },
+        });
+        return updated.count;
     });
-    return { attempted: true, pruned: result.count };
+    return { attempted: true, pruned: result };
 }
 
 function scheduleMutationJournalPrune(
     request: FastifyRequest,
+    accountId: string,
     sessionId: string,
     sessionHash: string,
     previousHighWatermark: number,
@@ -325,6 +334,7 @@ function scheduleMutationJournalPrune(
 ): void {
     const pruneStartedAt = Date.now();
     void pruneMutationJournal(
+        accountId,
         sessionId,
         previousHighWatermark,
         highWatermark,
@@ -395,6 +405,7 @@ export function v4SessionRoutes(app: Fastify): void {
 
         try {
             const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, request.userId)) return null;
                 const session = await findOwnedSession(tx, request, sessionId, access);
                 if (!session) return null;
                 if (session.archivedAt) {
@@ -557,6 +568,7 @@ export function v4SessionRoutes(app: Fastify): void {
 
                 scheduleMutationJournalPrune(
                     request,
+                    request.userId,
                     sessionId,
                     sessionHash,
                     result.previousHighWatermark,
@@ -736,6 +748,7 @@ export function v4SessionRoutes(app: Fastify): void {
             return reply.code(404).send({ error: "Session not found" });
         }
         const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return { kind: "notFound" as const };
             const session = await findOwnedSession(tx, request, sessionId, access);
             if (!session) return { kind: "notFound" as const };
             const minimum = await tx.sessionMutationV4.aggregate({
@@ -898,8 +911,33 @@ export function v4SessionRoutes(app: Fastify): void {
         if (!access.allowed) {
             return reply.code(404).send({ error: "Session not found" });
         }
-        const session = await findOwnedSession(db, request, sessionId, access);
-        if (!session) {
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return { kind: "notFound" as const };
+            const session = await findOwnedSession(tx, request, sessionId, access);
+            if (!session) return { kind: "notFound" as const };
+            const decodedCursor = decodeSnapshotCursor(request.query.cursor);
+            if (request.query.cursor && !decodedCursor) return { kind: "invalidCursor" as const };
+            if (decodedCursor && decodedCursor.highWatermark > session.syncV4Seq) {
+                return { kind: "invalidCursor" as const, highWatermark: decodedCursor.highWatermark };
+            }
+            const highWatermark = decodedCursor?.highWatermark ?? session.syncV4Seq;
+            const { page, hasMore } = await collectByteBoundedPage(
+                request.query.limit,
+                decodedCursor?.entityId ?? "",
+                (cursor, take) => tx.sessionEntityV4.findMany({
+                    where: {
+                        sessionId: session.id,
+                        updatedSeq: { lte: highWatermark },
+                        ...(cursor ? { entityId: { gt: cursor } } : {}),
+                    },
+                    orderBy: { entityId: "asc" },
+                    take,
+                }),
+                (row) => row.entityId,
+            );
+            return { kind: "ok" as const, page, hasMore, highWatermark };
+        });
+        if (result.kind === "notFound") {
             logServerSyncV4Diagnostic(request, {
                 level: "warn",
                 event: "snapshot",
@@ -913,14 +951,14 @@ export function v4SessionRoutes(app: Fastify): void {
             observeSyncV4Operation(request, "snapshot", "not_found", startedAt, 0);
             return reply.code(404).send({ error: "Session not found" });
         }
-        const decodedCursor = decodeSnapshotCursor(request.query.cursor);
-        if (request.query.cursor && !decodedCursor) {
+        if (result.kind === "invalidCursor") {
             logServerSyncV4Diagnostic(request, {
                 level: "warn",
                 event: "snapshot",
                 phase: "failed",
                 transportOperation: "snapshot",
                 sessionHash,
+                ...(result.highWatermark === undefined ? {} : { highWatermark: result.highWatermark }),
                 httpStatus: 400,
                 errorKind: "validation",
                 durationMs: elapsedMs(startedAt),
@@ -928,36 +966,6 @@ export function v4SessionRoutes(app: Fastify): void {
             observeSyncV4Operation(request, "snapshot", "invalid", startedAt, 0);
             return reply.code(400).send({ error: "Invalid snapshot cursor" });
         }
-        if (decodedCursor && decodedCursor.highWatermark > session.syncV4Seq) {
-            logServerSyncV4Diagnostic(request, {
-                level: "warn",
-                event: "snapshot",
-                phase: "failed",
-                transportOperation: "snapshot",
-                sessionHash,
-                highWatermark: decodedCursor.highWatermark,
-                httpStatus: 400,
-                errorKind: "validation",
-                durationMs: elapsedMs(startedAt),
-            });
-            observeSyncV4Operation(request, "snapshot", "invalid", startedAt, 0);
-            return reply.code(400).send({ error: "Invalid snapshot cursor" });
-        }
-        const highWatermark = decodedCursor?.highWatermark ?? session.syncV4Seq;
-        const { page, hasMore } = await collectByteBoundedPage(
-            request.query.limit,
-            decodedCursor?.entityId ?? "",
-            (cursor, take) => db.sessionEntityV4.findMany({
-                where: {
-                    sessionId,
-                    updatedSeq: { lte: highWatermark },
-                    ...(cursor ? { entityId: { gt: cursor } } : {}),
-                },
-                orderBy: { entityId: "asc" },
-                take,
-            }),
-            (row) => row.entityId,
-        );
         logServerSyncV4Diagnostic(request, {
             level: "debug",
             event: "snapshot",
@@ -965,8 +973,8 @@ export function v4SessionRoutes(app: Fastify): void {
             transportOperation: "snapshot",
             direction: "outbound",
             sessionHash,
-            highWatermark,
-            count: page.length,
+            highWatermark: result.highWatermark,
+            count: result.page.length,
             httpStatus: 200,
             durationMs: elapsedMs(startedAt),
         });
@@ -975,10 +983,10 @@ export function v4SessionRoutes(app: Fastify): void {
             "snapshot",
             "success",
             startedAt,
-            page.length,
+            result.page.length,
         );
         return reply.send({
-            entities: page.map((row) => ({
+            entities: result.page.map((row) => ({
                 producerId: row.producerId,
                 entityId: row.entityId,
                 entityType: row.entityType,
@@ -989,9 +997,9 @@ export function v4SessionRoutes(app: Fastify): void {
                 createdAt: row.createdAt.getTime(),
                 updatedAt: row.updatedAt.getTime(),
             })),
-            highWatermark,
-            nextCursor: hasMore && page.length > 0
-                ? encodeSnapshotCursor(highWatermark, page[page.length - 1].entityId)
+            highWatermark: result.highWatermark,
+            nextCursor: result.hasMore && result.page.length > 0
+                ? encodeSnapshotCursor(result.highWatermark, result.page[result.page.length - 1].entityId)
                 : null,
         });
     });

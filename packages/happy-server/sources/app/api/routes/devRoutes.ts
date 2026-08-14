@@ -17,13 +17,13 @@ export function devRoutes(app: Fastify) {
                 })
             }
         }, async (request, reply) => {
-            const { timestamp, level, message, source, platform } = request.body;
+            const { level, source } = request.body;
 
             // Log ONLY to separate remote logger (file only, no console)
             const logData = {
+                module: 'remote-debug',
                 source,
-                platform,
-                timestamp
+                severity: normalizeRemoteSeverity(level),
             };
 
             // Use the file-only logger if available
@@ -34,22 +34,31 @@ export function devRoutes(app: Fastify) {
                 return reply.send({ success: true });
             }
 
-            switch (level.toLowerCase()) {
+            switch (logData.severity) {
                 case 'error':
-                    fileConsolidatedLogger.error(logData, message);
+                    fileConsolidatedLogger.error(logData, 'Remote debug event received');
                     break;
                 case 'warn':
-                case 'warning':
-                    fileConsolidatedLogger.warn(logData, message);
+                    fileConsolidatedLogger.warn(logData, 'Remote debug event received');
                     break;
                 case 'debug':
-                    fileConsolidatedLogger.debug(logData, message);
+                    fileConsolidatedLogger.debug(logData, 'Remote debug event received');
                     break;
                 default:
-                    fileConsolidatedLogger.info(logData, message);
+                    fileConsolidatedLogger.info(logData, 'Remote debug event received');
             }
 
             return reply.send({ success: true });
         });
+    }
+}
+
+function normalizeRemoteSeverity(level: string): 'error' | 'warn' | 'debug' | 'info' {
+    switch (level.toLowerCase()) {
+        case 'error': return 'error';
+        case 'warn':
+        case 'warning': return 'warn';
+        case 'debug': return 'debug';
+        default: return 'info';
     }
 }

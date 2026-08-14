@@ -1,6 +1,6 @@
 # Privacy Policy for Happy Coder
 
-**Last Updated: August 10, 2026**
+**Last Updated: August 12, 2026**
 
 ## Overview
 
@@ -85,7 +85,11 @@ The optional voice feature is an exception to the encrypted synchronization mode
 
 - Encrypted session records are retained until the corresponding session is deleted
 - Metadata is retained as needed for system functionality
-- Deleting a session removes its database records and triggers attachment cleanup. Object-storage cleanup failures are currently non-fatal and have no bounded retry or hard-delete deadline, so we do not make a fixed deletion-time guarantee.
+- You can permanently delete a Happy account from the app's account settings. Confirmation immediately blocks new Server access and admissions for that account; a durable Server deletion process removes account records, encrypted sessions and Sync journals, devices, credentials, integration tokens, artifacts, social/KV/voice records, attachments, and profile objects. A download stream or external notification/RPC admitted before confirmation may finish and cannot be atomically recalled from a device or third-party provider. There is no export, cancellation, recovery, or restoration path.
+- Current Server versions proxy attachment and profile-object access instead of issuing new direct object-storage capabilities. For an S3 deployment upgraded from an older Server, the operator first records when every old direct-upload issuer has drained; deletion is then held until at least 16 minutes after that time before its final object sweep. Object-storage failures keep the account locked and are retried rather than reported as complete.
+- For the Happy-hosted service, the operating retention target for backups and operational logs that can contain account data is no more than three days. This repository cannot itself prove or configure the hosted backup and log systems; the active deletion plan tracks the required operating evidence.
+- Happy operational logging is designed to exclude message payloads, raw account/session/artifact/provider identifiers, credentials, encryption keys, and third-party error text or stacks. Where correlation is necessary, the service records a diagnostic hash plus fixed event categories, status classes, and counts.
+- Self-hosted deployments are operated by their deployer. The application removes its primary database and configured object-store records, but the deployer is responsible for database snapshots, object versioning/delete markers, provider logs, container logs, Redis, and any external-service copies or retention rules.
 - Voice audio, voice-session context, and voice-usage records processed or retained by ElevenLabs are subject to ElevenLabs' own practices and privacy policy; they are not stored as Happy encrypted synchronization data.
 
 ## Your Rights
@@ -93,12 +97,13 @@ The optional voice feature is an exception to the encrypted synchronization mode
 You have the right to:
 - Delete individual sessions through the app
 - Delete registered push tokens through the app's account settings
+- Permanently delete the entire Happy account from account settings, without an export or withdrawal period
 - Audit our open-source code
 - Disable product analytics in app settings
 
-Happy does not currently provide an account-wide deletion or encrypted-data
-export workflow. Those gaps are tracked as implementation work rather than
-represented here as available controls.
+Account deletion applies to Happy-controlled primary data. It does not erase
+data retained by independent providers such as Expo, PostHog, RevenueCat, or
+ElevenLabs, which remain subject to their own privacy and retention practices.
 
 ## Data Sharing
 

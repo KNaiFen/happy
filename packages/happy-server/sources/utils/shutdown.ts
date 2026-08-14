@@ -64,7 +64,7 @@ export async function awaitShutdown() {
         handlers.forEach((handler, index) => {
             const handlerPromise = handler().then(
                 () => {},
-                (error) => log(`Error in shutdown handler ${name}[${index}]:`, error)
+                () => log({ module: 'shutdown', level: 'error', operation: name, handlerIndex: index }, 'Shutdown handler failed')
             );
             allHandlers.push(handlerPromise);
         });

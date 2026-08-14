@@ -17,14 +17,24 @@ export interface Decryptor {
     decrypt(data: Uint8Array[]): Promise<(any | null)[]>;
 }
 
-export class SecretBoxEncryption implements Encryptor, Decryptor {
-    private readonly secretKey: Uint8Array;
+export interface DisposableEncryption {
+    dispose(): void;
+}
+
+function clearBytes(value: Uint8Array | null | undefined): void {
+    value?.fill(0);
+}
+
+export class SecretBoxEncryption implements Encryptor, Decryptor, DisposableEncryption {
+    private secretKey: Uint8Array;
+    private disposed = false;
 
     constructor(secretKey: Uint8Array) {
         this.secretKey = secretKey;
     }
 
     async decrypt(data: Uint8Array[]): Promise<(any | null)[]> {
+        if (this.disposed) return data.map(() => null);
         // Process as batch, not Promise.all - more efficient
         const results: (any | null)[] = [];
         for (const item of data) {
@@ -34,6 +44,7 @@ export class SecretBoxEncryption implements Encryptor, Decryptor {
     }
 
     async encrypt(data: any[]): Promise<Uint8Array[]> {
+        if (this.disposed) throw new Error('Encryption has been disposed');
         // Process as batch, not Promise.all - more efficient
         const results: Uint8Array[] = [];
         for (const item of data) {
@@ -41,11 +52,18 @@ export class SecretBoxEncryption implements Encryptor, Decryptor {
         }
         return results;
     }
+
+    dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        clearBytes(this.secretKey);
+    }
 }
 
-export class BoxEncryption implements Encryptor, Decryptor {
-    private readonly privateKey: Uint8Array;
-    private readonly publicKey: Uint8Array;
+export class BoxEncryption implements Encryptor, Decryptor, DisposableEncryption {
+    private privateKey: Uint8Array;
+    private publicKey: Uint8Array;
+    private disposed = false;
 
     constructor(seed: Uint8Array) {
         // Use the seed to generate a proper keypair
@@ -55,6 +73,7 @@ export class BoxEncryption implements Encryptor, Decryptor {
     }
 
     async encrypt(data: any[]): Promise<Uint8Array[]> {
+        if (this.disposed) throw new Error('Encryption has been disposed');
         // Process as batch, not Promise.all - more efficient
         const results: Uint8Array[] = [];
         for (const item of data) {
@@ -64,6 +83,7 @@ export class BoxEncryption implements Encryptor, Decryptor {
     }
 
     async decrypt(data: Uint8Array[]): Promise<(any | null)[]> {
+        if (this.disposed) return data.map(() => null);
         // Process as batch, not Promise.all - more efficient
         const results: (any | null)[] = [];
         for (const item of data) {
@@ -76,18 +96,29 @@ export class BoxEncryption implements Encryptor, Decryptor {
         }
         return results;
     }
+
+    dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        clearBytes(this.privateKey);
+        clearBytes(this.publicKey);
+    }
 }
 
-export class AES256Encryption implements Encryptor, Decryptor {
-    private readonly secretKey: Uint8Array;
-    private readonly secretKeyB64: string;
+export class AES256Encryption implements Encryptor, Decryptor, DisposableEncryption {
+    private secretKey: Uint8Array;
+    private secretKeyB64: string;
+    private disposed = false;
 
     constructor(secretKey: Uint8Array) {
-        this.secretKey = secretKey;
+        // The caller owns the lifecycle buffer. Keep a private copy so a
+        // subsequent refresh can clear its map without breaking this context.
+        this.secretKey = secretKey.slice();
         this.secretKeyB64 = encodeBase64(secretKey);
     }
 
     async encrypt(data: any[]): Promise<Uint8Array[]> {
+        if (this.disposed) throw new Error('Encryption has been disposed');
         // Process as batch, not Promise.all - more efficient
         const results: Uint8Array[] = [];
         for (const item of data) {
@@ -102,6 +133,7 @@ export class AES256Encryption implements Encryptor, Decryptor {
     }
 
     async decrypt(data: Uint8Array[]): Promise<(any | null)[]> {
+        if (this.disposed) return data.map(() => null);
         // Decrypt items concurrently. The previous implementation used a
         // sequential for-await loop, which serialised every AES-GCM call on
         // the JS thread. For a 1000-message session that meant ~1000
@@ -122,5 +154,12 @@ export class AES256Encryption implements Encryptor, Decryptor {
                 return null;
             }
         }));
+    }
+
+    dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        clearBytes(this.secretKey);
+        this.secretKeyB64 = '';
     }
 }

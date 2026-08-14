@@ -176,6 +176,7 @@ bundled `README.md` before exposing plain HTTP on a trusted LAN.
 | `HANDY_MASTER_SECRET` | Source mode | - | Master secret for source-mode auth/encryption; do not use it for the Docker image |
 | `HAPPY_MASTER_SECRET_FILE` | Docker | `/run/secrets/happy_master_secret` | Read-only file containing exactly 64 hexadecimal characters |
 | `PUBLIC_URL` | No | `http://localhost:3005` | Public base URL for file URLs sent to clients |
+| `ACCOUNT_DELETION_LEGACY_DIRECT_UPLOADS_DRAINED_AT` | Every S3 deployment | - | ISO 8601 UTC time when all pre-proxy direct-upload Server instances stopped issuing URLs; use `1970-01-01T00:00:00Z` only for a new S3 deployment that never ran an old issuer. Account deletion stays unavailable until this is set and completes no earlier than 16 minutes after it |
 | `PORT` | No | `3005` | Server port |
 | `DATA_DIR` | No | Source: `./data`; Docker: `/data` | Base data directory |
 | `PGLITE_DIR` | No | Source: `./data/pglite`; Docker: `/data/pglite` | PGlite database directory |
@@ -195,36 +196,47 @@ and S3; source-mode or custom deployments may still configure them:
 ### S3 bucket configuration (when self-hosting with S3)
 
 When `S3_HOST` is set, image attachments and other blobs land in S3 under
-`sessions/<sessionId>/attachments/<id>.enc`. Two bucket-level settings are
-not configured by the server itself and must be applied once at deploy
-time:
+`sessions/<sessionId>/attachments/<id>.enc`. The Server proxies every current
+attachment and profile-object transfer; it does not return a public S3 URL or a
+new direct S3 capability. Keep the bucket private. A public bucket, an old
+direct URL, or an independently issued object-store credential cannot be
+revoked by the application after account deletion.
 
-**1. Lifecycle rule for attachment TTL.** Session deletion removes database
-records and triggers best-effort attachment cleanup. Object-storage failures
-are non-fatal and currently have no bounded retry or hard-delete guarantee. Add
-a lifecycle rule on the attachments prefix so orphaned objects and attachments
-from long-lived sessions eventually age out. Pick a TTL that matches your
-retention policy (30 days is a reasonable default).
+**1. Block anonymous/public access.** Apply this in the object store before
+serving traffic:
 
 ```bash
 # AWS CLI
-aws s3api put-bucket-lifecycle-configuration --bucket happy-blobs \
-  --lifecycle-configuration '{
-    "Rules": [{
-      "ID": "session-attachments-ttl",
-      "Status": "Enabled",
-      "Filter": { "Prefix": "sessions/" },
-      "Expiration": { "Days": 30 }
-    }]
+aws s3api put-public-access-block --bucket happy-blobs \
+  --public-access-block-configuration '{
+    "BlockPublicAcls": true,
+    "IgnorePublicAcls": true,
+    "BlockPublicPolicy": true,
+    "RestrictPublicBuckets": true
   }'
 
 # MinIO
-mc ilm rule add myminio/happy-blobs \
-  --expire-days 30 \
-  --prefix "sessions/"
+mc anonymous set none myminio/happy-blobs
 ```
 
-**2. Server-side encryption (defense-in-depth).** Blobs are already
+**2. Configure retention and backup ownership.** Account deletion immediately
+locks access, durably retries primary-object cleanup, and waits out the legacy
+direct-upload capability window before its final sweep. Every S3 deployment must
+set `ACCOUNT_DELETION_LEGACY_DIRECT_UPLOADS_DRAINED_AT`. During an upgrade, set
+the actual UTC drain time only after all old Server instances are drained; do
+not invent a timestamp during the rolling rollout. A new S3 deployment that has
+never run an old direct-upload issuer may explicitly use
+`1970-01-01T00:00:00Z` to record that fact.
+The Server deletes every reachable version and delete marker in its configured
+primary bucket, but it cannot erase replicas, backup snapshots, object-store
+audit logs, container logs, or third-party copies maintained by a self-hosted
+deployment. The deployer must set and verify their replica, lifecycle, backup,
+and log-retention rules. If you want the Happy-hosted retention target, retain
+backup and operational-log data for no more than three days. This repository
+cannot establish that target for any deployment; retain the operating evidence
+with the deployment records.
+
+**3. Server-side encryption (defense-in-depth).** Blobs are already
 end-to-end encrypted by the client, but enabling AES-256 SSE on the
 bucket protects against an attacker who somehow obtains raw object
 storage access without the keys.
@@ -244,10 +256,19 @@ aws s3api put-bucket-encryption --bucket happy-blobs \
 mc encrypt set sse-s3 myminio/happy-blobs
 ```
 
-Local-storage mode (no `S3_HOST`) writes blobs under
-`<DATA_DIR>/files/sessions/<sessionId>/attachments/`. There is no
-lifecycle equivalent — clean up old session directories on a cron if
-you want a TTL story.
+Local-storage mode (no `S3_HOST`) is supported only on POSIX hosts with runtime
+UID ownership checks; Windows deployments must configure S3-compatible storage.
+The local mode writes blobs under
+`<DATA_DIR>/files/sessions/<sessionId>/attachments/`. Account deletion removes
+the configured primary data, but a self-hosted operator remains responsible for
+filesystem snapshots, backups, and host/container logs. The Server makes the
+local files root private to its runtime UID and rejects symbolic-link ancestors;
+operators must not grant another process that same UID write access to the data
+volume while the relay is running. A hostile process running as the Server UID
+is equivalent to a compromised Server process: it can inspect Server memory,
+credentials, and the primary database, so local storage is not a supported
+same-UID multi-tenant boundary. Deploy S3-compatible storage when that UID or
+volume cannot remain exclusive to the Server container/process.
 
 ## License
 

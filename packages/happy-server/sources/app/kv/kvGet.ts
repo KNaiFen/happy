@@ -1,4 +1,4 @@
-import { db } from "@/storage/db";
+import { Tx } from "@/storage/inTx";
 import * as privacyKit from "privacy-kit";
 
 export type KVGetResult = {
@@ -12,10 +12,11 @@ export type KVGetResult = {
  * Returns null if the key doesn't exist or if the value is null (deleted).
  */
 export async function kvGet(
+    tx: Pick<Tx, 'userKVStore'>,
     ctx: { uid: string },
     key: string
 ): Promise<KVGetResult> {
-    const result = await db.userKVStore.findUnique({
+    const result = await tx.userKVStore.findUnique({
         where: {
             accountId_key: {
                 accountId: ctx.uid,

@@ -50,6 +50,23 @@ The server uses room membership as the source of truth for who currently owns an
 4. When transient presence changes, the server emits `ephemeral` events to the matching rooms.
 5. On reconnect, clients can re-fetch state if they missed anything while offline.
 
+### Artifact recovery
+
+Artifact Socket events are low-latency incremental updates, not proof that every
+mutation was received. Recovery uses the authenticated REST artifact snapshot.
+The client follows the server's signed opaque cursor until `nextCursor` is
+`null`; it never treats one page, an empty cursor, a repeated cursor, or an
+interrupted pagination attempt as a complete set. If an artifact mutation
+changes the cursor's artifact revision, continuation returns 409 and the client
+restarts from the first page.
+
+Only after every page shares the same `highWatermark` may the App reconcile
+absence. It removes local artifacts and in-memory data keys missing from the
+complete snapshot, while preserving any present or absent artifact whose local
+lifecycle sequence is newer than the watermark. This lets a later snapshot
+repair a missed `delete-artifact` event without allowing an old snapshot to
+overwrite a newer Socket mutation.
+
 ## RPC Flow
 
 1. A caller emits `rpc-call` with a method name and params.

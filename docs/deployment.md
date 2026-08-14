@@ -25,13 +25,14 @@
 
 - `DATABASE_URL`：Prisma/Postgres 连接；
 - `REDIS_URL`：可选；配置时启用跨副本 Socket.IO adapter；
-- `S3_HOST`、`S3_ACCESS_KEY`、`S3_SECRET_KEY`、`S3_BUCKET`、
-  `S3_PUBLIC_URL`、`S3_PORT`、`S3_USE_SSL`：可选对象存储；
+- `S3_HOST`、`S3_ACCESS_KEY`、`S3_SECRET_KEY`、`S3_BUCKET`、`S3_PORT`、
+  `S3_USE_SSL`：可选对象存储；bucket 必须保持私有，文件只经 Server 代理；
 - 未配置 S3 时使用本地文件目录，该目录必须挂载持久卷。
 
 通用配置：
 
 - `PORT`：API 端口，默认 `3005`；
+- `PUBLIC_URL`：客户端访问 Server 的公开基址；用于 Server 返回的文件路径，不是对象存储公开 URL；
 - `METRICS_ENABLED` / `METRICS_PORT`：可选 Prometheus 指标；
 - `GITHUB_*`：可选 GitHub 连接；
 - `ELEVENLABS_API_KEY`：默认语音 agent；
@@ -39,17 +40,45 @@
 - `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING`：只限受控开发环境。
 
 目标安全边界要求生产日志不得记录 prompt、reasoning、tool 参数/输出、provider ID、
-bearer token、加密 key 或签名材料。语音链路由 App 与 Server 各自的白名单 logger
-收口：只允许固定事件名、布尔值、枚举和用量区间；conversation token、context、
-用户/会话/provider 标识符和原始 SDK/Error 对象一律不可进入生产日志。对应 canary
-覆盖成功和异常路径，实施记录见
+bearer token、加密 key 或签名材料。语音、GitHub OAuth/disconnect、Artifact、Push、Fastify 请求失败、
+受控调试、迁移与 retry 路径都使用白名单日志：只允许固定事件名、枚举、状态类别、长度/计数、用量
+区间和必要的 diagnostic hash；conversation token、context、原始账户/会话/artifact/provider 标识符、
+请求 payload、data key 及原始 SDK/Error message 或 stack 一律不可进入运维日志。对应 canary 和 hostile
+sentinel 覆盖成功与异常路径；语音实施记录见
 [Voice 敏感日志收敛归档](plans/archive/voice-sensitive-logging-hardening-1.11.29-1.1.41.md)。
+
+## 删除与保留边界
+
+账户删除立即拒绝该 Happy 账户的新认证和新的读写准入，并可靠删除 Server 主数据和已配置对象存储中的账户对象；它没有导出、
+撤回或恢复阶段。当前 Server 会将附件和 profile object 代理到自己，因而确认删除后不再为该账户
+提供新的受控读取或写入能力。S3-compatible bucket 必须禁用匿名/public read 和 write；公开 bucket
+或旧直连 URL 不受应用撤销控制，是部署配置错误。
+
+所有启用 S3 的部署都必须以 ISO 8601 UTC 时间设置
+`ACCOUNT_DELETION_LEGACY_DIRECT_UPLOADS_DRAINED_AT`。从旧版直接 S3 上传协议升级时，只能在完成滚动
+部署并确认所有旧 Pod 已停止签发 URL 后填入实际排空时间；全新、从未运行过旧签发器的 S3 部署可显式
+使用 `1970-01-01T00:00:00Z` 作为该事实的配置声明。这是删除最终对象 sweep 的安全
+栅栏：Server 将在该时间至少过去 16 分钟后才可报告 S3 账户删除完成；变量缺失、格式无效或落在
+未来时，Server 拒绝启动新的账户删除，而不是猜测旧 capability 是否已失效。仅使用本地文件存储的
+部署不需要该变量。
+
+托管服务的备份和运维日志保留目标为最长三天，但备份调度、日志汇聚和实际删除证据位于本仓库外。
+Server 会删除已配置主 bucket 中的所有对象版本和 delete marker；自托管部署者仍必须自行配置并验证
+Postgres/PGlite backup、S3 replica/lifecycle/Object Lock、Redis、Docker/host 日志和外部 provider 的
+保留策略。代码不会替部署者删除这些基础设施副本；Object Lock 或权限拒绝会让账户删除保持 pending。
+
+数据库删除无法撤回已经发送到外部系统的数据：删除前已准入的附件响应流可能完成，已交给 Socket、
+Expo 或远端 RPC provider 的动作只能尽力中止。删除标记会阻止新的准入，但不构成这些第三方已送达
+副本的删除证明。
 
 ## Kubernetes 与容器
 
 `packages/happy-server/deploy/handy.yaml` 和 `deploy/base`/`deploy/overlays` 是托管部署示例。
-本仓库没有 `happy-redis.yaml`；Redis 若需要由部署环境单独提供。本地 overlay 提供
-Postgres、MinIO、Prometheus 和 Grafana 示例。
+`handy.yaml` 自带单副本 Redis StatefulSet；部署者可以用外部 Redis 替换它。本地 overlay 另提供
+Postgres、MinIO、Prometheus 和 Grafana 示例，并把 `PUBLIC_URL` 固定为配套
+`kubectl port-forward svc/handy-server 3005:3000` 的 `http://localhost:3005`。
+如果客户端通过 NodePort、局域网地址或其他入口访问，部署者必须把该值改为同一个客户端可达基址；
+空值不能替代这项配置，因为请求之外产生的 profile 更新无法推导请求 Host。
 
 `Dockerfile.server` 是受支持的 standalone 单容器源码构建入口。它使用 PGlite、
 本地附件目录、`/data` 持久卷和 port `3005`，不需要 Postgres、Redis 或 S3。

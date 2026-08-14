@@ -305,6 +305,14 @@ export class SyncV4Persistence {
         }
     }
 
+    /** Remove all account-scoped snapshots, journals, outbox records and revisions. */
+    clearAll(): void {
+        const prefix = 'sync-v4:';
+        for (const key of this.storage.getAllKeys()) {
+            if (key.startsWith(prefix)) this.storage.delete(key);
+        }
+    }
+
     private readEntities(sessionId: string, generation: string): SyncEntitySnapshotV4[] {
         const indexed = Array.from({ length: INDEX_BUCKET_COUNT }, (_, bucket) => (
             this.readStringIndexSafe(entityIndexBucketKey(sessionId, generation, bucket))

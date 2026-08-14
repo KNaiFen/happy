@@ -229,5 +229,8 @@ export const voiceHooks = {
         }
         shownSessions.clear();
         pendingPrompts = [];
+        unsubscribeMode?.();
+        unsubscribeMode = null;
+        lastRealtimeMode = null;
     }
 };

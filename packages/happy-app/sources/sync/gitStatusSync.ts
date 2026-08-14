@@ -14,6 +14,7 @@ import { parseNumStat, mergeDiffSummaries } from './git-parsers/parseDiff';
 
 
 export class GitStatusSync {
+    private lifecycleGeneration = 0;
     // Map project keys to sync instances
     private projectSyncMap = new Map<string, InvalidateSync>();
     // Map session IDs to project keys for cleanup
@@ -120,10 +121,21 @@ export class GitStatusSync {
         }
     }
 
+    shutdown(): void {
+        this.lifecycleGeneration += 1;
+        for (const timer of this.debounceTimers.values()) clearTimeout(timer);
+        for (const sync of this.projectSyncMap.values()) sync.stop();
+        this.debounceTimers.clear();
+        this.projectSyncMap.clear();
+        this.sessionToProjectKey.clear();
+    }
+
     /**
      * Fetch git status for a project using any session in that project
      */
     private async fetchGitStatusForProject(sessionId: string, projectKey: string): Promise<void> {
+        const generation = this.lifecycleGeneration;
+        const isCurrent = () => generation === this.lifecycleGeneration;
         try {
             // Check if we have a session with valid metadata
             const session = storage.getState().sessions[sessionId];
@@ -137,6 +149,7 @@ export class GitStatusSync {
                 cwd: session.metadata.path,
                 timeout: 5000
             });
+            if (!isCurrent()) return;
 
             if (!gitCheckResult.success || gitCheckResult.exitCode !== 0) {
                 // Not a git repository, clear any existing status
@@ -151,6 +164,7 @@ export class GitStatusSync {
                 cwd: session.metadata.path,
                 timeout: 10000
             });
+            if (!isCurrent()) return;
 
             if (!statusResult.success) {
                 console.error('Failed to get git status:', statusResult.error);
@@ -163,6 +177,7 @@ export class GitStatusSync {
                 cwd: session.metadata.path,
                 timeout: 10000
             });
+            if (!isCurrent()) return;
 
             // Get git diff statistics for staged changes
             const stagedDiffStatResult = await sessionBash(sessionId, {
@@ -170,6 +185,7 @@ export class GitStatusSync {
                 cwd: session.metadata.path,
                 timeout: 10000
             });
+            if (!isCurrent()) return;
 
             // Parse the git status output with diff statistics
             const gitStatus = this.parseGitStatusV2(

@@ -4,22 +4,24 @@ import { inTx } from "@/storage/inTx";
 import { RelationshipStatus } from "@prisma/client";
 import { relationshipSet } from "./relationshipSet";
 import { relationshipGet } from "./relationshipGet";
+import { requireAccountWrites } from "@/app/account/accountWriteGate";
 
 export async function friendRemove(ctx: Context, uid: string): Promise<UserProfile | null> {
     return await inTx(async (tx) => {
 
         // Read current user objects
         const currentUser = await tx.account.findUnique({
-            where: { id: ctx.uid },
+            where: { id: ctx.uid, deletionRequestedAt: null },
             include: { githubUser: true }
         });
-        const targetUser = await tx.account.findUnique({
-            where: { id: uid },
+        const targetUser = await tx.account.findFirst({
+            where: { id: uid, deletionRequestedAt: null },
             include: { githubUser: true }
         });
         if (!currentUser || !targetUser) {
             return null;
         }
+        await requireAccountWrites(tx, [currentUser.id, targetUser.id]);
 
         // Read relationship status
         const currentUserRelationship = await relationshipGet(tx, currentUser.id, targetUser.id);

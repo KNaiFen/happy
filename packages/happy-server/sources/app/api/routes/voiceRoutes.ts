@@ -3,6 +3,14 @@ import * as crypto from "crypto";
 import { VoiceConversationResponseSchema, VoiceUsageResponseSchema } from "@slopus/happy-wire";
 import { type Fastify } from "../types";
 import {
+    armVoiceCredentialAdmission,
+    beginVoiceCredentialAdmission,
+    sendActiveAccountResponse,
+    sendVoiceCredentialForAdmission,
+    settleVoiceCredentialAdmission,
+    VoiceCredentialResponseOutcomeUnknownError,
+} from "@/app/account/voiceCredentialAdmission";
+import {
     voiceConversationBucket,
     voiceServerLog,
     voiceStatusClass,
@@ -13,6 +21,7 @@ const VOICE_FREE_LIMIT_SECONDS = 1200;  // 20 minutes free tier per 30 days (~$0
 const VOICE_HARD_LIMIT_SECONDS = 18000; // 5 hours absolute cap per 30 days (even with subscription)
 const VOICE_MAX_CONVERSATIONS = 100;    // Max conversations trackable per 30 days (ElevenLabs page_size limit)
 const VOICE_EXTRA_LIMIT_SECONDS = 5 * 60 * 60;
+const VOICE_CREDENTIAL_MAX_LIFETIME_MS = 60 * 60 * 1000;
 const VOICE_EXTRA_LIMIT_PUBLIC_IDS = new Set([
     "cmp66x5u018d9wz0unf56tp07",
 ]);
@@ -21,6 +30,34 @@ const ELEVEN_LABS_API = "https://api.elevenlabs.io/v1/convai";
 type VoiceUsageResult =
     | { ok: true; usedSeconds: number; conversationCount: number }
     | { ok: false };
+
+function parseConversationCredential(conversationToken: string): {
+    conversationId: string;
+    expiresAt: Date;
+} | null {
+    try {
+        const payload = JSON.parse(
+            Buffer.from(conversationToken.split('.')[1], 'base64url').toString(),
+        ) as { exp?: unknown; video?: { room?: unknown } };
+        const conversationId = typeof payload.video?.room === 'string'
+            ? payload.video.room.match(/(conv_[a-zA-Z0-9]+)/)?.[0]
+            : undefined;
+        const expiresAt = typeof payload.exp === 'number'
+            ? new Date(payload.exp * 1000)
+            : null;
+        const now = Date.now();
+        if (
+            !conversationId
+            || !expiresAt
+            || !Number.isFinite(expiresAt.getTime())
+            || expiresAt.getTime() <= now
+            || expiresAt.getTime() > now + VOICE_CREDENTIAL_MAX_LIFETIME_MS
+        ) return null;
+        return { conversationId, expiresAt };
+    } catch {
+        return null;
+    }
+}
 
 function getVoiceHardLimitSeconds(userId: string): number {
     if (VOICE_EXTRA_LIMIT_PUBLIC_IDS.has(userId)) {
@@ -131,6 +168,7 @@ export function voiceRoutes(app: Fastify) {
             }),
             response: {
                 200: VoiceConversationResponseSchema,
+                410: z.object({ error: z.literal('Account deletion in progress') }),
                 500: z.object({ error: z.string() }),
                 502: z.object({ error: z.string() }),
             },
@@ -138,8 +176,6 @@ export function voiceRoutes(app: Fastify) {
     }, async (request, reply) => {
         const userId = request.userId;
         const { agentId } = request.body;
-
-        voiceServerLog("credentials.requested");
 
         const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
         if (!elevenLabsApiKey) {
@@ -149,71 +185,90 @@ export function voiceRoutes(app: Fastify) {
             return reply.code(500).send({ error: 'REVENUECAT_API_KEY not configured' });
         }
 
-        const elevenUserId = deriveElevenUserId(userId);
-        const hardLimitSeconds = getVoiceHardLimitSeconds(userId);
-
-        // Check usage from ElevenLabs directly
-        const usage = await getVoiceUsage(elevenLabsApiKey, elevenUserId);
-        if (!usage.ok) {
-            return reply.code(502).send({ error: 'Failed to get voice usage' });
+        // Keep a durable admission across every provider query, not only the
+        // final token mint. Otherwise deletion could commit after a short
+        // account check and before ElevenLabs/RevenueCat is queried.
+        const admission = await beginVoiceCredentialAdmission(userId);
+        if (!admission) {
+            return reply.code(410).send({ error: 'Account deletion in progress' });
         }
-        const { usedSeconds, conversationCount } = usage;
-        voiceServerLog("credentials.evaluated", {
-            usageBucket: voiceUsageBucket(usedSeconds, VOICE_FREE_LIMIT_SECONDS, hardLimitSeconds),
-            conversationBucket: voiceConversationBucket(conversationCount),
-        });
+        let credentialMayHaveEscaped = false;
+        const sendAccountResponse = async (payload: z.infer<typeof VoiceConversationResponseSchema>) => {
+            const sent = await sendActiveAccountResponse(userId, () => {
+                reply.send(payload);
+            });
+            return sent
+                ? reply
+                : reply.code(410).send({ error: 'Account deletion in progress' });
+        };
 
-        // Conversation count cap — we can only track 100 per query (ElevenLabs page_size limit)
-        if (conversationCount >= VOICE_MAX_CONVERSATIONS) {
-            voiceServerLog("credentials.blocked", {
-                outcome: "blocked",
-                reason: "conversation-limit",
-            });
-            return reply.send({
-                allowed: false as const,
-                reason: 'voice_conversation_limit_reached' as const,
-                usedSeconds,
-                limitSeconds: hardLimitSeconds,
-                agentId,
-            });
-        }
+        try {
+            voiceServerLog("credentials.requested");
+            const elevenUserId = deriveElevenUserId(userId);
+            const hardLimitSeconds = getVoiceHardLimitSeconds(userId);
 
-        // Hard cap — normally 5 hours, with account-specific credits applied.
-        if (usedSeconds >= hardLimitSeconds) {
-            voiceServerLog("credentials.blocked", {
-                outcome: "blocked",
-                reason: "hard-limit",
+            // Check usage from ElevenLabs directly while the durable admission
+            // keeps deletion from completing underneath this request.
+            const usage = await getVoiceUsage(elevenLabsApiKey, elevenUserId);
+            if (!usage.ok) {
+                return reply.code(502).send({ error: 'Failed to get voice usage' });
+            }
+            const { usedSeconds, conversationCount } = usage;
+            voiceServerLog("credentials.evaluated", {
+                usageBucket: voiceUsageBucket(usedSeconds, VOICE_FREE_LIMIT_SECONDS, hardLimitSeconds),
+                conversationBucket: voiceConversationBucket(conversationCount),
             });
-            return reply.send({
-                allowed: false as const,
-                reason: 'voice_hard_limit_reached' as const,
-                usedSeconds,
-                limitSeconds: hardLimitSeconds,
-                agentId,
-            });
-        }
 
-        // Free tier — 1 hour, then need subscription
-        if (usedSeconds >= VOICE_FREE_LIMIT_SECONDS) {
-            const subscribed = await hasActiveSubscription(userId);
-            voiceServerLog("subscription.checked", { subscribed });
-            if (!subscribed) {
+            // Conversation count cap — we can only track 100 per query (ElevenLabs page_size limit)
+            if (conversationCount >= VOICE_MAX_CONVERSATIONS) {
                 voiceServerLog("credentials.blocked", {
                     outcome: "blocked",
-                    reason: "subscription-required",
+                    reason: "conversation-limit",
                 });
-                return reply.send({
+                return sendAccountResponse({
                     allowed: false as const,
-                    reason: 'subscription_required' as const,
+                    reason: 'voice_conversation_limit_reached' as const,
                     usedSeconds,
-                    limitSeconds: VOICE_FREE_LIMIT_SECONDS,
+                    limitSeconds: hardLimitSeconds,
                     agentId,
                 });
             }
-        }
 
-        // Get conversation token (JWT for WebRTC) with user identity
-        try {
+            // Hard cap — normally 5 hours, with account-specific credits applied.
+            if (usedSeconds >= hardLimitSeconds) {
+                voiceServerLog("credentials.blocked", {
+                    outcome: "blocked",
+                    reason: "hard-limit",
+                });
+                return sendAccountResponse({
+                    allowed: false as const,
+                    reason: 'voice_hard_limit_reached' as const,
+                    usedSeconds,
+                    limitSeconds: hardLimitSeconds,
+                    agentId,
+                });
+            }
+
+            // Free tier — 1 hour, then need subscription
+            if (usedSeconds >= VOICE_FREE_LIMIT_SECONDS) {
+                const subscribed = await hasActiveSubscription(userId);
+                voiceServerLog("subscription.checked", { subscribed });
+                if (!subscribed) {
+                    voiceServerLog("credentials.blocked", {
+                        outcome: "blocked",
+                        reason: "subscription-required",
+                    });
+                    return sendAccountResponse({
+                        allowed: false as const,
+                        reason: 'subscription_required' as const,
+                        usedSeconds,
+                        limitSeconds: VOICE_FREE_LIMIT_SECONDS,
+                        agentId,
+                    });
+                }
+            }
+
+            // Get conversation token (JWT for WebRTC) with user identity
             const tokenRes = await fetch(
                 `${ELEVEN_LABS_API}/conversation/token?agent_id=${agentId}&participant_name=${elevenUserId}`,
                 { headers: { 'xi-api-key': elevenLabsApiKey } }
@@ -230,11 +285,8 @@ export function voiceRoutes(app: Fastify) {
 
             const { token: conversationToken } = (await tokenRes.json()) as { token: string };
 
-            // Extract conversation_id from JWT payload (LiveKit room name contains it)
-            const jwtPayload = JSON.parse(Buffer.from(conversationToken.split('.')[1], 'base64').toString());
-            const conversationId = (jwtPayload.video?.room || '').match(/(conv_[a-zA-Z0-9]+)/)?.[0];
-
-            if (!conversationId) {
+            const credential = parseConversationCredential(conversationToken);
+            if (!credential || credential.expiresAt <= new Date()) {
                 voiceServerLog("provider.token.invalid", {
                     outcome: "failed",
                     reason: "provider-error",
@@ -242,22 +294,39 @@ export function voiceRoutes(app: Fastify) {
                 return reply.code(500).send({ error: 'Failed to get conversation ID' });
             }
 
-            voiceServerLog("credentials.issued", { outcome: "success" });
-            return reply.send({
+            if (!(await armVoiceCredentialAdmission(admission, credential.expiresAt))) {
+                return reply.code(410).send({ error: 'Account deletion in progress' });
+            }
+
+            const payload = {
                 allowed: true as const,
                 conversationToken,
-                conversationId,
+                conversationId: credential.conversationId,
                 agentId,
                 elevenUserId,
                 usedSeconds,
                 limitSeconds: usedSeconds >= VOICE_FREE_LIMIT_SECONDS ? hardLimitSeconds : VOICE_FREE_LIMIT_SECONDS,
+            };
+            const sent = await sendVoiceCredentialForAdmission(admission, () => {
+                credentialMayHaveEscaped = true;
+                reply.send(payload);
             });
-        } catch {
+            if (!sent) {
+                return reply.code(410).send({ error: 'Account deletion in progress' });
+            }
+            voiceServerLog("credentials.issued", { outcome: "success" });
+            return reply;
+        } catch (error) {
+            if (error instanceof VoiceCredentialResponseOutcomeUnknownError) return reply;
             voiceServerLog("credentials.request.failed", {
                 outcome: "failed",
                 reason: "provider-error",
             });
             return reply.code(500).send({ error: 'Failed to get voice credentials' });
+        } finally {
+            if (!credentialMayHaveEscaped) {
+                await settleVoiceCredentialAdmission(admission).catch(() => undefined);
+            }
         }
     });
 
@@ -270,6 +339,7 @@ export function voiceRoutes(app: Fastify) {
         schema: {
             response: {
                 200: VoiceUsageResponseSchema,
+                410: z.object({ error: z.literal('Account deletion in progress') }),
                 500: z.object({ error: z.string() }),
                 502: z.object({ error: z.string() }),
             },
@@ -282,10 +352,15 @@ export function voiceRoutes(app: Fastify) {
             return reply.code(500).send({ error: 'ELEVENLABS_API_KEY not configured' });
         }
 
-        const elevenUserId = deriveElevenUserId(userId);
-        const hardLimitSeconds = getVoiceHardLimitSeconds(userId);
+        const admission = await beginVoiceCredentialAdmission(userId);
+        if (!admission) {
+            return reply.code(410).send({ error: 'Account deletion in progress' });
+        }
 
         try {
+            const elevenUserId = deriveElevenUserId(userId);
+            const hardLimitSeconds = getVoiceHardLimitSeconds(userId);
+
             const [usage, subscribed] = await Promise.all([
                 getVoiceUsage(elevenLabsApiKey, elevenUserId),
                 hasActiveSubscription(userId),
@@ -294,19 +369,27 @@ export function voiceRoutes(app: Fastify) {
                 return reply.code(502).send({ error: 'Failed to get voice usage' });
             }
             const { usedSeconds, conversationCount } = usage;
-            return reply.send({
+            const payload = {
                 usedSeconds,
                 limitSeconds: subscribed ? hardLimitSeconds : VOICE_FREE_LIMIT_SECONDS,
                 conversationCount,
                 conversationLimit: VOICE_MAX_CONVERSATIONS,
                 elevenUserId,
+            };
+            const sent = await sendActiveAccountResponse(userId, () => {
+                reply.send(payload);
             });
+            return sent
+                ? reply
+                : reply.code(410).send({ error: 'Account deletion in progress' });
         } catch {
             voiceServerLog("usage.request.failed", {
                 outcome: "failed",
                 reason: "provider-error",
             });
             return reply.code(500).send({ error: 'Failed to get voice usage' });
+        } finally {
+            await settleVoiceCredentialAdmission(admission).catch(() => undefined);
         }
     });
 }

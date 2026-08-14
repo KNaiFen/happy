@@ -2,6 +2,8 @@ import * as privacyKit from "privacy-kit";
 import { db } from "@/storage/db";
 import { log } from "@/utils/log";
 import { diagnosticHash } from "@/utils/diagnosticHash";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 /** Cache entries expire after 24 hours */
 const TOKEN_CACHE_TTL = 24 * 60 * 60 * 1000;
@@ -9,6 +11,7 @@ const TOKEN_CACHE_TTL = 24 * 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 10_000;
 /** Run cleanup every 10 minutes */
 const CLEANUP_INTERVAL = 10 * 60 * 1000;
+export const GITHUB_OAUTH_STATE_TTL_MS = 5 * 60 * 1000;
 
 interface TokenCacheEntry {
     userId: string;
@@ -78,7 +81,7 @@ export class AuthModule {
         const githubGenerator = await privacyKit.createEphemeralTokenGenerator({
             service: 'github-happy',
             seed: process.env.HANDY_MASTER_SECRET!,
-            ttl: 5 * 60 * 1000 // 5 minutes
+            ttl: GITHUB_OAUTH_STATE_TTL_MS
         });
 
         const githubVerifier = await privacyKit.createEphemeralTokenVerifier({
@@ -95,26 +98,28 @@ export class AuthModule {
         log({ module: 'auth' }, 'Auth module initialized');
     }
     
-    async createToken(userId: string, extras?: Record<string, unknown>): Promise<string> {
+    async createToken(userId: string, extras?: Record<string, unknown>): Promise<string | null> {
         if (!this.tokens) {
             throw new Error('Auth module not initialized');
         }
-        
-        const payload: any = { user: userId };
-        if (extras) {
-            payload.extras = extras;
-        }
-        
-        const token = await this.tokens.generator.new(payload);
-        
-        // Cache the token immediately
+
+        // Keep account admission and token issuance in one serializable
+        // transaction so deletion cannot commit between the active check and
+        // generation of a credential.
+        const token = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return null;
+            const payload: any = { user: userId };
+            if (extras) payload.extras = extras;
+            return this.tokens!.generator.new(payload);
+        });
+        if (!token) return null;
+
         this.tokenCache.set(token, {
             userId,
             extras,
             credentialId: terminalCredentialIdFromExtras(extras),
             cachedAt: Date.now()
         });
-        
         return token;
     }
     
@@ -125,6 +130,10 @@ export class AuthModule {
             if (Date.now() - cached.cachedAt > TOKEN_CACHE_TTL) {
                 this.tokenCache.delete(token);
             } else {
+                if (!(await this.loadActiveAccount(cached.userId))) {
+                    this.tokenCache.delete(token);
+                    return null;
+                }
                 let machineId: string | undefined;
                 if (cached.credentialId) {
                     const credential = await this.loadActiveTerminalCredential(
@@ -158,6 +167,9 @@ export class AuthModule {
             }
             
             const userId = verified.user as string;
+            if (typeof userId !== 'string' || !(await this.loadActiveAccount(userId))) {
+                return null;
+            }
             const extras = asRecord(verified.extras);
             const credentialId = terminalCredentialIdFromExtras(extras);
             let machineId: string | undefined;
@@ -240,6 +252,26 @@ export class AuthModule {
             return null;
         }
     }
+
+    private async loadActiveAccount(userId: string): Promise<boolean> {
+        try {
+            const account = await db.account.findUnique({
+                where: { id: userId },
+                select: { deletionRequestedAt: true },
+            });
+            return account?.deletionRequestedAt === null;
+        } catch {
+            log({
+                module: 'auth',
+                level: 'error',
+            }, 'Account validation failed');
+            return false;
+        }
+    }
+
+    async isAccountActive(userId: string): Promise<boolean> {
+        return this.loadActiveAccount(userId);
+    }
     
     invalidateUserTokens(userId: string): void {
         // Remove all tokens for a specific user
@@ -287,18 +319,21 @@ export class AuthModule {
         };
     }
     
-    async createGithubToken(userId: string): Promise<string> {
+    async createGithubToken(userId: string, admissionId: string): Promise<string> {
         if (!this.tokens) {
             throw new Error('Auth module not initialized');
         }
         
-        const payload = { user: userId, purpose: 'github-oauth' };
+        const payload = {
+            user: userId,
+            extras: { purpose: 'github-oauth', admissionId },
+        };
         const token = await this.tokens.githubGenerator.new(payload);
         
         return token;
     }
 
-    async verifyGithubToken(token: string): Promise<{ userId: string } | null> {
+    async verifyGithubToken(token: string): Promise<{ userId: string; admissionId: string } | null> {
         if (!this.tokens) {
             throw new Error('Auth module not initialized');
         }
@@ -309,7 +344,20 @@ export class AuthModule {
                 return null;
             }
             
-            return { userId: verified.user as string };
+            const userId = verified.user;
+            const extras = asRecord(verified.extras);
+            const admissionId = extras?.admissionId;
+            if (
+                extras?.purpose !== 'github-oauth'
+                || typeof userId !== 'string'
+                || userId.length === 0
+                || typeof admissionId !== 'string'
+                || admissionId.length === 0
+                || !(await this.loadActiveAccount(userId))
+            ) {
+                return null;
+            }
+            return { userId, admissionId };
         } catch {
             log({ module: 'auth', level: 'error' }, 'GitHub token verification failed');
             return null;

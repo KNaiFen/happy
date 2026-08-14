@@ -205,6 +205,19 @@ describe('Codex command draft recovery', () => {
             .toBe('current\n\nrecovered');
     });
 
+    it('clears persisted receipts for an account shutdown', () => {
+        const state = fixture();
+        state.recovery.record({
+            commandId: 'command-1',
+            sourceSessionId: 'source',
+            text: 'discard on logout',
+        });
+
+        state.recovery.clear();
+
+        expect(state.persisted()).toEqual([]);
+    });
+
     it('reconciles a persisted receipt after an App restart', () => {
         const state = fixture([{
             version: 1,

@@ -10,6 +10,7 @@ import {
     buildSessionAccessWhere,
     type SessionAccessIdentity,
 } from "@/app/api/utils/sessionAccess";
+import { requireAccountWrite } from "@/app/account/accountWriteGate";
 
 /**
  * Delete a session and all its related data.
@@ -30,6 +31,7 @@ export async function sessionDelete(
     identity: SessionAccessIdentity = { userId: ctx.uid },
 ): Promise<boolean> {
     return await inTx(async (tx) => {
+        await requireAccountWrite(tx, ctx.uid);
         const accessWhere = buildSessionAccessWhere(identity, { id: sessionId });
         if (!accessWhere) return false;
         // Verify session exists and belongs to the user
@@ -95,6 +97,7 @@ export async function sessionDelete(
         // Send notification and clean up storage after transaction commits
         afterTx(tx, async () => {
             const updSeq = await allocateUserSeq(ctx.uid);
+            if (updSeq === null) return;
             const updatePayload = buildDeleteSessionUpdate(sessionId, updSeq, randomKeyNaked(12));
 
             log({

@@ -18,9 +18,9 @@ if (process.env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING) {
         const min = String(now.getMinutes()).padStart(2, '0');
         const sec = String(now.getSeconds()).padStart(2, '0');
         consolidatedLogFile = join(logsDir, `${month}-${day}-${hour}-${min}-${sec}.log`);
-        console.log(`[PINO] Remote debugging logs enabled - writing to ${consolidatedLogFile}`);
-    } catch (error) {
-        console.error('Failed to create logs directory:', error);
+        console.log('[PINO] Remote debugging logs enabled');
+    } catch {
+        console.error('Failed to create logs directory');
     }
 }
 

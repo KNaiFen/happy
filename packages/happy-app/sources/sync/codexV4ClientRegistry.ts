@@ -16,7 +16,7 @@ const MAX_PENDING_ON_DEMAND_STARTS = 256;
 export interface CodexV4RegistryClient {
     readonly diagnosticSessionId?: string;
     start(): Promise<void>;
-    stop(): void;
+    stop(options?: { silent?: boolean }): void;
     invalidate(highWatermark?: number): void;
 }
 
@@ -84,6 +84,8 @@ interface StartingClient<TClient extends CodexV4RegistryClient> {
     generation: number;
     client: TClient | null;
     stopped: boolean;
+    silent: boolean;
+    sessionKey: Uint8Array;
     created: Promise<TClient>;
     promise: Promise<void>;
 }
@@ -100,7 +102,10 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
     constructor(private readonly options: CodexV4ClientRegistryOptions<TClient, TEvent>) {}
 
     reconcile(sessions: CodexV4RegistrySession[]): void {
-        const desired = new Map(sessions.map((session) => [session.sessionId, session]));
+        const desired = new Map(sessions.map((session) => [session.sessionId, {
+            ...session,
+            sessionKey: session.sessionKey.slice(),
+        }]));
         const knownSessionIds = new Set([
             ...this.desired.keys(),
             ...this.clients.keys(),
@@ -116,6 +121,8 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             if (previous && previous.pollIntervalMs !== session.pollIntervalMs) {
                 this.stop(session.sessionId);
             }
+            const previousDesired = this.desired.get(session.sessionId);
+            if (previousDesired && previousDesired !== session) previousDesired.sessionKey.fill(0);
             this.desired.set(session.sessionId, session);
             if (session.pollIntervalMs === null && !pendingStart) continue;
             if (
@@ -154,20 +161,24 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         for (const sessionId of sessionIds) this.invalidate(sessionId);
     }
 
-    stop(sessionId: string): void {
+    stop(sessionId: string, options?: { silent?: boolean }): void {
+        const silent = options?.silent === true;
+        const desiredSession = this.desired.get(sessionId);
         const diagnosticStats = readAppSyncV4DiagnosticStatsSafely(this.options.diagnosticStats);
         const diagnosticsDegraded = appSyncV4DiagnosticStatsAreDegraded(diagnosticStats);
-        this.recordDiagnostic(sessionId, {
-            level: diagnosticsDegraded ? 'warn' : 'info',
-            event: 'lifecycle',
-            phase: diagnosticsDegraded ? 'failed' : 'completed',
-            state: diagnosticsDegraded ? 'degraded' : 'stopped',
-            count: diagnosticStats?.count,
-            dropped: diagnosticStats?.droppedRecords,
-            invalid: diagnosticStats?.invalidRecords,
-            writeFailures: diagnosticStats?.writeFailures,
-            listenerFailures: diagnosticStats?.listenerFailures,
-        });
+        if (!silent) {
+            this.recordDiagnostic(sessionId, {
+                level: diagnosticsDegraded ? 'warn' : 'info',
+                event: 'lifecycle',
+                phase: diagnosticsDegraded ? 'failed' : 'completed',
+                state: diagnosticsDegraded ? 'degraded' : 'stopped',
+                count: diagnosticStats?.count,
+                dropped: diagnosticStats?.droppedRecords,
+                invalid: diagnosticStats?.invalidRecords,
+                writeFailures: diagnosticStats?.writeFailures,
+                listenerFailures: diagnosticStats?.listenerFailures,
+            });
+        }
         this.desired.delete(sessionId);
         this.pendingStarts.delete(sessionId);
         this.retryAttempts.delete(sessionId);
@@ -178,13 +189,33 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         const activeClient = this.clients.get(sessionId);
         const startingRecord = this.starts.get(sessionId);
         const startingClient = startingRecord?.client;
-        activeClient?.stop();
+        desiredSession?.sessionKey.fill(0);
+        if (startingRecord) startingRecord.silent = silent;
+        activeClient?.stop({ silent });
         this.clients.delete(sessionId);
         if (startingClient && startingClient !== activeClient && !startingRecord?.stopped) {
-            startingClient.stop();
+            startingRecord!.silent = silent;
+            startingClient.stop({ silent });
             startingRecord!.stopped = true;
         }
+        // The factory may still be awaiting native crypto setup. Clear its
+        // private copy immediately; the create() finally block repeats this
+        // operation when the promise eventually settles.
+        startingRecord?.sessionKey.fill(0);
         this.starts.delete(sessionId);
+    }
+
+    stopAll(options?: { silent?: boolean }): void {
+        const sessionIds = new Set([
+            ...this.desired.keys(),
+            ...this.clients.keys(),
+            ...this.starts.keys(),
+            ...this.retryAttempts.keys(),
+            ...this.retryTimers.keys(),
+        ]);
+        for (const sessionId of sessionIds) this.stop(sessionId, options);
+        this.pendingStarts.clear();
+        this.generations.clear();
     }
 
     hasClient(sessionId: string): boolean {
@@ -248,8 +279,10 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             this.generations.get(session.sessionId) === generation
             && (this.starts.get(session.sessionId) === record || this.clients.get(session.sessionId) === record.client)
         );
+        const factorySessionKey = session.sessionKey.slice();
         const created = this.options.createClient({
             ...session,
+            sessionKey: factorySessionKey,
             onEntity: async (event) => {
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) return;
                 await this.options.onEntity(session.sessionId, event);
@@ -280,17 +313,24 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             generation,
             client: null,
             stopped: false,
+            silent: false,
+            sessionKey: factorySessionKey,
             created,
             promise: Promise.resolve(),
         };
         this.starts.set(session.sessionId, record);
         record.promise = (async () => {
             try {
-                const client = await created;
+                let client: TClient;
+                try {
+                    client = await created;
+                } finally {
+                    factorySessionKey.fill(0);
+                }
                 record.client = client;
                 if (!isCurrent() || !this.options.isEligible(session.sessionId)) {
                     if (!record.stopped) {
-                        client.stop();
+                        client.stop({ silent: record.silent });
                         record.stopped = true;
                     }
                     return;
@@ -321,7 +361,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                 });
             } catch (error) {
                 if (record.client && !record.stopped) {
-                    record.client.stop();
+                    record.client.stop({ silent: record.silent });
                     record.stopped = true;
                 }
                 if (isCurrent()) {

@@ -1,4 +1,4 @@
-import { db } from "@/storage/db";
+import { Tx } from "@/storage/inTx";
 import * as privacyKit from "privacy-kit";
 
 export interface KVBulkGetResult {
@@ -14,10 +14,11 @@ export interface KVBulkGetResult {
  * Only returns existing keys with non-null values; missing or deleted keys are omitted.
  */
 export async function kvBulkGet(
+    tx: Pick<Tx, 'userKVStore'>,
     ctx: { uid: string },
     keys: string[]
 ): Promise<KVBulkGetResult> {
-    const results = await db.userKVStore.findMany({
+    const results = await tx.userKVStore.findMany({
         where: {
             accountId: ctx.uid,
             key: {

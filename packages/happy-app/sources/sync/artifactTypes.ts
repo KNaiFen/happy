@@ -9,6 +9,8 @@ export interface Artifact {
     bodyVersion?: number;  // Only in full fetch
     dataEncryptionKey: string;  // Base64 encoded encryption key (encrypted with user key)
     seq: number;
+    /** Account-global update sequence assigned when this row last changed. */
+    updateSeq: number;
     createdAt: number;
     updatedAt: number;
 }
@@ -41,6 +43,7 @@ export interface DecryptedArtifact {
     headerVersion: number;
     bodyVersion?: number;
     seq: number;
+    updateSeq?: number;
     createdAt: number;
     updatedAt: number;
     isDecrypted: boolean;  // Whether decryption was successful
@@ -54,6 +57,10 @@ export interface ArtifactCreateRequest {
     header: string;  // Base64 encoded encrypted header
     body: string;  // Base64 encoded encrypted body
     dataEncryptionKey: string;  // Base64 encoded encryption key (encrypted with user key)
+}
+
+export interface ArtifactCreateResponse extends Artifact {
+    updateSeq: number;
 }
 
 /**
@@ -72,6 +79,7 @@ export interface ArtifactUpdateRequest {
 export type ArtifactUpdateResponse = 
     | {
         success: true;
+        updateSeq: number;
         headerVersion?: number;
         bodyVersion?: number;
     }
@@ -83,3 +91,13 @@ export type ArtifactUpdateResponse =
         currentHeader?: string;
         currentBody?: string;
     };
+
+export interface ArtifactDeleteResponse {
+    success: true;
+    updateSeq: number;
+}
+
+export interface ArtifactSnapshot {
+    artifacts: Artifact[];
+    highWatermark: number;
+}

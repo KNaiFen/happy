@@ -1,7 +1,7 @@
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { MachineMetadata, MachineMetadataSchema } from '../storageTypes';
 import { EncryptionCache } from './encryptionCache';
-import { Decryptor, Encryptor } from './encryptor';
+import { Decryptor, Encryptor, DisposableEncryption } from './encryptor';
 
 export class MachineEncryption {
     private machineId: string;
@@ -16,6 +16,10 @@ export class MachineEncryption {
         this.machineId = machineId;
         this.encryptor = encryptor;
         this.cache = cache;
+    }
+
+    dispose(): void {
+        (this.encryptor as Partial<DisposableEncryption>).dispose?.();
     }
 
     /**
@@ -46,15 +50,15 @@ export class MachineEncryption {
             
             const parsed = MachineMetadataSchema.safeParse(decrypted[0]);
             if (!parsed.success) {
-                console.error('Failed to parse machine metadata:', parsed.error);
+                console.error('Failed to parse machine metadata');
                 return null;
             }
 
             // Cache the result
             this.cache.setCachedMachineMetadata(this.machineId, version, parsed.data);
             return parsed.data;
-        } catch (error) {
-            console.error('Failed to decrypt machine metadata:', error);
+        } catch {
+            console.error('Failed to decrypt machine metadata');
             return null;
         }
     }
@@ -90,8 +94,8 @@ export class MachineEncryption {
             // Cache the result (including null values)
             this.cache.setCachedDaemonState(this.machineId, version, result);
             return result;
-        } catch (error) {
-            console.error('Failed to decrypt daemon state:', error);
+        } catch {
+            console.error('Failed to decrypt daemon state');
             // Cache null result to avoid repeated decryption attempts
             this.cache.setCachedDaemonState(this.machineId, version, null);
             return null;
@@ -114,8 +118,8 @@ export class MachineEncryption {
             const encryptedData = decodeBase64(encrypted, 'base64');
             const decrypted = await this.encryptor.decrypt([encryptedData]);
             return decrypted[0] || null;
-        } catch (error) {
-            console.error('Failed to decrypt raw data:', error);
+        } catch {
+            console.error('Failed to decrypt raw data');
             return null;
         }
     }

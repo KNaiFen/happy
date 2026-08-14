@@ -1,5 +1,4 @@
 import { eventRouter, buildUpdateAccountUpdate } from "@/app/events/eventRouter";
-import { db } from "@/storage/db";
 import { Fastify } from "../types";
 import { getPublicUrl } from "@/storage/files";
 import { z } from "zod";
@@ -7,35 +6,108 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { log } from "@/utils/log";
 import { AccountProfile } from "@/types";
+import { afterTx, inTx } from "@/storage/inTx";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
+import {
+    AccountDeletionError,
+    confirmAccountDeletion,
+    createAccountDeletionChallenge,
+} from "@/app/account/accountDeletion";
 
 export function accountRoutes(app: Fastify) {
+    app.post('/v1/account/deletion-challenge', {
+        preHandler: app.authenticate,
+    }, async (request, reply) => {
+        if (request.authCredentialId) {
+            return reply.code(403).send({ error: 'Account credential required' });
+        }
+        try {
+            return reply.send(await createAccountDeletionChallenge(request.userId));
+        } catch (error) {
+            if (error instanceof AccountDeletionError) {
+                if (error.code === 'legacy-upload-capability-cutoff-unconfirmed') {
+                    return reply.code(503).send({ error: 'Account deletion is temporarily unavailable while legacy uploads drain' });
+                }
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
+            return reply.code(500).send({ error: 'Failed to create account deletion challenge' });
+        }
+    });
+
+    app.delete('/v1/account', {
+        bodyLimit: 2 * 1024,
+        preHandler: app.authenticate,
+        schema: {
+            body: z.object({
+                challengeId: z.string().min(1).max(128),
+                challenge: z.string().min(1).max(128),
+                publicKey: z.string().min(1).max(128),
+                signature: z.string().min(1).max(256),
+            }),
+        },
+    }, async (request, reply) => {
+        if (request.authCredentialId) {
+            return reply.code(403).send({ error: 'Account credential required' });
+        }
+        try {
+            const status = await confirmAccountDeletion({
+                accountId: request.userId,
+                ...request.body,
+            });
+            return reply.code(status === 'deleted' ? 200 : 202).send({ status });
+        } catch (error) {
+            if (error instanceof AccountDeletionError) {
+                if (error.code === 'invalid-proof') {
+                    return reply.code(401).send({ error: 'Invalid account deletion proof' });
+                }
+                if (error.code === 'legacy-upload-capability-cutoff-unconfirmed') {
+                    return reply.code(503).send({ error: 'Account deletion is temporarily unavailable while legacy uploads drain' });
+                }
+                return reply.code(409).send({ error: 'Account deletion confirmation expired' });
+            }
+            return reply.code(500).send({ error: 'Failed to delete account' });
+        }
+    });
+
     app.get('/v1/account/profile', {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const userId = request.userId;
-        const user = await db.account.findUniqueOrThrow({
-            where: { id: userId },
-            select: {
-                firstName: true,
-                lastName: true,
-                username: true,
-                avatar: true,
-                githubUser: true
-            }
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+            const user = await tx.account.findUnique({
+                where: { id: userId },
+                select: {
+                    firstName: true,
+                    lastName: true,
+                    username: true,
+                    avatar: true,
+                    githubUser: true
+                }
+            });
+            if (!user) return { kind: 'missing' as const };
+            const connectedVendors = new Set((await tx.serviceAccountToken.findMany({
+                where: {
+                    accountId: userId,
+                    vendor: 'openai',
+                },
+            })).map(t => t.vendor));
+            return { kind: 'ok' as const, user, connectedVendors };
         });
-        const connectedVendors = new Set((await db.serviceAccountToken.findMany({
-            where: {
-                accountId: userId,
-                vendor: 'openai',
-            },
-        })).map(t => t.vendor));
+        if (result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
+        if (result.kind === 'missing') {
+            return reply.code(404).send({ error: 'Account not found' });
+        }
+        const { user, connectedVendors } = result;
         return reply.send({
             id: userId,
             timestamp: Date.now(),
             firstName: user.firstName,
             lastName: user.lastName,
             username: user.username,
-            avatar: user.avatar ? { ...user.avatar, url: getPublicUrl(user.avatar.path) } : null,
+            avatar: user.avatar ? { ...user.avatar, url: getPublicUrl(user.avatar.path, request) } : null,
             github: user.githubUser ? user.githubUser.profile : null,
             connectedServices: Array.from(connectedVendors)
         });
@@ -52,23 +124,35 @@ export function accountRoutes(app: Fastify) {
                 }),
                 500: z.object({
                     error: z.literal('Failed to get account settings')
+                }),
+                409: z.object({
+                    error: z.literal('Account deletion in progress')
                 })
             }
         }
     }, async (request, reply) => {
         try {
-            const user = await db.account.findUnique({
-                where: { id: request.userId },
-                select: { settings: true, settingsVersion: true }
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, request.userId)) return { kind: 'deleting' as const };
+                const user = await tx.account.findUnique({
+                    where: { id: request.userId },
+                    select: { settings: true, settingsVersion: true }
+                });
+                return user
+                    ? { kind: 'ok' as const, user }
+                    : { kind: 'missing' as const };
             });
 
-            if (!user) {
+            if (result.kind === 'deleting') {
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
+            if (result.kind === 'missing') {
                 return reply.code(500).send({ error: 'Failed to get account settings' });
             }
 
             return reply.send({
-                settings: user.settings,
-                settingsVersion: user.settingsVersion
+                settings: result.user.settings,
+                settingsVersion: result.user.settingsVersion
             });
         } catch (error) {
             return reply.code(500).send({ error: 'Failed to get account settings' });
@@ -95,6 +179,10 @@ export function accountRoutes(app: Fastify) {
                 500: z.object({
                     success: z.literal(false),
                     error: z.literal('Failed to update account settings')
+                }),
+                409: z.object({
+                    success: z.literal(false),
+                    error: z.literal('Failed to update account settings')
                 })
             }
         },
@@ -104,76 +192,84 @@ export function accountRoutes(app: Fastify) {
         const { settings, expectedVersion } = request.body;
 
         try {
-            // Get current user data for version check
-            const currentUser = await db.account.findUnique({
-                where: { id: userId },
-                select: { settings: true, settingsVersion: true }
+            // Read and update in one serializable transaction. The account
+            // write gate makes a deletion marker win over a request that has
+            // only passed authentication but has not committed its mutation.
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) {
+                    return { kind: 'deleting' as const };
+                }
+                const currentUser = await tx.account.findUnique({
+                    where: { id: userId },
+                    select: { settings: true, settingsVersion: true }
+                });
+
+                if (!currentUser) return { kind: 'missing' as const };
+
+                if (currentUser.settingsVersion !== expectedVersion) {
+                    return {
+                        kind: 'version-mismatch' as const,
+                        currentVersion: currentUser.settingsVersion,
+                        currentSettings: currentUser.settings,
+                    };
+                }
+
+                const updated = await tx.account.updateMany({
+                    where: {
+                        id: userId,
+                        settingsVersion: expectedVersion,
+                        deletionRequestedAt: null,
+                    },
+                    data: {
+                        settings,
+                        settingsVersion: expectedVersion + 1,
+                        updatedAt: new Date()
+                    }
+                });
+                if (updated.count !== 1) return { kind: 'deleting' as const };
+                const version = expectedVersion + 1;
+                const updSeq = await allocateUserSeq(userId, tx);
+                const updatePayload = buildUpdateAccountUpdate(
+                    userId,
+                    { settings: { value: settings, version } },
+                    updSeq,
+                    randomKeyNaked(12),
+                );
+                afterTx(tx, () => eventRouter.emitUpdate({
+                    userId,
+                    payload: updatePayload,
+                    recipientFilter: { type: 'user-scoped-only' },
+                }));
+                return { kind: 'updated' as const, version };
             });
 
-            if (!currentUser) {
+            if (result.kind === 'deleting') {
+                return reply.code(409).send({
+                    success: false,
+                    error: 'Failed to update account settings'
+                });
+            }
+            if (result.kind === 'missing') {
                 return reply.code(500).send({
                     success: false,
                     error: 'Failed to update account settings'
                 });
             }
-
-            // Check current version
-            if (currentUser.settingsVersion !== expectedVersion) {
+            if (result.kind === 'version-mismatch') {
                 return reply.code(200).send({
                     success: false,
                     error: 'version-mismatch',
-                    currentVersion: currentUser.settingsVersion,
-                    currentSettings: currentUser.settings
+                    currentVersion: result.currentVersion,
+                    currentSettings: result.currentSettings,
                 });
             }
-
-            // Update settings with version check
-            const { count } = await db.account.updateMany({
-                where: {
-                    id: userId,
-                    settingsVersion: expectedVersion
-                },
-                data: {
-                    settings: settings,
-                    settingsVersion: expectedVersion + 1,
-                    updatedAt: new Date()
-                }
-            });
-
-            if (count === 0) {
-                // Re-fetch to get current version
-                const account = await db.account.findUnique({
-                    where: { id: userId }
-                });
-                return reply.code(200).send({
-                    success: false,
-                    error: 'version-mismatch',
-                    currentVersion: account?.settingsVersion || 0,
-                    currentSettings: account?.settings || null
-                });
-            }
-
-            // Generate update for connected clients
-            const updSeq = await allocateUserSeq(userId);
-            const settingsUpdate = {
-                value: settings,
-                version: expectedVersion + 1
-            };
-
-            // Send account update to user-scoped connections only
-            const updatePayload = buildUpdateAccountUpdate(userId, { settings: settingsUpdate }, updSeq, randomKeyNaked(12));
-            eventRouter.emitUpdate({
-                userId,
-                payload: updatePayload,
-                recipientFilter: { type: 'user-scoped-only' }
-            });
 
             return reply.send({
                 success: true,
-                version: expectedVersion + 1
+                version: result.version
             });
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to update account settings: ${error}`);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'account.settings.update' }, 'account.settings.update.failed');
             return reply.code(500).send({
                 success: false,
                 error: 'Failed to update account settings'
@@ -197,49 +293,45 @@ export function accountRoutes(app: Fastify) {
         const actualGroupBy = groupBy || 'day';
 
         try {
-            // Build query conditions
-            const where: {
-                accountId: string;
-                sessionId?: string | null;
-                createdAt?: {
-                    gte?: Date;
-                    lte?: Date;
-                };
-            } = {
-                accountId: userId
-            };
+            const readResult = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
 
-            if (sessionId) {
-                // Verify session belongs to user
-                const session = await db.session.findFirst({
-                    where: {
-                        id: sessionId,
-                        accountId: userId
-                    }
+                const where: {
+                    accountId: string;
+                    sessionId?: string | null;
+                    createdAt?: {
+                        gte?: Date;
+                        lte?: Date;
+                    };
+                } = { accountId: userId };
+
+                if (sessionId) {
+                    const session = await tx.session.findFirst({
+                        where: { id: sessionId, accountId: userId },
+                    });
+                    if (!session) return { kind: 'session-missing' as const };
+                    where.sessionId = sessionId;
+                }
+
+                if (startTime || endTime) {
+                    where.createdAt = {};
+                    if (startTime) where.createdAt.gte = new Date(startTime * 1000);
+                    if (endTime) where.createdAt.lte = new Date(endTime * 1000);
+                }
+
+                const reports = await tx.usageReport.findMany({
+                    where,
+                    orderBy: { createdAt: 'desc' },
                 });
-                if (!session) {
-                    return reply.code(404).send({ error: 'Session not found' });
-                }
-                where.sessionId = sessionId;
-            }
-
-            if (startTime || endTime) {
-                where.createdAt = {};
-                if (startTime) {
-                    where.createdAt.gte = new Date(startTime * 1000);
-                }
-                if (endTime) {
-                    where.createdAt.lte = new Date(endTime * 1000);
-                }
-            }
-
-            // Fetch usage reports
-            const reports = await db.usageReport.findMany({
-                where,
-                orderBy: {
-                    createdAt: 'desc'
-                }
+                return { kind: 'ok' as const, reports };
             });
+            if (readResult.kind === 'deleting') {
+                return reply.code(409).send({ error: 'Account deletion in progress' });
+            }
+            if (readResult.kind === 'session-missing') {
+                return reply.code(404).send({ error: 'Session not found' });
+            }
+            const reports = readResult.reports;
 
             // Aggregate data by time period
             const aggregated = new Map<string, {
@@ -309,8 +401,8 @@ export function accountRoutes(app: Fastify) {
                 groupBy: actualGroupBy,
                 totalReports: reports.length
             });
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to query usage reports: ${error}`);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'account.usage.query' }, 'account.usage.query.failed');
             return reply.code(500).send({ error: 'Failed to query usage reports' });
         }
     });

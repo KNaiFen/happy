@@ -21,8 +21,8 @@ export async function createMetricsServer() {
             
             reply.type('text/plain; version=0.0.4; charset=utf-8');
             reply.send(combinedMetrics);
-        } catch (error) {
-            log({ module: 'metrics', level: 'error' }, `Error generating metrics: ${error}`);
+        } catch {
+            log({ module: 'metrics', level: 'error', operation: 'metrics.generate' }, 'Metrics generation failed');
             reply.code(500).send('Internal Server Error');
         }
     });
@@ -58,7 +58,7 @@ export async function startMetricsServer(): Promise<void> {
             try { await app.close(); } catch { /* noop */ }
             return;
         }
-        log({ module: 'metrics', level: 'error' }, `Failed to start metrics server: ${error}`);
+        log({ module: 'metrics', level: 'error', operation: 'metrics.start' }, 'Metrics server start failed');
         throw error;
     }
 }

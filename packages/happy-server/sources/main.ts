@@ -11,6 +11,7 @@ import { initEncrypt } from "./modules/encrypt";
 import { initGithub } from "./modules/github";
 import { loadFiles } from "./storage/files";
 import { purgeUnsupportedSessions } from "./app/session/purgeUnsupportedSessions";
+import { startAccountDeletionProcessor } from "./app/account/accountDeletion";
 
 async function main() {
 
@@ -40,6 +41,7 @@ async function main() {
     //
 
     await startApi();
+    startAccountDeletionProcessor();
     await startMetricsServer();
     startDatabaseMetricsUpdater();
     startTimeout();
@@ -58,36 +60,29 @@ process.on('uncaughtException', (error) => {
     log({
         module: 'process-error',
         level: 'error',
-        stack: error.stack,
-        name: error.name
-    }, `Uncaught Exception: ${error.message}`);
+        errorKind: error instanceof Error ? 'exception' : 'unknown',
+    }, 'Uncaught exception');
 
-    console.error('Uncaught Exception:', error);
+    console.error('Uncaught exception');
     process.exit(1);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-    const errorMsg = reason instanceof Error ? reason.message : String(reason);
-    const errorStack = reason instanceof Error ? reason.stack : undefined;
-
+process.on('unhandledRejection', (reason) => {
     log({
         module: 'process-error',
         level: 'error',
-        stack: errorStack,
-        reason: String(reason)
-    }, `Unhandled Rejection: ${errorMsg}`);
+        errorKind: reason instanceof Error ? 'rejection' : 'unknown',
+    }, 'Unhandled rejection');
 
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('Unhandled rejection');
     process.exit(1);
 });
 
-process.on('warning', (warning) => {
+process.on('warning', () => {
     log({
         module: 'process-warning',
         level: 'warn',
-        name: warning.name,
-        stack: warning.stack
-    }, `Process Warning: ${warning.message}`);
+    }, 'Process warning');
 });
 
 // Log when the process is about to exit
@@ -108,7 +103,7 @@ process.on('exit', (code) => {
 });
 
 main().catch((e) => {
-    console.error(e);
+    console.error('Server startup failed');
     process.exit(1);
 }).then(() => {
     process.exit(0);

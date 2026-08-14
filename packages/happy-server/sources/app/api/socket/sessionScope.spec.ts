@@ -12,6 +12,7 @@ describe("sessionWhereForConnection", () => {
         )).toEqual({
             id: "session-1",
             accountId: "user-1",
+            account: { is: { deletionRequestedAt: null } },
         });
     });
 
@@ -30,6 +31,7 @@ describe("sessionWhereForConnection", () => {
         )).toEqual({
             id: "session-1",
             accountId: "user-1",
+            account: { is: { deletionRequestedAt: null } },
             originMachineId: "machine-1",
             originMachine: {
                 is: {
@@ -72,6 +74,7 @@ describe("sessionWhereForConnection", () => {
             id: "session-1",
             accountId: "user-1",
             archivedAt: null,
+            account: { is: { deletionRequestedAt: null } },
             originMachineId: "machine-1",
             originMachine: {
                 is: {

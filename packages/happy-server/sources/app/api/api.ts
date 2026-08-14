@@ -1,4 +1,4 @@
-import fastify from "fastify";
+import fastify, { type FastifyBaseLogger } from "fastify";
 import { log, logger } from "@/utils/log";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
 import { onShutdown } from "@/utils/shutdown";
@@ -23,7 +23,10 @@ import { feedRoutes } from "./routes/feedRoutes";
 import { kvRoutes } from "./routes/kvRoutes";
 import { v4CapabilitiesRoutes, v4SessionRoutes } from "./routes/v4SessionRoutes";
 import { attachmentRoutes } from "./routes/attachmentRoutes";
-import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
+import { getFileStream } from "@/storage/files";
+import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead } from "@/app/account/accountWriteGate";
 import * as path from "path";
 import * as fs from "fs";
 import { SYNC_V4_TRACE_HEADER } from "./routes/syncV4Diagnostics";
@@ -35,16 +38,21 @@ export interface StartApiOptions {
     injectHtmlConfig?: Record<string, unknown>;
 }
 
+export function createFastifyServer(loggerInstance: FastifyBaseLogger = logger) {
+    return fastify({
+        loggerInstance,
+        disableRequestLogging: true,
+        bodyLimit: 1024 * 1024 * 100, // 100MB
+    });
+}
+
 export async function startApi(opts: StartApiOptions = {}) {
 
     // Configure
     log('Starting API...');
 
     // Start API
-    const app = fastify({
-        loggerInstance: logger,
-        bodyLimit: 1024 * 1024 * 100, // 100MB
-    });
+    const app = createFastifyServer();
     app.register(import('@fastify/cors'), {
         origin: '*',
         allowedHeaders: [
@@ -84,24 +92,31 @@ export async function startApi(opts: StartApiOptions = {}) {
     enableErrorHandlers(typed, { skipNotFoundHandler: !!opts.staticDir });
     enableAuthentication(typed);
 
-    // Serve local files when using local storage
-    if (isLocalStorage()) {
-        app.get('/files/*', function (request, reply) {
-            const filePath = (request.params as any)['*'];
-            const baseDir = path.resolve(getLocalFilesDir());
-            const fullPath = path.resolve(baseDir, filePath);
-            if (!fullPath.startsWith(baseDir + path.sep)) {
-                reply.code(403).send('Forbidden');
-                return;
-            }
-            if (!fs.existsSync(fullPath)) {
-                reply.code(404).send('Not found');
-                return;
-            }
-            const stream = fs.createReadStream(fullPath);
-            reply.send(stream);
-        });
-    }
+    // Profile images stay behind the API in both storage modes. A public S3 URL
+    // cannot be revoked during account deletion; this route checks the owner
+    // record every time before it streams the object.
+    app.get('/files/*', async (request, reply) => {
+        const filePath = (request.params as any)['*'];
+        const accountId = accountIdFromPublicFilePath(filePath);
+        if (!accountId) {
+            return reply.code(404).send('Not found');
+        }
+        try {
+            const stream = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, accountId)) return null;
+                const account = await tx.account.findUnique({
+                    where: { id: accountId },
+                    select: { deletionRequestedAt: true },
+                });
+                if (!account || account.deletionRequestedAt !== null) return null;
+                return getFileStream(filePath);
+            });
+            if (!stream) return reply.code(404).send('Not found');
+            return reply.send(stream);
+        } catch {
+            return reply.code(404).send('Not found');
+        }
+    });
 
     // Routes
     authRoutes(typed);
@@ -195,4 +210,17 @@ export async function startApi(opts: StartApiOptions = {}) {
     // End
     log(`API ready on http://${host}:${port}`);
     return { port, host };
+}
+
+function accountIdFromPublicFilePath(filePath: unknown): string | null {
+    if (typeof filePath !== 'string' || !filePath) return null;
+    const normalized = path.posix.normalize(filePath);
+    if (normalized !== filePath || normalized.startsWith('/') || normalized.includes('..')) {
+        return null;
+    }
+    const segments = normalized.split('/');
+    if (segments.length < 4 || segments[0] !== 'public' || segments[1] !== 'users' || !segments[2]) {
+        return null;
+    }
+    return segments[2];
 }

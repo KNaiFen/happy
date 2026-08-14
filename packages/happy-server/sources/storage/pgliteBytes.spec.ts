@@ -71,6 +71,30 @@ describe("PGlite Prisma Bytes compatibility", () => {
             migrationsDir: resolve("prisma", "migrations"),
         });
 
+        const migrationPg = new PGlite(pgliteDirectory);
+        try {
+            const appliedMigration = await migrationPg.query<{ migration_name: string }>(`
+                SELECT "migration_name"
+                FROM "_prisma_migrations"
+                WHERE "migration_name" = '20260814000000_add_artifact_update_seq'
+                  AND "finished_at" IS NOT NULL
+            `);
+            expect(appliedMigration.rows).toEqual([
+                { migration_name: "20260814000000_add_artifact_update_seq" },
+            ]);
+            const indexes = await migrationPg.query<{ indexname: string }>(`
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = 'Artifact'
+            `);
+            expect(indexes.rows.map(row => row.indexname)).toContain(
+                "Artifact_accountId_updateSeq_id_idx",
+            );
+        } finally {
+            await migrationPg.close();
+        }
+
         const expectedKey = new Uint8Array([0, 1, 2, 127, 128, 254, 255]);
         const expectedHeader = new Uint8Array([9, 8, 7]);
         const expectedBody = new Uint8Array([6, 5, 4, 3]);
@@ -98,7 +122,7 @@ describe("PGlite Prisma Bytes compatibility", () => {
                 dataEncryptionKey: expectedKey,
             },
         });
-        await firstClient.artifact.create({
+        const createdArtifact = await firstClient.artifact.create({
             data: {
                 id: crypto.randomUUID(),
                 accountId: account.id,
@@ -107,6 +131,8 @@ describe("PGlite Prisma Bytes compatibility", () => {
                 dataEncryptionKey: expectedKey,
             },
         });
+        expect(createdArtifact.updateSeq).toBe(0);
+        expect(account.artifactRevision).toBe(0);
         const githubUserId = `pglite-bytes-${crypto.randomUUID()}`;
         await firstClient.githubUser.create({
             data: {
@@ -272,5 +298,65 @@ describe("PGlite Prisma Bytes compatibility", () => {
 
         await currentClient.$disconnect();
         await currentPglite.close();
+    }, 30_000);
+});
+
+describe("PGlite account deletion admission migrations", () => {
+    it("creates the GitHub OAuth admission index and cascades rows with the account", async () => {
+        const dataDirectory = await mkdtemp(join(tmpdir(), "happy-pglite-github-admission-"));
+        temporaryDirectories.push(dataDirectory);
+        const pgliteDirectory = join(dataDirectory, "pglite");
+
+        await runMigrations({
+            pgliteDir: pgliteDirectory,
+            migrationsDir: resolve("prisma", "migrations"),
+        });
+
+        const pg = new PGlite(pgliteDirectory);
+        const client = new PrismaClient({
+            adapter: new PrismaPGlite(pg),
+        } as never);
+        try {
+            const indexes = await pg.query<{ indexname: string }>(`
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = 'AccountDeletionGithubOAuthAdmission'
+            `);
+            expect(indexes.rows.map(row => row.indexname)).toContain(
+                "AccountDeletionGithubOAuthAdmission_state_idx",
+            );
+
+            const voiceIndexes = await pg.query<{ indexname: string }>(`
+                SELECT indexname
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = 'AccountDeletionVoiceAdmission'
+            `);
+            expect(voiceIndexes.rows.map(row => row.indexname)).toContain(
+                "AccountDeletionVoiceAdmission_accountId_state_idx",
+            );
+
+            const account = await client.account.create({
+                data: { publicKey: `github-admission-${crypto.randomUUID()}` },
+            });
+            const admissionId = crypto.randomUUID();
+            await client.accountDeletionGithubOAuthAdmission.create({
+                data: {
+                    id: admissionId,
+                    accountId: account.id,
+                    expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+                },
+            });
+
+            await client.account.delete({ where: { id: account.id } });
+
+            await expect(client.accountDeletionGithubOAuthAdmission.count({
+                where: { id: admissionId },
+            })).resolves.toBe(0);
+        } finally {
+            await client.$disconnect();
+            await pg.close();
+        }
     }, 30_000);
 });

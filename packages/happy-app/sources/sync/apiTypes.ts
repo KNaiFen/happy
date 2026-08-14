@@ -86,6 +86,7 @@ export const ApiNewArtifactSchema = z.object({
 export const ApiUpdateArtifactSchema = z.object({
     t: z.literal('update-artifact'),
     artifactId: z.string(),
+    seq: z.number().int().nonnegative().optional(),
     header: z.object({
         value: z.string(),
         version: z.number()

@@ -69,6 +69,7 @@ export interface AppSyncV4Crypto {
     opaqueEntityId(entityType: CodexEntityV4['entityType'], providerId: string): Promise<string>;
     encryptEntity(aad: SyncV4Aad, entity: CodexEntityV4): Promise<string>;
     decryptEntity(aad: SyncV4Aad, ciphertext: string): Promise<CodexEntityV4>;
+    dispose?: () => void;
 }
 
 export class AppSyncV4SnapshotRequiredError extends Error {
@@ -191,6 +192,7 @@ export class AppSyncV4Client {
     private pollTimer: ReturnType<typeof setInterval> | null = null;
     private started = false;
     private disposed = false;
+    private diagnosticsSuppressed = false;
     private lifecycleGeneration = 0;
     private lastHealthyEmptyPollDiagnosticAt = 0;
     private suppressedHealthyEmptyPolls = 0;
@@ -353,29 +355,33 @@ export class AppSyncV4Client {
         });
     }
 
-    stop(): void {
+    stop(options?: { silent?: boolean }): void {
         if (this.disposed) return;
-        this.flushSuppressedHealthyEmptyPollDiagnostics();
-        this.flushSuppressedProjectionDiagnostics();
-        const diagnosticStats = readAppSyncV4DiagnosticStatsSafely(this.diagnosticStats);
-        const diagnosticsDegraded = appSyncV4DiagnosticStatsAreDegraded(diagnosticStats);
-        this.recordDiagnostic({
-            level: diagnosticsDegraded ? 'warn' : 'info',
-            event: 'lifecycle',
-            phase: 'started',
-            state: 'stopping',
-            generation: this.lifecycleGeneration,
-            cursor: this.receiveCursor,
-            depth: this.diagnosticOutboxDepth(),
-            count: diagnosticStats?.count,
-            dropped: diagnosticStats?.droppedRecords,
-            invalid: diagnosticStats?.invalidRecords,
-            writeFailures: diagnosticStats?.writeFailures,
-            listenerFailures: diagnosticStats?.listenerFailures,
-            suppressed: this.totalSuppressedHealthyEmptyPolls
-                + this.totalSuppressedProjectionBatches,
-            featureEnabled: true,
-        });
+        const silent = options?.silent === true;
+        this.diagnosticsSuppressed = silent;
+        const diagnosticStats = silent ? null : readAppSyncV4DiagnosticStatsSafely(this.diagnosticStats);
+        const diagnosticsDegraded = !silent && appSyncV4DiagnosticStatsAreDegraded(diagnosticStats);
+        if (!silent) {
+            this.flushSuppressedHealthyEmptyPollDiagnostics();
+            this.flushSuppressedProjectionDiagnostics();
+            this.recordDiagnostic({
+                level: diagnosticsDegraded ? 'warn' : 'info',
+                event: 'lifecycle',
+                phase: 'started',
+                state: 'stopping',
+                generation: this.lifecycleGeneration,
+                cursor: this.receiveCursor,
+                depth: this.diagnosticOutboxDepth(),
+                count: diagnosticStats?.count,
+                dropped: diagnosticStats?.droppedRecords,
+                invalid: diagnosticStats?.invalidRecords,
+                writeFailures: diagnosticStats?.writeFailures,
+                listenerFailures: diagnosticStats?.listenerFailures,
+                suppressed: this.totalSuppressedHealthyEmptyPolls
+                    + this.totalSuppressedProjectionBatches,
+                featureEnabled: true,
+            });
+        }
         this.disposed = true;
         this.started = false;
         this.lifecycleGeneration += 1;
@@ -383,23 +389,26 @@ export class AppSyncV4Client {
         this.pollTimer = null;
         this.sendSync.stop();
         this.receiveSync.stop();
-        this.recordDiagnostic({
-            level: diagnosticsDegraded ? 'warn' : 'info',
-            event: 'lifecycle',
-            phase: diagnosticsDegraded ? 'failed' : 'completed',
-            state: diagnosticsDegraded ? 'degraded' : 'stopped',
-            generation: this.lifecycleGeneration,
-            cursor: this.receiveCursor,
-            depth: this.diagnosticOutboxDepth(),
-            count: diagnosticStats?.count,
-            dropped: diagnosticStats?.droppedRecords,
-            invalid: diagnosticStats?.invalidRecords,
-            writeFailures: diagnosticStats?.writeFailures,
-            listenerFailures: diagnosticStats?.listenerFailures,
-            suppressed: this.totalSuppressedHealthyEmptyPolls
-                + this.totalSuppressedProjectionBatches,
-            featureEnabled: true,
-        });
+        this.crypto.dispose?.();
+        if (!silent) {
+            this.recordDiagnostic({
+                level: diagnosticsDegraded ? 'warn' : 'info',
+                event: 'lifecycle',
+                phase: diagnosticsDegraded ? 'failed' : 'completed',
+                state: diagnosticsDegraded ? 'degraded' : 'stopped',
+                generation: this.lifecycleGeneration,
+                cursor: this.receiveCursor,
+                depth: this.diagnosticOutboxDepth(),
+                count: diagnosticStats?.count,
+                dropped: diagnosticStats?.droppedRecords,
+                invalid: diagnosticStats?.invalidRecords,
+                writeFailures: diagnosticStats?.writeFailures,
+                listenerFailures: diagnosticStats?.listenerFailures,
+                suppressed: this.totalSuppressedHealthyEmptyPolls
+                    + this.totalSuppressedProjectionBatches,
+                featureEnabled: true,
+            });
+        }
     }
 
     invalidate(highWatermark?: number): void {
@@ -1298,6 +1307,7 @@ export class AppSyncV4Client {
     private recordDiagnostic(
         input: Omit<SyncV4DiagnosticInput, 'component' | 'sessionHash'>,
     ): void {
+        if (this.diagnosticsSuppressed) return;
         recordSyncV4DiagnosticSafely(this.diagnostics, {
             component: 'app.sync',
             sessionHash: this.diagnosticSessionHash,

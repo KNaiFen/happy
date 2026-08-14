@@ -8,6 +8,7 @@ import {
     MetadataSchema,
     type Session,
 } from './storageTypes';
+import { isSupportedExistingSession } from './sessionFlavor';
 
 const RawSessionSchema = z.object({
     id: z.string().min(1),
@@ -172,7 +173,14 @@ export async function scanCodexThreadBindings(machineId: string): Promise<CodexT
         }
         keys.set(session.id, key);
     }
-    await sync.encryption.initializeSessions(keys);
+    try {
+        await sync.encryption.initializeSessions(keys);
+    } finally {
+        // initializeSessions copies independent keys into their contexts;
+        // scan-local buffers must never outlive this handoff.
+        for (const key of keys.values()) key?.fill(0);
+        keys.clear();
+    }
 
     const grouped = new Map<string, Array<Extract<CodexThreadBinding, { type: 'bound' }>>>();
     for (const raw of rawSessions) {
@@ -201,7 +209,9 @@ export async function scanCodexThreadBindings(machineId: string): Promise<CodexT
             type: 'bound',
             sessionId: raw.id,
             active: raw.active,
-            legacy: raw.dataEncryptionKey === null,
+            // Historical sessions remain readable, but only an explicit Codex
+            // Sync v4 marker may cross the writable resume boundary.
+            legacy: raw.dataEncryptionKey === null || !isSupportedExistingSession(metadata.data),
             session: {
                 id: raw.id,
                 seq: raw.seq,
@@ -256,6 +266,19 @@ export async function openCodexThread(options: {
         };
     }
 
+    let externalDataEncryptionKey: string | undefined;
+    if (!options.binding) {
+        const key = await sync.encryption.deriveCodexResumeSessionDataKey(
+            options.machineId,
+            options.thread.threadId,
+        );
+        try {
+            externalDataEncryptionKey = encodeBase64(key, 'base64');
+        } finally {
+            key.fill(0);
+        }
+    }
+
     const request = {
         directory: options.directory,
         threadId: options.thread.threadId,
@@ -266,15 +289,7 @@ export async function openCodexThread(options: {
         },
         ...(options.binding?.type === 'bound'
             ? { binding: { sessionId: options.binding.sessionId } }
-            : {
-                externalDataEncryptionKey: encodeBase64(
-                    await sync.encryption.deriveCodexResumeSessionDataKey(
-                        options.machineId,
-                        options.thread.threadId,
-                    ),
-                    'base64',
-                ),
-            }),
+            : { externalDataEncryptionKey }),
     };
 
     let result = await callOpen(options.machineId, request);
@@ -294,11 +309,17 @@ export async function openCodexThread(options: {
                 errorMessage: 'This session has no independent resume key.',
             };
         }
+        let dataEncryptionKey: string;
+        try {
+            dataEncryptionKey = encodeBase64(key, 'base64');
+        } finally {
+            key.fill(0);
+        }
         result = await callOpen(options.machineId, {
             ...request,
             binding: {
                 sessionId: options.binding.sessionId,
-                dataEncryptionKey: encodeBase64(key, 'base64'),
+                dataEncryptionKey,
             },
         });
     }

@@ -39,14 +39,27 @@ export class SyncV4Crypto {
         }
         await sodium.ready;
         const rootKey = await deriveKey(options.sessionKey, 'Happy Sync v4', [options.sessionId]);
-        const entityIdKey = await deriveKey(rootKey, 'Happy Sync v4 Entity IDs', ['hmac']);
-        const entityAeadKey = await deriveKey(rootKey, 'Happy Sync v4 Entities', ['aead']);
-        return new SyncV4Crypto(
-            options.sessionId,
-            entityIdKey,
-            entityAeadKey,
-            options.randomBytes ?? ((size) => sodium.randombytes_buf(size) as Uint8Array),
-        );
+        let entityIdKey: Uint8Array | null = null;
+        let entityAeadKey: Uint8Array | null = null;
+        let crypto: SyncV4Crypto | null = null;
+        try {
+            entityIdKey = await deriveKey(rootKey, 'Happy Sync v4 Entity IDs', ['hmac']);
+            entityAeadKey = await deriveKey(rootKey, 'Happy Sync v4 Entities', ['aead']);
+            crypto = new SyncV4Crypto(
+                options.sessionId,
+                entityIdKey,
+                entityAeadKey,
+                options.randomBytes ?? ((size) => sodium.randombytes_buf(size) as Uint8Array),
+            );
+            return crypto;
+        } finally {
+            rootKey.fill(0);
+            // Ownership moves to SyncV4Crypto only after construction succeeds.
+            if (!crypto) {
+                entityIdKey?.fill(0);
+                entityAeadKey?.fill(0);
+            }
+        }
     }
 
     private constructor(
@@ -56,7 +69,17 @@ export class SyncV4Crypto {
         private readonly getRandomBytes: (size: number) => Uint8Array,
     ) {}
 
+    private disposed = false;
+
+    dispose(): void {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.entityIdKey.fill(0);
+        this.entityAeadKey.fill(0);
+    }
+
     async opaqueEntityId(entityType: CodexEntityType, providerId: string): Promise<string> {
+        this.assertUsable();
         const digest = await hmac_sha512(
             this.entityIdKey,
             new TextEncoder().encode(encodeSyncV4OpaqueEntityIdInput(entityType, providerId)),
@@ -65,6 +88,7 @@ export class SyncV4Crypto {
     }
 
     async encryptEntity(aad: SyncV4Aad, entity: CodexEntityV4): Promise<string> {
+        this.assertUsable();
         this.assertAadSession(aad);
         const canonicalEntity = CodexEntityV4Schema.parse(entity);
         if (canonicalEntity.entityType !== aad.entityType) {
@@ -96,6 +120,7 @@ export class SyncV4Crypto {
     }
 
     async decryptEntity(aad: SyncV4Aad, encodedCiphertext: string): Promise<CodexEntityV4> {
+        this.assertUsable();
         this.assertAadSession(aad);
         try {
             const bundle = decodeBase64(encodedCiphertext);
@@ -130,5 +155,9 @@ export class SyncV4Crypto {
         if (aad.sessionId !== this.sessionId) {
             throw new Error('Sync v4 AAD belongs to a different session');
         }
+    }
+
+    private assertUsable(): void {
+        if (this.disposed) throw new Error('Sync v4 crypto has been disposed');
     }
 }

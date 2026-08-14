@@ -67,6 +67,7 @@ export function createServerFetch(dependencies: ServerFetchDependencies): Server
             : new Request(targetUrl, init);
         throwIfAborted(request.signal);
         const bodyBuffer = await request.arrayBuffer();
+        throwIfAborted(request.signal);
         const nativeResponse = await dependencies.invokeNative({
             url: request.url,
             method: request.method,

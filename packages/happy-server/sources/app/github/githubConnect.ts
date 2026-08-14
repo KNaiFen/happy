@@ -8,6 +8,7 @@ import { allocateUserSeq } from "@/storage/seq";
 import { buildUpdateAccountUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { githubDisconnect } from "./githubDisconnect";
+import { inTx } from "@/storage/inTx";
 
 /**
  * Connects a GitHub account to a user profile.
@@ -33,7 +34,10 @@ export async function githubConnect(
 
     // Step 1: Check if user is already connected to this exact GitHub account
     const currentUser = await db.account.findFirstOrThrow({
-        where: { id: userId },
+        where: {
+            id: userId,
+            deletionRequestedAt: null,
+        },
         select: { githubUserId: true, username: true }
     });
     if (currentUser.githubUserId === githubUserId) {
@@ -61,7 +65,24 @@ export async function githubConnect(
     const name = separateName(githubProfile.name);
 
     // Step 4: Start transaction for atomic database operations
-    await db.$transaction(async (tx) => {
+    await inTx(async (tx) => {
+        // Serialize the connection write with account deletion. The initial
+        // OAuth-state check is intentionally not the authority because the
+        // callback performs external requests before reaching this transaction.
+        const locked = await tx.account.updateMany({
+            where: {
+                id: userId,
+                deletionRequestedAt: null,
+            },
+            data: { updatedAt: new Date() },
+        });
+        if (locked.count !== 1) {
+            throw new Error('Account deletion in progress');
+        }
+        const account = await tx.account.findUniqueOrThrow({
+            where: { id: userId },
+            select: { githubUserId: true },
+        });
 
         // Upsert GitHub user record with encrypted token
         await tx.githubUser.upsert({
@@ -88,10 +109,19 @@ export async function githubConnect(
                 avatar: avatar
             }
         });
+        if (account.githubUserId && account.githubUserId !== githubUserId) {
+            await tx.githubUser.deleteMany({
+                where: {
+                    id: account.githubUserId,
+                    Account: { none: {} },
+                },
+            });
+        }
     });
 
     // Step 5: Send update via socket (after transaction completes)
     const updSeq = await allocateUserSeq(userId);
+    if (updSeq === null) return;
     const updatePayload = buildUpdateAccountUpdate(userId, {
         github: githubProfile,
         username: githubProfile.login,

@@ -6,6 +6,9 @@ import {
     isCodexV4SyncEligible,
     type CodexV4RegistryClient,
 } from './codexV4ClientRegistry';
+import { AppSyncV4Client, type AppSyncV4Crypto } from './syncV4Client';
+import { AppSyncV4DiagnosticStore, type SyncV4DiagnosticStorage } from './syncV4Diagnostics';
+import { SyncV4Persistence, type SyncV4KeyValueStorage } from './syncV4Persistence';
 
 interface TestEvent {
     value: string;
@@ -34,12 +37,41 @@ class TestClient implements CodexV4RegistryClient {
         return this.started.promise;
     }
 
-    stop(): void {
+    stop(options?: { silent?: boolean }): void {
         this.stopCount += 1;
+        this.lastStopWasSilent = options?.silent === true;
     }
+
+    lastStopWasSilent = false;
 
     invalidate(highWatermark?: number): void {
         this.invalidations.push(highWatermark);
+    }
+}
+
+class SharedStorage implements SyncV4KeyValueStorage, SyncV4DiagnosticStorage {
+    readonly values = new Map<string, string | number | boolean>();
+
+    getString(key: string): string | undefined {
+        const value = this.values.get(key);
+        return typeof value === 'string' ? value : undefined;
+    }
+
+    getNumber(key: string): number | undefined {
+        const value = this.values.get(key);
+        return typeof value === 'number' ? value : undefined;
+    }
+
+    set(key: string, value: string | number | boolean): void {
+        this.values.set(key, value);
+    }
+
+    delete(key: string): void {
+        this.values.delete(key);
+    }
+
+    getAllKeys(): string[] {
+        return [...this.values.keys()];
     }
 }
 
@@ -87,6 +119,134 @@ describe('codexV4PollIntervalMsForLifecycle', () => {
 });
 
 describe('CodexV4ClientRegistry', () => {
+    it('stops every client and clears queued on-demand starts', async () => {
+        const createdSessionIds: string[] = [];
+        const clients = new Map<string, TestClient>();
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async (options) => {
+                createdSessionIds.push(options.sessionId);
+                const client = new TestClient();
+                clients.set(options.sessionId, client);
+                return client;
+            },
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+        });
+
+        registry.invalidate('dormant-session');
+        registry.reconcile([session]);
+        await Promise.resolve();
+
+        const startingClient = clients.get(session.sessionId)!;
+        expect(registry.hasStartingClient(session.sessionId)).toBe(true);
+        registry.stopAll();
+
+        startingClient.started.resolve();
+        await startingClient.started.promise;
+        await Promise.resolve();
+        registry.reconcile([{
+            sessionId: 'dormant-session',
+            sessionKey: new Uint8Array(32),
+            pollIntervalMs: null,
+        }]);
+        await Promise.resolve();
+
+        expect(startingClient.stopCount).toBe(1);
+        expect(registry.hasClient(session.sessionId)).toBe(false);
+        expect(registry.hasStartingClient(session.sessionId)).toBe(false);
+        expect(createdSessionIds).toEqual([session.sessionId]);
+        registry.stopAll();
+    });
+
+    it('silently disposes a client that finishes creating after account shutdown', async () => {
+        const created = new Deferred<TestClient>();
+        const diagnostics: unknown[] = [];
+        let factoryKey: Uint8Array | null = null;
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async (options) => {
+                factoryKey = options.sessionKey;
+                return created.promise;
+            },
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+            diagnostics: { record: (input) => diagnostics.push(input) },
+        });
+
+        registry.reconcile([session]);
+        await Promise.resolve();
+        registry.stopAll({ silent: true });
+        expect(factoryKey).toEqual(new Uint8Array(32));
+        const client = new TestClient();
+        created.resolve(client);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(client.stopCount).toBe(1);
+        expect(client.lastStopWasSilent).toBe(true);
+        expect(factoryKey).toEqual(new Uint8Array(32));
+        expect(diagnostics).not.toContainEqual(expect.objectContaining({
+            component: 'app.sync',
+            event: 'lifecycle',
+            state: 'stopped',
+        }));
+    });
+
+    it('does not repopulate real v4 persistence or diagnostics after silent shutdown', async () => {
+        const created = new Deferred<void>();
+        const storage = new SharedStorage();
+        const persistence = new SyncV4Persistence(storage, () => '00000000-0000-4000-8000-000000000001');
+        const diagnostics = new AppSyncV4DiagnosticStore(storage, 4, () => 100);
+        const dispose = vi.fn();
+        const crypto: AppSyncV4Crypto = {
+            opaqueEntityId: async () => 'opaque-session',
+            encryptEntity: async () => 'ciphertext',
+            decryptEntity: async () => { throw new Error('unused'); },
+            dispose,
+        };
+        const registry = new CodexV4ClientRegistry<AppSyncV4Client, TestEvent>({
+            createClient: async (options) => {
+                await created.promise;
+                return AppSyncV4Client.create({
+                    sessionId: options.sessionId,
+                    sessionKey: options.sessionKey,
+                    appVersion: '1.11.12',
+                    persistence,
+                    transport: {} as never,
+                    crypto,
+                    onEntity: async () => undefined,
+                    onSnapshotReset: async () => undefined,
+                });
+            },
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+            diagnostics,
+        });
+
+        registry.reconcile([session]);
+        await Promise.resolve();
+        registry.stopAll({ silent: true });
+
+        persistence.loadProducerId();
+        diagnostics.record({
+            level: 'info',
+            component: 'app.sync',
+            event: 'lifecycle',
+            phase: 'started',
+            state: 'starting',
+        });
+        persistence.clearAll();
+        diagnostics.clear();
+
+        created.resolve();
+        await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+
+        expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4:'))).toEqual([]);
+        expect(storage.getAllKeys().filter((key) => key.startsWith('sync-v4-diagnostics:'))).toEqual([]);
+    });
+
     it('keeps 150 dormant sessions uninstantiated and wakes only the invalidated target', async () => {
         const clients = new Map<string, TestClient>();
         const createdSessionIds: string[] = [];

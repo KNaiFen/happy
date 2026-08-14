@@ -70,6 +70,7 @@ const {
     const state = {
         sessions: [] as SessionRecord[],
         machines: [] as MachineRecord[],
+        accountWritable: true,
         mutations: [] as MutationRecord[],
         entities: [] as EntityRecord[],
         nextMutationId: 1,
@@ -80,6 +81,7 @@ const {
     const resetState = () => {
         state.sessions = [];
         state.machines = [];
+        state.accountWritable = true;
         state.mutations = [];
         state.entities = [];
         state.nextMutationId = 1;
@@ -343,7 +345,11 @@ const {
         return values.length / 9;
     });
 
+    const accountUpdateMany = vi.fn(async () => ({ count: state.accountWritable ? 1 : 0 }));
     const txClient = {
+        account: {
+            updateMany: accountUpdateMany,
+        },
         session: {
             findFirst: sessionFindFirst,
             update: sessionUpdate,
@@ -354,12 +360,16 @@ const {
             create: mutationCreate,
             createMany: mutationCreateMany,
             aggregate: mutationAggregate,
+            updateMany: mutationUpdateMany,
         },
         sessionEntityV4: { findMany: entityFindMany, upsert: entityUpsert },
         $executeRaw: executeRaw,
     };
 
     const dbMock = {
+        account: {
+            updateMany: accountUpdateMany,
+        },
         session: {
             findFirst: sessionFindFirst,
             update: sessionUpdate,
@@ -733,6 +743,26 @@ describe("v4SessionRoutes", () => {
         expect(state.mutations).toHaveLength(1);
     });
 
+    it("does not serve v4 history after the account deletion read gate closes", async () => {
+        seedSession("session-1", "user-1");
+        state.accountWritable = false;
+        app = await createApp();
+
+        const changes = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/changes?after_seq=0",
+            headers: { "x-user-id": "user-1" },
+        });
+        const snapshot = await app.inject({
+            method: "GET",
+            url: "/v4/sessions/session-1/snapshot",
+            headers: { "x-user-id": "user-1" },
+        });
+
+        expect(changes.statusCode).toBe(404);
+        expect(snapshot.statusCode).toBe(404);
+    });
+
     it("fails open when statusCode is exposed through a hostile getter or proxy", () => {
         const throwingGetter = Object.defineProperty(new Error("private-error"), "statusCode", {
             get: () => {
@@ -944,6 +974,10 @@ describe("v4SessionRoutes", () => {
         expect(dbMock.sessionMutationV4.updateMany).toHaveBeenCalledWith({
             where: {
                 sessionId: "session-1",
+                session: {
+                    accountId: "user-1",
+                    account: { deletionRequestedAt: null },
+                },
                 seq: { lte: 353 },
                 createdAt: { lt: expect.any(Date) },
                 prunedAt: null,

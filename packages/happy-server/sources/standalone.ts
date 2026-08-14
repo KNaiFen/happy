@@ -26,7 +26,7 @@ const pgliteDir = process.env.PGLITE_DIR || path.join(dataDir, "pglite");
 
 export async function runMigrations(opts: { pgliteDir: string; migrationsDir?: string } = { pgliteDir }) {
     const targetPgliteDir = opts.pgliteDir;
-    console.log(`Migrating database in ${targetPgliteDir}...`);
+    console.log('Migrating database...');
     fs.mkdirSync(targetPgliteDir, { recursive: true });
 
     const pg = createPGlite(targetPgliteDir);
@@ -59,7 +59,7 @@ export async function runMigrations(opts: { pgliteDir: string; migrationsDir?: s
         }
     }
     if (!migrationsDirResolved) {
-        throw new Error(`Could not find prisma/migrations directory. Tried: ${candidates.join(", ")}`);
+        throw new Error('Database migrations directory not found');
     }
 
     // Get all migration directories sorted
@@ -84,7 +84,7 @@ export async function runMigrations(opts: { pgliteDir: string; migrationsDir?: s
             continue;
         }
 
-        console.log(`  Applying ${dir}...`);
+        console.log('Applying database migration...');
         const sql = fs.readFileSync(sqlFile, "utf-8");
 
         try {
@@ -94,8 +94,8 @@ export async function runMigrations(opts: { pgliteDir: string; migrationsDir?: s
                 [crypto.randomUUID(), dir]
             );
             appliedCount++;
-        } catch (e: any) {
-            throw new Error(`Failed to apply ${dir}: ${e.message}`);
+        } catch {
+            throw new Error('Database migration failed');
         }
     }
 
@@ -180,6 +180,13 @@ export function isStandaloneEntrypoint(invokedFile: string): boolean {
     return standaloneEntrypoints.has(path.win32.basename(invokedFile).toLowerCase());
 }
 
+export function reportStandaloneFailure(
+    kind: 'migration' | 'server',
+    output: Pick<Console, 'error'> = console,
+): void {
+    output.error(kind === 'migration' ? 'Database migration failed' : 'Server startup failed');
+}
+
 const invokedFile = process.argv[1] || "";
 const isDirectInvocation = isStandaloneEntrypoint(invokedFile);
 
@@ -188,14 +195,14 @@ if (isDirectInvocation) {
 
     switch (command) {
         case "migrate":
-            runMigrations({ pgliteDir }).catch(e => {
-                console.error(e);
+            runMigrations({ pgliteDir }).catch(() => {
+                reportStandaloneFailure('migration');
                 process.exit(1);
             });
             break;
         case "serve":
-            serve().catch(e => {
-                console.error(e);
+            serve().catch(() => {
+                reportStandaloneFailure('server');
                 process.exit(1);
             });
             break;

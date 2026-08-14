@@ -7,6 +7,8 @@ import { Context } from "@/context";
 import { friendRemove } from "@/app/social/friendRemove";
 import { friendList } from "@/app/social/friendList";
 import { buildUserProfile } from "@/app/social/type";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead } from "@/app/account/accountWriteGate";
 
 export async function userRoutes(app: Fastify) {
 
@@ -30,31 +32,26 @@ export async function userRoutes(app: Fastify) {
         const { id } = request.params;
 
         // Fetch user
-        const user = await db.account.findUnique({
-            where: {
-                id: id
-            },
-            include: {
-                githubUser: true
-            }
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return null;
+            const user = await tx.account.findFirst({
+                where: { id, deletionRequestedAt: null },
+                include: { githubUser: true },
+            });
+            if (!user) return null;
+            const relationship = await tx.userRelationship.findFirst({
+                where: { fromUserId: request.userId, toUserId: id },
+            });
+            return { user, status: relationship?.status || RelationshipStatus.none };
         });
 
-        if (!user) {
+        if (!result) {
             return reply.code(404).send({ error: 'User not found' });
         }
 
-        // Resolve relationship status
-        const relationship = await db.userRelationship.findFirst({
-            where: {
-                fromUserId: request.userId,
-                toUserId: id
-            }
-        });
-        const status: RelationshipStatus = relationship?.status || RelationshipStatus.none;
-
         // Build user profile
         return reply.send({
-            user: buildUserProfile(user, status)
+            user: buildUserProfile(result.user, result.status)
         });
     });
 
@@ -75,33 +72,24 @@ export async function userRoutes(app: Fastify) {
         const { query } = request.query;
 
         // Search for users by username, first 10 matches
-        const users = await db.account.findMany({
-            where: {
-                username: {
-                    startsWith: query,
-                    mode: 'insensitive'
-                }
-            },
-            include: {
-                githubUser: true
-            },
-            take: 10,
-            orderBy: {
-                username: 'asc'
-            }
-        });
-
-        // Resolve relationship status for each user
-        const userProfiles = await Promise.all(users.map(async (user) => {
-            const relationship = await db.userRelationship.findFirst({
+        const userProfiles = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return [];
+            const users = await tx.account.findMany({
                 where: {
-                    fromUserId: request.userId,
-                    toUserId: user.id
-                }
+                    deletionRequestedAt: null,
+                    username: { startsWith: query, mode: 'insensitive' },
+                },
+                include: { githubUser: true },
+                take: 10,
+                orderBy: { username: 'asc' },
             });
-            const status: RelationshipStatus = relationship?.status || RelationshipStatus.none;
-            return buildUserProfile(user, status);
-        }));
+            return Promise.all(users.map(async (user) => {
+                const relationship = await tx.userRelationship.findFirst({
+                    where: { fromUserId: request.userId, toUserId: user.id },
+                });
+                return buildUserProfile(user, relationship?.status || RelationshipStatus.none);
+            }));
+        });
 
         return reply.send({
             users: userProfiles
@@ -159,7 +147,10 @@ export async function userRoutes(app: Fastify) {
         },
         preHandler: app.authenticate
     }, async (request, reply) => {
-        const friends = await friendList(Context.create(request.userId));
+        const friends = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return [];
+            return friendList(Context.create(request.userId), tx);
+        });
         return reply.send({ friends });
     });
 };

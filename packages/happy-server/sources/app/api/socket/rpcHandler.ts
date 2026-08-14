@@ -5,6 +5,8 @@ import type { DefaultEventsMap } from "socket.io/dist/typed-events";
 import { Counter, Histogram, register } from 'prom-client';
 import { diagnosticHash } from "@/utils/diagnosticHash";
 import { canCallRpcMethod, canRegisterRpcMethod } from "./rpcScope";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountRead } from "@/app/account/accountWriteGate";
 
 // RPC routing uses Socket.IO rooms. A daemon registering method M for user U
 // joins room `rpc:U:M`. Callers look the daemon up cross-replica via
@@ -139,7 +141,9 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
         machineId: socket.data.machineId,
     };
 
-    socket.on('rpc-register', (data: any) => {
+    const accountReadIsAllowed = () => inTx((tx) => acquireAccountRead(tx, userId));
+
+    socket.on('rpc-register', async (data: any) => {
         try {
             const { method } = data ?? {};
             if (!method || typeof method !== 'string') {
@@ -148,6 +152,10 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
             }
             if (!canRegisterRpcMethod(scope, method)) {
                 socket.emit('rpc-error', { type: 'register', error: 'RPC scope mismatch' });
+                return;
+            }
+            if (!await accountReadIsAllowed()) {
+                socket.emit('rpc-error', { type: 'register', error: 'Account deletion in progress' });
                 return;
             }
             socket.join(rpcRoom(userId, method));
@@ -199,6 +207,11 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
                 callback?.({ ok: false, error: 'RPC scope mismatch' });
                 return;
             }
+            if (!await accountReadIsAllowed()) {
+                finish('account_deleting');
+                callback?.({ ok: false, error: 'Account deletion in progress' });
+                return;
+            }
 
             // 1. Find the daemon socket(s) cross-replica via the adapter.
             // If the room is empty OR fetchSockets fails (peer replica
@@ -228,6 +241,15 @@ export function rpcHandler(userId: string, socket: Socket, io: Server) {
             if (target.id === socket.id) {
                 finish('self_call');
                 callback?.({ ok: false, error: 'Cannot call RPC on the same socket' });
+                return;
+            }
+
+            // Room lookup can wait through a reconnect grace period. Re-check
+            // immediately before the irreversible cross-replica emit so a
+            // deletion marker that committed during that wait blocks the call.
+            if (!await accountReadIsAllowed()) {
+                finish('account_deleting');
+                callback?.({ ok: false, error: 'Account deletion in progress' });
                 return;
             }
 

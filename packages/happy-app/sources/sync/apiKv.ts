@@ -2,6 +2,7 @@ import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
 import { getServerUrl } from './serverConfig';
 import { getHappyClientId } from './apiSocket';
+import { createAccountFetch } from './accountOutboundFence';
 
 //
 // Types
@@ -72,9 +73,10 @@ export async function kvGet(
     key: string
 ): Promise<KvItem | null> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/kv/${encodeURIComponent(key)}`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/kv/${encodeURIComponent(key)}`, {
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
                 'X-Happy-Client': getHappyClientId(),
@@ -102,6 +104,7 @@ export async function kvList(
     params: KvListParams = {}
 ): Promise<KvListResponse> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     const queryParams = new URLSearchParams();
     if (params.prefix) {
@@ -116,7 +119,7 @@ export async function kvList(
         : `${API_ENDPOINT}/v1/kv`;
 
     return await backoff(async () => {
-        const response = await fetch(url, {
+        const response = await accountFetch(url, {
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
                 'X-Happy-Client': getHappyClientId(),
@@ -148,9 +151,10 @@ export async function kvBulkGet(
     }
 
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/kv/bulk`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/kv/bulk`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,
@@ -187,9 +191,10 @@ export async function kvMutate(
     }
 
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
 
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/kv`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/kv`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,

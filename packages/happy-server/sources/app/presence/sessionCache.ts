@@ -2,6 +2,8 @@ import { db } from "@/storage/db";
 import { log } from "@/utils/log";
 import { sessionCacheCounter, databaseUpdatesSkippedCounter } from "@/app/monitoring/metrics2";
 import { diagnosticHash } from "@/utils/diagnosticHash";
+import { inTx } from "@/storage/inTx";
+import { acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 interface SessionCacheEntry {
     validUntil: number;
@@ -63,7 +65,12 @@ class ActivityCache {
         // Cache miss - check database
         try {
             const session = await db.session.findFirst({
-                where: { id: sessionId, accountId: userId, archivedAt: null }
+                where: {
+                    id: sessionId,
+                    accountId: userId,
+                    archivedAt: null,
+                    account: { is: { deletionRequestedAt: null } },
+                }
             });
             
             if (session) {
@@ -107,6 +114,7 @@ class ActivityCache {
                     accountId: userId,
                     id: machineId,
                     deletedAt: null,
+                    account: { is: { deletionRequestedAt: null } },
                 },
             });
             
@@ -179,14 +187,27 @@ class ActivityCache {
         }
     }
 
+    invalidateUser(userId: string): void {
+        for (const [sessionId, entry] of this.sessionCache.entries()) {
+            if (entry.userId === userId) {
+                this.sessionCache.delete(sessionId);
+            }
+        }
+        for (const [machineId, entry] of this.machineCache.entries()) {
+            if (entry.userId === userId) {
+                this.machineCache.delete(machineId);
+            }
+        }
+    }
+
     private async flushPendingUpdates(): Promise<void> {
-        const sessionUpdates: { id: string, timestamp: number }[] = [];
+        const sessionUpdates: { id: string, timestamp: number, userId: string }[] = [];
         const machineUpdates: { id: string, timestamp: number, userId: string }[] = [];
         
         // Collect session updates
         for (const [sessionId, entry] of this.sessionCache.entries()) {
             if (entry.pendingUpdate) {
-                sessionUpdates.push({ id: sessionId, timestamp: entry.pendingUpdate });
+                sessionUpdates.push({ id: sessionId, timestamp: entry.pendingUpdate, userId: entry.userId });
                 entry.lastUpdateSent = entry.pendingUpdate;
                 entry.pendingUpdate = null;
             }
@@ -206,49 +227,58 @@ class ActivityCache {
             }
         }
         
-        // Batch update sessions
+        const userIds = new Set([
+            ...sessionUpdates.map((update) => update.userId),
+            ...machineUpdates.map((update) => update.userId),
+        ]);
+
+        await Promise.all([...userIds].map(async (userId) => {
+            try {
+                await inTx(async (tx) => {
+                    if (!await acquireAccountWrite(tx, userId)) return;
+
+                    for (const update of sessionUpdates) {
+                        if (update.userId !== userId) continue;
+                        await tx.session.updateMany({
+                            where: {
+                                id: update.id,
+                                accountId: userId,
+                                account: { deletionRequestedAt: null },
+                                active: true,
+                                archivedAt: null,
+                                presenceLeaseId: null,
+                                OR: [
+                                    { originMachineId: null },
+                                    { originMachine: { deletedAt: null } },
+                                ],
+                            },
+                            data: { lastActiveAt: new Date(update.timestamp), active: true }
+                        });
+                    }
+
+                    for (const update of machineUpdates) {
+                        if (update.userId !== userId) continue;
+                        await tx.machine.updateMany({
+                            where: {
+                                accountId: userId,
+                                account: { deletionRequestedAt: null },
+                                id: update.id,
+                                deletedAt: null,
+                            },
+                            data: { lastActiveAt: new Date(update.timestamp), active: true }
+                        });
+                    }
+                });
+            } catch {
+                log({ module: 'session-cache', level: 'error' }, 'Error updating presence');
+            }
+        }));
+
         if (sessionUpdates.length > 0) {
-            try {
-                await Promise.all(sessionUpdates.map(update =>
-                    db.session.updateMany({
-                        where: {
-                            id: update.id,
-                            active: true,
-                            archivedAt: null,
-                            presenceLeaseId: null,
-                            OR: [
-                                { originMachineId: null },
-                                { originMachine: { deletedAt: null } },
-                            ],
-                        },
-                        data: { lastActiveAt: new Date(update.timestamp), active: true }
-                    })
-                ));
-                
-                log({ module: 'session-cache' }, `Flushed ${sessionUpdates.length} session updates`);
-            } catch {
-                log({ module: 'session-cache', level: 'error' }, 'Error updating sessions');
-            }
+            log({ module: 'session-cache' }, `Flushed ${sessionUpdates.length} session updates`);
         }
-        
-        // Batch update machines
         if (machineUpdates.length > 0) {
-            try {
-                await Promise.all(machineUpdates.map(update =>
-                    db.machine.updateMany({
-                        where: {
-                            accountId: update.userId,
-                            id: update.id,
-                            deletedAt: null,
-                        },
-                        data: { lastActiveAt: new Date(update.timestamp), active: true }
-                    })
-                ));
-                
-                log({ module: 'session-cache' }, `Flushed ${machineUpdates.length} machine updates`);
-            } catch {
-                log({ module: 'session-cache', level: 'error' }, 'Error updating machines');
-            }
+            log({ module: 'session-cache' }, `Flushed ${machineUpdates.length} machine updates`);
         }
     }
 

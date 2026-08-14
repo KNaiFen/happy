@@ -28,6 +28,7 @@ vi.mock('./encryptor', () => {
     class TestEncryption {
         async encrypt(values: unknown[]) { return values; }
         async decrypt(values: unknown[]) { return values; }
+        dispose() {}
     }
     return {
         AES256Encryption: TestEncryption,

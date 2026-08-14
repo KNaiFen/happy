@@ -2,6 +2,7 @@ import { AuthCredentials } from '@/auth/tokenStorage';
 import { backoff } from '@/utils/time';
 import { getServerUrl } from './serverConfig';
 import { getHappyClientId } from './apiSocket';
+import { createAccountFetch } from './accountOutboundFence';
 
 export interface UsageDataPoint {
     timestamp: number;
@@ -29,9 +30,10 @@ export async function queryUsage(
     params: UsageQueryParams = {}
 ): Promise<UsageResponse> {
     const API_ENDPOINT = getServerUrl();
+    const accountFetch = createAccountFetch(credentials.token);
     
     return await backoff(async () => {
-        const response = await fetch(`${API_ENDPOINT}/v1/usage/query`, {
+        const response = await accountFetch(`${API_ENDPOINT}/v1/usage/query`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${credentials.token}`,

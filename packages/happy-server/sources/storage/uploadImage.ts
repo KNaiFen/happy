@@ -1,13 +1,18 @@
 import { randomKey } from "@/utils/randomKey";
 import { processImage } from "./processImage";
-import { s3bucket, s3client, s3host, isLocalStorage, putLocalFile, getPublicUrl } from "./files";
+import { putFile, getPublicUrl } from "./files";
 import { db } from "./db";
+import {
+    beginAccountDeletionUpload,
+    settleAccountDeletionUpload,
+} from "@/app/account/accountDeletion";
 
 export async function uploadImage(userId: string, directory: string, prefix: string, url: string, src: Buffer) {
 
     // Check if image already exists
     const existing = await db.uploadedFile.findFirst({
         where: {
+            accountId: userId,
             reuseKey: 'image-url:' + url
         }
     });
@@ -27,22 +32,29 @@ export async function uploadImage(userId: string, directory: string, prefix: str
     let filename = `${key}.${processed.format === 'png' ? 'png' : 'jpg'}`;
     const filePath = `public/users/${userId}/${directory}/${filename}`;
 
-    if (isLocalStorage()) {
-        await putLocalFile(filePath, src);
-    } else {
-        await s3client.putObject(s3bucket, filePath, src);
+    const uploadOperation = await beginAccountDeletionUpload(userId, filePath);
+    if (!uploadOperation) {
+        throw new Error('Account deletion in progress');
     }
-
-    await db.uploadedFile.create({
-        data: {
-            accountId: userId,
-            path: filePath,
-            reuseKey: 'image-url:' + url,
-            width: processed.width,
-            height: processed.height,
-            thumbhash: processed.thumbhash
+    let objectWriteCompleted = false;
+    try {
+        await putFile(filePath, src);
+        objectWriteCompleted = true;
+        await db.uploadedFile.create({
+            data: {
+                accountId: userId,
+                path: filePath,
+                reuseKey: 'image-url:' + url,
+                width: processed.width,
+                height: processed.height,
+                thumbhash: processed.thumbhash
+            }
+        });
+    } finally {
+        if (objectWriteCompleted) {
+            await settleAccountDeletionUpload(uploadOperation);
         }
-    });
+    }
     return {
         path: filePath,
         thumbhash: processed.thumbhash,
@@ -52,8 +64,5 @@ export async function uploadImage(userId: string, directory: string, prefix: str
 }
 
 export function resolveImageUrl(path: string) {
-    if (isLocalStorage()) {
-        return getPublicUrl(path);
-    }
-    return `https://${s3host}/${s3bucket}/${path}`;
+    return getPublicUrl(path);
 }

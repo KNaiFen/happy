@@ -5,6 +5,7 @@ import { RelationshipStatus } from "@prisma/client";
 import { relationshipSet } from "./relationshipSet";
 import { relationshipGet } from "./relationshipGet";
 import { sendFriendRequestNotification, sendFriendshipEstablishedNotification } from "./friendNotification";
+import { requireAccountWrites } from "@/app/account/accountWriteGate";
 
 /**
  * Add a friend or accept a friend request.
@@ -24,16 +25,17 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
 
         // Read current user objects
         const currentUser = await tx.account.findUnique({
-            where: { id: ctx.uid },
+            where: { id: ctx.uid, deletionRequestedAt: null },
             include: { githubUser: true }
         });
-        const targetUser = await tx.account.findUnique({
-            where: { id: uid },
+        const targetUser = await tx.account.findFirst({
+            where: { id: uid, deletionRequestedAt: null },
             include: { githubUser: true }
         });
         if (!currentUser || !targetUser) {
             return null;
         }
+        await requireAccountWrites(tx, [currentUser.id, targetUser.id]);
 
         // Read relationship status
         const currentUserRelationship = await relationshipGet(tx, currentUser.id, targetUser.id);

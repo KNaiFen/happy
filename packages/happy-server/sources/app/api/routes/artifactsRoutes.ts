@@ -1,62 +1,165 @@
-import { eventRouter, buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate } from "@/app/events/eventRouter";
+import { eventRouter, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate } from "@/app/events/eventRouter";
 import { db } from "@/storage/db";
+import { afterTx, inTx } from "@/storage/inTx";
 import { Fastify } from "../types";
 import { z } from "zod";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
-import { allocateUserSeq } from "@/storage/seq";
+import { allocateArtifactMutation } from "@/storage/seq";
 import { log } from "@/utils/log";
 import * as privacyKit from "privacy-kit";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
+import { diagnosticHash } from "@/utils/diagnosticHash";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { createArtifactForAccount } from "@/app/artifacts/artifactCreate";
+
+type ArtifactSnapshotCursor = {
+    highWatermark: number;
+    artifactRevision: number;
+    lastId: string;
+};
+
+function artifactSnapshotCursorSignature(userId: string, payload: string): Buffer {
+    return createHmac('sha256', process.env.HANDY_MASTER_SECRET!)
+        .update('artifact-snapshot-cursor-v1\0')
+        .update(userId)
+        .update('\0')
+        .update(payload)
+        .digest();
+}
 
 export function artifactsRoutes(app: Fastify) {
-    // GET /v1/artifacts - List all artifacts for the account
+    const artifactSnapshotCursor = z.object({
+        highWatermark: z.number().int().nonnegative(),
+        artifactRevision: z.number().int().nonnegative(),
+        lastId: z.string().min(1).max(256),
+    });
+
+    function decodeArtifactSnapshotCursor(value: string | undefined, userId: string): ArtifactSnapshotCursor | null {
+        if (!value) return null;
+        try {
+            const separator = value.indexOf('.');
+            if (separator <= 0 || separator === value.length - 1) return null;
+            const payload = value.slice(0, separator);
+            const signature = Buffer.from(value.slice(separator + 1), 'base64url');
+            const expected = artifactSnapshotCursorSignature(userId, payload);
+            if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
+            const decoded = artifactSnapshotCursor.safeParse(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')));
+            return decoded.success ? decoded.data : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function encodeArtifactSnapshotCursor(cursor: ArtifactSnapshotCursor, userId: string): string {
+        const payload = Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+        return `${payload}.${artifactSnapshotCursorSignature(userId, payload).toString('base64url')}`;
+    }
+
+    // GET /v1/artifacts - List a complete, account-sequenced snapshot page.
     app.get('/v1/artifacts', {
         preHandler: app.authenticate,
         schema: {
+            querystring: z.object({
+                limit: z.coerce.number().int().min(1).max(100).default(100),
+                cursor: z.string().max(4096).optional(),
+            }),
             response: {
-                200: z.array(z.object({
-                    id: z.string(),
-                    header: z.string(),
-                    headerVersion: z.number(),
-                    dataEncryptionKey: z.string(),
-                    seq: z.number(),
-                    createdAt: z.number(),
-                    updatedAt: z.number()
-                })),
-                500: z.object({
-                    error: z.literal('Failed to get artifacts')
-                })
+                200: z.object({
+                    artifacts: z.array(z.object({
+                        id: z.string(),
+                        header: z.string(),
+                        headerVersion: z.number(),
+                        dataEncryptionKey: z.string(),
+                        seq: z.number(),
+                        updateSeq: z.number().int().nonnegative(),
+                        createdAt: z.number(),
+                        updatedAt: z.number()
+                    })),
+                    highWatermark: z.number().int().nonnegative(),
+                    nextCursor: z.string().max(4096).nullable(),
+                }),
+                400: z.object({ error: z.literal('Invalid artifact snapshot cursor') }),
+                500: z.object({ error: z.literal('Failed to get artifacts') }),
+                409: z.union([
+                    z.object({ error: z.literal('Account deletion in progress') }),
+                    z.object({ error: z.literal('Artifact snapshot changed') }),
+                ])
             }
-        }
+        },
     }, async (request, reply) => {
         const userId = request.userId;
+        const { limit, cursor: cursorValue } = request.query;
+        const cursor = decodeArtifactSnapshotCursor(cursorValue, userId);
+        if (cursorValue && !cursor) return reply.code(400).send({ error: 'Invalid artifact snapshot cursor' });
 
         try {
-            const artifacts = await db.artifact.findMany({
-                where: { accountId: userId },
-                orderBy: { updatedAt: 'desc' },
-                take: 200,
-                select: {
-                    id: true,
-                    header: true,
-                    headerVersion: true,
-                    dataEncryptionKey: true,
-                    seq: true,
-                    createdAt: true,
-                    updatedAt: true
-                }
+            const page = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return null;
+                const account = await tx.account.findUnique({
+                    where: { id: userId },
+                    select: { seq: true, artifactRevision: true },
+                });
+                if (!account) return null;
+                const highWatermark = cursor?.highWatermark ?? account.seq;
+                const artifactRevision = cursor?.artifactRevision ?? account.artifactRevision;
+                if (cursor && account.artifactRevision !== artifactRevision) return { kind: 'snapshotChanged' as const };
+                if (account.seq < highWatermark) return { kind: 'invalidCursor' as const };
+                const artifacts = await tx.artifact.findMany({
+                    where: {
+                        accountId: userId,
+                        updateSeq: { lte: highWatermark },
+                        ...(cursor ? { id: { gt: cursor.lastId } } : {}),
+                        account: { is: { deletionRequestedAt: null } },
+                    },
+                    orderBy: { id: 'asc' },
+                    take: limit + 1,
+                    select: {
+                        id: true,
+                        header: true,
+                        headerVersion: true,
+                        dataEncryptionKey: true,
+                        seq: true,
+                        updateSeq: true,
+                        createdAt: true,
+                        updatedAt: true
+                    }
+                });
+                const hasNext = artifacts.length > limit;
+                const rows = hasNext ? artifacts.slice(0, limit) : artifacts;
+                return {
+                    kind: 'page' as const,
+                    highWatermark,
+                    artifacts: rows,
+                    nextCursor: hasNext
+                        ? encodeArtifactSnapshotCursor({
+                            highWatermark,
+                            artifactRevision,
+                            lastId: rows[rows.length - 1]!.id,
+                        }, userId)
+                        : null,
+                };
             });
 
-            return reply.send(artifacts.map(a => ({
-                id: a.id,
-                header: privacyKit.encodeBase64(a.header),
-                headerVersion: a.headerVersion,
-                dataEncryptionKey: privacyKit.encodeBase64(a.dataEncryptionKey),
-                seq: a.seq,
-                createdAt: a.createdAt.getTime(),
-                updatedAt: a.updatedAt.getTime()
-            })));
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to get artifacts: ${error}`);
+            if (!page) return reply.code(409).send({ error: 'Account deletion in progress' });
+            if (page.kind === 'invalidCursor') return reply.code(400).send({ error: 'Invalid artifact snapshot cursor' });
+            if (page.kind === 'snapshotChanged') return reply.code(409).send({ error: 'Artifact snapshot changed' });
+
+            return reply.send({
+                artifacts: page.artifacts.map(a => ({
+                    id: a.id,
+                    header: privacyKit.encodeBase64(a.header),
+                    headerVersion: a.headerVersion,
+                    dataEncryptionKey: privacyKit.encodeBase64(a.dataEncryptionKey),
+                    seq: a.seq,
+                    updateSeq: a.updateSeq,
+                    createdAt: a.createdAt.getTime(),
+                    updatedAt: a.updatedAt.getTime(),
+                })),
+                highWatermark: page.highWatermark,
+                nextCursor: page.nextCursor,
+            });
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'artifact.list', userHash: diagnosticHash(userId) }, 'Artifact operation failed');
             return reply.code(500).send({ error: 'Failed to get artifacts' });
         }
     });
@@ -77,6 +180,7 @@ export function artifactsRoutes(app: Fastify) {
                     bodyVersion: z.number(),
                     dataEncryptionKey: z.string(),
                     seq: z.number(),
+                    updateSeq: z.number().int().nonnegative(),
                     createdAt: z.number(),
                     updatedAt: z.number()
                 }),
@@ -93,11 +197,15 @@ export function artifactsRoutes(app: Fastify) {
         const { id } = request.params;
 
         try {
-            const artifact = await db.artifact.findFirst({
-                where: {
-                    id,
-                    accountId: userId
-                }
+            const artifact = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, userId)) return null;
+                return tx.artifact.findFirst({
+                    where: {
+                        id,
+                        accountId: userId,
+                        account: { is: { deletionRequestedAt: null } },
+                    }
+                });
             });
 
             if (!artifact) {
@@ -112,11 +220,12 @@ export function artifactsRoutes(app: Fastify) {
                 bodyVersion: artifact.bodyVersion,
                 dataEncryptionKey: privacyKit.encodeBase64(artifact.dataEncryptionKey),
                 seq: artifact.seq,
+                updateSeq: artifact.updateSeq,
                 createdAt: artifact.createdAt.getTime(),
                 updatedAt: artifact.updatedAt.getTime()
             });
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to get artifact: ${error}`);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'artifact.get', userHash: diagnosticHash(userId), artifactHash: diagnosticHash(id) }, 'Artifact operation failed');
             return reply.code(500).send({ error: 'Failed to get artifact' });
         }
     });
@@ -140,6 +249,7 @@ export function artifactsRoutes(app: Fastify) {
                     bodyVersion: z.number(),
                     dataEncryptionKey: z.string(),
                     seq: z.number(),
+                    updateSeq: z.number(),
                     createdAt: z.number(),
                     updatedAt: z.number()
                 }),
@@ -156,57 +266,21 @@ export function artifactsRoutes(app: Fastify) {
         const { id, header, body, dataEncryptionKey } = request.body;
 
         try {
-            // Check if artifact exists
-            const existingArtifact = await db.artifact.findUnique({
-                where: { id }
+            const result = await createArtifactForAccount(userId, {
+                id,
+                header: privacyKit.decodeBase64(header),
+                body: privacyKit.decodeBase64(body),
+                dataEncryptionKey: privacyKit.decodeBase64(dataEncryptionKey),
             });
 
-            if (existingArtifact) {
-                // If exists for another account, return conflict
-                if (existingArtifact.accountId !== userId) {
-                    return reply.code(409).send({ 
-                        error: 'Artifact with this ID already exists for another account' 
-                    });
-                }
-                
-                // If exists for same account, return existing (idempotent)
-                log({ module: 'api', artifactId: id, userId }, 'Found existing artifact');
-                return reply.send({
-                    id: existingArtifact.id,
-                    header: privacyKit.encodeBase64(existingArtifact.header),
-                    headerVersion: existingArtifact.headerVersion,
-                    body: privacyKit.encodeBase64(existingArtifact.body),
-                    bodyVersion: existingArtifact.bodyVersion,
-                    dataEncryptionKey: privacyKit.encodeBase64(existingArtifact.dataEncryptionKey),
-                    seq: existingArtifact.seq,
-                    createdAt: existingArtifact.createdAt.getTime(),
-                    updatedAt: existingArtifact.updatedAt.getTime()
-                });
+            if (result.kind === 'deleting') {
+                return reply.code(500).send({ error: 'Failed to create artifact' });
             }
-
-            // Create new artifact
-            log({ module: 'api', artifactId: id, userId }, 'Creating new artifact');
-            const artifact = await db.artifact.create({
-                data: {
-                    id,
-                    accountId: userId,
-                    header: privacyKit.decodeBase64(header),
-                    headerVersion: 1,
-                    body: privacyKit.decodeBase64(body),
-                    bodyVersion: 1,
-                    dataEncryptionKey: privacyKit.decodeBase64(dataEncryptionKey),
-                    seq: 0
-                }
-            });
-
-            // Emit new-artifact event
-            const updSeq = await allocateUserSeq(userId);
-            const newArtifactPayload = buildNewArtifactUpdate(artifact, updSeq, randomKeyNaked(12));
-            eventRouter.emitUpdate({
-                userId,
-                payload: newArtifactPayload,
-                recipientFilter: { type: 'user-scoped-only' }
-            });
+            if (result.kind === 'conflict') {
+                return reply.code(409).send({ error: 'Artifact with this ID already exists for another account' });
+            }
+            log({ module: 'api', operation: 'artifact.create', artifactHash: diagnosticHash(id), userHash: diagnosticHash(userId), created: result.kind === 'created' }, 'Artifact create resolved');
+            const artifact = result.artifact;
 
             return reply.send({
                 id: artifact.id,
@@ -216,11 +290,12 @@ export function artifactsRoutes(app: Fastify) {
                 bodyVersion: artifact.bodyVersion,
                 dataEncryptionKey: privacyKit.encodeBase64(artifact.dataEncryptionKey),
                 seq: artifact.seq,
+                updateSeq: result.updateSeq,
                 createdAt: artifact.createdAt.getTime(),
                 updatedAt: artifact.updatedAt.getTime()
             });
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to create artifact: ${error}`);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'artifact.create', userHash: diagnosticHash(userId), artifactHash: diagnosticHash(id) }, 'Artifact operation failed');
             return reply.code(500).send({ error: 'Failed to create artifact' });
         }
     });
@@ -242,6 +317,7 @@ export function artifactsRoutes(app: Fastify) {
                 200: z.union([
                     z.object({
                         success: z.literal(true),
+                        updateSeq: z.number(),
                         headerVersion: z.number().optional(),
                         bodyVersion: z.number().optional()
                     }),
@@ -268,90 +344,49 @@ export function artifactsRoutes(app: Fastify) {
         const { header, expectedHeaderVersion, body, expectedBodyVersion } = request.body;
 
         try {
-            // Get current artifact for version check
-            const currentArtifact = await db.artifact.findFirst({
-                where: {
-                    id,
-                    accountId: userId
-                }
-            });
-
-            if (!currentArtifact) {
-                return reply.code(404).send({ error: 'Artifact not found' });
-            }
-
-            // Check version mismatches
-            const headerMismatch = header !== undefined && expectedHeaderVersion !== undefined && 
-                                   currentArtifact.headerVersion !== expectedHeaderVersion;
-            const bodyMismatch = body !== undefined && expectedBodyVersion !== undefined && 
-                                 currentArtifact.bodyVersion !== expectedBodyVersion;
-
-            if (headerMismatch || bodyMismatch) {
-                return reply.send({
-                    success: false,
-                    error: 'version-mismatch',
-                    ...(headerMismatch && {
-                        currentHeaderVersion: currentArtifact.headerVersion,
-                        currentHeader: privacyKit.encodeBase64(currentArtifact.header)
-                    }),
-                    ...(bodyMismatch && {
-                        currentBodyVersion: currentArtifact.bodyVersion,
-                        currentBody: privacyKit.encodeBase64(currentArtifact.body)
-                    })
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
+                const currentArtifact = await tx.artifact.findFirst({
+                    where: { id, accountId: userId, account: { is: { deletionRequestedAt: null } } }
                 });
-            }
-
-            // Build update data
-            const updateData: any = {
-                updatedAt: new Date()
-            };
-            
-            let headerUpdate: { value: string; version: number } | undefined;
-            let bodyUpdate: { value: string; version: number } | undefined;
-
-            if (header !== undefined && expectedHeaderVersion !== undefined) {
-                updateData.header = privacyKit.decodeBase64(header);
-                updateData.headerVersion = expectedHeaderVersion + 1;
-                headerUpdate = {
-                    value: header,
-                    version: expectedHeaderVersion + 1
-                };
-            }
-
-            if (body !== undefined && expectedBodyVersion !== undefined) {
-                updateData.body = privacyKit.decodeBase64(body);
-                updateData.bodyVersion = expectedBodyVersion + 1;
-                bodyUpdate = {
-                    value: body,
-                    version: expectedBodyVersion + 1
-                };
-            }
-
-            // Increment seq
-            updateData.seq = currentArtifact.seq + 1;
-
-            // Update artifact
-            await db.artifact.update({
-                where: { id },
-                data: updateData
+                if (!currentArtifact) return { kind: 'missing' as const };
+                const headerMismatch = header !== undefined && expectedHeaderVersion !== undefined && currentArtifact.headerVersion !== expectedHeaderVersion;
+                const bodyMismatch = body !== undefined && expectedBodyVersion !== undefined && currentArtifact.bodyVersion !== expectedBodyVersion;
+                if (headerMismatch || bodyMismatch) return { kind: 'version-mismatch' as const, artifact: currentArtifact, headerMismatch, bodyMismatch };
+                const updateData: any = { updatedAt: new Date(), seq: currentArtifact.seq + 1 };
+                const headerUpdate = header !== undefined && expectedHeaderVersion !== undefined
+                    ? { value: header, version: expectedHeaderVersion + 1 } : undefined;
+                const bodyUpdate = body !== undefined && expectedBodyVersion !== undefined
+                    ? { value: body, version: expectedBodyVersion + 1 } : undefined;
+                if (headerUpdate) { updateData.header = privacyKit.decodeBase64(headerUpdate.value); updateData.headerVersion = headerUpdate.version; }
+                if (bodyUpdate) { updateData.body = privacyKit.decodeBase64(bodyUpdate.value); updateData.bodyVersion = bodyUpdate.version; }
+                const updated = await tx.artifact.updateMany({
+                    where: { id, accountId: userId, account: { is: { deletionRequestedAt: null } }, ...(header && { headerVersion: expectedHeaderVersion }), ...(body && { bodyVersion: expectedBodyVersion }) },
+                    data: updateData,
+                });
+                if (updated.count !== 1) return { kind: 'version-mismatch' as const, artifact: currentArtifact, headerMismatch: Boolean(header), bodyMismatch: Boolean(body) };
+                const { seq: updSeq } = await allocateArtifactMutation(userId, tx);
+                await tx.artifact.updateMany({ where: { id, accountId: userId }, data: { updateSeq: updSeq } });
+                const updatePayload = buildUpdateArtifactUpdate(id, currentArtifact.seq + 1, updSeq, randomKeyNaked(12), headerUpdate, bodyUpdate);
+                afterTx(tx, () => eventRouter.emitUpdate({ userId, payload: updatePayload, recipientFilter: { type: 'user-scoped-only' } }));
+                return { kind: 'updated' as const, headerUpdate, bodyUpdate, updateSeq: updSeq };
             });
-
-            // Emit update-artifact event
-            const updSeq = await allocateUserSeq(userId);
-            const updatePayload = buildUpdateArtifactUpdate(id, updSeq, randomKeyNaked(12), headerUpdate, bodyUpdate);
-            eventRouter.emitUpdate({
-                userId,
-                payload: updatePayload,
-                recipientFilter: { type: 'user-scoped-only' }
-            });
+            if (result.kind === 'deleting' || result.kind === 'missing') return reply.code(404).send({ error: 'Artifact not found' });
+            if (result.kind === 'version-mismatch') {
+                const currentArtifact = result.artifact;
+                return reply.send({ success: false, error: 'version-mismatch',
+                    ...(result.headerMismatch && { currentHeaderVersion: currentArtifact.headerVersion, currentHeader: privacyKit.encodeBase64(currentArtifact.header) }),
+                    ...(result.bodyMismatch && { currentBodyVersion: currentArtifact.bodyVersion, currentBody: privacyKit.encodeBase64(currentArtifact.body) }) });
+            }
 
             return reply.send({
                 success: true,
-                ...(headerUpdate && { headerVersion: headerUpdate.version }),
-                ...(bodyUpdate && { bodyVersion: bodyUpdate.version })
+                updateSeq: result.updateSeq,
+                ...(result.headerUpdate && { headerVersion: result.headerUpdate.version }),
+                ...(result.bodyUpdate && { bodyVersion: result.bodyUpdate.version })
             });
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to update artifact: ${error}`);
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'artifact.update', userHash: diagnosticHash(userId), artifactHash: diagnosticHash(id) }, 'Artifact operation failed');
             return reply.code(500).send({ error: 'Failed to update artifact' });
         }
     });
@@ -365,7 +400,8 @@ export function artifactsRoutes(app: Fastify) {
             }),
             response: {
                 200: z.object({
-                    success: z.literal(true)
+                    success: z.literal(true),
+                    updateSeq: z.number()
                 }),
                 404: z.object({
                     error: z.literal('Artifact not found')
@@ -380,35 +416,21 @@ export function artifactsRoutes(app: Fastify) {
         const { id } = request.params;
 
         try {
-            // Check if artifact exists and belongs to user
-            const artifact = await db.artifact.findFirst({
-                where: {
-                    id,
-                    accountId: userId
-                }
+            const result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
+                const artifact = await tx.artifact.findFirst({ where: { id, accountId: userId, account: { is: { deletionRequestedAt: null } } } });
+                if (!artifact) return { kind: 'missing' as const };
+                await tx.artifact.delete({ where: { id } });
+                const { seq: updSeq } = await allocateArtifactMutation(userId, tx);
+                const deletePayload = buildDeleteArtifactUpdate(id, updSeq, randomKeyNaked(12));
+                afterTx(tx, () => eventRouter.emitUpdate({ userId, payload: deletePayload, recipientFilter: { type: 'user-scoped-only' } }));
+                return { kind: 'deleted' as const, seq: updSeq };
             });
+            if (result.kind !== 'deleted') return reply.code(404).send({ error: 'Artifact not found' });
 
-            if (!artifact) {
-                return reply.code(404).send({ error: 'Artifact not found' });
-            }
-
-            // Delete artifact
-            await db.artifact.delete({
-                where: { id }
-            });
-
-            // Emit delete-artifact event
-            const updSeq = await allocateUserSeq(userId);
-            const deletePayload = buildDeleteArtifactUpdate(id, updSeq, randomKeyNaked(12));
-            eventRouter.emitUpdate({
-                userId,
-                payload: deletePayload,
-                recipientFilter: { type: 'user-scoped-only' }
-            });
-
-            return reply.send({ success: true });
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to delete artifact: ${error}`);
+            return reply.send({ success: true, updateSeq: result.seq });
+        } catch {
+            log({ module: 'api', level: 'error', operation: 'artifact.delete', userHash: diagnosticHash(userId), artifactHash: diagnosticHash(id) }, 'Artifact operation failed');
             return reply.code(500).send({ error: 'Failed to delete artifact' });
         }
     });

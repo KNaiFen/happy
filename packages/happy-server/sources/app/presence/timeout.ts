@@ -28,6 +28,7 @@ export async function expireTimedOutSessions(now = Date.now()): Promise<void> {
                 active: true,
                 archivedAt: null,
                 lastActiveAt: session.lastActiveAt,
+                account: { is: { deletionRequestedAt: null } },
             },
             data: { active: false, presenceLeaseId: null },
         });
@@ -64,7 +65,11 @@ export function startTimeout() {
             });
             for (const machine of machines) {
                 const updated = await db.machine.updateManyAndReturn({
-                    where: { id: machine.id, active: true },
+                    where: {
+                        id: machine.id,
+                        active: true,
+                        account: { is: { deletionRequestedAt: null } },
+                    },
                     data: { active: false }
                 });
                 if (updated.length === 0) {

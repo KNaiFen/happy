@@ -4,6 +4,7 @@ import { allocateUserSeq } from "@/storage/seq";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { eventRouter, buildKVBatchUpdateUpdate } from "@/app/events/eventRouter";
 import * as privacyKit from "privacy-kit";
+import { requireAccountWrite } from "@/app/account/accountWriteGate";
 
 export interface KVMutation {
     key: string;
@@ -37,6 +38,7 @@ export async function kvMutate(
     mutations: KVMutation[]
 ): Promise<KVMutateResult> {
     return await inTx(async (tx) => {
+        await requireAccountWrite(tx, ctx.uid);
         const errors: KVMutateResult['errors'] = [];
 
         // Pre-validate all mutations
@@ -127,6 +129,7 @@ export async function kvMutate(
         // Send single bundled notification for all changes
         afterTx(tx, async () => {
             const updateSeq = await allocateUserSeq(ctx.uid);
+            if (updateSeq === null) return;
             eventRouter.emitUpdate({
                 userId: ctx.uid,
                 payload: buildKVBatchUpdateUpdate(changes, updateSeq, randomKeyNaked(12)),

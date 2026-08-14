@@ -7,24 +7,15 @@ const {
     state,
     dbMock,
     filesMock,
-    fsMock,
+    beginUploadOperation,
+    settleUploadOperation,
+    acquireAccountRead,
     resetState,
     seedSession
 } = vi.hoisted(() => {
     const state = {
         sessions: [] as Array<{ id: string; accountId: string }>,
         uploads: new Map<string, Buffer>(),
-        useLocalStorage: true,
-        s3PostUrl: "https://s3.test/post-url",
-        s3GetUrl: "https://s3.test/get-url",
-        s3PolicyMaxLength: 0,
-    };
-
-    const resetState = () => {
-        state.sessions = [];
-        state.uploads = new Map();
-        state.useLocalStorage = true;
-        state.s3PolicyMaxLength = 0;
     };
 
     const seedSession = (id: string, accountId: string) => {
@@ -40,59 +31,49 @@ const {
     const dbMock = { session: { findFirst: sessionFindFirst } };
 
     const filesMock = {
-        s3client: {
-            newPostPolicy: () => {
-                const policy = {
-                    bucket: "",
-                    key: "",
-                    expires: new Date(),
-                    minLen: 0,
-                    maxLen: 0,
-                    setBucket(b: string) { policy.bucket = b; },
-                    setKey(k: string) { policy.key = k; },
-                    setExpires(d: Date) { policy.expires = d; },
-                    setContentLengthRange(min: number, max: number) {
-                        policy.minLen = min;
-                        policy.maxLen = max;
-                        state.s3PolicyMaxLength = max;
-                    },
-                };
-                return policy;
-            },
-            presignedPostPolicy: vi.fn(async (_policy: any) => ({
-                postURL: state.s3PostUrl,
-                formData: { key: _policy.key, policy: "stub-policy" },
-            })),
-            presignedGetObject: vi.fn(async (_bucket: string, _key: string, _ttl: number) => state.s3GetUrl),
-        },
-        s3bucket: "test-bucket",
-        isLocalStorage: vi.fn(() => state.useLocalStorage),
-        getLocalFilesDir: vi.fn(() => "/tmp/test-files"),
-        putLocalFile: vi.fn(async (filePath: string, data: Buffer) => {
+        putFile: vi.fn(async (filePath: string, data: Buffer) => {
             state.uploads.set(filePath, data);
         }),
-    };
-
-    const fsMock = {
-        existsSync: vi.fn((p: string) => {
-            const rel = p.replace(/^\/tmp\/test-files\//, "");
-            return state.uploads.has(rel);
-        }),
-        readFileSync: vi.fn((p: string) => {
-            const rel = p.replace(/^\/tmp\/test-files\//, "");
-            return state.uploads.get(rel) ?? Buffer.alloc(0);
+        getFileStream: vi.fn(async (filePath: string) => {
+            const content = state.uploads.get(filePath);
+            if (!content) throw new Error("not found");
+            return content;
         }),
     };
 
-    return { state, dbMock, filesMock, fsMock, resetState, seedSession };
+    const resetState = () => {
+        state.sessions = [];
+        state.uploads = new Map();
+        filesMock.putFile.mockClear();
+        filesMock.getFileStream.mockClear();
+    };
+
+    const beginUploadOperation = vi.fn(async () => 'upload-operation-1');
+    const settleUploadOperation = vi.fn(async () => {});
+    const acquireAccountRead = vi.fn(async () => true);
+
+    return {
+        state,
+        dbMock,
+        filesMock,
+        beginUploadOperation,
+        settleUploadOperation,
+        acquireAccountRead,
+        resetState,
+        seedSession,
+    };
 });
 
 vi.mock("@/storage/db", () => ({ db: dbMock }));
+vi.mock('@/storage/inTx', () => ({
+    inTx: async (callback: (tx: typeof dbMock) => Promise<unknown>) => callback(dbMock),
+}));
+vi.mock('@/app/account/accountWriteGate', () => ({ acquireAccountRead }));
 vi.mock("@/storage/files", () => filesMock);
-vi.mock("fs", async () => {
-    const actual = await vi.importActual<typeof import("fs")>("fs");
-    return { ...actual, existsSync: fsMock.existsSync, readFileSync: fsMock.readFileSync };
-});
+vi.mock('@/app/account/accountDeletion', () => ({
+    beginAccountDeletionUpload: beginUploadOperation,
+    settleAccountDeletionUpload: settleUploadOperation,
+}));
 
 import { attachmentRoutes } from "./attachmentRoutes";
 
@@ -125,12 +106,19 @@ async function createApp() {
 
 describe("attachmentRoutes — request-upload", () => {
     let app: Fastify;
-    beforeEach(() => { resetState(); });
+    beforeEach(() => {
+        resetState();
+        beginUploadOperation.mockReset();
+        beginUploadOperation.mockResolvedValue('upload-operation-1');
+        settleUploadOperation.mockReset();
+        settleUploadOperation.mockResolvedValue(undefined);
+        acquireAccountRead.mockReset();
+        acquireAccountRead.mockResolvedValue(true);
+    });
     afterEach(async () => { if (app) await app.close(); });
 
-    it("returns 200 with .enc ref + method=PUT in local mode for the session owner", async () => {
+    it("returns an authenticated Server PUT URL for the session owner", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         app = await createApp();
 
         const res = await app.inject({
@@ -146,11 +134,11 @@ describe("attachmentRoutes — request-upload", () => {
         expect(body.ref).toMatch(/^sessions\/s1\/attachments\/[A-Fa-f0-9-]+\.enc$/);
         expect(body.uploadUrl).toContain("/v1/sessions/s1/attachments/");
         expect(body.uploadUrl).toMatch(/\.enc$/);
+        expect(body.requiresAuth).toBe(true);
     });
 
-    it("returns 200 with method=POST + formFields and a content-length-range policy in S3 mode", async () => {
+    it("does not issue an S3 capability when object storage is configured", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = false;
         app = await createApp();
 
         const res = await app.inject({
@@ -162,10 +150,10 @@ describe("attachmentRoutes — request-upload", () => {
 
         expect(res.statusCode).toBe(200);
         const body = res.json();
-        expect(body.method).toBe("POST");
-        expect(body.uploadUrl).toBe("https://s3.test/post-url");
-        expect(body.formFields).toBeDefined();
-        expect(state.s3PolicyMaxLength).toBe(10 * 1024 * 1024);
+        expect(body.method).toBe("PUT");
+        expect(body.uploadUrl).toContain("/v1/sessions/s1/attachments/");
+        expect(body.formFields).toBeUndefined();
+        expect(body.requiresAuth).toBe(true);
     });
 
     it("returns 404 when the requesting user is not the session owner", async () => {
@@ -208,14 +196,19 @@ describe("attachmentRoutes — request-upload", () => {
     });
 });
 
-describe("attachmentRoutes — PUT (local-mode upload)", () => {
+describe("attachmentRoutes — PUT (authenticated upload)", () => {
     let app: Fastify;
-    beforeEach(() => { resetState(); });
+    beforeEach(() => {
+        resetState();
+        beginUploadOperation.mockReset();
+        beginUploadOperation.mockResolvedValue('upload-operation-1');
+        settleUploadOperation.mockReset();
+        settleUploadOperation.mockResolvedValue(undefined);
+    });
     afterEach(async () => { if (app) await app.close(); });
 
     it("accepts the encrypted blob from the session owner and stores it under the session prefix", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         app = await createApp();
 
         const blob = Buffer.from("encrypted-bytes");
@@ -228,11 +221,15 @@ describe("attachmentRoutes — PUT (local-mode upload)", () => {
 
         expect(res.statusCode).toBe(200);
         expect(state.uploads.get("sessions/s1/attachments/abc.enc")).toEqual(blob);
+        expect(beginUploadOperation).toHaveBeenCalledWith(
+            'u1',
+            'sessions/s1/attachments/abc.enc',
+        );
+        expect(settleUploadOperation).toHaveBeenCalledWith('upload-operation-1');
     });
 
     it("rejects path traversal in attachment file segment", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         app = await createApp();
 
         const evil = await app.inject({
@@ -246,7 +243,6 @@ describe("attachmentRoutes — PUT (local-mode upload)", () => {
 
     it("rejects upload from a non-owner of the session", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         app = await createApp();
 
         const res = await app.inject({
@@ -258,9 +254,8 @@ describe("attachmentRoutes — PUT (local-mode upload)", () => {
         expect(res.statusCode).toBe(404);
     });
 
-    it("returns 404 for PUT in S3 mode (direct upload not available)", async () => {
+    it("proxies an authenticated PUT into the configured object storage", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = false;
         app = await createApp();
 
         const res = await app.inject({
@@ -269,18 +264,105 @@ describe("attachmentRoutes — PUT (local-mode upload)", () => {
             headers: { "x-user-id": "u1", "content-type": "application/octet-stream" },
             payload: Buffer.from("x"),
         });
-        expect(res.statusCode).toBe(404);
+        expect(res.statusCode).toBe(200);
+        expect(state.uploads.get("sessions/s1/attachments/abc.enc")).toEqual(Buffer.from("x"));
+    });
+
+    it('keeps the upload operation pending when object storage reports an unknown write result', async () => {
+        seedSession('s1', 'u1');
+        filesMock.putFile.mockRejectedValueOnce(new Error('connection reset'));
+        app = await createApp();
+
+        const res = await app.inject({
+            method: 'PUT',
+            url: '/v1/sessions/s1/attachments/abc.enc',
+            headers: { 'x-user-id': 'u1', 'content-type': 'application/octet-stream' },
+            payload: Buffer.from('x'),
+        });
+
+        expect(res.statusCode).toBe(500);
+        expect(settleUploadOperation).not.toHaveBeenCalled();
+    });
+
+    it('does not start an object write after account deletion takes the upload gate', async () => {
+        seedSession('s1', 'u1');
+        beginUploadOperation.mockResolvedValueOnce(null as never);
+        app = await createApp();
+
+        const res = await app.inject({
+            method: 'PUT',
+            url: '/v1/sessions/s1/attachments/abc.enc',
+            headers: { 'x-user-id': 'u1', 'content-type': 'application/octet-stream' },
+            payload: Buffer.from('x'),
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(filesMock.putFile).not.toHaveBeenCalled();
+        expect(settleUploadOperation).not.toHaveBeenCalled();
+    });
+
+    it('rejects an actual PUT body larger than 10MB before storage', async () => {
+        seedSession('s1', 'large-body-user');
+        app = await createApp();
+
+        const res = await app.inject({
+            method: 'PUT',
+            url: '/v1/sessions/s1/attachments/large.enc',
+            headers: {
+                'x-user-id': 'large-body-user',
+                'content-type': 'application/octet-stream',
+            },
+            payload: Buffer.alloc(10 * 1024 * 1024 + 1),
+        });
+
+        expect(res.statusCode).toBe(413);
+        expect(filesMock.putFile).not.toHaveBeenCalled();
+        expect(beginUploadOperation).not.toHaveBeenCalled();
+    });
+
+    it('rate-limits the 61st actual PUT within one minute', async () => {
+        seedSession('s1', 'rate-user');
+        app = await createApp();
+
+        for (let attempt = 0; attempt < 60; attempt++) {
+            const res = await app.inject({
+                method: 'PUT',
+                url: `/v1/sessions/s1/attachments/${attempt}.enc`,
+                headers: {
+                    'x-user-id': 'rate-user',
+                    'content-type': 'application/octet-stream',
+                },
+                payload: Buffer.from('x'),
+            });
+            expect(res.statusCode).toBe(200);
+        }
+
+        const limited = await app.inject({
+            method: 'PUT',
+            url: '/v1/sessions/s1/attachments/61.enc',
+            headers: {
+                'x-user-id': 'rate-user',
+                'content-type': 'application/octet-stream',
+            },
+            payload: Buffer.from('x'),
+        });
+
+        expect(limited.statusCode).toBe(429);
+        expect(filesMock.putFile).toHaveBeenCalledTimes(60);
     });
 });
 
 describe("attachmentRoutes — POST request-download", () => {
     let app: Fastify;
-    beforeEach(() => { resetState(); });
+    beforeEach(() => {
+        resetState();
+        acquireAccountRead.mockReset();
+        acquireAccountRead.mockResolvedValue(true);
+    });
     afterEach(async () => { if (app) await app.close(); });
 
-    it("returns a server-relative downloadUrl for the session owner in local mode", async () => {
+    it("returns an authenticated Server download URL for the session owner", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         app = await createApp();
 
         const res = await app.inject({
@@ -293,11 +375,11 @@ describe("attachmentRoutes — POST request-download", () => {
         expect(res.statusCode).toBe(200);
         const body = res.json();
         expect(body.downloadUrl).toContain("/v1/sessions/s1/attachments/abc.enc");
+        expect(body.requiresAuth).toBe(true);
     });
 
-    it("returns a presigned S3 GET URL in S3 mode", async () => {
+    it("does not return a presigned S3 GET URL", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = false;
         app = await createApp();
 
         const res = await app.inject({
@@ -308,7 +390,8 @@ describe("attachmentRoutes — POST request-download", () => {
         });
 
         expect(res.statusCode).toBe(200);
-        expect(res.json().downloadUrl).toBe("https://s3.test/get-url");
+        expect(res.json().downloadUrl).toContain("/v1/sessions/s1/attachments/abc.enc");
+        expect(res.json().requiresAuth).toBe(true);
     });
 
     it("rejects a ref that does not belong to the requested session (cross-session attack)", async () => {
@@ -368,14 +451,17 @@ describe("attachmentRoutes — POST request-download", () => {
     });
 });
 
-describe("attachmentRoutes — GET (download)", () => {
+describe("attachmentRoutes — GET (authenticated download)", () => {
     let app: Fastify;
-    beforeEach(() => { resetState(); });
+    beforeEach(() => {
+        resetState();
+        acquireAccountRead.mockReset();
+        acquireAccountRead.mockResolvedValue(true);
+    });
     afterEach(async () => { if (app) await app.close(); });
 
-    it("serves the encrypted blob to the session owner in local mode", async () => {
+    it("serves the encrypted blob to the session owner", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         state.uploads.set("sessions/s1/attachments/abc.enc", Buffer.from("payload"));
         app = await createApp();
 
@@ -390,9 +476,9 @@ describe("attachmentRoutes — GET (download)", () => {
         expect(res.rawPayload).toEqual(Buffer.from("payload"));
     });
 
-    it("redirects to a presigned GET URL in S3 mode for the session owner", async () => {
+    it("streams the object-storage blob rather than redirecting to a capability URL", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = false;
+        state.uploads.set("sessions/s1/attachments/abc.enc", Buffer.from("payload"));
         app = await createApp();
 
         const res = await app.inject({
@@ -401,13 +487,12 @@ describe("attachmentRoutes — GET (download)", () => {
             headers: { "x-user-id": "u1" },
         });
 
-        expect(res.statusCode).toBe(302);
-        expect(res.headers.location).toBe("https://s3.test/get-url");
+        expect(res.statusCode).toBe(200);
+        expect(res.rawPayload).toEqual(Buffer.from("payload"));
     });
 
     it("returns 404 for non-owner", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         state.uploads.set("sessions/s1/attachments/abc.enc", Buffer.from("payload"));
         app = await createApp();
 
@@ -421,7 +506,6 @@ describe("attachmentRoutes — GET (download)", () => {
 
     it("rejects path traversal", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         app = await createApp();
 
         const res = await app.inject({
@@ -432,9 +516,8 @@ describe("attachmentRoutes — GET (download)", () => {
         expect(res.statusCode).toBe(404);
     });
 
-    it("returns 404 when the attachment file is missing in local mode", async () => {
+    it("returns 404 when the attachment file is missing", async () => {
         seedSession("s1", "u1");
-        state.useLocalStorage = true;
         app = await createApp();
 
         const res = await app.inject({
@@ -443,5 +526,21 @@ describe("attachmentRoutes — GET (download)", () => {
             headers: { "x-user-id": "u1" },
         });
         expect(res.statusCode).toBe(404);
+    });
+
+    it("does not open a new object stream after account deletion is admitted", async () => {
+        seedSession("s1", "u1");
+        state.uploads.set("sessions/s1/attachments/abc.enc", Buffer.from("payload"));
+        acquireAccountRead.mockResolvedValueOnce(false);
+        app = await createApp();
+
+        const res = await app.inject({
+            method: "GET",
+            url: "/v1/sessions/s1/attachments/abc.enc",
+            headers: { "x-user-id": "u1" },
+        });
+
+        expect(res.statusCode).toBe(404);
+        expect(filesMock.getFileStream).not.toHaveBeenCalled();
     });
 });

@@ -11,6 +11,7 @@ import { auth } from "@/app/auth/auth";
 import { activityCache } from "@/app/presence/sessionCache";
 import { diagnosticHash } from "@/utils/diagnosticHash";
 import { Prisma } from "@prisma/client";
+import { acquireAccountRead, acquireAccountWrite } from "@/app/account/accountWriteGate";
 
 function machineResponse(machine: {
     id: string;
@@ -64,6 +65,9 @@ export function machinesRoutes(app: Fastify) {
         let result;
         try {
             result = await inTx(async (tx) => {
+                if (!await acquireAccountWrite(tx, userId)) {
+                    return { kind: 'account-deleting' as const };
+                }
                 const credential = await tx.terminalAuthRequest.findFirst({
                     where: {
                         id: credentialId,
@@ -124,7 +128,9 @@ export function machinesRoutes(app: Fastify) {
 
                 afterTx(tx, async () => {
                     const updSeq1 = await allocateUserSeq(userId);
+                    if (updSeq1 === null) return;
                     const updSeq2 = await allocateUserSeq(userId);
+                    if (updSeq2 === null) return;
                     const newMachinePayload = buildNewMachineUpdate(
                         machine,
                         updSeq1,
@@ -164,6 +170,9 @@ export function machinesRoutes(app: Fastify) {
         if (result.kind === 'credential-invalid') {
             return reply.code(401).send({ error: 'Terminal credential revoked' });
         }
+        if (result.kind === 'account-deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
         if (result.kind === 'machine-deleted') {
             return reply.code(410).send({ error: 'Machine was deleted; re-authentication required' });
         }
@@ -192,17 +201,21 @@ export function machinesRoutes(app: Fastify) {
             return reply.code(403).send({ error: 'Machine is not authorized' });
         }
 
-        const machines = await db.machine.findMany({
-            where: {
-                accountId: userId,
-                deletedAt: null,
-                ...(request.authCredentialId ? {
-                    id: request.authMachineId,
-                    credentialId: request.authCredentialId,
-                } : {}),
-            },
-            orderBy: { lastActiveAt: 'desc' }
+        const machines = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return null;
+            return tx.machine.findMany({
+                where: {
+                    accountId: userId,
+                    deletedAt: null,
+                    ...(request.authCredentialId ? {
+                        id: request.authMachineId,
+                        credentialId: request.authCredentialId,
+                    } : {}),
+                },
+                orderBy: { lastActiveAt: 'desc' }
+            });
         });
+        if (!machines) return reply.code(409).send({ error: 'Account deletion in progress' });
 
         return machines.map(machineResponse);
     });
@@ -225,23 +238,32 @@ export function machinesRoutes(app: Fastify) {
             return reply.code(404).send({ error: 'Machine not found' });
         }
 
-        const machine = await db.machine.findFirst({
-            where: {
-                accountId: userId,
-                id: id,
-                deletedAt: null,
-                ...(request.authCredentialId
-                    ? { credentialId: request.authCredentialId }
-                    : {}),
-            }
+        const result = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, userId)) return { kind: 'deleting' as const };
+            const machine = await tx.machine.findFirst({
+                where: {
+                    accountId: userId,
+                    id: id,
+                    deletedAt: null,
+                    ...(request.authCredentialId
+                        ? { credentialId: request.authCredentialId }
+                        : {}),
+                }
+            });
+            return machine
+                ? { kind: 'ok' as const, machine }
+                : { kind: 'missing' as const };
         });
 
-        if (!machine) {
+        if (result.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
+        if (result.kind === 'missing') {
             return reply.code(404).send({ error: 'Machine not found' });
         }
 
         return {
-            machine: machineResponse(machine)
+            machine: machineResponse(result.machine)
         };
     });
 
@@ -262,14 +284,15 @@ export function machinesRoutes(app: Fastify) {
         }
 
         const deleted = await inTx(async (tx) => {
+            if (!await acquireAccountWrite(tx, userId)) return { kind: 'deleting' as const };
             const machine = await tx.machine.findFirst({
-                where: { accountId: userId, id }
+                where: { accountId: userId, id, account: { is: { deletionRequestedAt: null } } }
             });
             if (!machine) {
-                return false;
+                return { kind: 'missing' as const };
             }
             if (machine.deletedAt) {
-                return true;
+                return { kind: 'deleted' as const };
             }
 
             const accessKeys = await tx.accessKey.findMany({
@@ -326,6 +349,7 @@ export function machinesRoutes(app: Fastify) {
 
             afterTx(tx, async () => {
                 const updSeq = await allocateUserSeq(userId);
+                if (updSeq === null) return;
                 const updatePayload = buildDeleteMachineUpdate(id, updSeq, randomKeyNaked(12));
                 eventRouter.emitUpdate({
                     userId,
@@ -346,10 +370,13 @@ export function machinesRoutes(app: Fastify) {
                 }, 'Machine deleted');
             });
 
-            return true;
+            return { kind: 'deleted' as const };
         });
 
-        if (!deleted) {
+        if (deleted.kind === 'deleting') {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
+        if (deleted.kind === 'missing') {
             return reply.code(404).send({ error: 'Machine not found' });
         }
 

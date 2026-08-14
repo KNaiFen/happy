@@ -1,32 +1,32 @@
 /**
  * Attachment upload/download routes for image attachments in chat sessions.
  *
- * Two storage modes:
- * - S3: Returns presigned PUT/GET URLs. Server never touches file bytes.
- * - Local: Server accepts/serves encrypted blobs directly.
+ * Two storage modes share one authenticated transport:
+ * - S3: Server proxies encrypted blobs to the configured bucket.
+ * - Local: Server writes/serves encrypted blobs directly.
  *
  * No database records — attachments are identified by their ref path.
  * Cleanup happens when sessions are deleted (Phase 8).
  */
 import { z } from 'zod';
-import * as fs from 'fs';
-import * as path from 'path';
 import * as crypto from 'crypto';
 import { Fastify } from '../types';
-import { db } from '@/storage/db';
-import { s3client, s3bucket, isLocalStorage, getLocalFilesDir, putLocalFile } from '@/storage/files';
+import { getFileStream, putFile } from '@/storage/files';
+import { inTx } from '@/storage/inTx';
+import { acquireAccountRead } from '@/app/account/accountWriteGate';
+import {
+    beginAccountDeletionUpload,
+    settleAccountDeletionUpload,
+} from '@/app/account/accountDeletion';
 import {
     buildSessionAccessWhere,
     sessionAccessIdentityFromRequest,
 } from '@/app/api/utils/sessionAccess';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const PRESIGNED_TTL_SECONDS = 15 * 60; // 15 minutes (design spec)
-
-// Per-user, per-process token bucket for request-upload. Best-effort flood
-// protection — on a multi-process deploy each instance counts independently,
-// so an attacker with N processes gets N×limit. Adequate as a backstop
-// against a single-client loop generating presigned URLs forever.
+// Per-user, per-process limit for actual object writes. Multi-process
+// deployments multiply this backstop by their replica count; a shared rate
+// limiter can replace it without changing the route contract.
 const UPLOAD_RATE_WINDOW_MS = 60_000;
 const UPLOAD_RATE_MAX = 60;
 const uploadRateState = new Map<string, { count: number; windowStart: number }>();
@@ -39,15 +39,8 @@ const uploadRateState = new Map<string, { count: number; windowStart: number }>(
  * (a phone, another LAN device, a desktop pointing at a dev IP) fail with a
  * generic Network request failed when it tries to follow the URL.
  */
-function resolveBaseUrl(request: { headers: Record<string, string | string[] | undefined> }): string {
+function resolveBaseUrl(_request: { headers: Record<string, string | string[] | undefined> }): string {
     if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL;
-    const xfHost = request.headers['x-forwarded-host'];
-    const xfProto = request.headers['x-forwarded-proto'];
-    const host = (Array.isArray(xfHost) ? xfHost[0] : xfHost) ?? request.headers.host;
-    const proto = (Array.isArray(xfProto) ? xfProto[0] : xfProto) ?? 'http';
-    if (typeof host === 'string' && host.length > 0) {
-        return `${proto}://${host}`;
-    }
     return `http://localhost:${process.env.PORT || '3005'}`;
 }
 
@@ -75,8 +68,9 @@ function checkUploadRate(userId: string): boolean {
 export function attachmentRoutes(app: Fastify) {
 
     /**
-     * Request an upload URL for an attachment.
-     * Returns a ref (storage path) and an uploadUrl to PUT the encrypted blob to.
+     * Request an authenticated upload URL for an attachment.
+     * Returns a ref (storage path) and an uploadUrl on this Server. Keeping the
+     * transfer server-mediated lets account deletion revoke access immediately.
      */
     app.post('/v1/sessions/:sessionId/attachments/request-upload', {
         schema: {
@@ -89,34 +83,30 @@ export function attachmentRoutes(app: Fastify) {
             }),
             response: {
                 200: z.object({
-                    ref: z.string(),
-                    uploadUrl: z.string(),
-                    method: z.enum(['PUT', 'POST']),
-                    formFields: z.record(z.string(), z.string()).optional(),
+                ref: z.string(),
+                uploadUrl: z.string(),
+                method: z.literal('PUT'),
+                requiresAuth: z.literal(true),
                 }),
                 404: z.object({ error: z.string() }),
+                409: z.object({ error: z.string() }),
                 413: z.object({ error: z.string() }),
-                429: z.object({ error: z.string() }),
             },
         },
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const { sessionId } = request.params;
         const { size } = request.body;
-        const userId = request.userId;
-
-        if (!checkUploadRate(userId)) {
-            return reply.code(429).send({ error: 'Too many upload requests. Try again in a minute.' });
-        }
 
         // Verify session ownership
         const accessWhere = buildSessionAccessWhere(
             sessionAccessIdentityFromRequest(request),
             { id: sessionId },
         );
-        const session = accessWhere
-            ? await db.session.findFirst({ where: accessWhere })
-            : null;
+        const session = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return null;
+            return accessWhere ? tx.session.findFirst({ where: accessWhere }) : null;
+        });
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -130,38 +120,17 @@ export function attachmentRoutes(app: Fastify) {
         const attachmentFile = `${attachmentId}.enc`;
         const ref = `sessions/${sessionId}/attachments/${attachmentFile}`;
 
-        if (isLocalStorage()) {
-            // Local mode: client uploads to our own PUT endpoint (the server
-            // enforces the size limit by inspecting the request body before
-            // it hits disk, so PUT is fine here).
-            const baseUrl = resolveBaseUrl(request);
-            const uploadUrl = `${baseUrl}/v1/sessions/${sessionId}/attachments/${attachmentFile}`;
-            return reply.send({ ref, uploadUrl, method: 'PUT' });
-        } else {
-            // S3 mode: presigned POST policy with content-length-range so S3
-            // itself rejects oversize uploads — a presigned PUT cannot enforce
-            // size and would let a client honest about size in the auth call
-            // PUT 500MB at the URL afterwards.
-            const policy = s3client.newPostPolicy();
-            policy.setBucket(s3bucket);
-            policy.setKey(ref);
-            policy.setExpires(new Date(Date.now() + PRESIGNED_TTL_SECONDS * 1000));
-            policy.setContentLengthRange(0, MAX_FILE_SIZE);
-            const { postURL, formData } = await s3client.presignedPostPolicy(policy);
-            return reply.send({
-                ref,
-                uploadUrl: postURL,
-                method: 'POST',
-                formFields: formData as Record<string, string>,
-            });
-        }
+        const baseUrl = resolveBaseUrl(request);
+        const uploadUrl = `${baseUrl}/v1/sessions/${sessionId}/attachments/${attachmentFile}`;
+        return reply.send({ ref, uploadUrl, method: 'PUT', requiresAuth: true });
     });
 
     /**
-     * Local storage: accept encrypted blob upload via PUT.
-     * Only active when S3 is not configured.
+     * Accept an encrypted blob upload via PUT and persist it through the
+     * configured backend.
      */
     app.put('/v1/sessions/:sessionId/attachments/:attachmentFile', {
+        bodyLimit: MAX_FILE_SIZE,
         schema: {
             params: z.object({
                 sessionId: z.string(),
@@ -170,26 +139,24 @@ export function attachmentRoutes(app: Fastify) {
             response: {
                 200: z.object({ ok: z.boolean() }),
                 404: z.object({ error: z.string() }),
+                409: z.object({ error: z.string() }),
                 413: z.object({ error: z.string() }),
+                429: z.object({ error: z.string() }),
             },
         },
         preHandler: app.authenticate,
     }, async (request, reply) => {
-        if (!isLocalStorage()) {
-            return reply.code(404).send({ error: 'Direct upload not available in S3 mode' });
-        }
-
         const { sessionId, attachmentFile } = request.params;
-        const userId = request.userId;
 
         // Verify session ownership
         const accessWhere = buildSessionAccessWhere(
             sessionAccessIdentityFromRequest(request),
             { id: sessionId },
         );
-        const session = accessWhere
-            ? await db.session.findFirst({ where: accessWhere })
-            : null;
+        const session = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return null;
+            return accessWhere ? tx.session.findFirst({ where: accessWhere }) : null;
+        });
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -204,16 +171,32 @@ export function attachmentRoutes(app: Fastify) {
             return reply.code(413).send({ error: 'File too large (max 10MB)' });
         }
 
+        if (!checkUploadRate(request.userId)) {
+            return reply.code(429).send({ error: 'Too many uploads. Try again in a minute.' });
+        }
+
         const ref = `sessions/${sessionId}/attachments/${attachmentFile}`;
-        await putLocalFile(ref, body);
+        const uploadOperation = await beginAccountDeletionUpload(request.userId, ref);
+        if (!uploadOperation) {
+            return reply.code(409).send({ error: 'Account deletion in progress' });
+        }
+        let objectWriteCompleted = false;
+        try {
+            await putFile(ref, body);
+            objectWriteCompleted = true;
+        } finally {
+            if (objectWriteCompleted) {
+                await settleAccountDeletionUpload(uploadOperation);
+            }
+        }
 
         return reply.send({ ok: true });
     });
 
     /**
      * Request a download URL for an attachment by ref. The client follows the
-     * returned URL with a normal HTTP GET — in local mode it points back at
-     * this server (auth-required), in S3 mode it is a presigned GET URL.
+     * returned URL with a normal HTTP GET against this server. The second
+     * request remains authenticated in both storage modes.
      * Pairs with /request-upload as the design-spec endpoint.
      */
     app.post('/v1/sessions/:sessionId/attachments/request-download', {
@@ -227,6 +210,7 @@ export function attachmentRoutes(app: Fastify) {
             response: {
                 200: z.object({
                     downloadUrl: z.string(),
+                    requiresAuth: z.literal(true),
                 }),
                 400: z.object({ error: z.string() }),
                 404: z.object({ error: z.string() }),
@@ -236,15 +220,14 @@ export function attachmentRoutes(app: Fastify) {
     }, async (request, reply) => {
         const { sessionId } = request.params;
         const { ref } = request.body;
-        const userId = request.userId;
-
         const accessWhere = buildSessionAccessWhere(
             sessionAccessIdentityFromRequest(request),
             { id: sessionId },
         );
-        const session = accessWhere
-            ? await db.session.findFirst({ where: accessWhere })
-            : null;
+        const session = await inTx(async (tx) => {
+            if (!await acquireAccountRead(tx, request.userId)) return null;
+            return accessWhere ? tx.session.findFirst({ where: accessWhere }) : null;
+        });
         if (!session) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -261,19 +244,14 @@ export function attachmentRoutes(app: Fastify) {
             return reply.code(400).send({ error: 'Invalid attachment ref' });
         }
 
-        if (isLocalStorage()) {
-            const baseUrl = resolveBaseUrl(request);
-            const downloadUrl = `${baseUrl}/v1/sessions/${sessionId}/attachments/${attachmentFile}`;
-            return reply.send({ downloadUrl });
-        }
-        const downloadUrl = await s3client.presignedGetObject(s3bucket, ref, PRESIGNED_TTL_SECONDS);
-        return reply.send({ downloadUrl });
+        const baseUrl = resolveBaseUrl(request);
+        const downloadUrl = `${baseUrl}/v1/sessions/${sessionId}/attachments/${attachmentFile}`;
+        return reply.send({ downloadUrl, requiresAuth: true });
     });
 
     /**
-     * Download an attachment. Returns the encrypted blob directly (local)
-     * or a presigned GET URL redirect (S3). Backs the URL returned by
-     * /request-download in local mode; clients can also call this directly.
+     * Download an attachment through the authenticated Server. This also backs
+     * the URL returned by /request-download.
      */
     app.get('/v1/sessions/:sessionId/attachments/:attachmentFile', {
         schema: {
@@ -285,20 +263,11 @@ export function attachmentRoutes(app: Fastify) {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const { sessionId, attachmentFile } = request.params;
-        const userId = request.userId;
-
         // Verify session ownership
         const accessWhere = buildSessionAccessWhere(
             sessionAccessIdentityFromRequest(request),
             { id: sessionId },
         );
-        const session = accessWhere
-            ? await db.session.findFirst({ where: accessWhere })
-            : null;
-        if (!session) {
-            return reply.code(404).send({ error: 'Session not found' });
-        }
-
         // Path traversal protection
         if (attachmentFile.includes('..') || attachmentFile.includes('/')) {
             return reply.code(404).send({ error: 'Invalid attachment file' });
@@ -306,17 +275,22 @@ export function attachmentRoutes(app: Fastify) {
 
         const ref = `sessions/${sessionId}/attachments/${attachmentFile}`;
 
-        if (isLocalStorage()) {
-            const fullPath = path.join(getLocalFilesDir(), ref);
-            if (!fs.existsSync(fullPath)) {
-                return reply.code(404).send({ error: 'Attachment not found' });
-            }
-            reply.header('Content-Type', 'application/octet-stream');
-            return reply.type('application/octet-stream').send(fs.readFileSync(fullPath));
-        } else {
-            // S3 mode: redirect to presigned GET URL (15 min, per design).
-            const url = await s3client.presignedGetObject(s3bucket, ref, PRESIGNED_TTL_SECONDS);
-            return reply.redirect(url);
+        try {
+            const session = await inTx(async (tx) => {
+                if (!await acquireAccountRead(tx, request.userId)) return null;
+                return accessWhere
+                    ? tx.session.findFirst({ where: accessWhere })
+                    : null;
+            });
+            if (!session) return reply.code(404).send({ error: 'Session not found' });
+
+            // The transaction above is the admission point. A stream admitted
+            // before deletion may finish, but no new stream can be admitted once
+            // the deletion marker owns the account row.
+            const stream = await getFileStream(ref);
+            return reply.type('application/octet-stream').send(stream);
+        } catch {
+            return reply.code(404).send({ error: 'Attachment not found' });
         }
     });
 }
