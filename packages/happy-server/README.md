@@ -256,10 +256,19 @@ aws s3api put-bucket-encryption --bucket happy-blobs \
 mc encrypt set sse-s3 myminio/happy-blobs
 ```
 
-Local-storage mode (no `S3_HOST`) writes blobs under
+Local-storage mode (no `S3_HOST`) is supported only on POSIX hosts with runtime
+UID ownership checks; Windows deployments must configure S3-compatible storage.
+The local mode writes blobs under
 `<DATA_DIR>/files/sessions/<sessionId>/attachments/`. Account deletion removes
 the configured primary data, but a self-hosted operator remains responsible for
-filesystem snapshots, backups, and host/container logs.
+filesystem snapshots, backups, and host/container logs. The Server makes the
+local files root private to its runtime UID and rejects symbolic-link ancestors;
+operators must not grant another process that same UID write access to the data
+volume while the relay is running. A hostile process running as the Server UID
+is equivalent to a compromised Server process: it can inspect Server memory,
+credentials, and the primary database, so local storage is not a supported
+same-UID multi-tenant boundary. Deploy S3-compatible storage when that UID or
+volume cannot remain exclusive to the Server container/process.
 
 ## License
 

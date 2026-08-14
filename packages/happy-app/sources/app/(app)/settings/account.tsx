@@ -241,10 +241,14 @@ export default React.memo(() => {
             const deletionCredentials = auth.credentials;
             const deletionResult = await deleteAccount(deletionCredentials, {
                 beforeProofSubmission: async () => {
-                    const revoked = await auth.logoutLocal({ reload: false });
-                    if (!revoked) {
+                    const revocationPermit = await auth.logoutLocal({
+                        reload: false,
+                        expectedCredentials: deletionCredentials,
+                    });
+                    if (!revocationPermit) {
                         throw new Error('Local account revocation failed');
                     }
+                    return revocationPermit;
                 },
             });
             if (deletionResult === 'uncertain') {

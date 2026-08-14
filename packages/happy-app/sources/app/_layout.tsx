@@ -18,7 +18,7 @@ import { View, Platform, AppState } from 'react-native';
 import { ModalProvider } from '@/modal';
 import { PostHogProvider } from 'posthog-react-native';
 import { tracking } from '@/track/tracking';
-import { syncRestore } from '@/sync/sync';
+import { syncQuarantine, syncRestore } from '@/sync/sync';
 import { useTrackScreens } from '@/track/useTrackScreens';
 import { RealtimeProvider } from '@/realtime/RealtimeProvider';
 import { FaviconPermissionIndicator } from '@/components/web/FaviconPermissionIndicator';
@@ -245,14 +245,31 @@ export default function RootLayout() {
     //
     const [initState, setInitState] = React.useState<{ credentials: AuthCredentials | null } | null>(null);
     React.useEffect(() => {
-        (async () => {
+        let active = true;
+        let credentialsInvalidated = false;
+        let initializationCompleted = false;
+        const commitInitialization = (credentials: AuthCredentials | null) => {
+            initializationCompleted = true;
+            if (active) {
+                setInitState({ credentials: credentialsInvalidated ? null : credentials });
+            }
+        };
+        const unsubscribeInvalidation = TokenStorage.subscribeToCredentialsInvalidation(() => {
+            credentialsInvalidated = true;
+            syncQuarantine({ silent: true });
+            if (active && initializationCompleted) {
+                setInitState({ credentials: null });
+            }
+        });
+
+        void (async () => {
             let credentials: AuthCredentials | null = null;
             try {
                 installServerFetchTransport();
                 await loadFonts();
                 await sodium.ready;
 
-                let credentialsRevoked = await TokenStorage.hasCredentialsRevoked();
+                let credentialsRevoked = credentialsInvalidated || await TokenStorage.hasCredentialsRevoked();
                 if (credentialsRevoked && Platform.OS === 'web' && typeof window !== 'undefined') {
                     const search = stripDevE2ECredentialsFromSearch(window.location.search);
                     window.history.replaceState(
@@ -262,6 +279,10 @@ export default function RootLayout() {
                     );
                 }
                 credentials = credentialsRevoked ? null : await TokenStorage.getCredentials();
+                if (credentialsInvalidated) {
+                    credentialsRevoked = true;
+                    credentials = null;
+                }
                 const appConfig = loadAppConfig();
                 const mobileFieldE2E = appConfig.mobileFieldE2E === true;
                 const allowE2EBootstrap = shouldAllowE2EBootstrap(__DEV__, mobileFieldE2E, credentialsRevoked);
@@ -276,6 +297,10 @@ export default function RootLayout() {
                     const saved = await TokenStorage.setE2EBootstrapCredentialsIfNotRevoked(bootstrapCredentials);
                     credentialsRevoked = !saved || await TokenStorage.hasCredentialsRevoked();
                     credentials = credentialsRevoked ? null : bootstrapCredentials;
+                    if (credentialsInvalidated) {
+                        credentialsRevoked = true;
+                        credentials = null;
+                    }
 
                     if (Platform.OS === 'web' && typeof window !== 'undefined') {
                         window.history.replaceState({}, '', window.location.pathname);
@@ -293,8 +318,12 @@ export default function RootLayout() {
 
                 try {
                     await commitServerTransportPolicy();
-                    if (credentials) {
+                    if (credentials && !credentialsInvalidated) {
                         await syncRestore(credentials);
+                    }
+                    if (credentialsInvalidated) {
+                        syncQuarantine({ silent: true });
+                        credentials = null;
                     }
                 } catch (error) {
                     if (!(error instanceof ServerUrlPolicyError)) {
@@ -303,15 +332,20 @@ export default function RootLayout() {
                     console.error('Error restoring sync');
                     // Keep server settings reachable when a persisted relay
                     // is offline or now requires first-time HTTP approval.
-                    setInitState({ credentials });
+                    commitInitialization(credentials);
                     return;
                 }
 
-                setInitState({ credentials });
+                commitInitialization(credentials);
             } catch {
                 console.error('Error initializing');
             }
         })();
+
+        return () => {
+            active = false;
+            unsubscribeInvalidation();
+        };
     }, []);
 
     React.useEffect(() => {

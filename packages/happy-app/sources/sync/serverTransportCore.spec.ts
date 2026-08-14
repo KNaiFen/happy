@@ -177,4 +177,42 @@ describe('server transport', () => {
         }));
         expect([...new Uint8Array(await result.arrayBuffer())]).toEqual([0, 1, 127, 255]);
     });
+
+    it('does not enter native transport when a request is aborted while reading its body', async () => {
+        const controller = new AbortController();
+        const invokeNative = vi.fn();
+        let bodyReadStarted!: () => void;
+        let finishBodyRead!: () => void;
+        const started = new Promise<void>((resolve) => { bodyReadStarted = resolve; });
+        const blocked = new Promise<void>((resolve) => { finishBodyRead = resolve; });
+        const arrayBuffer = vi.spyOn(Request.prototype, 'arrayBuffer').mockImplementationOnce(async () => {
+            bodyReadStarted();
+            await blocked;
+            return new ArrayBuffer(0);
+        });
+        const serverFetch = createServerFetch({
+            browserFetch: vi.fn(),
+            invokeNative,
+            invokeNativeProbe: vi.fn(),
+            getServerUrl: () => 'https://relay.example.test',
+            getRuntime: () => 'tauri',
+            getAllowInsecureHttp: () => false,
+        });
+
+        try {
+            const request = serverFetch('/v1/account', {
+                method: 'DELETE',
+                body: 'confirmed-proof',
+                signal: controller.signal,
+            });
+            await started;
+            controller.abort();
+            finishBodyRead();
+
+            await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+            expect(invokeNative).not.toHaveBeenCalled();
+        } finally {
+            arrayBuffer.mockRestore();
+        }
+    });
 });

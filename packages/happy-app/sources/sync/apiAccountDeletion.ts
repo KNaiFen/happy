@@ -19,7 +19,12 @@ const DeletionResultSchema = z.object({
 export type AccountDeletionResult = 'deleted' | 'pending' | 'uncertain';
 
 type AccountDeletionOptions = {
-    beforeProofSubmission?: () => Promise<void>;
+    beforeProofSubmission?: () => Promise<AccountDeletionProofAdmission | void>;
+};
+
+type AccountDeletionProofAdmission = {
+    readonly signal?: AbortSignal;
+    assertCurrent: () => void;
 };
 
 /**
@@ -68,19 +73,21 @@ export async function deleteAccount(
         // The local revocation fence is the last step before the one-time proof
         // can leave this process. Challenge failures therefore keep the account
         // locally usable, while every proof outcome remains fail-closed.
-        await options.beforeProofSubmission?.();
+        const proofAdmission = await options.beforeProofSubmission?.();
         const body = JSON.stringify({
             challengeId: challenge.challengeId,
             challenge: encodeBase64(signed.challenge),
             publicKey: encodeBase64(signed.publicKey),
             signature: encodeBase64(signed.signature),
         });
+        proofAdmission?.assertCurrent();
         let deletionResponse: Response;
         try {
             deletionResponse = await serverFetch(`${endpoint}/v1/account`, {
                 method: 'DELETE',
                 headers,
                 body,
+                ...(proofAdmission?.signal ? { signal: proofAdmission.signal } : {}),
             });
         } catch {
             // Once the one-time proof leaves this client, a transport failure cannot

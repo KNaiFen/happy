@@ -103,7 +103,12 @@ describe('deleteAccount', () => {
     it('waits for local revocation before submitting the deletion proof', async () => {
         let releaseRevocation!: () => void;
         const revocation = new Promise<void>((resolve) => { releaseRevocation = resolve; });
-        const beforeProofSubmission = vi.fn(() => revocation);
+        const controller = new AbortController();
+        const assertCurrent = vi.fn();
+        const beforeProofSubmission = vi.fn(async () => {
+            await revocation;
+            return { signal: controller.signal, assertCurrent };
+        });
         serverFetch
             .mockResolvedValueOnce(jsonResponse({
                 challengeId: 'challenge-1',
@@ -120,6 +125,8 @@ describe('deleteAccount', () => {
         releaseRevocation();
         await expect(deletion).resolves.toBe('deleted');
         expect(serverFetch).toHaveBeenCalledTimes(2);
+        expect(assertCurrent).toHaveBeenCalledOnce();
+        expect(serverFetch.mock.calls[1][1]).toMatchObject({ signal: controller.signal });
     });
 
     it('does not submit a deletion proof when local revocation fails', async () => {
@@ -135,6 +142,27 @@ describe('deleteAccount', () => {
         expect(serverFetch).toHaveBeenCalledTimes(1);
         expect(decodeBase64).toHaveBeenCalledTimes(2);
         expect(signAuthChallenge).toHaveBeenCalledOnce();
+    });
+
+    it('does not submit a proof when local revocation becomes stale before transport', async () => {
+        const assertCurrent = vi.fn(() => {
+            throw new Error('Local account revocation is no longer current');
+        });
+        serverFetch.mockResolvedValueOnce(jsonResponse({
+            challengeId: 'challenge-1',
+            challenge: 'server-challenge',
+            expiresAt: Date.now() + 60_000,
+        }));
+
+        await expect(deleteAccount(credentials, {
+            beforeProofSubmission: async () => ({
+                signal: new AbortController().signal,
+                assertCurrent,
+            }),
+        })).rejects.toThrow('Local account revocation is no longer current');
+
+        expect(assertCurrent).toHaveBeenCalledOnce();
+        expect(serverFetch).toHaveBeenCalledTimes(1);
     });
 
     it('accepts a pending deletion without retrying the consumed proof', async () => {

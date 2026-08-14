@@ -53,12 +53,135 @@ describe('getPublicUrl', () => {
     });
 });
 
+describe('local storage platform boundary', () => {
+    it('refuses local storage when POSIX UID protections are unavailable', async () => {
+        const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'win32' });
+
+        try {
+            const { loadFiles } = await import('./files');
+
+            await expect(loadFiles()).rejects.toThrow(
+                'Local file storage requires POSIX ownership checks; configure S3_HOST',
+            );
+            expect(fs.existsSync(path.join(dataDir, 'files'))).toBe(false);
+        } finally {
+            Object.defineProperty(process, 'platform', platformDescriptor);
+        }
+    });
+});
+
 describe('getFileStream', () => {
     it('rejects a missing local file before a route begins streaming a response', async () => {
         const { getFileStream } = await import('./files');
 
         await expect(getFileStream('sessions/missing/attachments/blob.enc'))
             .rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('rejects traversal and absolute paths before opening a local file', async () => {
+        const { getFileStream } = await import('./files');
+
+        await expect(getFileStream('../outside-secret')).rejects.toThrow('Invalid storage key');
+        await expect(getFileStream('..\\outside-secret')).rejects.toThrow('Invalid storage key');
+        await expect(getFileStream(path.resolve(dataDir, '..', 'outside-secret')))
+            .rejects.toThrow('Invalid storage key');
+    });
+});
+
+describe('putLocalFile', () => {
+    it('cannot write outside the configured local files directory', async () => {
+        const { putLocalFile } = await import('./files');
+        const outside = path.resolve(dataDir, '..', 'outside-write');
+
+        await expect(putLocalFile('../outside-write', Buffer.from('secret')))
+            .rejects.toThrow('Invalid storage key');
+        expect(fs.existsSync(outside)).toBe(false);
+    });
+
+    it('serializes concurrent parent creation without leaving either write incomplete', async () => {
+        const { putLocalFile } = await import('./files');
+
+        await Promise.all([
+            putLocalFile('sessions/shared/attachments/first.enc', Buffer.from('first')),
+            putLocalFile('sessions/shared/attachments/second.enc', Buffer.from('second')),
+        ]);
+
+        expect(fs.readFileSync(path.join(dataDir, 'files/sessions/shared/attachments/first.enc'), 'utf8'))
+            .toBe('first');
+        expect(fs.readFileSync(path.join(dataDir, 'files/sessions/shared/attachments/second.enc'), 'utf8'))
+            .toBe('second');
+    });
+});
+
+describe('local storage symbolic-link boundary', () => {
+    it('rejects a symbolic-link ancestor for read, write, and recursive deletion', async () => {
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'happy-files-outside-'));
+        const outsideAttachments = path.join(outside, 'attachments');
+        fs.mkdirSync(outsideAttachments);
+        const outsideSecret = path.join(outsideAttachments, 'secret.enc');
+        fs.writeFileSync(outsideSecret, 'outside-secret');
+        fs.mkdirSync(path.join(dataDir, 'files/sessions'), { recursive: true });
+        fs.symlinkSync(outside, path.join(dataDir, 'files/sessions/linked'), 'dir');
+
+        try {
+            const { deleteFilesWithPrefix, getFileStream, putLocalFile } = await import('./files');
+
+            await expect(getFileStream('sessions/linked/attachments/secret.enc'))
+                .rejects.toThrow('symbolic link');
+            await expect(putLocalFile('sessions/linked/attachments/new.enc', Buffer.from('new')))
+                .rejects.toThrow('symbolic link');
+            await expect(deleteFilesWithPrefix('sessions/linked/attachments/'))
+                .rejects.toThrow('symbolic link');
+            expect(fs.readFileSync(outsideSecret, 'utf8')).toBe('outside-secret');
+            expect(fs.existsSync(path.join(outsideAttachments, 'new.enc'))).toBe(false);
+        } finally {
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
+    });
+
+    it('never follows a final file link and only unlinks that link during deletion', async () => {
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'happy-file-outside-'));
+        const outsideSecret = path.join(outside, 'secret.enc');
+        fs.writeFileSync(outsideSecret, 'outside-secret');
+        const localDirectory = path.join(dataDir, 'files/sessions/s1/attachments');
+        fs.mkdirSync(localDirectory, { recursive: true });
+        const localLink = path.join(localDirectory, 'linked.enc');
+        fs.symlinkSync(outsideSecret, localLink, 'file');
+
+        try {
+            const { deleteFile, getFileStream, putLocalFile } = await import('./files');
+
+            await expect(getFileStream('sessions/s1/attachments/linked.enc')).rejects.toMatchObject({
+                code: 'ELOOP',
+            });
+            await expect(putLocalFile('sessions/s1/attachments/linked.enc', Buffer.from('overwrite')))
+                .rejects.toMatchObject({ code: 'ELOOP' });
+            await expect(deleteFile('sessions/s1/attachments/linked.enc')).resolves.toBeUndefined();
+            expect(fs.existsSync(localLink)).toBe(false);
+            expect(fs.readFileSync(outsideSecret, 'utf8')).toBe('outside-secret');
+        } finally {
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
+    });
+
+    it('unlinks descendant links without traversing them during prefix deletion', async () => {
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'happy-tree-outside-'));
+        const outsideSecret = path.join(outside, 'secret.enc');
+        fs.writeFileSync(outsideSecret, 'outside-secret');
+        const attachments = path.join(dataDir, 'files/sessions/s1/attachments');
+        fs.mkdirSync(attachments, { recursive: true });
+        fs.symlinkSync(outside, path.join(attachments, 'linked-directory'), 'dir');
+
+        try {
+            const { deleteFilesWithPrefix } = await import('./files');
+
+            await expect(deleteFilesWithPrefix('sessions/s1/attachments/')).resolves.toBeUndefined();
+            expect(fs.existsSync(attachments)).toBe(false);
+            expect(fs.readFileSync(outsideSecret, 'utf8')).toBe('outside-secret');
+        } finally {
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
     });
 });
 

@@ -38,7 +38,7 @@ function getS3Client(): Client {
 
 export async function loadFiles() {
     if (useLocalStorage) {
-        fs.mkdirSync(localFilesDir, { recursive: true });
+        await ensureLocalFilesDirectory();
         return;
     }
     await getS3Client().bucketExists(s3bucket);
@@ -70,13 +70,22 @@ export function getLocalFilesDir() {
 }
 
 export async function putLocalFile(filePath: string, data: Buffer) {
-    const fullPath = path.join(localFilesDir, filePath);
-    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-    fs.writeFileSync(fullPath, data);
+    const fullPath = await resolveLocalStoragePath(filePath, { createParents: true });
+    const file = await fs.promises.open(
+        fullPath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+        0o600,
+    );
+    try {
+        await file.writeFile(data);
+    } finally {
+        await file.close();
+    }
 }
 
 /** Store an opaque file through the configured backend. */
 export async function putFile(filePath: string, data: Buffer): Promise<void> {
+    validateStorageKey(filePath);
     if (useLocalStorage) {
         await putLocalFile(filePath, data);
         return;
@@ -96,7 +105,13 @@ export async function probeFile(filePath: string): Promise<FileProbeResult> {
     try {
         if (useLocalStorage) {
             try {
-                await fs.promises.stat(path.join(localFilesDir, filePath));
+                const fullPath = await resolveLocalStoragePath(filePath);
+                const file = await fs.promises.open(fullPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+                try {
+                    await file.stat();
+                } finally {
+                    await file.close();
+                }
                 return 'present';
             } catch (error: any) {
                 if (error?.code === 'ENOENT') return 'absent';
@@ -116,8 +131,13 @@ export async function probeFile(filePath: string): Promise<FileProbeResult> {
 export async function deleteFile(filePath: string): Promise<void> {
     validateStorageKey(filePath);
     if (useLocalStorage) {
-        const fullPath = path.join(localFilesDir, filePath);
+        const fullPath = await resolveLocalStoragePath(filePath);
         try {
+            const metadata = await fs.promises.lstat(fullPath);
+            if (metadata.isSymbolicLink()) {
+                await fs.promises.unlink(fullPath);
+                return;
+            }
             await fs.promises.unlink(fullPath);
         } catch (error: any) {
             if (error?.code !== 'ENOENT') throw error;
@@ -145,18 +165,118 @@ export async function deleteFile(filePath: string): Promise<void> {
 }
 
 function validateStorageKey(filePath: string): void {
-    if (!filePath || path.isAbsolute(filePath) || filePath.split('/').includes('..')) {
+    if (
+        !filePath
+        || filePath.includes('\0')
+        || filePath.includes('\\')
+        || path.isAbsolute(filePath)
+        || filePath.split(/[\\/]/).includes('..')
+    ) {
         throw new Error('Invalid storage key');
     }
 }
 
+async function ensureLocalFilesDirectory(): Promise<string> {
+    if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+        throw new Error('Local file storage requires POSIX ownership checks; configure S3_HOST');
+    }
+    // The local backend's security principal is this runtime UID. A hostile
+    // same-UID process can already inspect Server memory and the primary data
+    // store; deployments without an exclusive UID must use object storage.
+    const runtimeUid = process.getuid();
+    const root = path.resolve(localFilesDir);
+    await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
+    const metadata = await fs.promises.lstat(root);
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+        throw new Error('Local files root is not a directory');
+    }
+    if (metadata.uid !== runtimeUid) {
+        throw new Error('Local files root is not owned by the server user');
+    }
+    await fs.promises.chmod(root, 0o700);
+    return root;
+}
+
+async function resolveLocalStoragePath(
+    filePath: string,
+    options: { createParents?: boolean } = {},
+): Promise<string> {
+    validateStorageKey(filePath);
+    const root = await ensureLocalFilesDirectory();
+    const segments = filePath.split(/[\\/]/).filter(Boolean);
+    const leaf = segments.pop();
+    if (!leaf) throw new Error('Invalid storage key');
+    let current = root;
+    for (const [index, segment] of segments.entries()) {
+        const next = path.join(current, segment);
+        try {
+            const metadata = await fs.promises.lstat(next);
+            if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+                throw new Error('Storage key contains a symbolic link or non-directory ancestor');
+            }
+        } catch (error: any) {
+            if (error?.code !== 'ENOENT') throw error;
+            if (!options.createParents) {
+                const remaining = [...segments.slice(index), leaf];
+                return assertLocalStoragePath(root, path.resolve(current, ...remaining));
+            }
+            await fs.promises.mkdir(next, { mode: 0o700 }).catch((mkdirError: any) => {
+                if (mkdirError?.code !== 'EEXIST') throw mkdirError;
+            });
+            const metadata = await fs.promises.lstat(next);
+            if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+                throw new Error('Storage key contains a symbolic link or non-directory ancestor');
+            }
+            await fs.promises.chmod(next, 0o700);
+        }
+        current = next;
+    }
+    return assertLocalStoragePath(root, path.resolve(current, leaf));
+}
+
+function assertLocalStoragePath(root: string, resolved: string): string {
+    if (resolved === root || !resolved.startsWith(root + path.sep)) {
+        throw new Error('Storage key escapes local files directory');
+    }
+    return resolved;
+}
+
+async function removeLocalStorageTree(target: string): Promise<void> {
+    let metadata: fs.Stats;
+    try {
+        metadata = await fs.promises.lstat(target);
+    } catch (error: any) {
+        if (error?.code === 'ENOENT') return;
+        throw error;
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+        await fs.promises.unlink(target);
+        return;
+    }
+    const directory = await fs.promises.opendir(target);
+    for await (const entry of directory) {
+        const child = path.join(target, entry.name);
+        const childMetadata = await fs.promises.lstat(child);
+        if (childMetadata.isSymbolicLink() || !childMetadata.isDirectory()) {
+            await fs.promises.unlink(child);
+        } else {
+            await removeLocalStorageTree(child);
+        }
+    }
+    await fs.promises.rmdir(target);
+}
+
 /** Read an opaque file through the configured backend. */
 export async function getFileStream(filePath: string): Promise<NodeJS.ReadableStream> {
+    validateStorageKey(filePath);
     if (useLocalStorage) {
         // createReadStream reports ENOENT asynchronously, after Fastify has
         // started the response. Opening first keeps a missing object a normal
         // route-level 404 rather than a streamed 500.
-        const file = await fs.promises.open(path.join(localFilesDir, filePath), 'r');
+        const file = await fs.promises.open(
+            await resolveLocalStoragePath(filePath),
+            fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+        );
         return file.createReadStream();
     }
     return getS3Client().getObject(s3bucket, filePath);
@@ -176,14 +296,8 @@ export async function deleteFilesWithPrefix(prefix: string): Promise<void> {
     validateStorageKey(prefix);
 
     if (useLocalStorage) {
-        const root = path.resolve(localFilesDir);
-        const dir = path.resolve(root, prefix);
-        if (dir !== root && !dir.startsWith(root + path.sep)) {
-            throw new Error('Storage prefix escapes local files directory');
-        }
-        if (fs.existsSync(dir)) {
-            fs.rmSync(dir, { recursive: true, force: true });
-        }
+        const dir = await resolveLocalStoragePath(prefix);
+        await removeLocalStorageTree(dir);
         return;
     }
 
@@ -236,13 +350,39 @@ export async function forEachSessionAttachmentId(
     };
 
     if (useLocalStorage) {
-        const sessionsDir = path.join(localFilesDir, 'sessions');
-        if (!fs.existsSync(sessionsDir)) return;
+        const sessionsDir = await resolveLocalStoragePath('sessions');
+        let sessionsMetadata: fs.Stats;
+        try {
+            sessionsMetadata = await fs.promises.lstat(sessionsDir);
+        } catch (error: any) {
+            if (error?.code === 'ENOENT') return;
+            throw error;
+        }
+        if (sessionsMetadata.isSymbolicLink() || !sessionsMetadata.isDirectory()) {
+            throw new Error('Storage sessions directory is not a directory');
+        }
         const sessionIds = new Set<string>();
         const entries = await fs.promises.opendir(sessionsDir);
         for await (const entry of entries) {
-            if (!entry.isDirectory()
-                || !fs.existsSync(path.join(sessionsDir, entry.name, 'attachments'))) {
+            const sessionDir = path.join(sessionsDir, entry.name);
+            const attachmentsDir = path.join(sessionDir, 'attachments');
+            let sessionMetadata: fs.Stats;
+            let attachmentsMetadata: fs.Stats;
+            try {
+                [sessionMetadata, attachmentsMetadata] = await Promise.all([
+                    fs.promises.lstat(sessionDir),
+                    fs.promises.lstat(attachmentsDir),
+                ]);
+            } catch (error: any) {
+                if (error?.code === 'ENOENT') continue;
+                throw error;
+            }
+            if (
+                !sessionMetadata.isDirectory()
+                || sessionMetadata.isSymbolicLink()
+                || !attachmentsMetadata.isDirectory()
+                || attachmentsMetadata.isSymbolicLink()
+            ) {
                 continue;
             }
             sessionIds.add(entry.name);

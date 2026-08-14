@@ -1,14 +1,33 @@
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import {
+    clearEphemeralWebCredentialKey,
+    decryptWebCredential,
+    deleteWebCredentialKey,
+    encryptWebCredential,
+    getWebCredentialAdmission,
+    isEncryptedWebCredential,
+    runWithWebCredentialLock,
+    WebCredentialAdmission,
+} from './webCredentialStorage';
 
 const AUTH_KEY = 'auth_credentials';
 const AUTH_REVOKED_KEY = 'auth_credentials_revoked';
 const AUTH_BOOTSTRAP_PENDING_KEY = 'auth_credentials_bootstrap_pending';
+const AUTH_SESSION_CHANGE_KEY = 'auth_credentials_session_change';
 
 // Cache for synchronous access
 let credentialsCache: string | null = null;
 let revocationGeneration = 0;
+let ephemeralWebCredentials: {
+    json: string;
+    admission: WebCredentialAdmission;
+    generation: number;
+} | null = null;
+const webCredentialInvalidationListeners = new Set<() => void>();
+let webCredentialStorageListenerInstalled = false;
+let webCredentialInvalidated = false;
 
 async function readNativeCredentialFence(): Promise<boolean> {
     const results = await Promise.allSettled([
@@ -79,12 +98,90 @@ export interface AuthCredentials {
     secret: string;
 }
 
+function parseAuthCredentials(value: string): AuthCredentials | null {
+    try {
+        const parsed = JSON.parse(value) as Partial<AuthCredentials>;
+        if (typeof parsed.token !== 'string' || typeof parsed.secret !== 'string') return null;
+        return { token: parsed.token, secret: parsed.secret };
+    } catch {
+        return null;
+    }
+}
+
+function createWebSignal(kind: 'revoked' | 'bootstrap' | 'session'): string {
+    return `${kind}:${crypto.randomUUID()}`;
+}
+
+function readWebCredentialAdmission(): WebCredentialAdmission {
+    return {
+        revocationSignal: localStorage.getItem(AUTH_REVOKED_KEY),
+        bootstrapSignal: localStorage.getItem(AUTH_BOOTSTRAP_PENDING_KEY),
+    };
+}
+
+function admissionsEqual(left: WebCredentialAdmission, right: WebCredentialAdmission): boolean {
+    return left.revocationSignal === right.revocationSignal
+        && left.bootstrapSignal === right.bootstrapSignal;
+}
+
+function isWebAdmissionCurrent(admission: WebCredentialAdmission): boolean {
+    return admissionsEqual(admission, readWebCredentialAdmission());
+}
+
+function hasWebCredentialFence(admission: WebCredentialAdmission): boolean {
+    return admission.revocationSignal !== null || admission.bootstrapSignal !== null;
+}
+
+function installWebCredentialStorageListener(): void {
+    if (
+        webCredentialStorageListenerInstalled
+        || typeof window === 'undefined'
+        || typeof window.addEventListener !== 'function'
+    ) {
+        return;
+    }
+    webCredentialStorageListenerInstalled = true;
+    window.addEventListener('storage', (event) => {
+        if (
+            event.key !== AUTH_REVOKED_KEY
+            && event.key !== AUTH_BOOTSTRAP_PENDING_KEY
+            && event.key !== AUTH_SESSION_CHANGE_KEY
+        ) {
+            return;
+        }
+        webCredentialInvalidated = true;
+        revocationGeneration += 1;
+        credentialsCache = null;
+        ephemeralWebCredentials = null;
+        for (const listener of webCredentialInvalidationListeners) {
+            listener();
+        }
+    });
+}
+
+function publishWebCredentialSessionChange(): void {
+    localStorage.setItem(AUTH_SESSION_CHANGE_KEY, createWebSignal('session'));
+}
+
 export const TokenStorage = {
     async hasCredentialsRevoked(): Promise<boolean> {
         if (Platform.OS === 'web') {
+            installWebCredentialStorageListener();
             try {
-                return localStorage.getItem(AUTH_REVOKED_KEY) !== null
-                    || localStorage.getItem(AUTH_BOOTSTRAP_PENDING_KEY) !== null;
+                const admission = readWebCredentialAdmission();
+                const ephemeral = ephemeralWebCredentials;
+                if (
+                    ephemeral
+                    && ephemeral.generation === revocationGeneration
+                    && admissionsEqual(ephemeral.admission, admission)
+                ) {
+                    return false;
+                }
+                const stored = localStorage.getItem(AUTH_KEY);
+                if (!stored) return hasWebCredentialFence(admission);
+                if (!isEncryptedWebCredential(stored)) return hasWebCredentialFence(admission);
+                const storedAdmission = getWebCredentialAdmission(stored);
+                return !storedAdmission || !admissionsEqual(storedAdmission, admission);
             } catch {
                 // Storage access failure must not permit an automatic login.
                 return true;
@@ -95,23 +192,99 @@ export const TokenStorage = {
 
     async getCredentials(): Promise<AuthCredentials | null> {
         if (Platform.OS === 'web') {
-            try {
-                if (
-                    localStorage.getItem(AUTH_REVOKED_KEY) !== null
-                    || localStorage.getItem(AUTH_BOOTSTRAP_PENDING_KEY) !== null
-                ) {
+            installWebCredentialStorageListener();
+            return runWithWebCredentialLock(async () => {
+                const generation = revocationGeneration;
+                let legacyCredentialDetected = false;
+                try {
+                    const admission = readWebCredentialAdmission();
+                    const ephemeral = ephemeralWebCredentials;
+                    if (
+                        ephemeral
+                        && ephemeral.generation === generation
+                        && admissionsEqual(ephemeral.admission, admission)
+                    ) {
+                        return parseAuthCredentials(ephemeral.json);
+                    }
+                    const stored = localStorage.getItem(AUTH_KEY);
+                    if (!stored) return null;
+                    let expectedStored: string | null = stored;
+                    let plaintext: string | null;
+                    if (isEncryptedWebCredential(stored)) {
+                        const storedAdmission = getWebCredentialAdmission(stored);
+                        if (!storedAdmission || !admissionsEqual(storedAdmission, admission)) return null;
+                        plaintext = await decryptWebCredential(stored);
+                    } else {
+                        if (hasWebCredentialFence(admission)) return null;
+                        const legacyCredentials = parseAuthCredentials(stored);
+                        if (!legacyCredentials) return null;
+                        legacyCredentialDetected = true;
+                        const encrypted = await encryptWebCredential(stored, admission);
+                        if (
+                            generation !== revocationGeneration
+                            || !isWebAdmissionCurrent(admission)
+                            || localStorage.getItem(AUTH_KEY) !== stored
+                        ) {
+                            credentialsCache = null;
+                            return null;
+                        }
+                        if (encrypted.persistent) {
+                            localStorage.setItem(AUTH_KEY, encrypted.value);
+                            if (
+                                generation !== revocationGeneration
+                                || !isWebAdmissionCurrent(admission)
+                                || localStorage.getItem(AUTH_KEY) !== encrypted.value
+                            ) {
+                                credentialsCache = null;
+                                return null;
+                            }
+                            expectedStored = encrypted.value;
+                        } else {
+                            localStorage.removeItem(AUTH_KEY);
+                            if (
+                                generation !== revocationGeneration
+                                || !isWebAdmissionCurrent(admission)
+                                || localStorage.getItem(AUTH_KEY) !== null
+                            ) {
+                                credentialsCache = null;
+                                return null;
+                            }
+                            ephemeralWebCredentials = { json: stored, admission, generation };
+                            expectedStored = null;
+                        }
+                        plaintext = stored;
+                    }
+                    if (
+                        plaintext === null
+                        || generation !== revocationGeneration
+                        || !isWebAdmissionCurrent(admission)
+                        || localStorage.getItem(AUTH_KEY) !== expectedStored
+                    ) {
+                        credentialsCache = null;
+                        return null;
+                    }
+                    const credentials = parseAuthCredentials(plaintext);
+                    if (!credentials) {
+                        credentialsCache = null;
+                        return null;
+                    }
+                    credentialsCache = plaintext;
+                    return credentials;
+                } catch {
                     credentialsCache = null;
+                    if (legacyCredentialDetected) {
+                        try {
+                            localStorage.setItem(AUTH_REVOKED_KEY, createWebSignal('revoked'));
+                            localStorage.removeItem(AUTH_KEY);
+                        } catch {
+                            // A surviving plaintext credential is still blocked by
+                            // whichever durable marker operation succeeded.
+                        }
+                    }
+                    console.error('Credential load failed');
                     return null;
                 }
-                const stored = localStorage.getItem(AUTH_KEY);
-                if (!stored) return null;
-                credentialsCache = stored;
-                return JSON.parse(stored) as AuthCredentials;
-            } catch {
-                credentialsCache = null;
-                console.error('Credential load failed');
-                return null;
-            }
+            });
         }
         try {
             const revoked = await readNativeCredentialFence();
@@ -121,8 +294,10 @@ export const TokenStorage = {
             }
             const stored = await SecureStore.getItemAsync(AUTH_KEY);
             if (!stored) return null;
+            const credentials = parseAuthCredentials(stored);
+            if (!credentials) return null;
             credentialsCache = stored; // Update cache
-            return JSON.parse(stored) as AuthCredentials;
+            return credentials;
         } catch {
             console.error('Credential load failed');
             return null;
@@ -130,33 +305,58 @@ export const TokenStorage = {
     },
 
     async setCredentials(credentials: AuthCredentials): Promise<boolean> {
+        const generation = revocationGeneration;
         if (Platform.OS === 'web') {
             const json = JSON.stringify(credentials);
-            try {
-                localStorage.setItem(AUTH_REVOKED_KEY, '1');
-                localStorage.setItem(AUTH_KEY, json);
-                localStorage.removeItem(AUTH_REVOKED_KEY);
-                localStorage.removeItem(AUTH_BOOTSTRAP_PENDING_KEY);
-                credentialsCache = json;
-                return true;
-            } catch {
-                credentialsCache = null;
+            installWebCredentialStorageListener();
+            return runWithWebCredentialLock(async () => {
                 try {
-                    localStorage.setItem(AUTH_REVOKED_KEY, '1');
+                    const admission = readWebCredentialAdmission();
+                    const encrypted = await encryptWebCredential(json, admission);
+                    if (generation !== revocationGeneration || !isWebAdmissionCurrent(admission)) {
+                        credentialsCache = null;
+                        return false;
+                    }
+                    if (encrypted.persistent) {
+                        localStorage.setItem(AUTH_KEY, encrypted.value);
+                        if (
+                            generation !== revocationGeneration
+                            || !isWebAdmissionCurrent(admission)
+                            || localStorage.getItem(AUTH_KEY) !== encrypted.value
+                        ) {
+                            credentialsCache = null;
+                            return false;
+                        }
+                    } else {
+                        localStorage.removeItem(AUTH_KEY);
+                        if (
+                            generation !== revocationGeneration
+                            || !isWebAdmissionCurrent(admission)
+                            || localStorage.getItem(AUTH_KEY) !== null
+                        ) {
+                            credentialsCache = null;
+                            return false;
+                        }
+                        ephemeralWebCredentials = { json, admission, generation };
+                    }
+                    publishWebCredentialSessionChange();
+                    credentialsCache = json;
+                    return true;
                 } catch {
-                    // Credential removal below is the remaining boundary.
+                    credentialsCache = null;
+                    ephemeralWebCredentials = null;
+                    try {
+                        localStorage.setItem(AUTH_REVOKED_KEY, createWebSignal('revoked'));
+                    } catch {
+                        // A surviving admission signal remains the durable fence.
+                    }
+                    return false;
                 }
-                try {
-                    localStorage.removeItem(AUTH_KEY);
-                } catch {
-                    // A restored marker still blocks automatic recovery.
-                }
-                return false;
-            }
+            });
         }
         const json = JSON.stringify(credentials);
         const markerWrite = await writeNativeRevocationMarkers();
-        if (!markerWrite.allWritten) {
+        if (!markerWrite.allWritten || generation !== revocationGeneration) {
             await invalidateNativeCredentialCommit();
             credentialsCache = null;
             console.error('Credential save failed');
@@ -164,10 +364,20 @@ export const TokenStorage = {
         }
         try {
             await SecureStore.setItemAsync(AUTH_KEY, json);
+            if (generation !== revocationGeneration) {
+                await invalidateNativeCredentialCommit();
+                credentialsCache = null;
+                return false;
+            }
             if (!await clearNativeRevocationMarkers()) {
                 await invalidateNativeCredentialCommit();
                 credentialsCache = null;
                 console.error('Credential save failed');
+                return false;
+            }
+            if (generation !== revocationGeneration) {
+                await invalidateNativeCredentialCommit();
+                credentialsCache = null;
                 return false;
             }
             credentialsCache = json; // Update cache
@@ -188,45 +398,55 @@ export const TokenStorage = {
 
         const json = JSON.stringify(credentials);
         if (Platform.OS === 'web') {
-            try {
-                if (
-                    localStorage.getItem(AUTH_REVOKED_KEY) !== null
-                    || localStorage.getItem(AUTH_BOOTSTRAP_PENDING_KEY) !== null
-                    || generation !== revocationGeneration
-                ) {
-                    return false;
-                }
-                localStorage.setItem(AUTH_BOOTSTRAP_PENDING_KEY, '1');
-                localStorage.setItem(AUTH_KEY, json);
-                if (
-                    generation !== revocationGeneration
-                    || localStorage.getItem(AUTH_REVOKED_KEY) !== null
-                ) {
-                    localStorage.removeItem(AUTH_KEY);
-                    credentialsCache = null;
-                    return false;
-                }
-                localStorage.removeItem(AUTH_BOOTSTRAP_PENDING_KEY);
-                if (
-                    localStorage.getItem(AUTH_REVOKED_KEY) !== null
-                    || localStorage.getItem(AUTH_BOOTSTRAP_PENDING_KEY) !== null
-                ) {
-                    localStorage.setItem(AUTH_BOOTSTRAP_PENDING_KEY, '1');
-                    localStorage.removeItem(AUTH_KEY);
-                    credentialsCache = null;
-                    return false;
-                }
-                credentialsCache = json;
-                return true;
-            } catch {
-                credentialsCache = null;
+            installWebCredentialStorageListener();
+            return runWithWebCredentialLock(async () => {
                 try {
-                    localStorage.removeItem(AUTH_KEY);
+                    const beforeBootstrap = readWebCredentialAdmission();
+                    if (hasWebCredentialFence(beforeBootstrap) || generation !== revocationGeneration) {
+                        return false;
+                    }
+                    const bootstrapSignal = createWebSignal('bootstrap');
+                    const admission: WebCredentialAdmission = {
+                        revocationSignal: beforeBootstrap.revocationSignal,
+                        bootstrapSignal,
+                    };
+                    localStorage.setItem(AUTH_BOOTSTRAP_PENDING_KEY, bootstrapSignal);
+                    const encrypted = await encryptWebCredential(json, admission);
+                    if (generation !== revocationGeneration || !isWebAdmissionCurrent(admission)) {
+                        credentialsCache = null;
+                        return false;
+                    }
+                    if (encrypted.persistent) {
+                        localStorage.setItem(AUTH_KEY, encrypted.value);
+                        if (
+                            generation !== revocationGeneration
+                            || !isWebAdmissionCurrent(admission)
+                            || localStorage.getItem(AUTH_KEY) !== encrypted.value
+                        ) {
+                            credentialsCache = null;
+                            return false;
+                        }
+                    } else {
+                        localStorage.removeItem(AUTH_KEY);
+                        if (
+                            generation !== revocationGeneration
+                            || !isWebAdmissionCurrent(admission)
+                            || localStorage.getItem(AUTH_KEY) !== null
+                        ) {
+                            credentialsCache = null;
+                            return false;
+                        }
+                        ephemeralWebCredentials = { json, admission, generation };
+                    }
+                    publishWebCredentialSessionChange();
+                    credentialsCache = json;
+                    return true;
                 } catch {
-                    // A failed credential write cannot be treated as a bootstrap login.
+                    credentialsCache = null;
+                    ephemeralWebCredentials = null;
+                    return false;
                 }
-                return false;
-            }
+            });
         }
 
         if (!await writeNativeBootstrapMarkers() || generation !== revocationGeneration) {
@@ -284,13 +504,52 @@ export const TokenStorage = {
     async markCredentialsRevoked(): Promise<boolean> {
         revocationGeneration += 1;
         credentialsCache = null;
+        ephemeralWebCredentials = null;
         if (Platform.OS === 'web') {
+            installWebCredentialStorageListener();
+            let expectedStored: string | null = null;
+            let expectedSessionChange: string | null = null;
+            let admissionReadable = false;
             try {
-                localStorage.setItem(AUTH_REVOKED_KEY, '1');
-                return true;
+                expectedStored = localStorage.getItem(AUTH_KEY);
+                expectedSessionChange = localStorage.getItem(AUTH_SESSION_CHANGE_KEY);
+                localStorage.setItem(AUTH_REVOKED_KEY, createWebSignal('revoked'));
+                admissionReadable = true;
             } catch {
-                return false;
+                // Without a shared admission signal, other Web contexts cannot
+                // be quarantined reliably. Local cleanup below is best-effort.
             }
+            clearEphemeralWebCredentialKey();
+            let credentialHandled = false;
+            let markerPresent = false;
+            await runWithWebCredentialLock(async () => {
+                try {
+                    markerPresent = localStorage.getItem(AUTH_REVOKED_KEY) !== null;
+                    const currentStored = localStorage.getItem(AUTH_KEY);
+                    const currentSessionChange = localStorage.getItem(AUTH_SESSION_CHANGE_KEY);
+                    if (
+                        currentStored !== expectedStored
+                        || currentSessionChange !== expectedSessionChange
+                    ) {
+                        // A later explicit login owns the current payload/key.
+                        credentialHandled = true;
+                        return;
+                    }
+                    localStorage.removeItem(AUTH_KEY);
+                    credentialHandled = localStorage.getItem(AUTH_KEY) === null;
+                } catch {
+                    return;
+                }
+                if (credentialHandled && expectedStored !== null) {
+                    try {
+                        await deleteWebCredentialKey();
+                    } catch {
+                        // The ciphertext is gone and the admission signal blocks
+                        // recovery even if IndexedDB key deletion is unavailable.
+                    }
+                }
+            });
+            return admissionReadable && markerPresent && credentialHandled;
         }
         if (!(await writeNativeRevocationMarkers()).anyWritten) {
             console.error('Credential revocation marker failed');
@@ -301,15 +560,30 @@ export const TokenStorage = {
 
     async removeCredentials(): Promise<boolean> {
         if (Platform.OS === 'web') {
-            try {
-                localStorage.removeItem(AUTH_KEY);
+            installWebCredentialStorageListener();
+            return runWithWebCredentialLock(async () => {
+                let removed = true;
+                let storedCredentialPresent = false;
+                try {
+                    storedCredentialPresent = localStorage.getItem(AUTH_KEY) !== null;
+                    localStorage.removeItem(AUTH_KEY);
+                    removed = localStorage.getItem(AUTH_KEY) === null;
+                } catch {
+                    removed = false;
+                }
+                clearEphemeralWebCredentialKey();
+                if (removed && storedCredentialPresent) {
+                    try {
+                        await deleteWebCredentialKey();
+                    } catch {
+                        removed = false;
+                    }
+                }
                 credentialsCache = null;
-                return true;
-            } catch {
-                credentialsCache = null;
-                console.error('Credential removal failed');
-                return false;
-            }
+                ephemeralWebCredentials = null;
+                if (!removed) console.error('Credential removal failed');
+                return removed;
+            });
         }
         try {
             await SecureStore.deleteItemAsync(AUTH_KEY);
@@ -323,5 +597,15 @@ export const TokenStorage = {
             console.error('Credential removal failed');
             return false;
         }
+    },
+
+    subscribeToCredentialsInvalidation(listener: () => void): () => void {
+        if (Platform.OS !== 'web') return () => undefined;
+        installWebCredentialStorageListener();
+        webCredentialInvalidationListeners.add(listener);
+        if (webCredentialInvalidated) listener();
+        return () => {
+            webCredentialInvalidationListeners.delete(listener);
+        };
     },
 };

@@ -12,15 +12,37 @@ interface AuthContextType {
     credentials: AuthCredentials | null;
     login: (token: string, secret: string) => Promise<void>;
     logout: () => Promise<void>;
-    logoutLocal: (options?: { reload?: boolean }) => Promise<boolean>;
+    logoutLocal: (options?: {
+        reload?: boolean;
+        expectedCredentials?: AuthCredentials;
+    }) => Promise<LocalAuthRevocationPermit | null>;
 }
+
+export type LocalAuthRevocationPermit = {
+    readonly signal: AbortSignal;
+    assertCurrent: () => void;
+};
+
+type AuthTeardownKind = 'local' | 'remote';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children, initialCredentials }: { children: ReactNode; initialCredentials: AuthCredentials | null }) {
     const [isAuthenticated, setIsAuthenticated] = useState(!!initialCredentials);
     const [credentials, setCredentials] = useState<AuthCredentials | null>(initialCredentials);
-    const activeLocalAuthTeardown = useRef<Promise<boolean> | null>(null);
+    const credentialsRef = useRef<AuthCredentials | null>(initialCredentials);
+    const authGeneration = useRef(0);
+    const activeDeletionAdmission = useRef<AbortController | null>(null);
+    const activeAuthTeardown = useRef<{
+        kind: AuthTeardownKind;
+        promise: Promise<boolean>;
+    } | null>(null);
+
+    const invalidateDeletionAdmission = () => {
+        authGeneration.current += 1;
+        activeDeletionAdmission.current?.abort();
+        activeDeletionAdmission.current = null;
+    };
 
     // Update global auth state when local state changes
     useEffect(() => {
@@ -28,12 +50,14 @@ export function AuthProvider({ children, initialCredentials }: { children: React
     }, [isAuthenticated, credentials]);
 
     const login = async (token: string, secret: string) => {
-        const teardown = activeLocalAuthTeardown.current;
-        if (teardown) await teardown;
+        invalidateDeletionAdmission();
+        const teardown = activeAuthTeardown.current;
+        if (teardown) await teardown.promise;
         const newCredentials: AuthCredentials = { token, secret };
         const success = await TokenStorage.setCredentials(newCredentials);
         if (success) {
             await syncCreate(newCredentials);
+            credentialsRef.current = newCredentials;
             setCredentials(newCredentials);
             setIsAuthenticated(true);
         } else {
@@ -57,6 +81,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         // Quarantine memory and in-flight Sync work synchronously. External
         // teardown starts only after the durable revocation fence is present.
         setCurrentAuth(null);
+        credentialsRef.current = null;
         setCredentials(null);
         setIsAuthenticated(false);
         syncQuarantine({ silent: options?.silent });
@@ -66,7 +91,7 @@ export function AuthProvider({ children, initialCredentials }: { children: React
             markerWritten = await TokenStorage.markCredentialsRevoked();
         }
         if (!markerWritten) {
-            await TokenStorage.removeCredentials();
+            if (Platform.OS !== 'web') await TokenStorage.removeCredentials();
             console.error('Local credential revocation failed');
             return false;
         }
@@ -85,7 +110,11 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         } catch {
             console.error('Account persistence cleanup failed');
         }
-        const credentialsRemoved = await TokenStorage.removeCredentials();
+        // Web revocation removes only the payload that existed when revocation
+        // began. A second delayed removal could erase a later cross-tab login.
+        const credentialsRemoved = Platform.OS === 'web'
+            ? true
+            : await TokenStorage.removeCredentials();
         if (!credentialsRemoved || !shutdownSucceeded) {
             console.error('Local credential removal failed');
             return false;
@@ -97,25 +126,34 @@ export function AuthProvider({ children, initialCredentials }: { children: React
         return true;
     };
 
-    const runLocalAuthTeardown = (operation: () => Promise<boolean>): Promise<boolean> => {
-        const current = activeLocalAuthTeardown.current;
-        if (current) return current;
+    const runAuthTeardown = (
+        kind: AuthTeardownKind,
+        operation: () => Promise<boolean>,
+    ): Promise<boolean> => {
+        const current = activeAuthTeardown.current;
+        if (current) {
+            if (kind === 'local' && current.kind === 'remote') {
+                return current.promise.then(() => false, () => false);
+            }
+            return current.promise;
+        }
 
         const teardown = operation();
-        activeLocalAuthTeardown.current = teardown;
+        activeAuthTeardown.current = { kind, promise: teardown };
         void teardown.then(
             () => {
-                if (activeLocalAuthTeardown.current === teardown) activeLocalAuthTeardown.current = null;
+                if (activeAuthTeardown.current?.promise === teardown) activeAuthTeardown.current = null;
             },
             () => {
-                if (activeLocalAuthTeardown.current === teardown) activeLocalAuthTeardown.current = null;
+                if (activeAuthTeardown.current?.promise === teardown) activeAuthTeardown.current = null;
             },
         );
         return teardown;
     };
 
     const logout = async () => {
-        await runLocalAuthTeardown(async () => {
+        invalidateDeletionAdmission();
+        await runAuthTeardown('local', async () => {
             const logoutCredentials = credentials;
             const registeredPushToken = logoutCredentials ? loadRegisteredPushToken() : null;
             const cleared = await performLocalAuthTeardown({ reload: false });
@@ -137,9 +175,77 @@ export function AuthProvider({ children, initialCredentials }: { children: React
 
     // Account deletion has already removed server-side push tokens. Avoid a
     // follow-up request with credentials that the server has intentionally revoked.
-    const logoutLocal = async (options?: { reload?: boolean }): Promise<boolean> => {
-        return runLocalAuthTeardown(() => performLocalAuthTeardown({ ...options, silent: true }));
+    const logoutLocal = async (options?: {
+        reload?: boolean;
+        expectedCredentials?: AuthCredentials;
+    }): Promise<LocalAuthRevocationPermit | null> => {
+        const expected = options?.expectedCredentials;
+        const currentCredentials = credentialsRef.current;
+        if (
+            expected
+            && (
+                !currentCredentials
+                || currentCredentials.token !== expected.token
+                || currentCredentials.secret !== expected.secret
+            )
+        ) {
+            return null;
+        }
+        const generation = authGeneration.current;
+        const cleared = await runAuthTeardown(
+            'local',
+            () => performLocalAuthTeardown({ reload: options?.reload, silent: true }),
+        );
+        if (!cleared || generation !== authGeneration.current) return null;
+
+        activeDeletionAdmission.current?.abort();
+        const controller = new AbortController();
+        activeDeletionAdmission.current = controller;
+        return {
+            signal: controller.signal,
+            assertCurrent: () => {
+                if (
+                    controller.signal.aborted
+                    || generation !== authGeneration.current
+                    || activeDeletionAdmission.current !== controller
+                ) {
+                    throw new Error('Local account revocation is no longer current');
+                }
+            },
+        };
     };
+
+    const performRemoteAuthTeardown = async (): Promise<boolean> => {
+        // A storage event comes from another Web context which has already
+        // written the durable admission signal. Do not write it again here:
+        // doing so would create a cross-tab invalidation loop.
+        setCurrentAuth(null);
+        credentialsRef.current = null;
+        setCredentials(null);
+        setIsAuthenticated(false);
+        syncQuarantine({ silent: true });
+        try {
+            trackLogout();
+        } catch {
+            console.error('Account tracking reset failed');
+        }
+        const shutdownSucceeded = await syncShutdown({ silent: true }).then(() => true).catch(() => {
+            console.error('Account sync shutdown failed');
+            return false;
+        });
+        try {
+            clearPersistence();
+        } catch {
+            console.error('Account persistence cleanup failed');
+        }
+        await reloadAfterLogout();
+        return shutdownSucceeded;
+    };
+
+    useEffect(() => TokenStorage.subscribeToCredentialsInvalidation(() => {
+        invalidateDeletionAdmission();
+        void runAuthTeardown('remote', performRemoteAuthTeardown);
+    }), []);
 
     return (
         <AuthContext.Provider
