@@ -11,11 +11,12 @@
   `RUSTSEC-2026-0194`/`RUSTSEC-2026-0195`（`quick-xml 0.38.2`）及
   `RUSTSEC-2026-0001`/`RUSTSEC-2026-0235`（`rkyv 0.7.45`）。修复将 Tauri 升至 `2.10.3`、
   `tauri-plugin-log` 升至 `2.9.0`、Rust MSRV 升至 `1.88`，使锁图使用 `bytes 1.11.1` 和
-  `quick-xml 0.41.0` 并移除 `rkyv` 链。Tauri CI 已固定 Rust `1.88.0`，尚待新 head 的云端执行
-  验证该 MSRV。该修复仍待独立 PR、main CI 和 App `1.11.49` 发行证据。长期性能采样、Android 独立
-  attestation、阶段 4 的其余 Relay/队列优化和实体设备验收仍未完成）。
+  `quick-xml 0.41.0` 并移除 `rkyv` 链。PR #58 与 merge SHA `eb6111f0` 上固定 Rust `1.88.0` 的
+  Tauri audit/check/test、CodeQL 和 Required CI 均成功；App `1.11.49` 已由同 SHA 发行，Dependabot
+  `GHSA-82j2-j2ch-gfr8` 已标记 fixed。长期性能采样、Android 独立 attestation、阶段 4 的其余
+  Relay/队列优化和实体设备验收仍未完成）。
 - 建立日期：2026-08-10。
-- 当前基线：`origin/main@ec111f88f25137daa94345500a500a3738c0977c`（PR #57 squash merge）。
+- 当前基线：`origin/main@eb6111f0044bf3c1d130897e6f2608cc934472be`（PR #58 squash merge）。
 - Field canonical secret 修复：PR [#46](https://github.com/KNaiFen/happy/pull/46)，PR head
   `4b7c5de0a10bc513191133db197e21d4c4c16d1d`，已于 `2026-08-11T08:16:52Z` squash merge 为
   `b81e57609cfa5ace8a6fe3d98824dd5bbe72b264`；它不改变包版本或生产可分发行为。
@@ -569,7 +570,7 @@ PR #37 的 merge-SHA CI 暴露了另一类长时失败：job
   npm 生产 High/Critical 依赖门禁；`Required CodeQL gate` 已进入 active ruleset。Dependency Review 不作为
   required gate，因为其范围会扩大到开发依赖，超出本计划的已批准策略。实现细节见
   [ADR-006](../decisions/ADR-006-actions-security-and-production-dependency-gates.md)。
-- [ ] 修复 Tauri runtime High `GHSA-82j2-j2ch-gfr8` 以及新门禁发现的 `bytes`、`quick-xml`、`rkyv`
+- [x] 修复 Tauri runtime High `GHSA-82j2-j2ch-gfr8` 以及新门禁发现的 `bytes`、`quick-xml`、`rkyv`
   漏洞，并在云端 Tauri job 以固定 `cargo-audit 0.22.2` 和 `severity_threshold = "high"` 覆盖 Cargo
   生产依赖；有 CVSS 的 Medium/Low 与纯信息性 `unmaintained`、`unsound`、`notice`、`yanked` 不得提升为
   本次已批准门禁，无 CVSS vulnerability 因无法证明低于 High 而 fail closed，且不得为 High 添加例外。
@@ -600,12 +601,20 @@ Dependency Review 对精确 base/head 的 `403 Forbidden` 不阻塞本计划，�
 `0.103.14`。五个自动更新失败均已定位为当前约束无法解析修复版：`tauri`、`time`、`glib`、
 `serde_with` 为 Medium，`rand` 为 Low；它们保持可见但不冒充本次 High/Critical 阻断项。
 
+独立修复 PR [#58](https://github.com/KNaiFen/happy/pull/58) 的 head `03c161cb` 通过 CI
+`31780241640`、CodeQL `31780241507`、Documentation `31780241514` 和 CLI Smoke `31780241541`，并于
+`2026-08-14T07:59:17Z` squash merge 为 `eb6111f0`。同 SHA 的 main CI `31782083553`、CodeQL
+`31782083429` 和 Documentation `31782083435` 均成功；main Tauri job 使用 Rust `1.88.0`，固定安装
+`cargo-audit 0.22.2` 后完成 audit、format、check 与 test。发行 run `31783096096` 生成并提升 App
+`1.11.49` artifact `9213041500`（`happy-app-1.11.49-android-arm64-v8a-no-ota`，69,876,772 bytes）。
+Dependabot alert #123 于 `2026-08-14T07:59:24Z` 标记为 fixed。
+
 ## 当前阻塞项
 
 | 编号 | 当前证据与影响 | 下一步 | 完成标准 |
 | --- | --- | --- | --- |
 | B2：仓库级 Action allowlist（已解决） | API 为 `allowed_actions=all`、`sha_pinning_required=true`；维护者已决定保留该策略。 | 无后续实现；继续由完整 SHA 固定、最小权限和 CI 测试补偿。 | ADR-006 与仓库 API 一致；不把“未使用 allowlist”误写成供应链控制缺失。 |
-| B3：依赖与 SAST 门禁 | npm 生产审计、alerts/security fixes、advanced CodeQL 和 ruleset gate 已生效；独立审计先修复 `rustls-webpki` High，新增 Cargo 门禁又在旧锁图中发现 5 项 `bytes`、`quick-xml`、`rkyv` 生产漏洞。 | 以独立 PR 更新 `rustls-webpki`、Tauri 依赖图和 MSRV，保留固定 cargo-audit High/Critical 与无 CVSS vulnerability fail-closed 门禁，并取得新 head 的 PR/main Tauri 与 App `1.11.49` 发行证据。 | npm 与 Cargo 的生产 High/Critical、无 CVSS vulnerability 新发现均 fail-closed；有 CVSS 的 Medium/Low 和纯信息性类别不升级；两个精确 Metro 无修复例外在到期前可见且受限。 |
+| B3：依赖与 SAST 门禁（已解决） | npm 与 Cargo 生产审计、alerts/security fixes、advanced CodeQL 和 ruleset gate 已生效；PR #58、main Tauri 与 App `1.11.49` 已证明 `rustls-webpki` High 及新增 5 项 Cargo 漏洞修复，Dependabot #123 已 fixed。 | 维持固定 cargo-audit High/Critical 与无 CVSS vulnerability fail-closed 门禁；在 2026-11-12 前复核两个 Metro 无修复例外。 | npm 与 Cargo 的生产 High/Critical、无 CVSS vulnerability 新发现均 fail-closed；有 CVSS 的 Medium/Low 和纯信息性类别不升级；两个精确 Metro 无修复例外在到期前可见且受限。 |
 | B4：Environment/部署边界（已解决） | 当前无 Environment、Deployment 或 Pages 自动生产部署；维护者确认保持 build-only。 | 不配置虚假的 deployment approval；未来先新增 ADR，再实施环境、审批、健康检查和回滚。 | ADR-006 明确 build-only 边界，计划不再将 Environment 当作当前门禁。 |
 | B5：Android 独立证明与实体设备 | Rehearsal 已验证签名 ARM64 APK、source/digest receipt 和 payload 不变，但没有独立 checksum/attestation 下载项，也没有 Snapdragon 8 Elite 实体设备证据。 | 在正式 Android 发布路径增加独立 checksum/attestation；由具备生产设备、签名 Secret 和真实网络条件的操作者执行设备矩阵。 | 正式 artifact、checksum/attestation 绑定同一 SHA/版本；实体设备完成升级安装、网络切换、relay reconnect 和关键 Codex lifecycle，留下设备/运行/制品证据。 |
 | B6：长期性能与取消率 | 现有数字只覆盖少量绿色 run；main CI `31410997683` 墙钟 922 秒、runner 2,271 秒，TUI 占 runner 34.7%，但不足以宣称 P50/P90。 | 累积至少 20 次 CI/Field/Smoke 样本，按 workflow、job、cache 与失败阶段重新统计。 | 报告 wall/runner P50/P90、cache 命中、取消率、重复 run 和失败阶段；仅保留有持续收益的缓存/复用优化。 |
@@ -671,17 +680,14 @@ git diff --cached --check
 
 ## 下一步
 
-1. 完成 Tauri runtime High 及新增 `bytes`、`quick-xml`、`rkyv` 漏洞独立修复的新 head PR/main Tauri、
-   CodeQL 和 App `1.11.49` 云端发行验证；确认 `GHSA-82j2-j2ch-gfr8` 关闭后再将该子项标记完成。保留
-   `allowed_actions=all`，不把 Dependency Review 或 Environment 引入已批准范围。
-2. 为 Android 正式交付增加独立 checksum/attestation，并安排 B5 的实体 ARM64 设备验收；本次
+1. 为 Android 正式交付增加独立 checksum/attestation，并安排 B5 的实体 ARM64 设备验收；本次
    x86_64 Field 和 rehearsal 不能替代物理设备、生产网络或外部账号证据。
-3. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
+2. 重新采样至少 20 次 Official Codex CI/Field/Smoke，报告 runner/wall P50/P90、cache 命中、取消率
    和失败阶段；在有足够样本前不把单次 run 差值宣称为长期节省。
-4. APK 复用的 automatic miss/hit 对照已经完成；接下来依次以独立 PR 处理 Relay 失败前移、超 SLA
+3. APK 复用的 automatic miss/hit 对照已经完成；接下来依次以独立 PR 处理 Relay 失败前移、超 SLA
    告警和 cache mode A/B。Field 同输入并发已经过云端对照，每项后续优化仍以独立云端对照证明，不删除
    最终交付验收。
-5. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
+4. 不制作无语义 root-only PR；下一次真实 root 安装输入变更必须记录其分类器和两个 gate 的云端结果。
 
 ## 完成条件
 
