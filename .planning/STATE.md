@@ -5,8 +5,8 @@ milestone_name: milestone
 current_phase: 1
 current_phase_name: Supply Chain Verification
 status: planning
-stopped_at: Phase 6 context gathered
-last_updated: "2026-08-15T14:43:27.674Z"
+stopped_at: Phase 6 UI-SPEC approved
+last_updated: "2026-08-15T15:57:06.953Z"
 last_activity: 2026-08-15
 last_activity_desc: Ingested 7 ADR documents and created the initial planning baseline
 progress:
@@ -84,6 +84,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-08-15T14:43:13.569Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-chat-composer-controls-and-popover-motion/06-CONTEXT.md
+Last session: 2026-08-15T15:57:06.935Z
+Stopped at: Phase 6 UI-SPEC approved
+Resume file: .planning/phases/06-chat-composer-controls-and-popover-motion/06-UI-SPEC.md
