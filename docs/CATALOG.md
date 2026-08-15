@@ -106,6 +106,7 @@
 - [Context](../.planning/intel/context.md)
 - [Decisions](../.planning/intel/decisions.md)
 - [Requirements](../.planning/intel/requirements.md)
+- [Onboarding Summary](../.planning/onboarding/SUMMARY.md)
 - [Privacy Policy for Happy Coder](../PRIVACY.md)
 - [Product](../PRODUCT.md)
 - [Mobile and Web Client for Codex](../README.md)
