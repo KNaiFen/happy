@@ -13,6 +13,8 @@ created: 2026-08-15
 
 本合同只定义聊天输入区现有权限、模型和思考程度控件的布局、菜单呈现与生命周期。它不增加模型、权限、思考程度、会话能力、设置入口或协议行为。上游产品决定 D-01 至 D-16 全部为锁定约束。
 
+当前合同无法在 Happy 支持的 iOS 15.1–16.3 范围内同时证明 D-07 与 D-09；在产品/支持边界做出新决定前，UI 批准保持阻塞。详见 `iOS Support-Boundary Blocker`。
+
 ---
 
 ## Design System
@@ -36,30 +38,30 @@ created: 2026-08-15
 
 ## Spacing Scale
 
-沿用项目 `theme.ts` 的 4px 基准，不建立阶段私有的互斥 spacing system：
+沿用项目 `theme.ts` 的 4px 基准，本阶段布局只使用 `4 / 8 / 16 / 24 / 32 / 48 / 64px`：
 
 | Token | Value | Usage |
 |-------|-------|-------|
 | xs | 4px | 窄屏控件间距、状态行底部间距、紧凑内联间距 |
-| sm | 8px | 标准控件间距、视口安全边距、hit slop 基础值 |
-| md | 12px | 320–359px 视口的状态行左右内边距、菜单项垂直内边距 |
-| lg | 16px | ≥360px 状态行左右内边距与最右侧协调间距 |
-| xl | 20px | 菜单项正文行高，不用于额外容器嵌套 |
-| 2xl | 24px | 仅继承现有节间距；本阶段不新增大区块 |
-| 3xl | 32px | 菜单分组标题最小高度、模型触发器内容收缩基准 |
+| sm | 8px | 标准控件间距、视口安全边距、菜单项垂直内边距与锚点间距 |
+| md | 16px | 状态行标准左右内边距、菜单项水平内边距与最右侧协调间距 |
+| lg | 24px | 分组标题行高与现有节间距 |
+| xl | 32px | 菜单分组标题最小高度、模型触发器内容收缩基准 |
+| 2xl | 48px | 仅继承现有大区块间距；本阶段不新增使用点 |
+| 3xl | 64px | 仅继承页面级间距；本阶段不新增使用点 |
 
-Exceptions: 锚点与菜单表面的间隔固定为 6px，沿用 `resolveAnchoredMenuPlacement` 的现有几何；菜单边框使用 `StyleSheet.hairlineWidth`。触发器视觉高度为 28px，垂直 hit slop 为 8px，从而得到至少 44px 的有效触控高度；这属于触控尺寸而非 spacing token。
+Spacing exceptions: none。菜单边框的 `StyleSheet.hairlineWidth`、触发器视觉高度 28px 与至少 44px 触控目标属于线条/组件尺寸，不得被引用为新的布局间距令牌。
 
 ---
 
 ## Typography
 
-本阶段只使用 3 个字号和 2 个字重；不引入 display type。
+本阶段只使用 3 个字号和 2 个字重；不引入 display type。原 11px/12px 紧邻层级已合并：触发器以 12px 为最小可见字号，菜单使用 14px 正文和 16px 分组标题建立明确层级。
 
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
-| Control value | 11px | Regular 400 | 16px |
-| Group heading | 12px | Semibold 600 | 16px |
+| Control value | 12px | Regular 400 | 16px |
+| Group heading | 16px | Semibold 600 | 24px |
 | Menu option / body | 14px | Regular 400 | 20px |
 | Selected menu option | 14px | Semibold 600 | 20px |
 
@@ -118,7 +120,7 @@ Accent reserved for: 当前选项标记、Web 可见焦点环；不得把所有�
 
 1. 控件簇位于消息发送框正上方，始终保持一个水平行，顺序固定为：权限 → 模型 → 思考程度 → 右侧留白。（D-01）
 2. 现有 connection/context 信息仍留在状态行的 leading 区域，不改变其语义；三个选择控件构成 trailing 控件簇。不得把任一控件放回底部 action row，也不得保留重复入口。
-3. ≥360px 宽度时，状态行左右内边距 16px、控件间距 8px、最右留白 16px；320–359px 时分别为 12px、4px、12px。
+3. ≥360px 宽度时，状态行左右内边距 16px、控件间距 8px、最右留白 16px；320–359px 时分别为 8px、4px、8px。
 4. 状态行总高度由 28px 触发器和 4px 底部间距组成；不得因打开菜单或键盘状态改变高度。
 5. 支持的验收宽度从 320px 起；320、375、700、701 和 1024px 都必须保留相同顺序，不换行、不横向滚动、不重叠。
 
@@ -146,9 +148,9 @@ Accent reserved for: 当前选项标记、Web 可见焦点环；不得把所有�
 | Effort | 同一个模型/思考程度组合窗口 | 思考程度分组在前，模型分组紧随 | 选择思考程度后立即关闭 |
 
 - “同一个组合窗口”指共享同一份可见状态、锚定层和关闭生命周期；不得为模型与思考程度维护两套独立 popup。（D-05、D-06）
-- 组合窗口内每个分组有 32px 最小高度的 12/16 semibold 标题；选项最小高度 44px、水平内边距 14px、垂直内边距 12px。
+- 组合窗口内每个分组有 32px 最小高度的 16/24 semibold 标题；选项最小高度 44px、水平内边距 16px、垂直内边距 8px。
 - 选项文字可换行并让行高自然增长。内容超过窗口上限时滚动菜单内容，标题随内容滚动；不得裁切完整模型名。
-- 当前项使用 Ionicons `checkmark` 与 `accessibilityState.selected=true`；未选项不放置造成列宽跳动的可见占位图标，应为标记列预留稳定 18px 宽度。
+- 当前项使用 Ionicons `checkmark` 与 `accessibilityState.selected=true`；未选项不放置造成列宽跳动的可见占位图标，应为标记列预留稳定 16px 宽度。
 - 选择模型后，窗口锚点、滚动位置和分组顺序保持不变。若现有兼容性逻辑自动回退思考程度，思考程度 checkmark 在同一个仍打开的窗口中更新，不显示 toast、不闪烁、不临时呈现旧选中态。（D-07、D-08）
 - 选项 key 必须先在当前 option array 中解析；未知或陈旧 key 不得发送 mutation，也不得回退成 prompt text。
 
@@ -160,7 +162,8 @@ Accent reserved for: 当前选项标记、Web 可见焦点环；不得把所有�
 
 - 复用 Expo UI SwiftUI `Host` + 系统 `Menu` 生命周期；一个触发动作只创建一个系统菜单。（D-09）
 - 系统外观跟随 Happy 当前 light/dark 主题，不固定深色，不固定白色 tint。（D-10）
-- 权限与思考程度 action 使用系统默认关闭行为；模型 action 在 iOS 16.4+ 使用 no-dismiss 行为。低版本行为受下方兼容性门约束。
+- iOS 16.4+ 的权限/思考程度 action 使用系统默认关闭行为；模型 action 使用 `menuActionDismissBehavior('disabled')`。该 API 能力有官方文档与已安装 Expo UI 源码支持，但仍需 16.4+ runtime 验收保存打开状态与实时更新选中标记。
+- iOS 15.1–16.3 没有可用的 no-dismiss API，也没有可复核的 `Menu`/`Picker` 运行时证据能证明模型选择后菜单保持打开。该范围当前没有已批准的 renderer 行为；不得用自定义 popover 或选择后关闭来暗中规避 D-07/D-09。
 - 定位、圆角、阴影、入退场和 Reduced Motion 由系统菜单负责；不得在系统菜单外再包一层自定义 dim/blur overlay。
 
 ### Android native
@@ -175,8 +178,8 @@ Accent reserved for: 当前选项标记、Web 可见焦点环；不得把所有�
 - 使用自定义锚定 popover，不在窄屏切换成居中 modal、bottom sheet 或整行面板。（D-11、D-12）
 - 权限窗口期望宽度 224px；组合窗口期望宽度 320px。实际宽度为 `min(期望宽度, viewport - safe-area - 16px)`。
 - 内容期望高度由真实内容测量，最大 400px；实际高度再受锚点所在方向可用空间限制，超出部分垂直滚动。
-- 水平边界固定为 safe-area 加 8px viewport margin；菜单与触发器固定间隔 6px。
-- 表面圆角 14px、hairline border、主题背景和现有菜单阴影；关闭层没有自己的 enter/exit 动画。
+- 水平边界固定为 safe-area 加 8px viewport margin；菜单与触发器固定间隔 8px。
+- 表面圆角 8px、hairline border、主题背景和现有菜单阴影；关闭层没有自己的 enter/exit 动画。
 
 ---
 
@@ -190,7 +193,7 @@ Android 与 Web 的三个菜单调用方使用 above-first 偏好；不得全局
 4. 第一个完整容纳宽高的候选胜出；`end` 对齐优先，使表面靠近触发器右边缘。
 5. 若没有方向可完整容纳高度，选择可用高度更大的一侧；相等时选上方。高度收缩到该侧可用值并启用内容滚动。
 6. `left` 和 `top` 最终 clamp 到可用边界；菜单不得覆盖安全区、可见键盘或越出视口。
-7. 锚点与菜单之间保留 6px，不与触发器重叠。窗口尺寸变化、旋转或键盘几何变化时重新计算，不产生一帧越界位置。
+7. 锚点与菜单之间保留 8px，不与触发器重叠。窗口尺寸变化、旋转或键盘几何变化时重新计算，不产生一帧越界位置。
 
 ---
 
@@ -235,15 +238,22 @@ Android 与 Web 的三个菜单调用方使用 above-first 偏好；不得全局
 
 ---
 
-## iOS 15.1–16.3 Compatibility Gate
+## iOS Support-Boundary Blocker
 
-Expo SDK 55 支持 iOS 15.1+，但 `menuActionDismissBehavior` 仅在 iOS 16.4+ 生效。D-07（选模型后保持窗口打开）与 D-09（iOS 使用系统菜单）因此构成强制先决门：
+Expo SDK 55 的 App 支持下限为 iOS 15.1，而 `menuActionDismissBehavior` 只在 iOS 16.4+ 可用。已安装 Expo UI 在更低 OS 上只返回未修饰的 content；当前没有 iOS 15.1–16.3 `Menu`/`Picker` 的可复核运行时证据。
 
-1. 在完整重构前先实现最小 SwiftUI `Menu` + model `Picker`/action spike。
-2. 至少在一个 iOS 15.1–16.3 runtime 和一个 iOS 16.4+ runtime 上验证：选择模型后系统菜单保持打开、模型 checkmark 更新、自动 effort fallback 的 checkmark 在同一菜单中实时更新、随后选择 effort 会关闭。
-3. 记录 OS 版本、交互录像/截图或等价可复核证据；仅在当前最新版 iOS 通过不算完成。
-4. 若 15.1–16.3 无法同时满足保持打开和 live update，Phase 06 必须停在该 checkpoint 并请求产品/支持范围决策。不得静默让低版本选择模型后关闭，不得私自把低版本改成自定义 popover，也不得宣称 D-07/D-09 已满足。
-5. Checker/verification 在上述证据缺失时应把 iOS 兼容性标记为 human-needed/blocking，而不是把 TypeScript 测试通过当作替代证据。
+| OS range | Defensible evidence | Contract status |
+|----------|---------------------|-----------------|
+| iOS 15.1–16.3 | Expo UI 源码证明 no-dismiss modifier 不生效；没有证据证明系统 `Menu` 中的 `Picker` 在选模型后保持打开并实时更新 model/effort checkmark | **BLOCKED**：现有证据无法同时满足 D-07、D-08、D-09 与 iOS 15.1 支持边界 |
+| iOS 16.4+ | 官方 API 及已安装类型/原生实现支持对模型 action 禁止 dismiss，对权限/effort 保持 dismiss | API 设计路径可用；批准前仍必须在 16.4+ runtime 记录保持打开、选中标记更新和 effort fallback 实时更新证据 |
+
+因此，当前锁定的 D-07（选模型后保持打开）与 D-09（iOS 使用系统菜单）无法在现有 iOS 15.1 支持边界下获得防御性批准。Phase 06 在产品/支持边界做出下列之一的明确决定前保持阻塞：
+
+1. 将 Happy App 的 iOS 最低支持版本提高到 16.4，保留 D-07 与 D-09。
+2. 保留 iOS 15.1 与 D-07，但明确修订 D-09，允许 iOS 15.1–16.3 使用非系统的锚定 popover。
+3. 保留 iOS 15.1 与 D-09，但明确修订 D-07，定义 iOS 15.1–16.3 选择模型后的产品行为。
+
+上述三种都会改变已锁定产品决定或支持边界，UI 研究者不代为选择。在决定记录更新前，planner/executor 不得把 iOS 15.1–16.3 标记为已解决，checker 必须保持 Dimension 2 BLOCK。TypeScript 测试不能替代系统菜单运行时证据。
 
 ---
 
@@ -251,11 +261,12 @@ Expo SDK 55 支持 iOS 15.1+，但 `menuActionDismissBehavior` 仅在 iOS 16.4+ 
 
 | Surface | Required contract evidence |
 |---------|----------------------------|
-| Web 320px | 12px row inset、4px gaps、模型中间省略；权限/effort 完整；320px 组合窗 clamp 到 304px；无水平 overflow |
+| Web 320px | 8px row inset、4px gaps、模型中间省略；权限/effort 完整；320px 组合窗 clamp 到 304px；无水平 overflow |
 | Web 375px | 16px inset、8px gaps；组合窗 320px；above-first、必要时翻转与滚动 |
 | Web 700/701px | 跨现有 compact breakpoint 前后顺序和菜单形态不变；窄 Web 始终为锚定 popover |
 | Web 1024px+ | 控件簇不被模型长名撑开；模型最大 176px；popover 保持锚定而非页面居中 |
-| iOS light/dark | 系统菜单跟随主题、键盘不收起、背景不闪；15.1–16.3 与 16.4+ 兼容门有证据 |
+| iOS 15.1–16.3 light/dark | **BLOCKED**：尚无已批准的系统菜单行为能同时满足 D-07/D-09；等待产品/支持边界决定 |
+| iOS 16.4+ light/dark | 系统菜单跟随主题、键盘不收起、背景不闪；no-dismiss/dismiss API 分支和 model/effort 实时选中更新有 runtime 证据 |
 | Android light/dark | 透明锚定层、键盘边界、上下翻转、滚动、系统 Reduced Motion 与无 click-through |
 
 每个 Web 尺寸都要用最长真实模型名和全部受支持 locale 的最长权限/effort 值验证；不得以英文短字符串作为唯一验收数据。
@@ -284,7 +295,7 @@ Expo SDK 55 支持 iOS 15.1+，但 `menuActionDismissBehavior` 仅在 iOS 16.4+ 
 | APPUI-01 / D-01–D-04 | Control row placement、order、flex、truncation、value-only presentation |
 | APPUI-02 / D-13–D-16 | Focus preservation、transparent stable layer、motion、single-window lifecycle |
 | APPUI-03 / D-05–D-12 | Shared combined menu、selection policy、platform seam、theme、placement and bounds |
-| RESEARCH iOS risk | Mandatory 15.1–16.3 compatibility gate before full implementation |
+| RESEARCH iOS blocker | D-07/D-09 在 iOS 15.1–16.3 无可辩护解法；批准前需产品/支持边界决定 |
 
 ---
 
@@ -331,4 +342,4 @@ Applicable state considerations resolved: {N covered, M backstop, K unresolved �
 - [ ] Dimension 5 Spacing: PASS
 - [ ] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** BLOCKED — 等待 iOS 15.1–16.3 的产品/支持边界决定；Dimension 2 不得在此前升级为 PASS
