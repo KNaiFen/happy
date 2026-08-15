@@ -41,6 +41,12 @@
 - [ ] **RSUM-03**: 明确缺失才能产生 `ineligible`；Relay、provider 或 Gateway 暂态故障保持 `pending`，`alreadyActive` 只触发投影刷新
 - [ ] **RSUM-04**: App 使用不持久化 fingerprint 投影与从请求开始计时的 20 秒 TTL，用户点击 Resume 时绕过缓存并重新执行权威预检
 
+### App Chat Composer Experience
+
+- [ ] **APPUI-01**: Happy App 聊天页在消息发送框上方依次展示权限、模型和思考程度组件，模型与思考程度位于权限组件右侧，并在最右侧保留协调间距
+- [ ] **APPUI-02**: 权限窗口打开和关闭时不发生背景闪烁，并使用从旧权限按钮实现验证或恢复的平滑动画生命周期
+- [ ] **APPUI-03**: 模型和思考程度窗口复用同一无闪烁动画模式，在 Happy App 支持的聊天页面尺寸下不重叠、不溢出
+
 ## v2 Requirements
 
 None currently. New capabilities require an explicit accepted decision before promotion into v1.
@@ -80,10 +86,13 @@ None currently. New capabilities require an explicit accepted decision before pr
 | RSUM-02 | Phase 5 | Pending |
 | RSUM-03 | Phase 5 | Pending |
 | RSUM-04 | Phase 5 | Pending |
+| APPUI-01 | Phase 6 | Pending |
+| APPUI-02 | Phase 6 | Pending |
+| APPUI-03 | Phase 6 | Pending |
 
 **Coverage:**
-- v1 requirements: 21 total
-- Mapped to phases: 21
+- v1 requirements: 24 total
+- Mapped to phases: 24
 - Unmapped: 0 ✓
 
 ---

@@ -11,6 +11,7 @@
 - [ ] **Phase 3: Sync V4 Integrity** - 验证 durable sync、权威 lifecycle 与 child isolation
 - [ ] **Phase 4: Gateway TUI Continuity** - 验证官方 TUI、detach/attach、lease 与 generation
 - [ ] **Phase 5: Resume Eligibility Preflight** - 验证同源只读预检和 App 保守投影
+- [ ] **Phase 6: Chat Composer Controls And Popover Motion** - 统一聊天输入区控制布局与无闪烁弹窗动画
 
 ## Phase Details
 
@@ -72,9 +73,25 @@
 **Plans**: TBD
 **UI hint**: yes
 
+### Phase 6: Chat Composer Controls And Popover Motion
+
+**Goal**: Happy App 聊天页的模型、思考程度与权限控制以一致、稳定且无闪烁的交互呈现在消息发送框上方
+**Depends on**: Nothing (independent App UI phase)
+**Requirements**: APPUI-01, APPUI-02, APPUI-03
+**Success Criteria** (what must be TRUE):
+
+  1. 模型、思考程度和权限组件均贴在消息发送框上方，模型与思考程度依次位于权限组件右侧，最右侧保留协调间距
+  2. 权限窗口打开和关闭时不发生背景闪烁，并具有平滑动画
+  3. 实现对照被移除的旧权限按钮代码，复用或恢复其稳定的背景与动画生命周期处理
+  4. 模型和思考程度窗口采用相同的无闪烁动画模式
+  5. 在 Happy App 支持的聊天页面尺寸下，控件不重叠、不溢出，布局保持可用
+
+**Plans**: TBD
+**UI hint**: yes
+
 ## Progress
 
-**Execution Order:** Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5
+**Execution Order:** Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5; Phase 6 is independent
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -83,3 +100,4 @@
 | 3. Sync V4 Integrity | 0/TBD | Not started | - |
 | 4. Gateway TUI Continuity | 0/TBD | Not started | - |
 | 5. Resume Eligibility Preflight | 0/TBD | Not started | - |
+| 6. Chat Composer Controls And Popover Motion | 0/TBD | Not started | - |

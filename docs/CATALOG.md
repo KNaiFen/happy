@@ -93,7 +93,7 @@
 - [Happy](../.planning/PROJECT.md)
 - [Requirements: Happy](../.planning/REQUIREMENTS.md)
 - [Roadmap: Happy](../.planning/ROADMAP.md)
-- [percent: 0](../.planning/STATE.md)
+- [completed_plans: 0](../.planning/STATE.md)
 - [Architecture](../.planning/codebase/ARCHITECTURE.md)
 - [Codebase Concerns](../.planning/codebase/CONCERNS.md)
 - [Coding Conventions](../.planning/codebase/CONVENTIONS.md)
