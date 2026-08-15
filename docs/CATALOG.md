@@ -107,6 +107,8 @@
 - [Decisions](../.planning/intel/decisions.md)
 - [Requirements](../.planning/intel/requirements.md)
 - [Onboarding Summary](../.planning/onboarding/SUMMARY.md)
+- [Phase 6: Chat Composer Controls And Popover Motion - Context](../.planning/phases/06-chat-composer-controls-and-popover-motion/06-CONTEXT.md)
+- [Phase 6: Chat Composer Controls And Popover Motion - Discussion Log](../.planning/phases/06-chat-composer-controls-and-popover-motion/06-DISCUSSION-LOG.md)
 - [Privacy Policy for Happy Coder](../PRIVACY.md)
 - [Product](../PRODUCT.md)
 - [Mobile and Web Client for Codex](../README.md)
