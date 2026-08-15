@@ -176,15 +176,8 @@ export const zhHans: TranslationStructure = {
         },
         chat: '聊天',
         chatDescription: '自定义聊天消息外观',
-        sessionStatusBar: '会话状态信息',
-        sessionStatusBarDescription: '选择分支、模型、工作量和上下文的显示位置',
-        sessionStatusDisplayOptions: {
-            hidden: '隐藏',
-            above: '输入框上方',
-            below: '输入框下方',
-        },
-        usageLimitShowRemaining: '显示剩余额度',
-        usageLimitShowRemainingDescription: '额度指示器显示剩余量，而不是已用量',
+        showVoiceInput: '显示语音输入按钮',
+        showVoiceInputDescription: '在消息输入框中显示麦克风按钮',
         userMessageBubbleColor: '用户气泡颜色',
         userMessageBubbleColorDescription: '让您的消息在长聊天中更容易找到',
         userMessageBubbleColorOptions: {
@@ -485,14 +478,6 @@ export const zhHans: TranslationStructure = {
             stopGoal: '停止目标',
             editGoal: '编辑目标',
         },
-        sessionStatusBar: {
-            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `上下文 ${used}/${total} 个令牌，${percent}%`,
-            limitFiveHour: '5 小时额度',
-            limitSevenDay: '7 天额度',
-            limitResets: ({ time }: { time: string }) => `${time} 重置`,
-            limitAsOf: ({ age }: { age: string }) => `数据为 ${age} 前`,
-            limitRemaining: ({ percent }: { percent: number }) => `剩余 ${percent}%`,
-        },
     },
 
     agentInput: {
@@ -543,6 +528,9 @@ export const zhHans: TranslationStructure = {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `剩余 ${percent}%`,
+            detailsTitle: '上下文用量',
+            usage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `上下文已使用 ${used}/${total} 个令牌（${percent}%）`,
+            remainingTokens: ({ remaining }: { remaining: string }) => `剩余 ${remaining} 个令牌`,
         },
         suggestion: {
             fileLabel: '文件',
@@ -979,6 +967,7 @@ export const zhHans: TranslationStructure = {
         sentAsGoal: 'Sent as goal',
         unknownTime: '未知时间',
         contextCompaction: '上下文压缩',
+        sessionCleared: '新会话窗口',
         reviewStarted: '开始审查',
         reviewFinished: '结束审查',
     },

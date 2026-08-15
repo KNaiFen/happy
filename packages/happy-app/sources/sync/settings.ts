@@ -9,11 +9,6 @@ import { DEFAULT_USER_MESSAGE_BUBBLE_COLOR } from '../utils/userMessageBubbleCol
 // Current schema version for backward compatibility
 export const SUPPORTED_SCHEMA_VERSION = 2;
 
-// Where (and whether) the branch/model/effort/context status bar renders
-// around the composer.
-export const SESSION_STATUS_BAR_DISPLAY_MODES = ['hidden', 'above', 'below'] as const;
-export type SessionStatusBarDisplay = typeof SESSION_STATUS_BAR_DISPLAY_MODES[number];
-
 export const SettingsSchema = z.object({
     // Schema version for compatibility detection
     schemaVersion: z.number().default(SUPPORTED_SCHEMA_VERSION).describe('Settings schema version for compatibility checks'),
@@ -29,12 +24,10 @@ export const SettingsSchema = z.object({
     experiments: z.boolean().describe('Whether to enable experimental features'),
     alwaysShowContextSize: z.boolean().describe('Always show context size in agent input'),
     agentInputEnterToSend: z.boolean().describe('Whether pressing Enter submits/sends in the agent input (web)'),
+    showVoiceInput: z.boolean().describe('Whether to show the microphone button in the agent input'),
     avatarStyle: z.string().describe('Avatar display style'),
     showFlavorIcons: z.boolean().describe('Whether to show AI provider icons in avatars'),
     userMessageBubbleColor: z.string().describe('User message bubble color preset'),
-    sessionStatusBarDisplay: z.enum(SESSION_STATUS_BAR_DISPLAY_MODES).describe('Whether/where to show the branch, model, effort, and context status bar'),
-    usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
-
     hideArchivedSessions: z.boolean().describe('Hide archived sessions in the main list'),
     sortSessionsByActivity: z.boolean().describe('Sort the session list by last activity instead of creation date'),
     expResumeSession: z.boolean().describe('Legacy toggle for experimental thread actions'),
@@ -98,14 +91,10 @@ export const settingsDefaults: Settings = {
     experiments: false,
     alwaysShowContextSize: false,
     agentInputEnterToSend: true,
+    showVoiceInput: false,
     avatarStyle: 'brutalist',
     showFlavorIcons: false,
     userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
-    // Hidden everywhere by default — the context usage indicator is still too
-    // raw to roll out; users can opt back in from appearance settings.
-    sessionStatusBarDisplay: 'hidden',
-    usageLimitShowRemaining: false,
-
     hideArchivedSessions: true,
     sortSessionsByActivity: false,
     expResumeSession: false,

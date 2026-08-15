@@ -1,6 +1,7 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
 import { View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, TouchableWithoutFeedback } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
 import type { AttachmentPreview } from '@/sync/attachmentTypes';
 import { generateThumbhash } from '@/utils/thumbhash';
@@ -16,7 +17,6 @@ import { useActiveWord } from './autocomplete/useActiveWord';
 import { useActiveSuggestions } from './autocomplete/useActiveSuggestions';
 import { AgentInputAutocomplete } from './AgentInputAutocomplete';
 import { FloatingOverlay } from './FloatingOverlay';
-import { SessionStatusBar } from './SessionStatusBar';
 import { TextInputState, MultiTextInputHandle } from './MultiTextInput';
 import { applySuggestion } from './autocomplete/applySuggestion';
 import { GitStatusBadge, useHasMeaningfulGitStatus } from './GitStatusBadge';
@@ -37,6 +37,7 @@ import { useKeyboardDismissCoordinator } from '@/hooks/useKeyboardDismissCoordin
 import { CodexQueuedMessages } from './CodexQueuedMessages';
 import { CODEX_QUEUED_MESSAGE_DOCK_HORIZONTAL_INSET } from './codexQueuedMessageStack';
 import type { CodexV4QueuedMessage } from '@/sync/codexV4Projection';
+import { getContextUsageSummary, type ContextUsageSummary } from '@/utils/contextUsage';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -84,10 +85,6 @@ interface AgentInputProps {
         contextWindow?: number;
     };
     alwaysShowContextSize?: boolean;
-    showSessionStatusInfoInSettings?: boolean;
-    sessionStatusGitBranch?: string | null;
-    sessionStatusModelLabel?: string | null;
-    sessionStatusEffortLabel?: string | null;
     onFileViewerPress?: () => void;
     machineName?: string | null;
     onMachineClick?: () => void;
@@ -203,11 +200,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     overlaySection: {
         paddingVertical: 8,
-    },
-    settingsStatusInfo: {
-        paddingTop: 6,
-        paddingBottom: 4,
-        paddingHorizontal: 8,
     },
     overlaySectionTitle: {
         fontSize: 12,
@@ -366,7 +358,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginLeft: 8,
     },
     desktopModeButton: {
-        maxWidth: 152,
+        maxWidth: 220,
         height: 32,
         flexDirection: 'row',
         alignItems: 'center',
@@ -387,6 +379,29 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 16,
+    },
+    contextDetails: {
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        gap: 6,
+    },
+    contextDetailsTitle: {
+        color: theme.colors.text,
+        fontSize: 14,
+        fontWeight: '600',
+        ...Typography.default('semiBold'),
+    },
+    contextDetailsPrimary: {
+        color: theme.colors.text,
+        fontSize: 13,
+        fontVariant: ['tabular-nums'],
+        ...Typography.default(),
+    },
+    contextDetailsSecondary: {
+        color: theme.colors.textSecondary,
+        fontSize: 12,
+        fontVariant: ['tabular-nums'],
+        ...Typography.default(),
     },
     desktopStopButton: {
         backgroundColor: theme.colors.fab.background,
@@ -495,15 +510,15 @@ type StatusRowProps = {
     permissionSemanticKind?: string | null;
     isSandboxedYoloMode: boolean;
     permissionLabel: string | null;
+    onPermissionPress?: () => void;
     zenMode?: boolean;
 };
 
 const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
     const { theme } = useUnistyles();
-    const showPermissionBadge = !!p.displayPermissionMode
-        && p.permissionModeKey !== 'default'
-        && !p.zenMode
-        && !!p.permissionLabel;
+    const showPermissionBadge = !p.zenMode
+        && !!p.permissionLabel
+        && !!p.onPermissionPress;
     if (!p.connectionStatus && !p.contextWarning && !showPermissionBadge) {
         return null;
     }
@@ -580,7 +595,19 @@ const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRow
                     presentationKind === 'plan' || presentationKind === 'read-only'
                         ? 'pause' : 'play-forward';
                 return (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={t('agentInput.codexPermissionMode.title')}
+                        hitSlop={8}
+                        onPress={p.onPermissionPress}
+                        testID="agent-input-permission-menu"
+                        style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4,
+                            opacity: pressed ? 0.6 : 1,
+                        })}
+                    >
                         <Ionicons name={permIcon} size={11} color={permColor} />
                         <Text style={{
                             fontSize: 11,
@@ -589,12 +616,46 @@ const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRow
                         }}>
                             {p.permissionLabel}
                         </Text>
-                    </View>
+                    </Pressable>
                 );
             })()}
         </View>
     );
 });
+
+function ContextUsageCircle(props: { summary: ContextUsageSummary }) {
+    const { theme } = useUnistyles();
+    const size = 20;
+    const strokeWidth = 2;
+    const radius = (size - strokeWidth) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const dashOffset = circumference * (1 - props.summary.percentage / 100);
+
+    return (
+        <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+            <Circle
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                stroke={theme.colors.divider}
+                strokeWidth={strokeWidth}
+            />
+            <Circle
+                cx={size / 2}
+                cy={size / 2}
+                r={radius}
+                fill="none"
+                stroke={theme.colors.textSecondary}
+                strokeWidth={strokeWidth}
+                strokeLinecap="round"
+                strokeDasharray={`${circumference} ${circumference}`}
+                strokeDashoffset={dashOffset}
+                transform={`rotate(-90 ${size / 2} ${size / 2})`}
+            />
+        </Svg>
+    );
+}
 
 type ContextChipsProps = {
     machineName?: string | null;
@@ -738,6 +799,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const contextWarning = props.usageData?.contextSize
         ? getContextWarning(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme, props.usageData.contextWindow)
         : null;
+    const contextUsage = React.useMemo(() => getContextUsageSummary(
+        props.usageData?.contextSize,
+        props.usageData?.contextWindow,
+    ), [props.usageData?.contextSize, props.usageData?.contextWindow]);
+    const contextUsageAccessibilityLabel = contextUsage
+        ? t('agentInput.context.usage', {
+            used: contextUsage.used.toLocaleString(),
+            total: contextUsage.total.toLocaleString(),
+            percent: contextUsage.percentage,
+        })
+        : '';
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
 
@@ -930,7 +1002,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // The compact composer has separate controls for permission, model, and
     // effort. Keep a single popup state so only one selection surface is ever
     // visible, including while we dismiss the keyboard on mobile.
-    type ComposerPicker = 'permission' | 'model' | 'effort';
+    type ComposerPicker = 'permission' | 'model' | 'effort' | 'context';
     const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
     const pickerCoordinator = useKeyboardDismissCoordinator<ComposerPicker>();
 
@@ -1032,23 +1104,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onMicPress();
     }, [props.isSendDisabled, props.onMicPress]);
 
-    const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
-        if (!props.onPermissionModeChange || availableModes.length === 0) {
-            return [];
-        }
-        return [{
-            key: 'permission',
-            label: t('agentInput.codexPermissionMode.title'),
-            systemImage: 'shield',
-            options: availableModes.map((mode) => ({ key: mode.key, label: withSandboxSuffix(mode.name, mode.key) })),
-            selectedKey: permissionModeKey,
-            onSelect: (key) => {
-                const mode = availableModes.find((candidate) => candidate.key === key);
-                if (mode) handleSettingsSelect(mode);
-            },
-        }];
-    }, [availableModes, handleSettingsSelect, permissionModeKey, props.onPermissionModeChange, withSandboxSuffix]);
-
     const modelSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         const groups: NativeSettingsMenuGroup[] = [];
         if (availableModels.length > 0 && props.onModelModeChange) {
@@ -1088,12 +1143,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const effortSettingsGroup = modelSettingsGroups.find((group) => group.key === 'effort');
 
     const renderModelValue = () => (
-        <>
-            <Ionicons name="flash" size={18} color={theme.colors.text} />
-            <Text style={styles.mobileModeText} numberOfLines={1}>
-                {modelLabel}
-            </Text>
-        </>
+        <Text style={styles.mobileModeText} numberOfLines={1} ellipsizeMode="head">
+            {modelLabel}
+        </Text>
     );
 
     const renderEffortValue = () => (
@@ -1104,6 +1156,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             </Text>
         </>
     );
+
+    const contextDetails = contextUsage ? (
+        <View style={styles.contextDetails} testID="agent-input-context-details">
+            <Text style={styles.contextDetailsTitle}>{t('agentInput.context.detailsTitle')}</Text>
+            <Text style={styles.contextDetailsPrimary}>{contextUsageAccessibilityLabel}</Text>
+            <Text style={styles.contextDetailsSecondary}>
+                {t('agentInput.context.remainingTokens', { remaining: contextUsage.remaining.toLocaleString() })}
+            </Text>
+        </View>
+    ) : null;
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
@@ -1179,25 +1241,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                     {props.zenMode && <View style={{ flex: 1 }} />}
                     {!props.zenMode && <View style={styles.actionButtonsLeft}>
-                        {props.onPermissionModeChange && (
-                            <Pressable
-                                onPress={handleSettingsPress}
-                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                style={(p) => ({
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    borderRadius: Platform.select({ default: 16, android: 20 }),
-                                    paddingHorizontal: 8,
-                                    paddingVertical: 6,
-                                    justifyContent: 'center',
-                                    height: 32,
-                                    opacity: p.pressed ? 0.7 : 1,
-                                })}
-                            >
-                                <Octicons name="gear" size={16} color={theme.colors.button.secondary.tint} />
-                            </Pressable>
-                        )}
-
                         <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
 
                         {props.onPickImages && (
@@ -1241,8 +1284,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     !canOpenModelPicker && { opacity: 0.58 },
                                 ]}
                             >
-                                <Ionicons name="flash" size={15} color={theme.colors.textSecondary} />
-                                <Text style={styles.desktopModeText} numberOfLines={1}>{modelLabel}</Text>
+                                <Text style={styles.desktopModeText} numberOfLines={1} ellipsizeMode="head">{modelLabel}</Text>
                             </Pressable>
                         )}
                         {!props.zenMode && (canOpenEffortPicker || !!effortLabel) && (
@@ -1261,6 +1303,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 ]}
                             >
                                 <Text style={styles.desktopModeText} numberOfLines={1}>{effortLabel ?? t('agentInput.effort.title')}</Text>
+                            </Pressable>
+                        )}
+                        {contextUsage && (
+                            <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={contextUsageAccessibilityLabel}
+                                hitSlop={6}
+                                onPress={() => handlePickerPress('context')}
+                                testID="agent-input-context-usage"
+                                style={({ pressed }) => [
+                                    styles.desktopIconButton,
+                                    pressed && styles.actionButtonPressed,
+                                ]}
+                            >
+                                <ContextUsageCircle summary={contextUsage} />
                             </Pressable>
                         )}
                         {props.onMicPress && (
@@ -1405,22 +1462,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 { paddingHorizontal: screenWidth > 700 ? 0 : 8 },
             ]}>
                 <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                    {props.showSessionStatusInfoInSettings ? (
-                        <>
-                            <View style={styles.settingsStatusInfo}>
-                                <SessionStatusBar
-                                    gitBranch={props.sessionStatusGitBranch}
-                                    modelLabel={props.sessionStatusModelLabel ?? null}
-                                    effortLabel={props.sessionStatusEffortLabel ?? null}
-                                    contextSize={props.usageData?.contextSize}
-                                    contextWindow={props.usageData?.contextWindow}
-                                />
-                            </View>
-                            <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 16 }} />
-                        </>
-                    ) : null}
-
-                    <View style={styles.overlaySection}>
+                    {openPicker === 'context' ? contextDetails : (
+                    <>
+                        <View style={styles.overlaySection}>
                         <Text style={styles.overlaySectionTitle}>
                             {t('agentInput.codexPermissionMode.title')}
                         </Text>
@@ -1498,7 +1542,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 </View>
                             </>
                         )}
-                    </View>
+                        </View>
+                    </>
+                    )}
                 </FloatingOverlay>
             </View>
         </>
@@ -1536,9 +1582,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 {desktopSettingsOverlay}
 
-                {/* Permission, model, and effort pickers open independently
+                {/* Permission, model, effort, and context pickers open independently
                     from their matching controls in the compact composer action row. */}
-                {compactMobileComposer && !useNativeSettingsMenus && openPicker && (
+                {compactMobileComposer && openPicker && (
                     <>
                         <AnimatedClickAwayBackdrop
                             onPress={closePicker}
@@ -1549,22 +1595,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             { paddingHorizontal: screenWidth > 700 ? 0 : 16 }
                         ]}>
                             <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                                {props.showSessionStatusInfoInSettings ? (
-                                    <>
-                                        <View style={styles.settingsStatusInfo}>
-                                            <SessionStatusBar
-                                                gitBranch={props.sessionStatusGitBranch}
-                                                modelLabel={props.sessionStatusModelLabel ?? null}
-                                                effortLabel={props.sessionStatusEffortLabel ?? null}
-                                                contextSize={props.usageData?.contextSize}
-                                                contextWindow={props.usageData?.contextWindow}
-                                            />
-                                        </View>
-                                        <View style={styles.overlayDivider} />
-                                    </>
-                                ) : null}
-
-                                {openPicker === 'permission' ? (
+                                {openPicker === 'context' ? contextDetails : openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>
                                             {t('agentInput.codexPermissionMode.title')}
@@ -1808,7 +1839,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     permissionModeKey={permissionModeKey}
                     permissionSemanticKind={displayPermissionMode?.semanticKind}
                     isSandboxedYoloMode={isSandboxedYoloMode}
-                    permissionLabel={displayPermissionMode ? withSandboxSuffix(displayPermissionMode.name, permissionModeKey) : null}
+                    permissionLabel={displayPermissionMode
+                        ? withSandboxSuffix(displayPermissionMode.name, permissionModeKey)
+                        : t('agentInput.codexPermissionMode.default')}
+                    onPermissionPress={props.onPermissionModeChange && availableModes.length > 0 ? handleSettingsPress : undefined}
                     zenMode={props.zenMode}
                 />
 
@@ -1878,7 +1912,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                     {compactMobileComposer ? (
                     /* The action order mirrors the expanded Home composer:
-                        photo, permissions, model/effort, voice, then send/stop. */
+                        photo, model/effort, context, voice, then send/stop. */
                     <View style={[
                         styles.actionButtonsContainer,
                         styles.mobileActionButtonsContainer,
@@ -1899,32 +1933,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         : theme.colors.text}
                                 />
                             </BubblePressable>
-                        )}
-
-                        {!props.zenMode && permissionSettingsGroups.length > 0 && (
-                            useNativeSettingsMenus ? (
-                                <NativeSettingsMenu
-                                    groups={permissionSettingsGroups}
-                                    flat
-                                    style={styles.mobileIconButton}
-                                    accessibilityLabel={t('agentInput.codexPermissionMode.title')}
-                                    testID="agent-input-permission-menu"
-                                >
-                                    <View style={styles.mobileIconButton}>
-                                        <Ionicons name="settings-outline" size={20} color={theme.colors.text} />
-                                    </View>
-                                </NativeSettingsMenu>
-                            ) : (
-                                <BubblePressable
-                                    onPress={handleSettingsPress}
-                                    hitSlop={6}
-                                    style={styles.mobileIconButton}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={t('agentInput.codexPermissionMode.title')}
-                                >
-                                    <Ionicons name="settings-outline" size={20} color={theme.colors.text} />
-                                </BubblePressable>
-                            )
                         )}
 
                         {!props.zenMode ? (
@@ -1991,6 +1999,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         {!compactMobileComposer && (
                             <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
+                        )}
+
+                        {contextUsage && (
+                            <BubblePressable
+                                onPress={() => handlePickerPress('context')}
+                                hitSlop={6}
+                                style={styles.mobileIconButton}
+                                accessibilityRole="button"
+                                accessibilityLabel={contextUsageAccessibilityLabel}
+                                testID="agent-input-context-usage"
+                            >
+                                <ContextUsageCircle summary={contextUsage} />
+                            </BubblePressable>
                         )}
 
                         {props.onMicPress && (

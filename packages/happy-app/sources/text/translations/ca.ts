@@ -175,15 +175,8 @@ export const ca: TranslationStructure = {
         },
         chat: 'Xat',
         chatDescription: 'Personalitza l\'aspecte dels missatges del xat',
-        sessionStatusBar: 'Informació d\'estat de la sessió',
-        sessionStatusBarDescription: 'Tria on es mostren la branca, el model, l\'esforç i el context',
-        sessionStatusDisplayOptions: {
-            hidden: 'Ocult',
-            above: 'Sobre el compositor',
-            below: 'Sota el compositor',
-        },
-        usageLimitShowRemaining: 'Mostra la quota restant',
-        usageLimitShowRemainingDescription: 'Els indicadors de límit compten enrere en lloc d\'endavant',
+        showVoiceInput: 'Botó d\'entrada de veu',
+        showVoiceInputDescription: 'Mostra el botó del micròfon al camp del missatge',
         userMessageBubbleColor: 'Color dels teus missatges',
         userMessageBubbleColorDescription: 'Fes que els teus missatges siguin més fàcils de trobar en xats llargs',
         userMessageBubbleColorOptions: {
@@ -484,14 +477,6 @@ export const ca: TranslationStructure = {
             stopGoal: 'Atura objectiu',
             editGoal: 'Edita objectiu',
         },
-        sessionStatusBar: {
-            contextUsage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Context ${used} de ${total} tokens, ${percent}%`,
-            limitFiveHour: 'Límit de 5 hores',
-            limitSevenDay: 'Límit de 7 dies',
-            limitResets: ({ time }: { time: string }) => `es restableix ${time}`,
-            limitAsOf: ({ age }: { age: string }) => `fa ${age}`,
-            limitRemaining: ({ percent }: { percent: number }) => `${percent}% restant`,
-        },
     },
 
     agentInput: {
@@ -542,6 +527,9 @@ export const ca: TranslationStructure = {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `${percent}% restant`,
+            detailsTitle: 'Ús del context',
+            usage: ({ used, total, percent }: { used: string; total: string; percent: number }) => `Context: ${used} de ${total} tokens, ${percent}%`,
+            remainingTokens: ({ remaining }: { remaining: string }) => `Tokens restants: ${remaining}`,
         },
         suggestion: {
             fileLabel: 'FITXER',
@@ -978,6 +966,7 @@ export const ca: TranslationStructure = {
         sentAsGoal: 'Sent as goal',
         unknownTime: 'temps desconegut',
         contextCompaction: 'Context compactat',
+        sessionCleared: 'Finestra de sessió nova',
         reviewStarted: 'Revisió iniciada',
         reviewFinished: 'Revisió finalitzada',
     },

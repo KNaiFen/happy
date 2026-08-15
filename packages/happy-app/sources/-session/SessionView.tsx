@@ -17,7 +17,6 @@ import { ChatHeaderView } from '@/components/ChatHeaderView';
 import { ChatList } from '@/components/ChatList';
 import { Deferred } from '@/components/Deferred';
 import { EmptyMessages } from '@/components/EmptyMessages';
-import { SessionStatusBar } from '@/components/SessionStatusBar';
 import { Avatar } from '@/components/Avatar';
 import { VoiceAssistantStatusBar } from '@/components/VoiceAssistantStatusBar';
 import { useDraft } from '@/hooks/useDraft';
@@ -30,7 +29,7 @@ import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionGoalAction, sessionSetAgentModes, spawnSideChat } from '@/sync/ops';
 import { archiveSession } from '@/sync/sessionArchiveCoordinator';
 import { shouldArchiveSideChatOnClose } from '@/sync/sideChatSessions';
-import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
+import { storage, useAgentDefaultOverrides, useCodexV4Session, useIsDataReady, useIsSessionMachineDeleted, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { isCodexV4SyncActive } from '@/sync/codexV4ClientRegistry';
 import { findActiveCodexV4Turn } from '@/sync/codexV4Commands';
 import { codexV4QueuedMessages } from '@/sync/codexV4Projection';
@@ -61,7 +60,6 @@ import { trackVoiceSessionError, trackVoiceSessionStarted, trackVoiceSessionStop
 import { getVoiceMessageCount, getVoiceOnboardingPromptLoadCount } from '@/sync/persistence';
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
-import { resolveStatusBarGitBranch } from '@/utils/sessionStatusBar';
 import { FilesSidebar, SidebarMode } from '@/components/FilesSidebar';
 import { AllFilesDiffView } from '@/components/AllFilesDiffView';
 import { FileViewPanel } from '@/components/FileViewPanel';
@@ -784,9 +782,8 @@ export function SessionViewLoaded({
 
     const sessionStatus = useSessionStatus(session);
     const sessionUsage = useSessionUsage(sessionId);
-    const gitStatus = useSessionGitStatus(sessionId);
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
-    const sessionStatusBarDisplay = useSetting('sessionStatusBarDisplay');
+    const showVoiceInput = useSetting('showVoiceInput');
     const experiments = useSetting('experiments');
     const {
         canResume,
@@ -1020,16 +1017,6 @@ export function SessionViewLoaded({
             contextWindow: source.contextWindow,
         };
     }, [isCodexV4Active, codexV4Session?.usage, sessionUsage, session.latestUsage]);
-    const metadataGitBranch = React.useMemo(() => {
-        const gitBranch = (session.metadata as { gitBranch?: unknown } | null)?.gitBranch;
-        return typeof gitBranch === 'string' && gitBranch.trim() ? gitBranch.trim() : null;
-    }, [session.metadata]);
-    const statusBarGitBranch = resolveStatusBarGitBranch(gitStatus?.branch, metadataGitBranch);
-    const statusBarModelLabel = modelMode?.name ?? session.metadata?.currentModelCode ?? session.modelMode ?? null;
-    const statusBarEffortLabel = effortLevel?.name
-        ? effortLevel.name.charAt(0).toUpperCase() + effortLevel.name.slice(1)
-        : null;
-
     const visibleAgentGoal = React.useMemo(() => (
         resolveVisibleAgentGoalStatus(session, codexV4Session)
     ), [
@@ -1092,6 +1079,7 @@ export function SessionViewLoaded({
         onMicPress: handleMicrophonePress,
         isMicActive: realtimeStatus === 'connected' || realtimeStatus === 'connecting'
     }), [handleMicrophonePress, realtimeStatus]);
+    const shouldShowMicButton = showVoiceInput || micButtonState.isMicActive;
 
     // Trigger session visibility and initialize git status sync
     React.useLayoutEffect(() => {
@@ -1170,7 +1158,7 @@ export function SessionViewLoaded({
             onSend={handleSend}
             canSteerFollowUp={canSteerCodexTurn}
             queuedMessages={isCodexV4Active ? codexQueuedMessages : []}
-            onMicPress={(embedded || isDisconnected) ? undefined : micButtonState.onMicPress}
+            onMicPress={(embedded || isDisconnected || !shouldShowMicButton) ? undefined : micButtonState.onMicPress}
             isMicActive={(embedded || isDisconnected) ? false : micButtonState.isMicActive}
             onAbort={isDisconnected ? undefined : handleAbort}
             showAbortButton={Platform.OS === 'web'
@@ -1186,10 +1174,6 @@ export function SessionViewLoaded({
             usageData={usageData}
             alwaysShowContextSize={alwaysShowContextSize}
             zenMode={zenMode}
-            showSessionStatusInfoInSettings={false}
-            sessionStatusGitBranch={statusBarGitBranch}
-            sessionStatusModelLabel={statusBarModelLabel}
-            sessionStatusEffortLabel={statusBarEffortLabel}
         />
     );
 
@@ -1218,31 +1202,6 @@ export function SessionViewLoaded({
         </CenteredInputWidth>
     ) : null;
 
-    const showSessionStatusBar = sessionStatusBarDisplay === 'above' || sessionStatusBarDisplay === 'below';
-    const sessionStatusBarPosition = sessionStatusBarDisplay === 'above' ? 'above' : 'below';
-    const sessionStatusBar = showSessionStatusBar ? (
-        <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
-            <SessionStatusBar
-                gitBranch={statusBarGitBranch}
-                modelLabel={statusBarModelLabel}
-                modelMode={modelMode}
-                availableModels={availableModels}
-                onModelModeChange={!isCodexReadOnly
-                    ? updateModelMode
-                    : undefined}
-                effortLabel={statusBarEffortLabel}
-                effortLevel={effortLevel}
-                availableEffortLevels={availableEffortLevels}
-                onEffortLevelChange={!isCodexReadOnly
-                    ? updateEffortLevel
-                    : undefined}
-                contextSize={usageData?.contextSize}
-                contextWindow={usageData?.contextWindow}
-                usageLimits={session.agentState?.usageLimits}
-            />
-        </CenteredInputWidth>
-    ) : null;
-
     const input = (
         <>
             {inactiveHint}
@@ -1255,9 +1214,7 @@ export function SessionViewLoaded({
                     />
                 </CenteredInputWidth>
             )}
-            {sessionStatusBarPosition === 'above' ? sessionStatusBar : null}
             {composer}
-            {sessionStatusBarPosition === 'below' ? sessionStatusBar : null}
         </>
     );
 
