@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/knaifen/Documents/Codex/happy/docs/decisions/ADR-002-codex-session-lifecycle-and-timeline-order.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "ADR-002: Separate Codex lifecycle, transport state, and timeline order",
+  "summary": "Defines authoritative archival, provider event ordering, and independent connection and execution state for Codex Sync v4.",
+  "scope": ["Codex Sync v4", "session archival", "provider timeline order", "activity state"],
+  "cross_refs": [],
+  "locked": true,
+  "precedence": null,
+  "notes": ""
+}

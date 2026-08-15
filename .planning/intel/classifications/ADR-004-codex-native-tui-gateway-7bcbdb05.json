@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/knaifen/Documents/Codex/happy/docs/decisions/ADR-004-codex-native-tui-gateway.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "ADR-004: 通过持久 Gateway 运行官方 Codex TUI",
+  "summary": "通过持久 Gateway worker 运行官方 Codex TUI，并隔离终端、provider、Sync bridge 与 thread 生命周期。",
+  "scope": ["Codex TUI", "Gateway worker", "app-server", "Sync v4", "thread lease", "attach"],
+  "cross_refs": [],
+  "locked": true,
+  "precedence": null,
+  "notes": ""
+}

@@ -89,6 +89,23 @@
 
 ## 仓库文档
 
+- [.planning/INGEST-CONFLICTS.md](../.planning/INGEST-CONFLICTS.md)
+- [Happy](../.planning/PROJECT.md)
+- [Requirements: Happy](../.planning/REQUIREMENTS.md)
+- [Roadmap: Happy](../.planning/ROADMAP.md)
+- [percent: 0](../.planning/STATE.md)
+- [Architecture](../.planning/codebase/ARCHITECTURE.md)
+- [Codebase Concerns](../.planning/codebase/CONCERNS.md)
+- [Coding Conventions](../.planning/codebase/CONVENTIONS.md)
+- [External Integrations](../.planning/codebase/INTEGRATIONS.md)
+- [Technology Stack](../.planning/codebase/STACK.md)
+- [Codebase Structure](../.planning/codebase/STRUCTURE.md)
+- [Testing Patterns](../.planning/codebase/TESTING.md)
+- [Document Synthesis](../.planning/intel/SYNTHESIS.md)
+- [Constraints](../.planning/intel/constraints.md)
+- [Context](../.planning/intel/context.md)
+- [Decisions](../.planning/intel/decisions.md)
+- [Requirements](../.planning/intel/requirements.md)
 - [Privacy Policy for Happy Coder](../PRIVACY.md)
 - [Product](../PRODUCT.md)
 - [Mobile and Web Client for Codex](../README.md)

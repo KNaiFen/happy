@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/knaifen/Documents/Codex/happy/docs/decisions/ADR-006-actions-security-and-production-dependency-gates.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "ADR-006: Actions supply-chain controls and production dependency gates",
+  "summary": "Defines pinned GitHub Actions, CodeQL, Dependabot, and High or Critical production dependency security gates.",
+  "scope": ["GitHub Actions", "CodeQL", "Dependabot", "production dependencies", "repository ruleset"],
+  "cross_refs": [],
+  "locked": true,
+  "precedence": null,
+  "notes": ""
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "/Users/knaifen/Documents/Codex/happy/docs/decisions/README.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "架构决策记录",
+  "summary": "Generated index of the project's current architecture decision records and their authority rule.",
+  "scope": ["architecture decisions", "ADR index", "knowledge base"],
+  "cross_refs": ["./ADR-001-codex-sync-v4.md", "./ADR-002-codex-session-lifecycle-and-timeline-order.md", "./ADR-003-codex-only-provider.md", "./ADR-004-codex-native-tui-gateway.md", "./ADR-005-daemon-resume-eligibility-preflight.md", "./ADR-006-actions-security-and-production-dependency-gates.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}
