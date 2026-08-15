@@ -11,7 +11,8 @@
 - [Codex Native TUI Gateway](decisions/ADR-004-codex-native-tui-gateway.md)：终端与远端控制边界。
 - [恢复资格只读预检](decisions/ADR-005-daemon-resume-eligibility-preflight.md)：首页恢复承诺与 daemon 权威检查边界。
 - [后端架构](backend-architecture.md)、[CLI 架构](cli-architecture.md) 与 [HTTP API](api.md)。
-- [权限解析](permission-resolution.md)、[加密边界](encryption.md) 与 [Codex 验收层](agent-testing.md)。
+- [权限解析](permission-resolution.md)、[聊天 Composer 设置菜单](chat-composer-settings-menu.md)、
+  [加密边界](encryption.md) 与 [Codex 验收层](agent-testing.md)。
 - [部署](deployment.md)、[开发环境](dev-environments.md) 与 [发行矩阵](release-matrix.md)。
 
 `protocol.md`、`session-protocol.md` 和 `realtime-sync-and-rpc.md` 仍记录共享 v3

@@ -285,7 +285,11 @@ export function getDefaultEffortKeyForModel(
     if (advertisedDefault && levels.some((level) => level.key === advertisedDefault)) {
         return advertisedDefault;
     }
-    return getCodeAgentDefaults(flavor).effortLevel ?? levels[levels.length - 1].key;
+    const codeDefault = getCodeAgentDefaults(flavor).effortLevel;
+    if (codeDefault && levels.some((level) => level.key === codeDefault)) {
+        return codeDefault;
+    }
+    return levels[levels.length - 1].key;
 }
 
 export function getSupportsWorktree(flavor: AgentFlavor): boolean {

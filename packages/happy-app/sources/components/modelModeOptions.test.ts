@@ -54,6 +54,31 @@ describe('Codex model and mode options', () => {
         expect(getDefaultEffortKeyForModel('codex', 'gpt-test', metadata)).toBe('high');
     });
 
+    it('falls back to a valid effort when the advertised default is missing', () => {
+        const metadata = {
+            models: [{
+                code: 'gpt-test',
+                value: 'GPT Test',
+                thinkingLevels: ['low', 'high'],
+            }],
+        } as Metadata;
+
+        expect(getDefaultEffortKeyForModel('codex', 'gpt-test', metadata)).toBe('high');
+    });
+
+    it('ignores an advertised default that the model does not support', () => {
+        const metadata = {
+            models: [{
+                code: 'gpt-test',
+                value: 'GPT Test',
+                thinkingLevels: ['low', 'high'],
+                defaultThinkingLevel: 'xhigh',
+            }],
+        } as Metadata;
+
+        expect(getDefaultEffortKeyForModel('codex', 'gpt-test', metadata)).toBe('high');
+    });
+
     it('uses the machine Codex catalog and retains a selected fallback model', () => {
         const advertised = {
             host: 'host',

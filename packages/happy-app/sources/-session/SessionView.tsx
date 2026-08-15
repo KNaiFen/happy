@@ -8,6 +8,7 @@ import { layout } from '@/components/layout';
 import {
     getAvailableModels,
     getAvailablePermissionModes,
+    getDefaultEffortKeyForModel,
     getEffortLevelsForModel,
     resolveCurrentOption,
     EffortLevel,
@@ -884,7 +885,9 @@ export function SessionViewLoaded({
             : true;
         sessionSetAgentModes(sessionId, {
             modelMode: mode.key,
-            ...(!currentEffortSupported ? { effortLevel: mode.defaultThinkingLevel ?? null } : {}),
+            ...(!currentEffortSupported ? {
+                effortLevel: getDefaultEffortKeyForModel(flavor, mode.key, session.metadata),
+            } : {}),
         });
     }, [sessionId, flavor, session.metadata, session.effortLevel]);
 

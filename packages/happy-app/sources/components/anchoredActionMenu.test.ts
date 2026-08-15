@@ -20,6 +20,18 @@ describe('resolveAnchoredMenuPlacement', () => {
         });
     });
 
+    it('prefers above the trigger when both sides fit', () => {
+        expect(resolveAnchoredMenuPlacement({
+            anchor: { x: 180, y: 200, width: 32, height: 32 },
+            viewport: { width: 408, height: 360 },
+            menu,
+            preferAbove: true,
+        })).toMatchObject({
+            direction: 'above',
+            top: 62,
+        });
+    });
+
     it('flips above a trigger near the bottom edge', () => {
         expect(resolveAnchoredMenuPlacement({
             anchor: { x: 350, y: 180, width: 32, height: 32 },
