@@ -78,6 +78,7 @@ import {
     isCodexV4SyncEligible,
 } from './codexV4ClientRegistry';
 import {
+    bindCodexV4CommandDraftToCurrentGateway,
     commandForCodexV4Input,
     createCodexV4Command,
     parseCodexV4Input,
@@ -110,6 +111,8 @@ type SendMessageOptions = {
     /** Stable identity shared by the App send and CLI queue item. */
     localKey?: string;
 };
+
+const INITIAL_SESSIONS_READY_DEADLINE_MS = 2_500;
 
 export class SyncLifecycleCancelledError extends Error {
     constructor() {
@@ -240,6 +243,7 @@ class Sync {
             onStartError: () => {
                 log.log('Codex Sync v4 client start failed');
             },
+            maxConcurrentStarts: 3,
         });
         this.sessionsSync = new InvalidateSync(this.fetchSessions);
         this.settingsSync = new InvalidateSync(this.syncSettings);
@@ -364,19 +368,21 @@ class Sync {
         this.machinesSync.invalidate();
         this.pushTokenSync.invalidate();
         this.nativeUpdateSync.invalidate();
-        this.friendsSync.invalidate();
-        this.friendRequestsSync.invalidate();
-        this.artifactsSync.invalidate();
-        this.feedSync.invalidate();
-        log.log('🔄 #init: All syncs invalidated, including artifacts');
+        log.log('🔄 #init: Primary syncs invalidated');
 
-        // Mark UI ready as soon as sessions load. Machines sync may hang
-        // when encryption keys are unavailable (e.g. V1 auth fallback) —
-        // let it resolve in the background instead of blocking the UI.
+        // Session data gets a short head start. Slow or unavailable relays keep
+        // retrying in the background without owning the App's interaction gate.
         const generation = this.lifecycleGeneration;
-        this.sessionsSync.awaitQueue().then(() => {
+        this.sessionsSync.awaitQueueUntil(INITIAL_SESSIONS_READY_DEADLINE_MS).then((completed) => {
             if (!this.isGenerationCurrent(generation)) return;
             storage.getState().applyReady();
+            if (!completed) log.log('Initial session sync continues in the background');
+
+            this.friendsSync.invalidate();
+            this.friendRequestsSync.invalidate();
+            this.artifactsSync.invalidate();
+            this.feedSync.invalidate();
+            log.log('🔄 #init: Deferred syncs invalidated, including artifacts');
         }).catch((error) => {
             console.error('Failed to load sessions');
             // Still mark ready so the UI doesn't stay on a blank screen forever
@@ -429,7 +435,7 @@ class Sync {
 
 
     onSessionVisible = (sessionId: string) => {
-        this.codexV4Clients.invalidate(sessionId);
+        this.codexV4Clients.prioritize(sessionId);
 
         // Also invalidate git status sync for this session
         gitStatusSync.getSync(sessionId).invalidate();
@@ -464,8 +470,9 @@ class Sync {
         if (!this.isCodexV4Eligible(sessionId)) {
             throw new Error('Codex Sync v4 is not enabled for this session');
         }
-        const command = createCodexV4Command(draft, { commandId });
-        const assertCurrentSessionAllowsCommand = () => {
+        const commandCreatedAt = Date.now();
+        let publishDraft = draft;
+        const createCurrentCommand = () => {
             const state = storage.getState();
             const session = state.sessions[sessionId];
             if (!session || !isCodexV4SyncEligible(session.metadata)) {
@@ -476,15 +483,24 @@ class Sync {
             ) {
                 throw new Error('The source machine was deleted; this session is read-only');
             }
+            publishDraft = bindCodexV4CommandDraftToCurrentGateway(
+                publishDraft,
+                session.metadata,
+            );
+            const command = createCodexV4Command(publishDraft, {
+                commandId,
+                now: commandCreatedAt,
+            });
             assertCodexV4CommandPublishAllowed({
                 command,
-                metadata: session?.metadata,
+                metadata: session.metadata,
                 projection: state.codexV4Sessions[sessionId],
             });
+            return command;
         };
-        assertCurrentSessionAllowsCommand();
-        await this.codexV4Clients.withClient(sessionId, async (client) => {
-            assertCurrentSessionAllowsCommand();
+        createCurrentCommand();
+        return await this.codexV4Clients.withClient(sessionId, async (client) => {
+            const command = createCurrentCommand();
             if (draftReceiptText !== undefined) {
                 codexCommandDraftRecovery.record({
                     commandId,
@@ -493,8 +509,8 @@ class Sync {
                 });
             }
             await client.publishEntity(command);
+            return command;
         });
-        return command;
     }
 
     /**

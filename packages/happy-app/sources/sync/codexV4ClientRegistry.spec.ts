@@ -119,6 +119,83 @@ describe('codexV4PollIntervalMsForLifecycle', () => {
 });
 
 describe('CodexV4ClientRegistry', () => {
+    it('bounds automatic client startup and drains queued sessions in order', async () => {
+        const createdSessionIds: string[] = [];
+        const clients = new Map<string, TestClient>();
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async (options) => {
+                createdSessionIds.push(options.sessionId);
+                const client = new TestClient();
+                clients.set(options.sessionId, client);
+                return client;
+            },
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+            maxConcurrentStarts: 2,
+        });
+        const sessions = Array.from({ length: 4 }, (_, index) => ({
+            sessionId: `session-${index + 1}`,
+            sessionKey: new Uint8Array(32),
+            pollIntervalMs: 5_000,
+        }));
+
+        registry.reconcile(sessions);
+        await Promise.resolve();
+        expect(createdSessionIds).toEqual(['session-1', 'session-2']);
+
+        clients.get('session-1')!.started.resolve();
+        await clients.get('session-1')!.started.promise;
+        await vi.waitFor(() => {
+            expect(createdSessionIds).toEqual(['session-1', 'session-2', 'session-3']);
+        });
+
+        clients.get('session-2')!.started.resolve();
+        await clients.get('session-2')!.started.promise;
+        await vi.waitFor(() => {
+            expect(createdSessionIds).toEqual(['session-1', 'session-2', 'session-3', 'session-4']);
+        });
+
+        clients.get('session-3')!.started.resolve();
+        clients.get('session-4')!.started.resolve();
+        registry.stopAll();
+    });
+
+    it('keeps background invalidation bounded while prioritizing a visible session', async () => {
+        const createdSessionIds: string[] = [];
+        const clients = new Map<string, TestClient>();
+        const registry = new CodexV4ClientRegistry<TestClient, TestEvent>({
+            createClient: async (options) => {
+                createdSessionIds.push(options.sessionId);
+                const client = new TestClient();
+                clients.set(options.sessionId, client);
+                return client;
+            },
+            isEligible: () => true,
+            onEntity: async () => undefined,
+            onSnapshotReset: async () => undefined,
+            maxConcurrentStarts: 1,
+        });
+        const secondSession = {
+            sessionId: 'session-2',
+            sessionKey: new Uint8Array(32),
+            pollIntervalMs: 5_000,
+        };
+
+        registry.reconcile([{ ...session, pollIntervalMs: 5_000 }, secondSession]);
+        await Promise.resolve();
+        registry.invalidate(secondSession.sessionId);
+        expect(createdSessionIds).toEqual(['session-1']);
+
+        registry.prioritize(secondSession.sessionId);
+        await Promise.resolve();
+        expect(createdSessionIds).toEqual(['session-1', 'session-2']);
+
+        clients.get('session-1')!.started.resolve();
+        clients.get('session-2')!.started.resolve();
+        registry.stopAll();
+    });
+
     it('stops every client and clears queued on-demand starts', async () => {
         const createdSessionIds: string[] = [];
         const clients = new Map<string, TestClient>();

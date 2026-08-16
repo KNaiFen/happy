@@ -189,19 +189,17 @@ describe('AppSyncV4DiagnosticStore', () => {
         expect(listener).toHaveBeenCalledTimes(2);
     });
 
-    it('scans slots only during recovery and keeps steady-state writes and stats O(1)', () => {
+    it('keeps startup, steady-state writes, reads, and stats free of full key scans', () => {
         const storage = new MemoryStorage();
         const diagnostics = new AppSyncV4DiagnosticStore(storage, 4, () => 100);
-        const recoveryScans = storage.getAllKeysCalls;
 
         diagnostics.record(event(1));
         diagnostics.record(event(2));
         diagnostics.stats();
 
-        expect(recoveryScans).toBeGreaterThan(0);
-        expect(storage.getAllKeysCalls).toBe(recoveryScans);
+        expect(storage.getAllKeysCalls).toBe(0);
         expect(diagnostics.records().map((record) => record.cursor)).toEqual([1, 2]);
-        expect(storage.getAllKeysCalls).toBe(recoveryScans);
+        expect(storage.getAllKeysCalls).toBe(0);
     });
 
     it('rejects capacities above the declared persistent ring limit', () => {

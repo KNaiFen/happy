@@ -45,6 +45,28 @@ export class InvalidateSync {
         });
     }
 
+    async awaitQueueUntil(timeoutMs: number): Promise<boolean> {
+        if (this._stopped || (!this._invalidated && this._pendings.length === 0)) {
+            return true;
+        }
+        return await new Promise<boolean>((resolve) => {
+            let settled = false;
+            const finish = (completed: boolean) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (!completed) {
+                    const index = this._pendings.indexOf(onCompleted);
+                    if (index >= 0) this._pendings.splice(index, 1);
+                }
+                resolve(completed);
+            };
+            const onCompleted = () => finish(true);
+            const timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
+            this._pendings.push(onCompleted);
+        });
+    }
+
     stop() {
         if (this._stopped) {
             return;

@@ -5,6 +5,7 @@ import type {
 } from '@slopus/happy-wire';
 import { describe, expect, it } from 'vitest';
 import {
+    bindCodexV4CommandDraftToCurrentGateway,
     codexV4RequestResponse,
     commandForCodexV4Input,
     createCodexV4Command,
@@ -210,6 +211,43 @@ describe('Codex v4 App commands', () => {
         expect(draft.bindingGeneration).toBe(7);
         expect(createCodexV4Command(draft, { commandId: 'command-7', now: 100 }))
             .toMatchObject({ bindingGeneration: 7 });
+    });
+
+    it('binds a first command to current Gateway metadata before runtime hydration', () => {
+        const draft = commandForCodexV4Input({
+            parsed: parseCodexV4Input('first prompt', []),
+            projection: createCodexV4Projection(),
+            mode: {},
+        });
+        const binding = {
+            gatewayId: 'gateway-1',
+            generation: 1,
+            origin: 'app',
+            role: 'current',
+            terminal: 'unattached',
+            changedAt: 100,
+        } as const;
+
+        expect(bindCodexV4CommandDraftToCurrentGateway(draft, {
+            path: '/workspace',
+            host: 'host',
+            flavor: 'codex',
+            codexSyncVersion: 4,
+            codexGatewayBinding: binding,
+        })).toMatchObject({
+            command: 'turn.start',
+            bindingGeneration: 1,
+        });
+        expect(bindCodexV4CommandDraftToCurrentGateway({
+            ...draft,
+            bindingGeneration: 0,
+        }, {
+            path: '/workspace',
+            host: 'host',
+            flavor: 'codex',
+            codexSyncVersion: 4,
+            codexGatewayBinding: binding,
+        })).toMatchObject({ bindingGeneration: 0 });
     });
 
     it('creates the first turn command before the v4 projection is activated', () => {
