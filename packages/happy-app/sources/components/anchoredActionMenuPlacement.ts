@@ -23,6 +23,8 @@ export type AnchoredMenuPlacementInput = {
     keyboardHeight?: number;
     margin?: number;
     gap?: number;
+    /** Prefer the side above the trigger when both sides can fit. */
+    preferAbove?: boolean;
 };
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -61,7 +63,12 @@ export function resolveAnchoredMenuPlacement(input: AnchoredMenuPlacementInput):
         alignment: 'start' | 'end';
         left: number;
         top: number;
-    }> = [
+    }> = input.preferAbove ? [
+        { direction: 'above', alignment: 'end', left: endLeft, top: aboveTop },
+        { direction: 'below', alignment: 'end', left: endLeft, top: belowTop },
+        { direction: 'above', alignment: 'start', left: startLeft, top: aboveTop },
+        { direction: 'below', alignment: 'start', left: startLeft, top: belowTop },
+    ] : [
         { direction: 'below', alignment: 'end', left: endLeft, top: belowTop },
         { direction: 'above', alignment: 'end', left: endLeft, top: aboveTop },
         { direction: 'below', alignment: 'start', left: startLeft, top: belowTop },

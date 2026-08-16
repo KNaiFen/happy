@@ -13,6 +13,7 @@
 - [Agent Testing](./agent-testing.md)
 - [API](./api.md)
 - [Happy Server 架构](./backend-architecture.md)
+- [聊天 Composer 设置菜单](./chat-composer-settings-menu.md)
 - [Happy CLI 架构](./cli-architecture.md)
 - [Happy Server 部署](./deployment.md)
 - [Dev Environments](./dev-environments.md)

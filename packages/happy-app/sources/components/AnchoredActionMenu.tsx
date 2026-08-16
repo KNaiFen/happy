@@ -14,15 +14,17 @@ import type { AnchoredMenuRect } from './anchoredActionMenuPlacement';
 
 const MENU_WIDTH = 224;
 const MENU_ITEM_HEIGHT = 44;
+const MENU_SECTION_HEIGHT = 30;
 
 export type AnchoredActionMenuItem = {
     id: string;
-    icon: React.ComponentProps<typeof Ionicons>['name'];
+    kind?: 'item' | 'section';
+    icon?: React.ComponentProps<typeof Ionicons>['name'];
     label: string;
     disabled?: boolean;
     destructive?: boolean;
     selected?: boolean;
-    onPress: () => void;
+    onPress?: () => void;
 };
 
 export function AnchoredActionMenu(props: {
@@ -33,6 +35,7 @@ export function AnchoredActionMenu(props: {
     onClose: () => void;
     testID?: string;
     visible: boolean;
+    preferAbove?: boolean;
 }) {
     const { theme } = useUnistyles();
     const safeArea = useSafeAreaInsets();
@@ -45,12 +48,16 @@ export function AnchoredActionMenu(props: {
             viewport: { width: viewportWidth, height: viewportHeight },
             menu: {
                 width: MENU_WIDTH,
-                height: props.items.length * MENU_ITEM_HEIGHT,
+                height: props.items.reduce(
+                    (height, item) => height + (item.kind === 'section' ? MENU_SECTION_HEIGHT : MENU_ITEM_HEIGHT),
+                    0,
+                ),
             },
             safeArea,
             keyboardHeight: keyboard.isVisible ? keyboard.height : 0,
+            preferAbove: props.preferAbove,
         });
-    }, [keyboard.height, keyboard.isVisible, props.anchor, props.items.length, safeArea, viewportHeight, viewportWidth]);
+    }, [keyboard.height, keyboard.isVisible, props.anchor, props.items, props.preferAbove, safeArea, viewportHeight, viewportWidth]);
 
     React.useEffect(() => {
         if (Platform.OS !== 'web' || !props.visible || typeof window === 'undefined') return;
@@ -68,7 +75,7 @@ export function AnchoredActionMenu(props: {
 
     return (
         <NativeModal
-            animationType="fade"
+            animationType="none"
             onRequestClose={props.onClose}
             statusBarTranslucent
             transparent
@@ -109,7 +116,11 @@ export function AnchoredActionMenu(props: {
                                 showsVerticalScrollIndicator={false}
                                 style={styles.menuScroll}
                             >
-                                {props.items.map((item, index) => (
+                                {props.items.map((item, index) => item.kind === 'section' ? (
+                                    <View key={item.id} style={styles.section}>
+                                        <Text style={styles.sectionLabel}>{item.label}</Text>
+                                    </View>
+                                ) : (
                                     <Pressable
                                         key={item.id}
                                         accessibilityRole="button"
@@ -128,13 +139,14 @@ export function AnchoredActionMenu(props: {
                                         ]}
                                         testID={props.testID ? `${props.testID}-${item.id}` : undefined}
                                     >
-                                        <Ionicons
-                                            color={item.destructive ? theme.colors.warningCritical : theme.colors.text}
-                                            name={item.icon}
-                                            size={18}
-                                        />
+                                        {item.icon && (
+                                            <Ionicons
+                                                color={item.destructive ? theme.colors.warningCritical : theme.colors.text}
+                                                name={item.icon}
+                                                size={18}
+                                            />
+                                        )}
                                         <Text
-                                            numberOfLines={1}
                                             style={[
                                                 styles.itemLabel,
                                                 item.destructive && { color: theme.colors.warningCritical },
@@ -193,6 +205,20 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: 10,
         paddingHorizontal: 14,
+        paddingVertical: 6,
+    },
+    section: {
+        minHeight: MENU_SECTION_HEIGHT,
+        justifyContent: 'flex-end',
+        paddingHorizontal: 14,
+        paddingTop: 8,
+        paddingBottom: 4,
+    },
+    sectionLabel: {
+        color: theme.colors.textSecondary,
+        fontSize: 11,
+        fontWeight: '600',
+        ...Typography.default('semiBold'),
     },
     itemDivider: {
         borderBottomWidth: StyleSheet.hairlineWidth,

@@ -4,6 +4,7 @@ import { Platform, type StyleProp, type ViewStyle } from 'react-native';
 export type NativeSettingsMenuOption = {
     key: string;
     label: string;
+    disabled?: boolean;
 };
 
 export type NativeSettingsMenuGroup = {
@@ -13,6 +14,8 @@ export type NativeSettingsMenuGroup = {
     options: NativeSettingsMenuOption[];
     selectedKey: string | null | undefined;
     onSelect: (key: string) => void;
+    /** Keep the menu open after choosing an option in this group. */
+    keepOpenOnSelect?: boolean;
 };
 
 export type NativeSettingsMenuProps = {
@@ -23,7 +26,11 @@ export type NativeSettingsMenuProps = {
     testID?: string;
     /** Render all options directly in the root menu instead of nesting by group. */
     flat?: boolean;
+    /** Put the group owning the pressed trigger first in a shared menu. */
+    preferredGroupKey?: string;
 };
+
+export { orderSettingsMenuGroups } from './settingsMenuPolicy';
 
 const NativeSettingsMenuImpl = Platform.select<React.ComponentType<NativeSettingsMenuProps>>({
     ios: require('./NativeSettingsMenu.ios').NativeSettingsMenu,

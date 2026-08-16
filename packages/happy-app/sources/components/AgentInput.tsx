@@ -104,13 +104,6 @@ interface AgentInputProps {
     onAddImages?: (images: AttachmentPreview[]) => void;
 }
 
-function permissionKindIcon(kind: string | null | undefined): React.ComponentProps<typeof Ionicons>['name'] {
-    if (kind === 'read-only') return 'lock-closed-outline';
-    if (kind === 'safe-yolo') return 'shield-checkmark-outline';
-    if (kind === 'yolo') return 'warning-outline';
-    return 'folder-open-outline';
-}
-
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {
         alignItems: 'center',
@@ -198,23 +191,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         bottom: -1000,
         zIndex: 999,
     },
-    overlaySection: {
-        paddingVertical: 8,
-    },
-    overlaySectionTitle: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: theme.colors.textSecondary,
-        paddingHorizontal: 16,
-        paddingBottom: 4,
-        ...Typography.default('semiBold'),
-    },
-    overlayDivider: {
-        height: 1,
-        backgroundColor: theme.colors.glass.divider,
-        marginHorizontal: 16,
-    },
-
     // Selection styles
     selectionItem: {
         flexDirection: 'row',
@@ -309,42 +285,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: 'center',
         flexShrink: 0,
     },
-    mobileModeButton: {
-        flex: 1,
-        minWidth: 0,
-        height: 44,
-        borderRadius: 22,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        paddingHorizontal: 8,
-        paddingRight: 0,
-        gap: 7,
-    },
-    mobileEffortButton: {
-        width: 64,
-        flexShrink: 0,
-        height: 44,
-        borderRadius: 22,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        paddingLeft: 2,
-        paddingRight: 0,
-        gap: 4,
-    },
-    mobileModeText: {
-        flexShrink: 1,
-        minWidth: 0,
-        fontSize: 14,
-        color: theme.colors.text,
-        ...Typography.default(),
-    },
-    mobileModeSeparator: {
-        color: theme.colors.textSecondary,
-        fontSize: 14,
-        ...Typography.default(),
-    },
     actionButtonsLeft: {
         flexDirection: 'row',
         gap: 8,
@@ -356,22 +296,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         gap: 2,
         marginLeft: 8,
-    },
-    desktopModeButton: {
-        maxWidth: 220,
-        height: 32,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        paddingHorizontal: 6,
-        borderRadius: 16,
-    },
-    desktopModeText: {
-        flexShrink: 1,
-        color: theme.colors.textSecondary,
-        fontSize: 12,
-        lineHeight: 16,
-        ...Typography.default(),
     },
     desktopIconButton: {
         width: 32,
@@ -505,21 +429,11 @@ const getContextWarning = (contextSize: number, alwaysShow: boolean = false, the
 type StatusRowProps = {
     connectionStatus?: AgentInputProps['connectionStatus'];
     contextWarning: { text: string; color: string } | null;
-    displayPermissionMode: ReturnType<typeof hackMode> | null;
-    permissionModeKey: string;
-    permissionSemanticKind?: string | null;
-    isSandboxedYoloMode: boolean;
-    permissionLabel: string | null;
-    onPermissionPress?: () => void;
-    zenMode?: boolean;
 };
 
 const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
     const { theme } = useUnistyles();
-    const showPermissionBadge = !p.zenMode
-        && !!p.permissionLabel
-        && !!p.onPermissionPress;
-    if (!p.connectionStatus && !p.contextWarning && !showPermissionBadge) {
+    if (!p.connectionStatus && !p.contextWarning) {
         return null;
     }
     return (
@@ -581,44 +495,107 @@ const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRow
                     </Text>
                 )}
             </View>
-            {showPermissionBadge && (() => {
-                const presentationKind = p.permissionSemanticKind ?? p.permissionModeKey;
-                const permColor = p.isSandboxedYoloMode ? '#4169E1' :
-                    presentationKind === 'acceptEdits' ? theme.colors.permission.acceptEdits :
-                        presentationKind === 'bypassPermissions' ? theme.colors.permission.bypass :
-                            presentationKind === 'plan' ? theme.colors.permission.plan :
-                                presentationKind === 'read-only' ? theme.colors.permission.readOnly :
-                                    presentationKind === 'safe-yolo' ? theme.colors.permission.safeYolo :
-                                        presentationKind === 'yolo' ? theme.colors.permission.yolo :
-                                            theme.colors.textSecondary;
-                const permIcon: 'play-forward' | 'pause' =
-                    presentationKind === 'plan' || presentationKind === 'read-only'
-                        ? 'pause' : 'play-forward';
-                return (
-                    <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={t('agentInput.codexPermissionMode.title')}
-                        hitSlop={8}
-                        onPress={p.onPermissionPress}
-                        testID="agent-input-permission-menu"
-                        style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 4,
-                            opacity: pressed ? 0.6 : 1,
-                        })}
-                    >
-                        <Ionicons name={permIcon} size={11} color={permColor} />
-                        <Text style={{
-                            fontSize: 11,
-                            color: permColor,
-                            ...Typography.default()
-                        }}>
+        </View>
+    );
+});
+
+type AgentInputSettingsRowProps = {
+    permissionGroup?: NativeSettingsMenuGroup;
+    modelGroup?: NativeSettingsMenuGroup;
+    effortGroup?: NativeSettingsMenuGroup;
+    permissionLabel: string;
+    modelLabel: string;
+    effortLabel: string;
+    zenMode?: boolean;
+};
+
+function MiddleEllipsisValue({ label, color }: { label: string; color: string }) {
+    const characters = Array.from(label);
+    const suffixLength = Math.min(6, Math.floor(characters.length / 2));
+    const splitIndex = characters.length - suffixLength;
+    const textStyle = { color, fontSize: 12, ...Typography.default() };
+    return (
+        <View style={{ flexDirection: 'row', minWidth: 0 }}>
+            <Text
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                style={[textStyle, { flexShrink: 1, minWidth: 0 }]}
+            >
+                {characters.slice(0, splitIndex).join('')}
+            </Text>
+            <Text
+                numberOfLines={1}
+                style={[textStyle, { flexShrink: 0 }]}
+            >
+                {characters.slice(splitIndex).join('')}
+            </Text>
+        </View>
+    );
+}
+
+const AgentInputSettingsRow = React.memo(function AgentInputSettingsRow(p: AgentInputSettingsRowProps) {
+    const { theme } = useUnistyles();
+    if (p.zenMode || (!p.permissionGroup && !p.modelGroup && !p.effortGroup)) return null;
+
+    return (
+        <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            width: '100%',
+            minHeight: 32,
+            paddingHorizontal: 16,
+            paddingBottom: 4,
+        }}>
+            {p.permissionGroup && (
+                <NativeSettingsMenu
+                    groups={[p.permissionGroup]}
+                    flat
+                    style={{ flexShrink: 0, minWidth: 0, height: 32 }}
+                    accessibilityLabel={p.permissionLabel}
+                    testID="agent-input-permission-menu"
+                >
+                    <View style={{ height: 32, justifyContent: 'center', minWidth: 0 }}>
+                        <Text
+                            numberOfLines={1}
+                            style={{ color: theme.colors.textSecondary, fontSize: 12, ...Typography.default() }}
+                        >
                             {p.permissionLabel}
                         </Text>
-                    </Pressable>
-                );
-            })()}
+                    </View>
+                </NativeSettingsMenu>
+            )}
+            {p.modelGroup && (
+                <NativeSettingsMenu
+                    groups={[p.modelGroup, ...(p.effortGroup ? [p.effortGroup] : [])]}
+                    preferredGroupKey="model"
+                    style={{ flex: 1, minWidth: 0, height: 32 }}
+                    accessibilityLabel={p.modelLabel}
+                    testID="agent-input-model-menu"
+                >
+                    <View style={{ height: 32, minWidth: 0, justifyContent: 'center' }}>
+                        <MiddleEllipsisValue label={p.modelLabel} color={theme.colors.textSecondary} />
+                    </View>
+                </NativeSettingsMenu>
+            )}
+            {p.effortGroup && (
+                <NativeSettingsMenu
+                    groups={[p.modelGroup, p.effortGroup].filter(Boolean) as NativeSettingsMenuGroup[]}
+                    preferredGroupKey="effort"
+                    style={{ flexShrink: 0, minWidth: 0, height: 32 }}
+                    accessibilityLabel={p.effortLabel}
+                    testID="agent-input-effort-menu"
+                >
+                    <View style={{ height: 32, minWidth: 0, justifyContent: 'center' }}>
+                        <Text
+                            numberOfLines={1}
+                            style={{ color: theme.colors.textSecondary, fontSize: 12, ...Typography.default() }}
+                        >
+                            {p.effortLabel}
+                        </Text>
+                    </View>
+                </NativeSettingsMenu>
+            )}
         </View>
     );
 });
@@ -748,7 +725,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // composer affordances rather than inheriting the mobile action row.
     const compactMobileComposer = Platform.OS !== 'web' && !isRunningOnMac() && screenWidth <= 700;
     const glassEnabled = compactMobileComposer;
-    const useNativeSettingsMenus = compactMobileComposer;
     const isSendBlocked = props.blockSend ?? false;
 
     // `hasText` drives only the send-button appearance/enabled state. It's
@@ -769,8 +745,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const availableEffortLevels = props.availableEffortLevels ?? [];
     const modelLabel = props.modelMode?.name ?? t('agentInput.model.title');
     const effortLabel = props.effortLevel?.name;
-    const canOpenModelPicker = availableModels.length > 0 && !!props.onModelModeChange;
-    const canOpenEffortPicker = availableEffortLevels.length > 0 && !!props.onEffortLevelChange;
     const isSandboxEnabled = React.useMemo(() => {
         const sandbox = props.metadata?.sandbox as unknown;
         if (!sandbox) {
@@ -781,10 +755,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         }
         return true;
     }, [props.metadata?.sandbox]);
-    const isSandboxedYoloMode = isSandboxEnabled && (
-        permissionModeKey === 'bypassPermissions' || permissionModeKey === 'yolo'
-    );
-
     const withSandboxSuffix = React.useCallback((label: string, modeKey?: string) => {
         if (!isSandboxEnabled) {
             return label;
@@ -999,10 +969,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hapticsLight();
     }, [suggestions, inputState, props.autocompletePrefixes]);
 
-    // The compact composer has separate controls for permission, model, and
-    // effort. Keep a single popup state so only one selection surface is ever
-    // visible, including while we dismiss the keyboard on mobile.
-    type ComposerPicker = 'permission' | 'model' | 'effort' | 'context';
+    type ComposerPicker = 'context';
     const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
     const pickerCoordinator = useKeyboardDismissCoordinator<ComposerPicker>();
 
@@ -1026,26 +993,30 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         );
     }, [closePicker, openPicker, pickerCoordinator]);
 
-    const handleSettingsPress = React.useCallback(() => {
-        handlePickerPress('permission');
-    }, [handlePickerPress]);
-
-    const handleModelPress = React.useCallback(() => {
-        if (!canOpenModelPicker) return;
-        handlePickerPress('model');
-    }, [canOpenModelPicker, handlePickerPress]);
-
-    const handleEffortPress = React.useCallback(() => {
-        if (!canOpenEffortPicker) return;
-        handlePickerPress('effort');
-    }, [canOpenEffortPicker, handlePickerPress]);
-
     // Handle settings selection
     const handleSettingsSelect = React.useCallback((mode: PermissionMode) => {
         hapticsLight();
         props.onPermissionModeChange?.(mode);
-        closePicker();
-    }, [closePicker, props.onPermissionModeChange]);
+    }, [props.onPermissionModeChange]);
+
+    const permissionSettingsGroup = React.useMemo<NativeSettingsMenuGroup | undefined>(() => {
+        if (!props.onPermissionModeChange || availableModes.length === 0) return undefined;
+        return {
+            key: 'permission',
+            label: t('agentInput.codexPermissionMode.title'),
+            systemImage: 'shield',
+            options: availableModes.map((mode) => ({
+                key: mode.key,
+                label: withSandboxSuffix(mode.name, mode.key),
+                disabled: mode.disabled,
+            })),
+            selectedKey: permissionModeKey,
+            onSelect: (key) => {
+                const mode = availableModes.find((candidate) => candidate.key === key);
+                if (mode) handleSettingsSelect(mode);
+            },
+        };
+    }, [availableModes, handleSettingsSelect, permissionModeKey, props.onPermissionModeChange, withSandboxSuffix]);
 
     // Handle abort button press
     const handleAbortPress = React.useCallback(async () => {
@@ -1109,10 +1080,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (availableModels.length > 0 && props.onModelModeChange) {
             groups.push({
                 key: 'model',
-                label: props.modelMode?.name ?? t('agentInput.model.title'),
+                label: t('agentInput.model.title'),
                 systemImage: 'cube',
-                options: availableModels.map((model) => ({ key: model.key, label: model.name })),
+                options: availableModels.map((model) => ({ key: model.key, label: model.name, disabled: model.disabled })),
                 selectedKey: props.modelMode?.key,
+                keepOpenOnSelect: true,
                 onSelect: (key) => {
                     const model = availableModels.find((candidate) => candidate.key === key);
                     if (!model) return;
@@ -1124,9 +1096,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (availableEffortLevels.length > 0 && props.onEffortLevelChange) {
             groups.push({
                 key: 'effort',
-                label: props.effortLevel?.name ?? t('agentInput.effort.title'),
+                label: t('agentInput.effort.title'),
                 systemImage: 'bolt',
-                options: availableEffortLevels.map((level) => ({ key: level.key, label: level.name })),
+                options: availableEffortLevels.map((level) => ({ key: level.key, label: level.name, disabled: level.disabled })),
                 selectedKey: props.effortLevel?.key,
                 onSelect: (key) => {
                     const level = availableEffortLevels.find((candidate) => candidate.key === key);
@@ -1141,21 +1113,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     const modelSettingsGroup = modelSettingsGroups.find((group) => group.key === 'model');
     const effortSettingsGroup = modelSettingsGroups.find((group) => group.key === 'effort');
-
-    const renderModelValue = () => (
-        <Text style={styles.mobileModeText} numberOfLines={1} ellipsizeMode="head">
-            {modelLabel}
-        </Text>
-    );
-
-    const renderEffortValue = () => (
-        <>
-            <Text style={styles.mobileModeSeparator}>·</Text>
-            <Text style={styles.mobileModeText} numberOfLines={1}>
-                {effortLabel ?? t('agentInput.effort.title')}
-            </Text>
-        </>
-    );
 
     const contextDetails = contextUsage ? (
         <View style={styles.contextDetails} testID="agent-input-context-details">
@@ -1270,41 +1227,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>}
 
                     <View style={styles.desktopActionButtonsRight}>
-                        {!props.zenMode && (canOpenModelPicker || !!modelLabel) && (
-                            <Pressable
-                                accessibilityRole="button"
-                                accessibilityLabel={t('agentInput.model.title')}
-                                accessibilityState={{ disabled: !canOpenModelPicker }}
-                                disabled={!canOpenModelPicker}
-                                hitSlop={6}
-                                onPress={handleModelPress}
-                                style={({ pressed }) => [
-                                    styles.desktopModeButton,
-                                    pressed && canOpenModelPicker && styles.actionButtonPressed,
-                                    !canOpenModelPicker && { opacity: 0.58 },
-                                ]}
-                            >
-                                <Text style={styles.desktopModeText} numberOfLines={1} ellipsizeMode="head">{modelLabel}</Text>
-                            </Pressable>
-                        )}
-                        {!props.zenMode && (canOpenEffortPicker || !!effortLabel) && (
-                            <Pressable
-                                accessibilityRole="button"
-                                accessibilityLabel={t('agentInput.effort.title')}
-                                accessibilityState={{ disabled: !canOpenEffortPicker }}
-                                disabled={!canOpenEffortPicker}
-                                hitSlop={6}
-                                onPress={handleEffortPress}
-                                style={({ pressed }) => [
-                                    styles.desktopModeButton,
-                                    { maxWidth: 92 },
-                                    pressed && canOpenEffortPicker && styles.actionButtonPressed,
-                                    !canOpenEffortPicker && { opacity: 0.58 },
-                                ]}
-                            >
-                                <Text style={styles.desktopModeText} numberOfLines={1}>{effortLabel ?? t('agentInput.effort.title')}</Text>
-                            </Pressable>
-                        )}
                         {contextUsage && (
                             <Pressable
                                 accessibilityRole="button"
@@ -1395,64 +1317,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </View>
     );
 
-    const renderDesktopPickerOption = (
-        key: string,
-        selected: boolean,
-        label: string,
-        description: string | null | undefined,
-        onPress: () => void,
-    ) => (
-        <Pressable
-            key={key}
-            onPress={onPress}
-            style={({ pressed }) => ({
-                flexDirection: 'row',
-                alignItems: 'flex-start',
-                paddingHorizontal: 16,
-                paddingVertical: 8,
-                backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent',
-            })}
-        >
-            <View style={{
-                width: 16,
-                height: 16,
-                borderRadius: 8,
-                borderWidth: 2,
-                borderColor: selected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12,
-                marginTop: 2,
-            }}>
-                {selected && <View style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: 3,
-                    backgroundColor: theme.colors.radio.dot,
-                }} />}
-            </View>
-            <View style={{ flex: 1 }}>
-                <Text style={{
-                    fontSize: 14,
-                    color: selected ? theme.colors.radio.active : theme.colors.text,
-                    ...Typography.default(),
-                }}>
-                    {label}
-                </Text>
-                {!!description && (
-                    <Text style={{
-                        fontSize: 11,
-                        color: theme.colors.textSecondary,
-                        ...Typography.default(),
-                    }}>
-                        {description}
-                    </Text>
-                )}
-            </View>
-        </Pressable>
-    );
-
-    const desktopSettingsOverlay = !compactMobileComposer && openPicker ? (
+    const desktopSettingsOverlay = !compactMobileComposer && openPicker === 'context' ? (
         <>
             <TouchableWithoutFeedback onPress={closePicker}>
                 <View style={styles.overlayBackdrop} />
@@ -1462,89 +1327,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 { paddingHorizontal: screenWidth > 700 ? 0 : 8 },
             ]}>
                 <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                    {openPicker === 'context' ? contextDetails : (
-                    <>
-                        <View style={styles.overlaySection}>
-                        <Text style={styles.overlaySectionTitle}>
-                            {t('agentInput.codexPermissionMode.title')}
-                        </Text>
-                        {availableModes.map((mode) => renderDesktopPickerOption(
-                            mode.key,
-                            permissionModeKey === mode.key,
-                            withSandboxSuffix(mode.name, mode.key),
-                            mode.description,
-                            () => handleSettingsSelect(mode),
-                        ))}
-                    </View>
-
-                    <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 16 }} />
-
-                    <View style={{ flexDirection: 'row' }}>
-                        <View style={{ paddingVertical: 8, flex: 1 }}>
-                            <Text style={{
-                                fontSize: 12,
-                                fontWeight: '600',
-                                color: theme.colors.textSecondary,
-                                paddingHorizontal: 16,
-                                paddingBottom: 4,
-                                ...Typography.default('semiBold'),
-                            }}>
-                                {t('agentInput.model.title')}
-                            </Text>
-                            {availableModels.length > 0 ? availableModels.map((model) => renderDesktopPickerOption(
-                                model.key,
-                                props.modelMode?.key === model.key,
-                                model.name,
-                                model.description,
-                                () => {
-                                    hapticsLight();
-                                    props.onModelModeChange?.(model);
-                                    closePicker();
-                                },
-                            )) : (
-                                <Text style={{
-                                    fontSize: 13,
-                                    color: theme.colors.textSecondary,
-                                    paddingHorizontal: 16,
-                                    paddingVertical: 8,
-                                    ...Typography.default(),
-                                }}>
-                                    {t('agentInput.model.configureInCli')}
-                                </Text>
-                            )}
-                        </View>
-
-                        {availableEffortLevels.length > 0 && props.onEffortLevelChange && (
-                            <>
-                                <View style={{ width: 1, backgroundColor: theme.colors.divider, marginVertical: 8 }} />
-                                <View style={{ paddingVertical: 8, flex: 1 }}>
-                                    <Text style={{
-                                        fontSize: 12,
-                                        fontWeight: '600',
-                                        color: theme.colors.textSecondary,
-                                        paddingHorizontal: 16,
-                                        paddingBottom: 4,
-                                        ...Typography.default('semiBold'),
-                                    }}>
-                                        {t('agentInput.effort.title')}
-                                    </Text>
-                                    {availableEffortLevels.map((level) => renderDesktopPickerOption(
-                                        level.key,
-                                        props.effortLevel?.key === level.key,
-                                        level.name,
-                                        level.description,
-                                        () => {
-                                            hapticsLight();
-                                            props.onEffortLevelChange?.(level);
-                                            closePicker();
-                                        },
-                                    ))}
-                                </View>
-                            </>
-                        )}
-                        </View>
-                    </>
-                    )}
+                    {contextDetails}
                 </FloatingOverlay>
             </View>
         </>
@@ -1582,9 +1365,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 {desktopSettingsOverlay}
 
-                {/* Permission, model, effort, and context pickers open independently
-                    from their matching controls in the compact composer action row. */}
-                {compactMobileComposer && openPicker && (
+                {compactMobileComposer && openPicker === 'context' && (
                     <>
                         <AnimatedClickAwayBackdrop
                             onPress={closePicker}
@@ -1592,241 +1373,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         />
                         <View style={[
                             styles.settingsOverlay,
-                            { paddingHorizontal: screenWidth > 700 ? 0 : 16 }
+                            { paddingHorizontal: screenWidth > 700 ? 0 : 16 },
                         ]}>
                             <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                                {openPicker === 'context' ? contextDetails : openPicker === 'permission' ? (
-                                    <View style={styles.overlaySection}>
-                                        <Text style={styles.overlaySectionTitle}>
-                                            {t('agentInput.codexPermissionMode.title')}
-                                        </Text>
-                                        {availableModes.map((mode) => {
-                                            const isSelected = permissionModeKey === mode.key;
-                                            return (
-                                                <BubblePressable
-                                                    key={mode.key}
-                                                    disabled={!props.onPermissionModeChange || mode.disabled}
-                                                    onPress={() => handleSettingsSelect(mode)}
-                                                    style={({ pressed }) => ({
-                                                        flexDirection: 'row',
-                                                        alignItems: 'flex-start',
-                                                        paddingHorizontal: 16,
-                                                        paddingVertical: 8,
-                                                        marginHorizontal: 8,
-                                                        borderRadius: 14,
-                                                        backgroundColor: pressed
-                                                            ? theme.colors.surfacePressedOverlay
-                                                            : isSelected
-                                                                ? theme.colors.glass.backgroundSubtle
-                                                                : 'transparent',
-                                                        opacity: (!props.onPermissionModeChange || mode.disabled) ? 0.55 : 1,
-                                                    })}
-                                                >
-                                                    <View style={{
-                                                        width: 16,
-                                                        height: 16,
-                                                        borderRadius: 8,
-                                                        borderWidth: 2,
-                                                        borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                        alignItems: 'center',
-                                                        justifyContent: 'center',
-                                                        marginRight: 12,
-                                                        marginTop: 2,
-                                                    }}>
-                                                        {isSelected && <View style={{
-                                                            width: 6,
-                                                            height: 6,
-                                                            borderRadius: 3,
-                                                            backgroundColor: theme.colors.radio.dot,
-                                                        }} />}
-                                                    </View>
-                                                    <View style={{ flex: 1 }}>
-                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                                                            {mode.semanticKind && (
-                                                                <Ionicons
-                                                                    name={permissionKindIcon(mode.semanticKind)}
-                                                                    size={13}
-                                                                    color={isSelected ? theme.colors.radio.active : theme.colors.textSecondary}
-                                                                />
-                                                            )}
-                                                            <Text style={{
-                                                                fontSize: 14,
-                                                                color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                ...Typography.default(),
-                                                            }}>
-                                                                {withSandboxSuffix(mode.name, mode.key)}
-                                                            </Text>
-                                                        </View>
-                                                        {!!mode.description && (
-                                                            <Text style={{
-                                                                fontSize: 11,
-                                                                color: theme.colors.textSecondary,
-                                                                ...Typography.default(),
-                                                            }}>
-                                                                {mode.description}
-                                                            </Text>
-                                                        )}
-                                                    </View>
-                                                </BubblePressable>
-                                            );
-                                        })}
-                                    </View>
-                                ) : (
-                                    <>
-                                        {openPicker === 'model' && (
-                                        <View style={styles.overlaySection}>
-                                            <Text style={styles.overlaySectionTitle}>
-                                                {props.modelMode?.name ?? t('agentInput.model.title')}
-                                            </Text>
-                                            {availableModels.length > 0 ? availableModels.map((model) => {
-                                                const isSelected = props.modelMode?.key === model.key;
-                                                return (
-                                                    <BubblePressable
-                                                        key={model.key}
-                                                        disabled={!props.onModelModeChange || model.disabled}
-                                                        onPress={() => {
-                                                            hapticsLight();
-                                                            props.onModelModeChange?.(model);
-                                                            closePicker();
-                                                        }}
-                                                        style={({ pressed }) => ({
-                                                            flexDirection: 'row',
-                                                            alignItems: 'flex-start',
-                                                            paddingHorizontal: 16,
-                                                            paddingVertical: 8,
-                                                            marginHorizontal: 8,
-                                                            borderRadius: 14,
-                                                            backgroundColor: pressed
-                                                                ? theme.colors.surfacePressedOverlay
-                                                                : isSelected
-                                                                    ? theme.colors.glass.backgroundSubtle
-                                                                    : 'transparent',
-                                                            opacity: (!props.onModelModeChange || model.disabled) ? 0.55 : 1,
-                                                        })}
-                                                    >
-                                                        <View style={{
-                                                            width: 16,
-                                                            height: 16,
-                                                            borderRadius: 8,
-                                                            borderWidth: 2,
-                                                            borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                            alignItems: 'center',
-                                                            justifyContent: 'center',
-                                                            marginRight: 12,
-                                                            marginTop: 2,
-                                                        }}>
-                                                            {isSelected && <View style={{
-                                                                width: 6,
-                                                                height: 6,
-                                                                borderRadius: 3,
-                                                                backgroundColor: theme.colors.radio.dot,
-                                                            }} />}
-                                                        </View>
-                                                        <View style={{ flex: 1 }}>
-                                                            <Text style={{
-                                                                fontSize: 14,
-                                                                color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                ...Typography.default(),
-                                                            }}>
-                                                                {model.name}
-                                                            </Text>
-                                                            {!!model.description && (
-                                                                <Text style={{
-                                                                    fontSize: 11,
-                                                                    color: theme.colors.textSecondary,
-                                                                    ...Typography.default(),
-                                                                }}>
-                                                                    {model.description}
-                                                                </Text>
-                                                            )}
-                                                        </View>
-                                                    </BubblePressable>
-                                                );
-                                            }) : (
-                                                <Text style={{
-                                                    fontSize: 13,
-                                                    color: theme.colors.textSecondary,
-                                                    paddingHorizontal: 16,
-                                                    paddingVertical: 8,
-                                                    ...Typography.default(),
-                                                }}>
-                                                    {t('agentInput.model.configureInCli')}
-                                                </Text>
-                                            )}
-                                        </View>
-                                        )}
-                                        {openPicker === 'effort' && availableEffortLevels.length > 0 && props.onEffortLevelChange && (
-                                                <View style={styles.overlaySection}>
-                                                    <Text style={styles.overlaySectionTitle}>
-                                                        {props.effortLevel?.name ?? t('agentInput.effort.title')}
-                                                    </Text>
-                                                    {availableEffortLevels.map((level) => {
-                                                        const isSelected = props.effortLevel?.key === level.key;
-                                                        return (
-                                                            <BubblePressable
-                                                                key={level.key}
-                                                                onPress={() => {
-                                                                    hapticsLight();
-                                                                    props.onEffortLevelChange?.(level);
-                                                                    closePicker();
-                                                                }}
-                                                                style={({ pressed }) => ({
-                                                                    flexDirection: 'row',
-                                                                    alignItems: 'flex-start',
-                                                                    paddingHorizontal: 16,
-                                                                    paddingVertical: 8,
-                                                                    marginHorizontal: 8,
-                                                                    borderRadius: 14,
-                                                                    backgroundColor: pressed
-                                                                        ? theme.colors.surfacePressedOverlay
-                                                                        : isSelected
-                                                                            ? theme.colors.glass.backgroundSubtle
-                                                                            : 'transparent',
-                                                                })}
-                                                            >
-                                                                <View style={{
-                                                                    width: 16,
-                                                                    height: 16,
-                                                                    borderRadius: 8,
-                                                                    borderWidth: 2,
-                                                                    borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                                    alignItems: 'center',
-                                                                    justifyContent: 'center',
-                                                                    marginRight: 12,
-                                                                    marginTop: 2,
-                                                                }}>
-                                                                    {isSelected && <View style={{
-                                                                        width: 6,
-                                                                        height: 6,
-                                                                        borderRadius: 3,
-                                                                        backgroundColor: theme.colors.radio.dot,
-                                                                    }} />}
-                                                                </View>
-                                                                <View style={{ flex: 1 }}>
-                                                                    <Text style={{
-                                                                        fontSize: 14,
-                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                        ...Typography.default(),
-                                                                    }}>
-                                                                        {level.name}
-                                                                    </Text>
-                                                                    {!!level.description && (
-                                                                        <Text style={{
-                                                                            fontSize: 11,
-                                                                            color: theme.colors.textSecondary,
-                                                                            ...Typography.default(),
-                                                                        }}>
-                                                                            {level.description}
-                                                                        </Text>
-                                                                    )}
-                                                                </View>
-                                                            </BubblePressable>
-                                                        );
-                                                    })}
-                                                </View>
-                                        )}
-                                    </>
-                                )}
+                                {contextDetails}
                             </FloatingOverlay>
                         </View>
                     </>
@@ -1835,15 +1385,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 <AgentInputStatusRow
                     connectionStatus={props.connectionStatus}
                     contextWarning={contextWarning}
-                    displayPermissionMode={displayPermissionMode}
-                    permissionModeKey={permissionModeKey}
-                    permissionSemanticKind={displayPermissionMode?.semanticKind}
-                    isSandboxedYoloMode={isSandboxedYoloMode}
-                    permissionLabel={displayPermissionMode
-                        ? withSandboxSuffix(displayPermissionMode.name, permissionModeKey)
-                        : t('agentInput.codexPermissionMode.default')}
-                    onPermissionPress={props.onPermissionModeChange && availableModes.length > 0 ? handleSettingsPress : undefined}
-                    zenMode={props.zenMode}
                 />
 
                 <AgentInputContextChips
@@ -1865,6 +1406,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         ) : null}
                     </View>
                 ) : null}
+
+                <AgentInputSettingsRow
+                    permissionGroup={permissionSettingsGroup}
+                    modelGroup={modelSettingsGroup}
+                    effortGroup={effortSettingsGroup}
+                    permissionLabel={displayPermissionMode
+                        ? withSandboxSuffix(displayPermissionMode.name, permissionModeKey)
+                        : t('agentInput.codexPermissionMode.default')}
+                    modelLabel={modelLabel}
+                    effortLabel={effortLabel ?? t('agentInput.effort.title')}
+                    zenMode={props.zenMode}
+                />
 
                 {/* Box 2: Action Area (Input + Send) */}
                 <View style={styles.composerLayer}>
@@ -1935,67 +1488,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             </BubblePressable>
                         )}
 
-                        {!props.zenMode ? (
-                            <>
-                                {useNativeSettingsMenus && modelSettingsGroup ? (
-                                    <NativeSettingsMenu
-                                        groups={[modelSettingsGroup]}
-                                        flat
-                                        style={styles.mobileModeButton}
-                                        accessibilityLabel={t('agentInput.model.title')}
-                                        testID="agent-input-model-menu"
-                                    >
-                                        <View style={styles.mobileModeButton}>
-                                            {renderModelValue()}
-                                        </View>
-                                    </NativeSettingsMenu>
-                                ) : (
-                                    <BubblePressable
-                                        onPress={handleModelPress}
-                                        disabled={!canOpenModelPicker}
-                                        hitSlop={6}
-                                        style={(p) => [
-                                            styles.mobileModeButton,
-                                            { opacity: p.pressed && canOpenModelPicker ? 0.7 : canOpenModelPicker ? 1 : 0.58 },
-                                        ]}
-                                        accessibilityRole="button"
-                                        accessibilityLabel={t('agentInput.model.title')}
-                                    >
-                                        {renderModelValue()}
-                                    </BubblePressable>
-                                )}
-
-                                {effortSettingsGroup && (
-                                    useNativeSettingsMenus ? (
-                                        <NativeSettingsMenu
-                                            groups={[effortSettingsGroup]}
-                                            flat
-                                            style={styles.mobileEffortButton}
-                                            accessibilityLabel={t('agentInput.effort.title')}
-                                            testID="agent-input-effort-menu"
-                                        >
-                                            <View style={styles.mobileEffortButton}>
-                                                {renderEffortValue()}
-                                            </View>
-                                        </NativeSettingsMenu>
-                                    ) : (
-                                        <BubblePressable
-                                            onPress={handleEffortPress}
-                                            disabled={!canOpenEffortPicker}
-                                            hitSlop={6}
-                                            style={(p) => [
-                                                styles.mobileEffortButton,
-                                                { opacity: p.pressed && canOpenEffortPicker ? 0.7 : canOpenEffortPicker ? 1 : 0.58 },
-                                            ]}
-                                            accessibilityRole="button"
-                                            accessibilityLabel={t('agentInput.effort.title')}
-                                        >
-                                            {renderEffortValue()}
-                                        </BubblePressable>
-                                    )
-                                )}
-                            </>
-                        ) : <View style={{ flex: 1 }} />}
+                        <View style={{ flex: 1 }} />
 
                         {!compactMobileComposer && (
                             <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />

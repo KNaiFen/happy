@@ -4,9 +4,14 @@ import { AnchoredActionMenu } from './AnchoredActionMenu';
 import type { AnchoredActionMenuItem } from './AnchoredActionMenu';
 import type { AnchoredMenuRect } from './anchoredActionMenuPlacement';
 import type { NativeSettingsMenuProps } from './NativeSettingsMenu';
+import { orderSettingsMenuGroups, shouldCloseSettingsMenu } from './settingsMenuPolicy';
+import { claimSettingsMenu, releaseSettingsMenu } from './settingsMenuCoordinator';
 
 const styles = StyleSheet.create({
     fill: StyleSheet.absoluteFillObject,
+    triggerContent: {
+        minWidth: 0,
+    },
 });
 
 export function NativeSettingsMenu({
@@ -16,32 +21,63 @@ export function NativeSettingsMenu({
     accessibilityLabel,
     testID,
     flat = false,
+    preferredGroupKey,
 }: NativeSettingsMenuProps) {
     const triggerRef = React.useRef<View>(null);
+    const menuToken = React.useRef<object>({}).current;
+    const measureRequest = React.useRef(0);
     const [anchor, setAnchor] = React.useState<AnchoredMenuRect | null>(null);
-    const triggerLabel = accessibilityLabel ?? groups.map((group) => group.label).join(', ');
-    const closeMenu = React.useCallback(() => setAnchor(null), []);
+    const orderedGroups = React.useMemo(
+        () => orderSettingsMenuGroups(groups, preferredGroupKey),
+        [groups, preferredGroupKey],
+    );
+    const triggerLabel = accessibilityLabel ?? orderedGroups.map((group) => group.label).join(', ');
+    const closeMenu = React.useCallback(() => {
+        measureRequest.current += 1;
+        setAnchor(null);
+        releaseSettingsMenu(menuToken);
+    }, [menuToken]);
+    React.useEffect(() => () => releaseSettingsMenu(menuToken), [menuToken]);
     const openMenu = React.useCallback(() => {
-        triggerRef.current?.measureInWindow((x, y, width, height) => {
-            if (width <= 0 || height <= 0) return;
+        if (!claimSettingsMenu(menuToken, closeMenu)) return;
+        const request = ++measureRequest.current;
+        const trigger = triggerRef.current;
+        if (!trigger) {
+            closeMenu();
+            return;
+        }
+        trigger.measureInWindow((x, y, width, height) => {
+            if (request !== measureRequest.current || width <= 0 || height <= 0) {
+                releaseSettingsMenu(menuToken);
+                return;
+            }
             setAnchor({ x, y, width, height });
         });
-    }, []);
+    }, [closeMenu, menuToken]);
     const items = React.useMemo<readonly AnchoredActionMenuItem[]>(() => (
-        groups.flatMap((group) => group.options.map((option) => ({
-            id: `${group.key}-${option.key}`,
-            icon: option.key === group.selectedKey ? 'checkmark' : 'ellipse-outline',
-            label: `${flat ? '' : `${group.label}: `}${option.label}`,
-            selected: option.key === group.selectedKey,
-            onPress: () => {
-                closeMenu();
-                group.onSelect(option.key);
-            },
-        })))
-    ), [closeMenu, flat, groups]);
+        orderedGroups.flatMap((group) => [
+            ...(!flat && orderedGroups.length > 1 ? [{
+                id: `${group.key}-section`,
+                kind: 'section' as const,
+                label: group.label,
+            }] : []),
+            ...group.options.map((option) => ({
+                id: `${group.key}-${option.key}`,
+                icon: (option.key === group.selectedKey ? 'checkmark' : 'ellipse-outline') as AnchoredActionMenuItem['icon'],
+                label: option.label,
+                disabled: option.disabled,
+                selected: option.key === group.selectedKey,
+                onPress: () => {
+                    group.onSelect(option.key);
+                    if (shouldCloseSettingsMenu(group)) closeMenu();
+                },
+            })),
+        ])
+    ), [closeMenu, flat, orderedGroups]);
 
     return (
         <View style={style}>
+            <View pointerEvents="none" style={styles.triggerContent}>{children}</View>
             <Pressable
                 ref={triggerRef}
                 testID={testID}
@@ -50,14 +86,13 @@ export function NativeSettingsMenu({
                 accessibilityRole="button"
                 accessibilityLabel={triggerLabel}
                 accessibilityState={{ expanded: anchor !== null }}
-            >
-                {children}
-            </Pressable>
+            />
             <AnchoredActionMenu
                 anchor={anchor}
                 glassEnabled={false}
                 items={items}
                 onClose={closeMenu}
+                preferAbove
                 testID={testID ? `${testID}-options` : undefined}
                 visible={anchor !== null}
             />
