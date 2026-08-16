@@ -429,83 +429,15 @@ const getContextWarning = (contextSize: number, alwaysShow: boolean = false, the
 type StatusRowProps = {
     connectionStatus?: AgentInputProps['connectionStatus'];
     contextWarning: { text: string; color: string } | null;
-};
-
-const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
-    const { theme } = useUnistyles();
-    if (!p.connectionStatus && !p.contextWarning) {
-        return null;
-    }
-    return (
-        <View style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: 16,
-            paddingBottom: 4,
-            minHeight: 20,
-        }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 11 }}>
-                {p.connectionStatus && (
-                    <>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                            <StatusDot
-                                color={p.connectionStatus.dotColor}
-                                isPulsing={p.connectionStatus.isPulsing}
-                                size={6}
-                            />
-                            <Text style={{
-                                fontSize: 11,
-                                color: p.connectionStatus.color,
-                                ...Typography.default()
-                            }}>
-                                {p.connectionStatus.text}
-                            </Text>
-                        </View>
-                        {p.connectionStatus.cliStatus && (
-                            <>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        {p.connectionStatus.cliStatus.codex ? '✓' : '✗'}
-                                    </Text>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        codex
-                                    </Text>
-                                </View>
-                            </>
-                        )}
-                    </>
-                )}
-                {p.contextWarning && (
-                    <Text style={{
-                        fontSize: 11,
-                        color: p.contextWarning.color,
-                        marginLeft: p.connectionStatus ? 8 : 0,
-                        ...Typography.default()
-                    }}>
-                        {p.connectionStatus ? '• ' : ''}{p.contextWarning.text}
-                    </Text>
-                )}
-            </View>
-        </View>
-    );
-});
-
-type AgentInputSettingsRowProps = {
     permissionGroup?: NativeSettingsMenuGroup;
     modelGroup?: NativeSettingsMenuGroup;
     effortGroup?: NativeSettingsMenuGroup;
     permissionLabel: string;
     modelLabel: string;
     effortLabel: string;
+    permissionModeKey: string;
+    permissionSemanticKind?: string | null;
+    isSandboxedYoloMode: boolean;
     zenMode?: boolean;
 };
 
@@ -513,9 +445,9 @@ function MiddleEllipsisValue({ label, color }: { label: string; color: string })
     const characters = Array.from(label);
     const suffixLength = Math.min(6, Math.floor(characters.length / 2));
     const splitIndex = characters.length - suffixLength;
-    const textStyle = { color, fontSize: 12, ...Typography.default() };
+    const textStyle = { color, fontSize: 11, ...Typography.default() };
     return (
-        <View style={{ flexDirection: 'row', minWidth: 0 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', minWidth: 0 }}>
             <Text
                 numberOfLines={1}
                 ellipsizeMode="tail"
@@ -533,68 +465,163 @@ function MiddleEllipsisValue({ label, color }: { label: string; color: string })
     );
 }
 
-const AgentInputSettingsRow = React.memo(function AgentInputSettingsRow(p: AgentInputSettingsRowProps) {
+function formatEffortDisplayLabel(label: string): string {
+    if (label === 'xhigh') return 'XHigh';
+    return label.length > 0 ? `${label[0].toLocaleUpperCase()}${label.slice(1)}` : label;
+}
+
+const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
     const { theme } = useUnistyles();
-    if (p.zenMode || (!p.permissionGroup && !p.modelGroup && !p.effortGroup)) return null;
+    const showSettings = !p.zenMode && !!(p.permissionGroup || p.modelGroup || p.effortGroup);
+    if (!p.connectionStatus && !p.contextWarning && !showSettings) return null;
+
+    const presentationKind = p.permissionSemanticKind ?? p.permissionModeKey;
+    const permissionColor = p.isSandboxedYoloMode ? '#4169E1' :
+        presentationKind === 'acceptEdits' ? theme.colors.permission.acceptEdits :
+            presentationKind === 'bypassPermissions' ? theme.colors.permission.bypass :
+                presentationKind === 'plan' ? theme.colors.permission.plan :
+                    presentationKind === 'read-only' ? theme.colors.permission.readOnly :
+                        presentationKind === 'safe-yolo' ? theme.colors.permission.safeYolo :
+                            presentationKind === 'yolo' ? theme.colors.permission.yolo :
+                                theme.colors.textSecondary;
+    const permissionIcon: 'play-forward' | 'pause' =
+        presentationKind === 'plan' || presentationKind === 'read-only'
+            ? 'pause' : 'play-forward';
 
     return (
-        <View style={{
+        <View testID="agent-input-status-row" style={{
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 4,
-            width: '100%',
-            minHeight: 32,
+            justifyContent: 'space-between',
             paddingHorizontal: 16,
             paddingBottom: 4,
+            minHeight: 24,
         }}>
-            {p.permissionGroup && (
-                <NativeSettingsMenu
-                    groups={[p.permissionGroup]}
-                    flat
-                    style={{ flexShrink: 0, minWidth: 0, height: 32 }}
-                    accessibilityLabel={p.permissionLabel}
-                    testID="agent-input-permission-menu"
-                >
-                    <View style={{ height: 32, justifyContent: 'center', minWidth: 0 }}>
-                        <Text
-                            numberOfLines={1}
-                            style={{ color: theme.colors.textSecondary, fontSize: 12, ...Typography.default() }}
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1, minWidth: 0, gap: 11 }}>
+                {p.connectionStatus && (
+                    <>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0, gap: 4 }}>
+                            <StatusDot
+                                color={p.connectionStatus.dotColor}
+                                isPulsing={p.connectionStatus.isPulsing}
+                                size={6}
+                            />
+                            <Text
+                                numberOfLines={1}
+                                style={{
+                                    fontSize: 11,
+                                    color: p.connectionStatus.color,
+                                    ...Typography.default(),
+                                }}
+                            >
+                                {p.connectionStatus.text}
+                            </Text>
+                        </View>
+                        {p.connectionStatus.cliStatus && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 0, gap: 4 }}>
+                                <Text style={{
+                                    fontSize: 11,
+                                    color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
+                                    ...Typography.default(),
+                                }}>
+                                    {p.connectionStatus.cliStatus.codex ? '✓' : '✗'}
+                                </Text>
+                                <Text style={{
+                                    fontSize: 11,
+                                    color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
+                                    ...Typography.default(),
+                                }}>
+                                    codex
+                                </Text>
+                            </View>
+                        )}
+                    </>
+                )}
+                {p.contextWarning && (
+                    <Text
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                        style={{
+                            flexShrink: 1,
+                            minWidth: 0,
+                            fontSize: 11,
+                            color: p.contextWarning.color,
+                            marginLeft: p.connectionStatus ? 8 : 0,
+                            ...Typography.default(),
+                        }}
+                    >
+                        {p.connectionStatus ? '• ' : ''}{p.contextWarning.text}
+                    </Text>
+                )}
+            </View>
+
+            {showSettings && (
+                <View style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    flex: 1,
+                    minWidth: 0,
+                    marginLeft: p.connectionStatus || p.contextWarning ? 12 : 0,
+                }}>
+                    {p.modelGroup && (
+                        <NativeSettingsMenu
+                            groups={[p.modelGroup, ...(p.effortGroup ? [p.effortGroup] : [])]}
+                            preferredGroupKey="model"
+                            style={{ flexShrink: 1, minWidth: 0, height: 24 }}
+                            accessibilityLabel={p.modelLabel}
+                            testID="agent-input-model-menu"
                         >
-                            {p.permissionLabel}
-                        </Text>
-                    </View>
-                </NativeSettingsMenu>
-            )}
-            {p.modelGroup && (
-                <NativeSettingsMenu
-                    groups={[p.modelGroup, ...(p.effortGroup ? [p.effortGroup] : [])]}
-                    preferredGroupKey="model"
-                    style={{ flex: 1, minWidth: 0, height: 32 }}
-                    accessibilityLabel={p.modelLabel}
-                    testID="agent-input-model-menu"
-                >
-                    <View style={{ height: 32, minWidth: 0, justifyContent: 'center' }}>
-                        <MiddleEllipsisValue label={p.modelLabel} color={theme.colors.textSecondary} />
-                    </View>
-                </NativeSettingsMenu>
-            )}
-            {p.effortGroup && (
-                <NativeSettingsMenu
-                    groups={[p.modelGroup, p.effortGroup].filter(Boolean) as NativeSettingsMenuGroup[]}
-                    preferredGroupKey="effort"
-                    style={{ flexShrink: 0, minWidth: 0, height: 32 }}
-                    accessibilityLabel={p.effortLabel}
-                    testID="agent-input-effort-menu"
-                >
-                    <View style={{ height: 32, minWidth: 0, justifyContent: 'center' }}>
-                        <Text
-                            numberOfLines={1}
-                            style={{ color: theme.colors.textSecondary, fontSize: 12, ...Typography.default() }}
+                            <View style={{ height: 24, minWidth: 0, justifyContent: 'center' }}>
+                                <MiddleEllipsisValue label={p.modelLabel} color={theme.colors.textSecondary} />
+                            </View>
+                        </NativeSettingsMenu>
+                    )}
+                    {p.effortGroup && (
+                        <>
+                            {p.modelGroup && (
+                                <Text accessible={false} style={{ color: theme.colors.textSecondary, fontSize: 11, ...Typography.default() }}>
+                                    ·
+                                </Text>
+                            )}
+                            <NativeSettingsMenu
+                                groups={[p.modelGroup, p.effortGroup].filter(Boolean) as NativeSettingsMenuGroup[]}
+                                preferredGroupKey="effort"
+                                style={{ flexShrink: 0, minWidth: 0, height: 24 }}
+                                accessibilityLabel={p.effortLabel}
+                                testID="agent-input-effort-menu"
+                            >
+                                <View style={{ height: 24, minWidth: 0, justifyContent: 'center' }}>
+                                    <Text
+                                        numberOfLines={1}
+                                        style={{ color: theme.colors.textSecondary, fontSize: 11, ...Typography.default() }}
+                                    >
+                                        {p.effortLabel}
+                                    </Text>
+                                </View>
+                            </NativeSettingsMenu>
+                        </>
+                    )}
+                    {p.permissionGroup && (
+                        <NativeSettingsMenu
+                            groups={[p.permissionGroup]}
+                            flat
+                            style={{ flexShrink: 0, minWidth: 0, height: 24, marginLeft: 12 }}
+                            accessibilityLabel={p.permissionLabel}
+                            testID="agent-input-permission-menu"
                         >
-                            {p.effortLabel}
-                        </Text>
-                    </View>
-                </NativeSettingsMenu>
+                            <View style={{ height: 24, flexDirection: 'row', alignItems: 'center', flexShrink: 0, gap: 4 }}>
+                                <Ionicons name={permissionIcon} size={11} color={permissionColor} />
+                                <Text
+                                    numberOfLines={1}
+                                    style={{ color: permissionColor, fontSize: 11, ...Typography.default() }}
+                                >
+                                    {p.permissionLabel}
+                                </Text>
+                            </View>
+                        </NativeSettingsMenu>
+                    )}
+                </View>
             )}
         </View>
     );
@@ -1385,6 +1412,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 <AgentInputStatusRow
                     connectionStatus={props.connectionStatus}
                     contextWarning={contextWarning}
+                    permissionGroup={permissionSettingsGroup}
+                    modelGroup={modelSettingsGroup}
+                    effortGroup={effortSettingsGroup}
+                    permissionLabel={displayPermissionMode
+                        ? withSandboxSuffix(displayPermissionMode.name, permissionModeKey)
+                        : t('agentInput.codexPermissionMode.default')}
+                    modelLabel={modelLabel}
+                    effortLabel={formatEffortDisplayLabel(effortLabel ?? t('agentInput.effort.title'))}
+                    permissionModeKey={permissionModeKey}
+                    permissionSemanticKind={displayPermissionMode?.semanticKind}
+                    isSandboxedYoloMode={isSandboxEnabled
+                        && (permissionModeKey === 'bypassPermissions' || permissionModeKey === 'yolo')}
+                    zenMode={props.zenMode}
                 />
 
                 <AgentInputContextChips
@@ -1406,18 +1446,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         ) : null}
                     </View>
                 ) : null}
-
-                <AgentInputSettingsRow
-                    permissionGroup={permissionSettingsGroup}
-                    modelGroup={modelSettingsGroup}
-                    effortGroup={effortSettingsGroup}
-                    permissionLabel={displayPermissionMode
-                        ? withSandboxSuffix(displayPermissionMode.name, permissionModeKey)
-                        : t('agentInput.codexPermissionMode.default')}
-                    modelLabel={modelLabel}
-                    effortLabel={effortLabel ?? t('agentInput.effort.title')}
-                    zenMode={props.zenMode}
-                />
 
                 {/* Box 2: Action Area (Input + Send) */}
                 <View style={styles.composerLayer}>
