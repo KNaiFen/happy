@@ -78,6 +78,7 @@ interface CodexV4ClientRegistryOptions<TClient extends CodexV4RegistryClient, TE
     retryBaseMs?: number;
     retryMaxMs?: number;
     random?: () => number;
+    maxConcurrentStarts?: number;
 }
 
 interface StartingClient<TClient extends CodexV4RegistryClient> {
@@ -96,10 +97,21 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
     private readonly generations = new Map<string, number>();
     private readonly desired = new Map<string, CodexV4RegistrySession>();
     private readonly pendingStarts = new Set<string>();
+    private readonly queuedStarts = new Map<string, boolean>();
     private readonly retryAttempts = new Map<string, number>();
     private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    private readonly maxConcurrentStarts: number;
 
-    constructor(private readonly options: CodexV4ClientRegistryOptions<TClient, TEvent>) {}
+    constructor(private readonly options: CodexV4ClientRegistryOptions<TClient, TEvent>) {
+        const configuredLimit = options.maxConcurrentStarts;
+        if (
+            configuredLimit !== undefined
+            && (!Number.isSafeInteger(configuredLimit) || configuredLimit <= 0)
+        ) {
+            throw new Error('Codex Sync v4 concurrent start limit must be a positive integer');
+        }
+        this.maxConcurrentStarts = configuredLimit ?? Number.POSITIVE_INFINITY;
+    }
 
     reconcile(sessions: CodexV4RegistrySession[]): void {
         const desired = new Map(sessions.map((session) => [session.sessionId, {
@@ -110,6 +122,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             ...this.desired.keys(),
             ...this.clients.keys(),
             ...this.starts.keys(),
+            ...this.queuedStarts.keys(),
             ...this.retryTimers.keys(),
         ]);
         for (const sessionId of knownSessionIds) {
@@ -128,13 +141,26 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             if (
                 this.clients.has(session.sessionId)
                 || this.starts.has(session.sessionId)
+                || this.queuedStarts.has(session.sessionId)
                 || this.retryTimers.has(session.sessionId)
             ) continue;
-            this.start(session, false);
+            this.requestStart(session, false);
         }
     }
 
     invalidate(sessionId: string, highWatermark?: number): void {
+        this.invalidateSession(sessionId, highWatermark, false);
+    }
+
+    prioritize(sessionId: string, highWatermark?: number): void {
+        this.invalidateSession(sessionId, highWatermark, true);
+    }
+
+    private invalidateSession(
+        sessionId: string,
+        highWatermark: number | undefined,
+        bypassLimit: boolean,
+    ): void {
         const client = this.clients.get(sessionId);
         if (client) {
             client.invalidate(highWatermark);
@@ -150,7 +176,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             this.pendingStarts.add(sessionId);
             return;
         }
-        this.wakeRetry(sessionId);
+        this.wakeRetry(sessionId, bypassLimit);
     }
 
     invalidateAll(): void {
@@ -181,6 +207,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         }
         this.desired.delete(sessionId);
         this.pendingStarts.delete(sessionId);
+        this.queuedStarts.delete(sessionId);
         this.retryAttempts.delete(sessionId);
         const retryTimer = this.retryTimers.get(sessionId);
         if (retryTimer) clearTimeout(retryTimer);
@@ -203,6 +230,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         // operation when the promise eventually settles.
         startingRecord?.sessionKey.fill(0);
         this.starts.delete(sessionId);
+        this.pumpStarts();
     }
 
     stopAll(options?: { silent?: boolean }): void {
@@ -210,9 +238,11 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             ...this.desired.keys(),
             ...this.clients.keys(),
             ...this.starts.keys(),
+            ...this.queuedStarts.keys(),
             ...this.retryAttempts.keys(),
             ...this.retryTimers.keys(),
         ]);
+        this.queuedStarts.clear();
         for (const sessionId of sessionIds) this.stop(sessionId, options);
         this.pendingStarts.clear();
         this.generations.clear();
@@ -242,7 +272,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                 this.stop(sessionId);
                 throw new Error('Codex Sync v4 client is no longer eligible');
             }
-            this.wakeRetry(sessionId);
+            this.wakeRetry(sessionId, true);
             starting = this.starts.get(sessionId);
         }
         if (!starting) throw new Error('Codex Sync v4 client is not available');
@@ -384,6 +414,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                 }
             } finally {
                 if (this.starts.get(session.sessionId) === record) this.starts.delete(session.sessionId);
+                this.pumpStarts();
             }
         })();
         void record.promise;
@@ -424,7 +455,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
                 || !this.options.isEligible(sessionId)
             ) return;
             if (this.clients.has(sessionId) || this.starts.has(sessionId)) return;
-            this.start(latestDesired, true);
+            this.requestStart(latestDesired, true);
         }, delay);
         this.retryTimers.set(sessionId, timer);
     }
@@ -440,7 +471,7 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
         });
     }
 
-    private wakeRetry(sessionId: string): void {
+    private wakeRetry(sessionId: string, bypassLimit = false): void {
         const timer = this.retryTimers.get(sessionId);
         if (timer) clearTimeout(timer);
         this.retryTimers.delete(sessionId);
@@ -451,7 +482,44 @@ export class CodexV4ClientRegistry<TClient extends CodexV4RegistryClient, TEvent
             || this.clients.has(sessionId)
             || this.starts.has(sessionId)
         ) return;
-        this.start(desired, this.retryAttempts.has(sessionId));
+        this.requestStart(desired, this.retryAttempts.has(sessionId), bypassLimit);
+    }
+
+    private requestStart(
+        session: CodexV4RegistrySession,
+        retrying: boolean,
+        bypassLimit = false,
+    ): void {
+        if (!bypassLimit && this.starts.size >= this.maxConcurrentStarts) {
+            this.queuedStarts.set(
+                session.sessionId,
+                retrying || this.queuedStarts.get(session.sessionId) === true,
+            );
+            return;
+        }
+        this.queuedStarts.delete(session.sessionId);
+        this.start(session, retrying);
+    }
+
+    private pumpStarts(): void {
+        while (
+            this.starts.size < this.maxConcurrentStarts
+            && this.queuedStarts.size > 0
+        ) {
+            const next = this.queuedStarts.entries().next().value as [string, boolean] | undefined;
+            if (!next) return;
+            const [sessionId, retrying] = next;
+            this.queuedStarts.delete(sessionId);
+            const desired = this.desired.get(sessionId);
+            if (
+                !desired
+                || !this.options.isEligible(sessionId)
+                || this.clients.has(sessionId)
+                || this.starts.has(sessionId)
+                || this.retryTimers.has(sessionId)
+            ) continue;
+            this.start(desired, retrying);
+        }
     }
 
     private emitSyncState(sessionId: string, state: CodexV4RegistrySyncState): void {

@@ -5,7 +5,11 @@ import {
     type CodexTurnEntityV4,
 } from '@slopus/happy-wire';
 import type { CodexV4Projection } from './codexV4Projection';
-import { resolveCodexV4GatewayGeneration } from './codexV4Capabilities';
+import type { Metadata } from './storageTypes';
+import {
+    resolveCodexGatewayBinding,
+    resolveCodexV4GatewayGeneration,
+} from './codexV4Capabilities';
 
 type CodexV4Json = CodexCommandEntityV4['payload'];
 type CodexV4JsonObject = { [key: string]: CodexV4Json };
@@ -72,6 +76,19 @@ export function createCodexV4Command(
             ? { bindingGeneration: draft.bindingGeneration }
             : {}),
     } as CodexCommandEntityV4;
+}
+
+export function bindCodexV4CommandDraftToCurrentGateway(
+    draft: CodexV4CommandDraft,
+    metadata: Metadata | null | undefined,
+): CodexV4CommandDraft {
+    if (draft.bindingGeneration !== undefined) return draft;
+    const binding = resolveCodexGatewayBinding(metadata);
+    if (binding?.role !== 'current') return draft;
+    return {
+        ...draft,
+        bindingGeneration: binding.generation,
+    };
 }
 
 export function parseCodexV4Input(text: string, skillCommands: readonly string[]): ParsedCodexV4Input {

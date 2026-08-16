@@ -131,7 +131,10 @@ export function assertCodexV4CommandPublishAllowed(options: {
     assertCodexSessionWritable(options.metadata);
 
     if (
-        resolveCodexV4GatewayGeneration(options.projection) !== undefined
+        (
+            resolveCodexGatewayBinding(options.metadata) !== null
+            || resolveCodexV4GatewayGeneration(options.projection) !== undefined
+        )
         && options.command.bindingGeneration === undefined
     ) {
         throw new Error('Codex Gateway binding generation is required for this command');

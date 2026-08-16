@@ -213,7 +213,7 @@ describe('Codex v4 App capabilities', () => {
         })).toThrow('expected turn');
     });
 
-    it('requires an explicit generation once the projected Gateway exists', () => {
+    it('requires an explicit generation once Gateway metadata or runtime exists', () => {
         const current = projection();
         current.runtime = {
             gateway: { generation: 4 },
@@ -235,5 +235,19 @@ describe('Codex v4 App capabilities', () => {
             metadata: metadata(),
             projection: projection(),
         })).not.toThrow();
+        expect(() => assertCodexV4CommandPublishAllowed({
+            command: command(),
+            metadata: metadata({
+                codexGatewayBinding: {
+                    gatewayId: 'gateway-1',
+                    generation: 4,
+                    origin: 'app',
+                    role: 'current',
+                    terminal: 'unattached',
+                    changedAt: 10,
+                },
+            }),
+            projection: projection(),
+        })).toThrow('binding generation is required');
     });
 });

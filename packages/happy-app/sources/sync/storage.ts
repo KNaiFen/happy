@@ -845,6 +845,8 @@ export const storage = create<StorageState>()((set, get) => {
         }),
         applyReady: () => set((state) => ({
             ...state,
+            sessionsData: state.sessionsData ?? [],
+            sessionListViewData: state.sessionListViewData ?? [],
             isDataReady: true
         })),
         applyMessages: (sessionId: string, messages: NormalizedMessage[]) => {

@@ -70,6 +70,7 @@ const storedRecordSchema = z.object({
 export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
     private droppedRecords = 0;
     private invalidRecords = 0;
+    private storedInvalidRecords = 0;
     private writeFailures = 0;
     private listenerFailures = 0;
     private readonly listeners = new Set<() => void>();
@@ -115,6 +116,7 @@ export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
                 this.clearStoredRecords();
                 this.head = 0;
                 this.count = 0;
+                this.storedInvalidRecords = 0;
                 sequence = 1;
             }
             const nextCount = Math.min(this.capacity, this.count + 1);
@@ -133,6 +135,7 @@ export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
     records(): SyncV4DiagnosticRecord[] {
         const minimum = Math.max(1, this.head - this.count + 1);
         const records: SyncV4DiagnosticRecord[] = [];
+        let invalidRecords = 0;
         try {
             for (let sequence = minimum; sequence <= this.head; sequence += 1) {
                 const raw = this.storage.getString(this.recordKey(sequence));
@@ -142,6 +145,7 @@ export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
                     if (stored.sequence !== sequence) continue;
                     records.push(stored.record);
                 } catch {
+                    invalidRecords += 1;
                     continue;
                 }
             }
@@ -149,6 +153,7 @@ export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
             this.writeFailures += 1;
             return [];
         }
+        this.storedInvalidRecords = invalidRecords;
         return records;
     }
 
@@ -163,6 +168,7 @@ export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
         this.count = 0;
         this.droppedRecords = 0;
         this.invalidRecords = 0;
+        this.storedInvalidRecords = 0;
         this.writeFailures = 0;
         this.listenerFailures = 0;
         this.notifyListeners();
@@ -172,7 +178,7 @@ export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
         return {
             count: this.count,
             droppedRecords: this.droppedRecords,
-            invalidRecords: this.invalidRecords,
+            invalidRecords: this.invalidRecords + this.storedInvalidRecords,
             writeFailures: this.writeFailures,
             listenerFailures: this.listenerFailures,
         };
@@ -221,16 +227,6 @@ export class AppSyncV4DiagnosticStore implements SyncV4DiagnosticSink {
     }
 
     private recoverState(): { head: number; count: number } {
-        for (const key of this.storage.getAllKeys()) {
-            if (!key.startsWith(RECORD_PREFIX)) continue;
-            const raw = this.storage.getString(key);
-            if (!raw) continue;
-            try {
-                storedRecordSchema.parse(JSON.parse(raw));
-            } catch {
-                this.invalidRecords += 1;
-            }
-        }
         const storedHead = this.storage.getNumber(HEAD_KEY);
         const head = Number.isSafeInteger(storedHead) && storedHead! >= 0
             ? storedHead!

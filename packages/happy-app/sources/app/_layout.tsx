@@ -128,7 +128,6 @@ async function loadFonts() {
         if (loaded) {
             return;
         }
-        loaded = true;
         // Check if running in Tauri
         const isTauri = Platform.OS === 'web' &&
             typeof window !== 'undefined' &&
@@ -155,8 +154,10 @@ async function loadFonts() {
 
                 ...FontAwesome.font,
             });
+            loaded = true;
         } else {
             // For Tauri, skip Font Face Observer as fonts are loaded via CSS
+            loaded = true;
             console.log('Do not wait for fonts to load');
             (async () => {
                 try {
@@ -243,21 +244,34 @@ export default function RootLayout() {
     //
     // Init sequence
     //
-    const [initState, setInitState] = React.useState<{ credentials: AuthCredentials | null } | null>(null);
+    const [initState, setInitState] = React.useState<
+        { credentials: AuthCredentials | null } | { initializationFailed: true } | null
+    >(null);
     React.useEffect(() => {
         let active = true;
         let credentialsInvalidated = false;
         let initializationCompleted = false;
+        let initializationSucceeded = false;
         const commitInitialization = (credentials: AuthCredentials | null) => {
+            if (initializationCompleted) return;
             initializationCompleted = true;
+            initializationSucceeded = true;
             if (active) {
                 setInitState({ credentials: credentialsInvalidated ? null : credentials });
+            }
+        };
+        const commitInitializationFailure = () => {
+            if (initializationCompleted) return;
+            initializationCompleted = true;
+            if (active) {
+                void SplashScreen.hideAsync().catch(() => undefined);
+                setInitState({ initializationFailed: true });
             }
         };
         const unsubscribeInvalidation = TokenStorage.subscribeToCredentialsInvalidation(() => {
             credentialsInvalidated = true;
             syncQuarantine({ silent: true });
-            if (active && initializationCompleted) {
+            if (active && initializationCompleted && initializationSucceeded) {
                 setInitState({ credentials: null });
             }
         });
@@ -339,6 +353,7 @@ export default function RootLayout() {
                 commitInitialization(credentials);
             } catch {
                 console.error('Error initializing');
+                commitInitializationFailure();
             }
         })();
 
@@ -461,6 +476,9 @@ export default function RootLayout() {
 
     if (!initState) {
         return null;
+    }
+    if ('initializationFailed' in initState) {
+        throw new Error('App initialization failed');
     }
 
     //
