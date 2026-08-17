@@ -111,7 +111,7 @@ describe('Api server error handling', () => {
                         minimumHappyCliVersion: '1.4.7',
                         minimumHappyAppVersion: '1.11.12',
                         minimumHappyAgentVersion: '0.1.3',
-                        minimumCodexCliVersion: '0.145.0',
+                        minimumCodexCliVersion: '0.147.0',
                     },
                 },
                 headers: { 'x-happy-sync-trace': '0123456789abcdef0123456789abcdef' },
@@ -119,7 +119,7 @@ describe('Api server error handling', () => {
 
             const traceId = '0123456789abcdef0123456789abcdef';
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 traceId,
                 { record: (input) => diagnostics.push(input) },
             )).resolves.toBe(true);
@@ -152,7 +152,7 @@ describe('Api server error handling', () => {
 
         it('rejects an invalid capability trace ID before transport', async () => {
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 'prompt-reasoning-tool-output-secret',
             )).rejects.toThrow('128-bit lowercase hex');
             expect(mockGet).not.toHaveBeenCalled();
@@ -176,12 +176,12 @@ describe('Api server error handling', () => {
             }).mockRejectedValueOnce({ response: { status: 404 } });
 
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 '00000000000000000000000000000001',
                 sink,
             )).rejects.toThrow('Codex Sync v4 disabled');
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 '00000000000000000000000000000002',
                 sink,
             )).rejects.toThrow('required Codex Sync v4 capability endpoint');
@@ -212,12 +212,12 @@ describe('Api server error handling', () => {
                 });
 
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 '00000000000000000000000000000003',
                 sink,
             )).rejects.toThrow('Codex Sync v4 is required');
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 '00000000000000000000000000000004',
                 sink,
             )).rejects.toThrow('invalid Codex Sync v4 capability');
@@ -244,7 +244,7 @@ describe('Api server error handling', () => {
             mockGet.mockRejectedValueOnce(hostileError);
 
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 '00000000000000000000000000000005',
                 { record: (input) => diagnostics.push(input) },
             )).rejects.toThrow('Codex Sync v4 is required');
@@ -265,7 +265,7 @@ describe('Api server error handling', () => {
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
                     minimumHappyAgentVersion: '0.1.3',
-                    minimumCodexCliVersion: '0.145.0',
+                    minimumCodexCliVersion: '0.147.0',
                 },
             };
             mockGet
@@ -276,12 +276,12 @@ describe('Api server error handling', () => {
                 });
 
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 'a'.repeat(32),
                 { record: (input) => diagnostics.push(input) },
             )).rejects.toThrow('could not be correlated');
             await expect(api.isCodexSyncV4Enabled(
-                '0.145.0',
+                '0.147.0',
                 'b'.repeat(32),
                 { record: (input) => diagnostics.push(input) },
             )).rejects.toThrow('could not be correlated');
@@ -300,12 +300,12 @@ describe('Api server error handling', () => {
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
                     minimumHappyAgentVersion: '0.1.3',
-                    minimumCodexCliVersion: '0.146.0',
+                    minimumCodexCliVersion: '0.148.0',
                 },
             };
             mockGet.mockResolvedValue({ data: capability });
 
-            await expect(api.isCodexSyncV4Enabled('0.145.0')).rejects.toThrow('Codex CLI 0.146.0 or newer');
+            await expect(api.isCodexSyncV4Enabled('0.147.0')).rejects.toThrow('Codex CLI 0.148.0 or newer');
         });
     });
 

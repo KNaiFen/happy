@@ -178,6 +178,8 @@ function thread(id: string, parentThreadId: string | null, status: Thread['statu
         parentThreadId,
         preview: '',
         ephemeral: false,
+        section: null,
+        sectionEnteredAt: null,
         modelProvider: 'openai',
         createdAt: 1,
         updatedAt: 2,

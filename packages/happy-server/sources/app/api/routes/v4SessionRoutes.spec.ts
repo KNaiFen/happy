@@ -817,7 +817,7 @@ describe("v4SessionRoutes", () => {
                 minimumHappyCliVersion: "1.4.37",
                 minimumHappyAppVersion: "1.11.24",
                 minimumHappyAgentVersion: "0.1.4",
-                minimumCodexCliVersion: "0.145.0",
+                minimumCodexCliVersion: "0.147.0",
             },
         });
 

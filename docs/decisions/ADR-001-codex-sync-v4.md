@@ -120,9 +120,9 @@ counted for local diagnostics but is never written to Sync v4.
 
 ### Codex Gateway protocol boundary
 
-Happy generates protocol types from exactly `codex-cli 0.145.0` using
+Happy generates protocol types from exactly `codex-cli 0.147.0` using
 `codex app-server generate-ts` without experimental flags. The generator
-rejects any other version. Runtime accepts `0.145.0` or newer and refuses older
+rejects any other version. Runtime accepts `0.147.0` or newer and refuses older
 or unreadable versions. Initialization always advertises
 `experimentalApi: false`.
 

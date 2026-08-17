@@ -19,7 +19,7 @@
 
 ## Codex app-server 边界
 
-Happy 以 `codex-cli 0.145.0` 为最低支持版本，生成协议类型时固定使用
+Happy 以 `codex-cli 0.147.0` 为最低支持版本，生成协议类型时固定使用
 `codex app-server generate-ts` 且不开 experimental API。运行时拒绝更旧或无法识别的
 Codex 版本；已识别的控制命令使用官方 RPC，失败时显式报错，不退化为 prompt 文本。
 

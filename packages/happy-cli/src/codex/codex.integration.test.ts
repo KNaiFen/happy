@@ -6,7 +6,7 @@
  * were impossible with the legacy MCP tools.
  *
  * Requirements:
- *   - `codex` CLI installed and on PATH (>= 0.145.0)
+ *   - `codex` CLI installed and on PATH (>= 0.147.0)
  *   - OPENAI_API_KEY (or equivalent) configured
  *
  * Run:

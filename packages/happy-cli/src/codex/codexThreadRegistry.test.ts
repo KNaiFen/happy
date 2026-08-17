@@ -23,6 +23,8 @@ function thread(id: string, status: ThreadStatus, turns: Turn[] = []): Thread {
         parentThreadId: null,
         preview: '',
         ephemeral: false,
+        section: null,
+        sectionEnteredAt: null,
         modelProvider: 'openai',
         createdAt: 1,
         updatedAt: 1,

@@ -33,7 +33,7 @@ evidence that a file or dependency should be removed.
   sessions by inference.
 - Codex canonical state uses Sync v4 only. Generic v3 transport remains for the
   retained agents that still require it; it is not a hidden Codex fallback.
-- Codex stays on non-experimental stable-v2 with `codex-cli 0.145.0` as the
+- Codex stays on non-experimental stable-v2 with `codex-cli 0.147.0` as the
   minimum version. Only official reasoning summaries are synchronized.
 - Keep `@anthropic-ai/sandbox-runtime` while Codex sandboxing depends on it.
 - Keep sourced competitor research, historical changelog entries, archived

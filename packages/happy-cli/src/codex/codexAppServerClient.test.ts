@@ -123,7 +123,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         vi.clearAllMocks();
         process.env.RUST_LOG = originalRustLog;
         delete process.env.HAPPY_CODEX_APP_SERVER_PATH;
-        mockExecFileSync.mockReturnValue('codex-cli 0.145.0');
+        mockExecFileSync.mockReturnValue('codex-cli 0.147.0');
         mockInitializeSandbox.mockResolvedValue(mockSandboxCleanup);
         mockWrapForMcpTransport.mockResolvedValue({ command: 'sh', args: ['-c', 'wrapped codex app-server'] });
         mockSpawn.mockImplementation(() => createMockProcess());
@@ -170,11 +170,11 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
-    it('refuses to connect to Codex versions older than 0.145.0', async () => {
+    it('refuses to connect to Codex versions older than 0.147.0', async () => {
         const { CodexAppServerClient } = await import('./codexAppServerClient');
-        mockExecFileSync.mockReturnValue('codex-cli 0.144.9');
+        mockExecFileSync.mockReturnValue('codex-cli 0.146.9');
 
-        await expect(new CodexAppServerClient().connect()).rejects.toThrow('found 0.144.9');
+        await expect(new CodexAppServerClient().connect()).rejects.toThrow('found 0.146.9');
         expect(mockSpawn).not.toHaveBeenCalled();
     });
 
@@ -393,7 +393,7 @@ describe('CodexAppServerClient sandbox integration', () => {
     });
 
     it('steers the active turn without interrupting it', async () => {
-        mockExecFileSync.mockReturnValue('codex-cli 0.145.0');
+        mockExecFileSync.mockReturnValue('codex-cli 0.147.0');
         const requests: MockRpcMessage[] = [];
         const proc = createMockProcess({
             onRequest: (msg, stdout) => {

@@ -1,6 +1,6 @@
 /**
  * Cherry-picked types from `codex app-server generate-ts --experimental`
- * (Codex 0.145.0).
+ * (Codex 0.147.0).
  * Only the essential types needed for our integration.
  */
 

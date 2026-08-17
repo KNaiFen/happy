@@ -142,7 +142,7 @@ development does not build or globally link the CLI package.
 ## Requirements
 
 - Node.js >= 20.0.0
-- `codex` CLI 0.145.0 or newer installed and logged in
+- `codex` CLI 0.147.0 or newer installed and logged in
 
 ## License
 

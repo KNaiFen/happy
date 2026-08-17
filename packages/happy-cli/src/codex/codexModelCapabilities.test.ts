@@ -16,6 +16,7 @@ function model(overrides: Partial<Model>): Model {
         availabilityNux: null,
         displayName: 'GPT Test',
         description: 'Test model',
+        modelSpecialty: null,
         hidden: false,
         supportedReasoningEfforts: [
             { reasoningEffort: 'low', description: 'Low' },
