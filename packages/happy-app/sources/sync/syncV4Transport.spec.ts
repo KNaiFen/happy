@@ -49,7 +49,7 @@ describe('HttpAppSyncV4Transport', () => {
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
                     minimumHappyAgentVersion: '0.1.3',
-                    minimumCodexCliVersion: '0.145.0',
+                    minimumCodexCliVersion: '0.147.0',
                 },
             }, traceIds.capabilities))
             .mockResolvedValueOnce(jsonResponse({
@@ -126,7 +126,7 @@ describe('HttpAppSyncV4Transport', () => {
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
                     minimumHappyAgentVersion: '0.1.3',
-                    minimumCodexCliVersion: '0.145.0',
+                    minimumCodexCliVersion: '0.147.0',
                 },
             }))
             .mockResolvedValueOnce(jsonResponse({
@@ -136,7 +136,7 @@ describe('HttpAppSyncV4Transport', () => {
                     minimumHappyCliVersion: '1.4.7',
                     minimumHappyAppVersion: '1.11.12',
                     minimumHappyAgentVersion: '0.1.3',
-                    minimumCodexCliVersion: '0.145.0',
+                    minimumCodexCliVersion: '0.147.0',
                 },
             }, 'f'.repeat(32)));
         const transport = new HttpAppSyncV4Transport();
@@ -174,7 +174,7 @@ describe('HttpAppSyncV4Transport', () => {
                 minimumHappyCliVersion: '1.4.7',
                 minimumHappyAppVersion: '1.11.12',
                 minimumHappyAgentVersion: '0.1.3',
-                minimumCodexCliVersion: '0.145.0',
+                minimumCodexCliVersion: '0.147.0',
             },
         }, traceIds.capabilities));
         const transport = new AppSyncV4HttpTransport(request);

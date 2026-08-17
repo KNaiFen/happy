@@ -91,13 +91,13 @@ jobs:
           VERSION="${BASH_REMATCH[1]}"
           node - "$VERSION" <<'NODE'
           const version = process.argv[2].split('.').map(Number);
-          const minimum = [0, 145, 0];
+          const minimum = [0, 147, 0];
           const supported = version.some((part, index) => (
             part > minimum[index]
             && version.slice(0, index).every((value, prior) => value === minimum[prior])
           )) || version.every((part, index) => part === minimum[index]);
           if (!supported) {
-            throw new Error(`Latest stable Codex ${process.argv[2]} is below 0.145.0`);
+            throw new Error(`Latest stable Codex ${process.argv[2]} is below 0.147.0`);
           }
           NODE
 

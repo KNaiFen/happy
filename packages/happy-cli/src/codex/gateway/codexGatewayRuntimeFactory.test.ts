@@ -219,7 +219,7 @@ function createHarness(options: {
         api,
         presence,
         client,
-        codexCliVersion: { major: 0, minor: 145, patch: 0 },
+        codexCliVersion: { major: 0, minor: 147, patch: 0 },
         defaultPermissionMode: 'default',
         defaultModel: 'gpt-test',
         defaultEffort: 'high',

@@ -53,7 +53,7 @@ describe('CodexAppServerClient external WebSocket transport', () => {
 
         const client = new CodexAppServerClient(
             undefined,
-            { major: 0, minor: 145, patch: 0 },
+            { major: 0, minor: 147, patch: 0 },
             { webSocketEndpoint: { socketPath } },
         );
         cleanups.push(async () => client.disconnect());
@@ -126,7 +126,7 @@ describe('CodexAppServerClient external WebSocket transport', () => {
 
         const client = new CodexAppServerClient(
             undefined,
-            { major: 0, minor: 145, patch: 0 },
+            { major: 0, minor: 147, patch: 0 },
             { webSocketEndpoint: { socketPath } },
         );
         cleanups.push(async () => client.disconnect());
@@ -164,7 +164,7 @@ describe('CodexAppServerClient external WebSocket transport', () => {
 
         const client = new CodexAppServerClient(
             undefined,
-            { major: 0, minor: 145, patch: 0 },
+            { major: 0, minor: 147, patch: 0 },
             { webSocketEndpoint: { socketPath } },
         );
         cleanups.push(async () => client.disconnect());
@@ -201,7 +201,7 @@ describe('CodexAppServerClient external WebSocket transport', () => {
 
         const client = new CodexAppServerClient(
             undefined,
-            { major: 0, minor: 145, patch: 0 },
+            { major: 0, minor: 147, patch: 0 },
             { webSocketEndpoint: { socketPath } },
         );
         cleanups.push(async () => client.disconnect());
@@ -243,7 +243,7 @@ describe('CodexAppServerClient external WebSocket transport', () => {
         });
         const client = new CodexAppServerClient(
             undefined,
-            { major: 0, minor: 145, patch: 0 },
+            { major: 0, minor: 147, patch: 0 },
             { webSocketEndpoint: { socketPath } },
         );
         const connectionStates: string[] = [];
@@ -275,7 +275,7 @@ describe('CodexAppServerClient external WebSocket transport', () => {
         });
         const client = new CodexAppServerClient(
             undefined,
-            { major: 0, minor: 145, patch: 0 },
+            { major: 0, minor: 147, patch: 0 },
             { webSocketEndpoint: { socketPath } },
         );
         client.setServerRequestHandler(async () => null);

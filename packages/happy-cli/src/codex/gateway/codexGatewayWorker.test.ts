@@ -82,7 +82,7 @@ vi.mock('@/configuration', () => ({
     },
 }));
 vi.mock('../codexCliVersion', () => ({
-    readCodexCliVersion: vi.fn(() => ({ major: 0, minor: 145, patch: 0 })),
+    readCodexCliVersion: vi.fn(() => ({ major: 0, minor: 147, patch: 0 })),
     assertMinimumCodexCliVersion: vi.fn((version) => version),
 }));
 vi.mock('../codexModelCapabilities', () => ({

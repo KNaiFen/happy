@@ -8,7 +8,7 @@ export interface CodexCliVersion {
 
 export const MINIMUM_CODEX_CLI_VERSION: CodexCliVersion = {
     major: 0,
-    minor: 145,
+    minor: 147,
     patch: 0,
 };
 

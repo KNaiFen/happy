@@ -42,7 +42,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn: () => {
                 server.listen(socketPath);
                 return processHandle;
@@ -71,7 +71,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn,
             waitUntilReady: async () => undefined,
             recoveryDelaysMs: [10, 20],
@@ -123,7 +123,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: `/${'a'.repeat(103)}` },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn,
         });
 
@@ -137,7 +137,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: join(root, 'provider.sock') },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn: () => processHandle,
             waitUntilReady: async () => undefined,
             stopTimeoutMs: 50,
@@ -162,7 +162,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: join(root, 'provider.sock') },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn: () => processHandle,
             waitUntilReady: async () => undefined,
             hooks: { processChanged },
@@ -184,7 +184,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: join(root, 'provider.sock') },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn,
             waitUntilReady: async () => undefined,
             adoptExisting: {
@@ -217,7 +217,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: join(root, 'provider.sock') },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn,
             waitUntilReady: async () => {
                 readinessAttempt += 1;
@@ -248,7 +248,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: join(root, 'provider.sock') },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             waitUntilReady: async () => undefined,
             adoptExisting: {
                 pid: 501,
@@ -277,7 +277,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: join(root, 'provider.sock') },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn,
             adoptExisting: {
                 pid: 601,
@@ -301,7 +301,7 @@ describe('Codex Gateway provider supervisor', () => {
         const provider = new CodexGatewayProvider({
             cwd: '/workspace',
             endpoint: { socketPath: join(root, 'provider.sock') },
-            codexCliVersion: { major: 0, minor: 145, patch: 0 },
+            codexCliVersion: { major: 0, minor: 147, patch: 0 },
             spawn,
             waitUntilReady: async () => undefined,
             adoptExisting: {

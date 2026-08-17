@@ -83,7 +83,7 @@ worker 在 provider 调用前拒绝过期命令。源 binding 进入 draining，
 - descriptor、PID 和 kill 操作必须校验 gateway identity 与进程证据，防止 PID 重用。
 - 用户 flags 通过 argv 数组传递，不经过 shell。
 - 日志不记录 prompt、reasoning、tool payload、provider ID、bearer token 或密钥。
-- stable-v2 与最低 Codex `0.145.0` 保持不变；只同步 reasoning summary。
+- stable-v2 与最低 Codex `0.147.0` 保持不变；只同步 reasoning summary。
 
 ## 替代方案
 
@@ -113,7 +113,7 @@ resume 会制造重复 runtime。允许的 resume 仅限原 Gateway 内新 TUI �
 - App 必须把 terminal、provider connection 和 execution 分开显示。
 - Wire 需要可选 generation、Gateway runtime 状态和结构化 cancelled 结果。
 - 原生 TUI 功能自动随官方 Codex 升级，但 Happy 必须在云端同时验证最新 stable
-  与最低 `0.145.0` schema。
+  与最低 `0.147.0` schema。
 - 异常断开后的 provider 继续消耗本机资源，直到用户 attach 后正常退出、App stop，
   或显式 `happy codex stop`；选择器与状态必须让这一点可见。
 

@@ -16,6 +16,8 @@ function thread(id: string, turns: Turn[] = [], parentThreadId: string | null = 
         parentThreadId,
         preview: '',
         ephemeral: false,
+        section: null,
+        sectionEnteredAt: null,
         modelProvider: 'openai',
         createdAt: 1,
         updatedAt: 2,

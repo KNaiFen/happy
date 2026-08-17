@@ -4,7 +4,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const CODEX_PROTOCOL_VERSION = '0.145.0';
+const CODEX_PROTOCOL_VERSION = '0.147.0';
 const CODEX_VERSION_TIMEOUT_MS = 10_000;
 const CODEX_GENERATE_TIMEOUT_MS = 120_000;
 const packageRoot = path.resolve(__dirname, '..');

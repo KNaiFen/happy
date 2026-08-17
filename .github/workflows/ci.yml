@@ -550,7 +550,7 @@ jobs:
     uses: ./.github/workflows/build-official-codex-source.yml
 
   protocol-drift:
-    name: Codex 0.145.0 stable-v2 protocol drift
+    name: Codex 0.147.0 stable-v2 protocol drift
     needs: classify
     if: needs.classify.outputs.protocol_drift == 'true'
     runs-on: ubuntu-latest
@@ -577,10 +577,10 @@ jobs:
 
       - name: Install pinned Codex CLI
         run: |
-          npm install --global @openai/codex@0.145.0
+          npm install --global @openai/codex@0.147.0
           CODEX_BIN="$(npm prefix --global)/bin/codex"
           test -x "$CODEX_BIN"
-          test "$(timeout 10s "$CODEX_BIN" --version)" = "codex-cli 0.145.0"
+          test "$(timeout 10s "$CODEX_BIN" --version)" = "codex-cli 0.147.0"
           printf 'HAPPY_CODEX_PROTOCOL_BIN=%s\n' "$CODEX_BIN" >> "$GITHUB_ENV"
 
       - name: Regenerate stable-v2 protocol
