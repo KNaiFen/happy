@@ -23,6 +23,17 @@ function imageSizeAdvisory(overrides = {}) {
     };
 }
 
+function prismaDeepmergeAdvisory(overrides = {}) {
+    return {
+        severity: 'high',
+        github_advisory_id: 'GHSA-ggr8-5vv4-36mx',
+        module_name: 'deepmerge-ts',
+        patched_versions: '>=8.0.0',
+        findings: [{ paths: ['packages__happy-server>prisma>@prisma/config>deepmerge-ts'] }],
+        ...overrides,
+    };
+}
+
 test('accepts only the exact unfixable Metro image-size advisory before expiry', () => {
     const result = evaluateAuditReport(
         reportWith([imageSizeAdvisory()]),
@@ -30,6 +41,34 @@ test('accepts only the exact unfixable Metro image-size advisory before expiry',
     );
     assert.equal(result.accepted.length, 1);
     assert.equal(result.blocking.length, 0);
+});
+
+test('accepts only the exact Prisma deepmerge advisory before its short expiry', () => {
+    const accepted = evaluateAuditReport(
+        reportWith([prismaDeepmergeAdvisory()]),
+        new Date('2026-08-18T00:00:00Z'),
+    );
+    assert.equal(accepted.accepted.length, 1);
+    assert.equal(accepted.blocking.length, 0);
+
+    const changedScope = evaluateAuditReport(reportWith([
+        prismaDeepmergeAdvisory({
+            findings: [{ paths: ['packages__happy-server>@prisma/config>deepmerge-ts'] }],
+        }),
+        prismaDeepmergeAdvisory({ patched_versions: '>=7.1.6' }),
+    ]));
+    assert.deepEqual(changedScope.blocking.map(({ reason }) => reason), [
+        'allowlist scope changed',
+        'allowlist scope changed',
+    ]);
+
+    const expired = evaluateAuditReport(
+        reportWith([prismaDeepmergeAdvisory()]),
+        new Date('2026-09-19T00:00:00Z'),
+    );
+    assert.deepEqual(expired.blocking.map(({ reason }) => reason), [
+        'exception expired 2026-09-18',
+    ]);
 });
 
 test('blocks a new high advisory and a critical advisory', () => {
