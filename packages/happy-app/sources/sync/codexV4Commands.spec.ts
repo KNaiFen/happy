@@ -81,6 +81,15 @@ describe('Codex v4 App commands', () => {
             command: 'review.start',
             payload: { target: { type: 'custom', instructions: 'compare API' } },
         });
+        expect(parseCodexV4Input('/status', [])).toMatchObject({
+            kind: 'control',
+            command: 'status.read',
+        });
+        expect(parseCodexV4Input('/status extra', [])).toMatchObject({
+            kind: 'control',
+            command: 'status.read',
+            payload: { unsupportedArguments: 'extra' },
+        });
         expect(parseCodexV4Input('/release dry run', ['/release'])).toEqual({
             kind: 'skill',
             skillName: 'release',

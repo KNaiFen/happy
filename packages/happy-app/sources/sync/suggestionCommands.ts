@@ -37,7 +37,6 @@ export const IGNORED_COMMANDS = [
     "pr-comments",
     "release-notes",
     "resume",
-    "status",
     "bug",
     "review",
     "security-review",
@@ -58,6 +57,7 @@ const DEFAULT_COMMANDS: CommandItem[] = [
     { command: 'goal', description: 'Set a session goal' },
     { command: 'mcp', description: 'Show connected MCP servers' },
     { command: 'skills', description: 'Show available skills' },
+    { command: 'status', description: 'Show connection status' },
 ];
 
 // Command descriptions for known tools/commands

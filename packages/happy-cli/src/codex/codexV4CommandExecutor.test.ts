@@ -94,6 +94,44 @@ describe('CodexV4CommandExecutor', () => {
         expect(result).toEqual({ threadId: 'thread-1', turnId: 'turn-1' });
     });
 
+    it('reads a compact status snapshot without loading thread turns', async () => {
+        const client = fakeClient({
+            readThread: vi.fn(async () => ({
+                thread: {
+                    id: 'thread-1',
+                    status: { type: 'idle' },
+                    cwd: '/workspace/project',
+                    modelProvider: 'openai',
+                    cliVersion: '0.147.0',
+                    name: 'Status session',
+                    turns: [],
+                },
+            })),
+        });
+
+        await expect(executor(client).execute(command('status.read', {}))).resolves.toEqual({
+            threadId: 'thread-1',
+            result: {
+                threadId: 'thread-1',
+                status: { type: 'idle' },
+                cwd: '/workspace/project',
+                modelProvider: 'openai',
+                cliVersion: '0.147.0',
+                name: 'Status session',
+            },
+        });
+        expect(client.readThread).toHaveBeenCalledWith({ threadId: 'thread-1', includeTurns: false });
+        expect(client.readThreadComplete).not.toHaveBeenCalled();
+    });
+
+    it('rejects status arguments without falling back to a prompt', async () => {
+        const client = fakeClient();
+        await expect(executor(client).execute(command('status.read', { unsupportedArguments: 'extra' })))
+            .rejects.toThrow('status.read does not accept arguments');
+        expect(client.readThread).not.toHaveBeenCalled();
+        expect(client.startTurnOnThread).not.toHaveBeenCalled();
+    });
+
     it('starts a queued follow-up as a new official turn with the same idempotency key', async () => {
         const client = fakeClient();
         const result = await executor(client).execute(command('turn.queue', { text: 'next' }));

@@ -1171,7 +1171,7 @@ function projectCommandResult(
     };
 }
 
-const QUERY_COMMANDS = new Set(['skills.list', 'mcp.status.list', 'model.list']);
+const QUERY_COMMANDS = new Set(['skills.list', 'mcp.status.list', 'model.list', 'status.read']);
 
 function shouldProjectCommandResult(
     result: CodexCommandResultEntityV4,

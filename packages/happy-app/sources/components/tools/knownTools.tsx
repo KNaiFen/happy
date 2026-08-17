@@ -532,7 +532,9 @@ export const knownTools = {
     'CodexControlCommand': {
         title: t('tools.names.codexControl'),
         icon: ICON_TERMINAL,
-        minimal: true,
+        minimal: ({ tool }: { metadata: Metadata | null, tool: ToolCall }) => (
+            tool.input?.command !== 'status.read'
+        ),
         input: z.object({ command: z.string().optional() }).partial().passthrough(),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => (
             typeof opts.tool.input?.command === 'string' ? opts.tool.input.command : null

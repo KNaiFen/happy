@@ -14,12 +14,14 @@ interface CodexV4CommandOwnershipOptions {
 
 const CODEX_V4_READ_ONLY_COMMANDS = new Set([
     'thread.read',
+    'status.read',
     'skills.list',
     'mcp.status.list',
     'model.list',
 ]);
 const CODEX_V4_THREAD_SCOPED_READ_ONLY_COMMANDS = new Set([
     'thread.read',
+    'status.read',
     'mcp.status.list',
 ]);
 
