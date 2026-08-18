@@ -114,7 +114,7 @@
         "tailwind-merge": "^3.5.0",
         "tailwind-styled-components": "^2.2.0",
         "tweetnacl": "^1.0.3",
-        "uuid": "^14.0.0",
+        "uuid": "^14.0.1",
         "yjs": "^13.6.30",
         "zod": "4.4.3",
         "zod-to-json-schema": "^3.25.2"
