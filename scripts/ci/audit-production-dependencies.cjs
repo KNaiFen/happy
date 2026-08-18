@@ -27,6 +27,14 @@ const PRODUCTION_AUDIT_EXCEPTIONS = [
         expiresOn: '2026-11-12',
         reason: 'Expo Metro build tooling only; the advisory has no patched release.',
     },
+    {
+        ghsa: 'GHSA-ggr8-5vv4-36mx',
+        module: 'deepmerge-ts',
+        path: 'packages__happy-server>prisma>@prisma/config>deepmerge-ts',
+        patchedVersions: '>=8.0.0',
+        expiresOn: '2026-09-18',
+        reason: 'Prisma config tooling pins 7.1.5 and reads only trusted repository configuration; no patched Prisma release exists.',
+    },
 ];
 
 function highOrCritical(advisory) {

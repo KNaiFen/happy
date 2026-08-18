@@ -1579,6 +1579,53 @@ describe('Codex v4 projection', () => {
         });
     });
 
+    it('projects a successful status query result', () => {
+        const command: CodexCommandEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.command',
+            providerId: 'command-status',
+            createdAt: 10,
+            updatedAt: 10,
+            commandId: 'command-status',
+            threadId: 'thread-1',
+            expectedTurnId: null,
+            command: 'status.read',
+            payload: { displayText: '/status' },
+            clientUserMessageId: 'command-status',
+            replacesCommandId: null,
+        };
+        const result: CodexCommandResultEntityV4 = {
+            schemaVersion: 1,
+            entityType: 'codex.commandResult',
+            providerId: 'result-status',
+            createdAt: 11,
+            updatedAt: 12,
+            commandId: 'command-status',
+            threadId: 'thread-1',
+            turnId: null,
+            status: 'succeeded',
+            providerRequestId: null,
+            result: { status: { type: 'idle' }, cwd: '/workspace' },
+            error: null,
+        };
+
+        const projection = applyCodexV4ProjectionUpdates(createCodexV4Projection(), [
+            { entity: command, revision: 1, op: 'upsert' },
+            { entity: result, revision: 1, op: 'upsert' },
+        ]);
+
+        expect(projection.messages).toHaveLength(2);
+        expect(projection.messages.find((message) => message.kind === 'tool-call')).toMatchObject({
+            id: 'codex-v4:command-result:result-status',
+            tool: {
+                name: 'CodexControlCommand',
+                state: 'completed',
+                input: { command: 'status.read' },
+                result: { status: { type: 'idle' }, cwd: '/workspace' },
+            },
+        });
+    });
+
     it('keeps metadata-selected thread state isolated from newer late updates', () => {
         const usage = (totalTokens: number) => ({
             totalTokens,

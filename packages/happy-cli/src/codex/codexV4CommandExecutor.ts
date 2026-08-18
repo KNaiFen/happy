@@ -40,6 +40,7 @@ export interface CodexV4AttachmentReference {
 
 const READ_ONLY_COMMANDS = new Set([
     'thread.read',
+    'status.read',
     'skills.list',
     'mcp.status.list',
     'model.list',
@@ -80,6 +81,27 @@ export class CodexV4CommandExecutor {
                 this.beforeProviderCall(command);
                 const result = await this.options.client.readThreadComplete({ threadId });
                 return { threadId: result.thread.id, result: { status: result.thread.status } };
+            }
+            case 'status.read': {
+                const threadId = commandThreadId(command, payload);
+                assertNoUnsupportedInput(payload, 'status.read');
+                this.beforeProviderCall(command);
+                const result = await this.options.client.readThread({
+                    threadId,
+                    includeTurns: false,
+                });
+                const thread = result.thread;
+                return {
+                    threadId: thread.id,
+                    result: {
+                        threadId: thread.id,
+                        status: thread.status,
+                        cwd: thread.cwd ?? null,
+                        modelProvider: thread.modelProvider ?? null,
+                        cliVersion: thread.cliVersion ?? null,
+                        name: thread.name ?? null,
+                    },
+                };
             }
             case 'thread.fork': {
                 const threadId = commandThreadId(command, payload);

@@ -134,6 +134,13 @@ export function parseCodexV4Input(text: string, skillCommands: readonly string[]
                 payload: { displayText, ...(args ? { unsupportedArguments: args } : {}) },
                 displayText,
             };
+        case 'status':
+            return {
+                kind: 'control',
+                command: 'status.read',
+                payload: { displayText, ...(args ? { unsupportedArguments: args } : {}) },
+                displayText,
+            };
         case 'goal':
             return args.toLowerCase() === 'clear'
                 ? { kind: 'control', command: 'goal.clear', payload: { displayText }, displayText }

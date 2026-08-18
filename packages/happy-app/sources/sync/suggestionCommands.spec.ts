@@ -23,6 +23,17 @@ describe('suggestionCommands', () => {
         ]));
     });
 
+    it('includes /status in the default slash command suggestions', () => {
+        const commands = getAllCommands('missing-session');
+
+        expect(commands).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                command: 'status',
+                description: 'Show connection status',
+            }),
+        ]));
+    });
+
     it('includes skills from session metadata in slash command suggestions', () => {
         mockSessions['codex-session'] = {
             metadata: {

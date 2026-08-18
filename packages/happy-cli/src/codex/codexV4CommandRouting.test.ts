@@ -147,6 +147,10 @@ describe('Codex v4 command routing', () => {
             threadId: 'thread-child',
         }))).not.toThrow();
         expect(() => assertCodexV4ReadOnlyCommand(command({
+            command: 'status.read',
+            threadId: 'thread-child',
+        }))).not.toThrow();
+        expect(() => assertCodexV4ReadOnlyCommand(command({
             command: 'request.resolve',
             threadId: 'thread-child',
         }))).toThrow('read-only');
