@@ -277,7 +277,11 @@ export class CodexGatewayProxy {
             options.forward(options.data, false);
             return;
         }
-        if (!ROOT_METHODS.has(parsed.method)) {
+        const systemThread = parsed.method === 'thread/start'
+            && parsed.params && typeof parsed.params === 'object'
+            && (parsed.params as Record<string, unknown>).threadSource === 'system';
+        // Official TUI uses system threads for background work such as automatic titles.
+        if (!ROOT_METHODS.has(parsed.method) || systemThread) {
             options.forward(options.data, false);
             return;
         }

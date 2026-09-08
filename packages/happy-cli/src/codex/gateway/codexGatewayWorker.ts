@@ -12,6 +12,7 @@ import { configuration } from '@/configuration';
 import {
     CodexAppServerClient,
     classifyCodexRpcFailure,
+    codexRpcErrorDiagnostic,
     isCodexThreadUnavailableRpcResponse,
 } from '../codexAppServerClient';
 import {
@@ -1751,12 +1752,12 @@ function safeErrorKind(error: unknown): string {
     if (error instanceof CodexGatewaySocketPathTooLongError) return 'socketPathTooLong';
     if (error instanceof CodexGatewayRootBindingError) {
         if (error.diagnosticCause instanceof CodexGatewayRuntimeBindingUpdateError) {
-            const causeKind = classifySyncV4DiagnosticError(
-                error.diagnosticCause.diagnosticCause,
-            );
+            const cause = error.diagnosticCause.diagnosticCause;
+            const causeKind = codexRpcErrorDiagnostic(cause) ?? classifySyncV4DiagnosticError(cause);
             return `rootBinding:${error.phase}:${error.diagnosticCause.phase}:${causeKind}`;
         }
-        const causeKind = classifySyncV4DiagnosticError(error.diagnosticCause);
+        const causeKind = codexRpcErrorDiagnostic(error.diagnosticCause)
+            ?? classifySyncV4DiagnosticError(error.diagnosticCause);
         return `rootBinding:${error.phase}:${causeKind}`;
     }
     const classified = classifySyncV4DiagnosticError(error);

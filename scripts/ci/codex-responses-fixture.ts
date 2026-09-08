@@ -6,7 +6,8 @@ import {
     type ServerResponse,
 } from 'node:http';
 import * as zlib from 'node:zlib';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
 export const OFFICIAL_CODEX_RESPONSE_SENTINEL = 'Official Codex source E2E response';
@@ -45,6 +46,7 @@ export interface CodexResponsesFixtureSnapshot {
     queuedFollowUpObserved: boolean;
     postClearFollowUpObserved: boolean;
     clearPromptObserved: boolean;
+    shellOutputShape: string;
     toolNames: string[];
     instructionSentinelObserved: boolean;
     requestShapes: RequestShape[];
@@ -59,6 +61,7 @@ export interface CodexResponsesFixtureOptions {
     expectedQueuedFollowUpText?: string;
     expectedPostClearText?: string;
     mcpFollowupDelayMs?: number;
+    beforeSeedTool?: () => Promise<void>;
 }
 
 export interface CodexResponsesFixtureMcpConfig {
@@ -85,6 +88,8 @@ interface OfferedTool {
 export async function startCodexResponsesFixture(
     options: CodexResponsesFixtureOptions = {},
 ): Promise<CodexResponsesFixture> {
+    const shellSignalDir = await mkdtemp(join(tmpdir(), 'happy-official-shell-'));
+    const shellReleasePath = join(shellSignalDir, 'release');
     const state: CodexResponsesFixtureSnapshot = {
         requestCount: 0,
         toolOutputObserved: false,
@@ -99,6 +104,7 @@ export async function startCodexResponsesFixture(
         queuedFollowUpObserved: false,
         postClearFollowUpObserved: false,
         clearPromptObserved: false,
+        shellOutputShape: 'none',
         toolNames: [],
         instructionSentinelObserved: false,
         requestShapes: [],
@@ -116,6 +122,7 @@ export async function startCodexResponsesFixture(
             options,
             pendingTools,
             pendingToolSearches,
+            shellReleasePath,
         ).catch((error: unknown) => {
             const errorName = error instanceof Error ? error.name : 'UnknownError';
             if (!response.headersSent) {
@@ -134,7 +141,10 @@ export async function startCodexResponsesFixture(
     return {
         baseUrl: `http://127.0.0.1:${address.port}`,
         snapshot: () => structuredClone(state),
-        close: () => closeServer(server),
+        close: async () => {
+            await closeServer(server);
+            await rm(shellSignalDir, { recursive: true, force: true });
+        },
     };
 }
 
@@ -210,6 +220,7 @@ async function handleRequest(
     options: CodexResponsesFixtureOptions,
     pendingTools: Map<string, { isFixtureMcp: boolean; expectsChoice: boolean }>,
     pendingToolSearches: Set<string>,
+    shellReleasePath: string,
 ): Promise<void> {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
     if (request.method !== 'POST' || pathname !== '/v1/responses') {
@@ -233,6 +244,39 @@ async function handleRequest(
 
     const completedTool = findMatchingToolOutput(body, pendingTools);
     if (completedTool) {
+        if (!completedTool.isFixtureMcp) {
+            const outputText = typeof completedTool.output === 'string'
+                ? completedTool.output
+                : Array.isArray(completedTool.output)
+                    ? completedTool.output.filter((part) => isRecord(part) && part.type === 'input_text' && typeof part.text === 'string')
+                        .map((part) => part.text).join('\n')
+                    : '';
+            const runningSession = /^Process running with session ID (\d+)$/m.exec(outputText);
+            state.shellOutputShape = [typeof completedTool.output, Array.isArray(completedTool.output) ? 'array' : 'scalar',
+                ...['session ID', 'Process exited', 'Output:', 'Error', 'failed', 'not allowed', 'sandbox', 'unsupported', 'stdin', 'Invalid', 'exec_command failed', 'unified exec is unavailable', 'CreateProcess', 'UnknownProcessId', 'PTY', 'Read-only file system', 'Permission denied'].filter((text) => outputText.includes(text)),
+            ].join(':');
+            if (runningSession) {
+                // Release output only after unified exec has installed its stream watcher.
+                await writeFile(shellReleasePath, 'ready');
+                const stdin = collectOfferedTools(body).find((tool) => tool.name === 'write_stdin');
+                assert(stdin, 'official runtime omitted write_stdin for a running command');
+                pendingTools.delete(completedTool.callId);
+                const callId = `${completedTool.callId}-stdin`;
+                pendingTools.set(callId, { isFixtureMcp: false, expectsChoice: false });
+                response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+                writeEvents(response, toolCallEvents(callId, stdin, options, {
+                    session_id: Number(runningSession[1]),
+                    chars: '',
+                    yield_time_ms: 1_000,
+                }));
+                response.end();
+                return;
+            }
+            assert(
+                outputText.split(/\r?\n/).some((line) => line.trim() === OFFICIAL_CODEX_TOOL_SENTINEL),
+                'shell tool output omitted the verification sentinel',
+            );
+        }
         pendingTools.delete(completedTool.callId);
         state.toolOutputObserved = true;
         state.toolOutputCount += 1;
@@ -327,9 +371,17 @@ async function handleRequest(
     // Keep the seed history turn on the deterministic shell path. Tool search is
     // reserved for the later App-driven turn, after that warm-up has completed.
     if (state.toolNames.length === 0) {
+        const offered = collectOfferedTools(body);
+        const shell = offered.find((tool) => tool.name === 'exec_command')
+            ?? offered.find((tool) => tool.name === 'shell_command');
+        assert(shell, 'official runtime offered no supported shell tool');
+        await options.beforeSeedTool?.();
         pendingTools.set(toolCallId, { isFixtureMcp: false, expectsChoice: false });
-        state.toolNames.push('shell_command');
-        writeEvents(response, toolCallEvents(toolCallId, { name: 'shell_command' }));
+        state.toolNames.push(canonicalToolName(shell));
+        writeEvents(response, toolCallEvents(toolCallId, shell, options, shell.name === 'exec_command' ? {
+            cmd: `while ! test -f '${shellReleasePath.replaceAll("'", "'\\''")}'; do sleep 0.01; done; printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
+            yield_time_ms: 250,
+        } : undefined));
         response.end();
         return;
     }
@@ -373,8 +425,9 @@ function toolCallEvents(
     callId: string,
     tool: OfferedTool,
     options: CodexResponsesFixtureOptions = {},
+    explicitArguments?: Record<string, unknown>,
 ): Array<Record<string, unknown>> {
-    const argumentsJson = JSON.stringify(isFixtureMcpTool(tool, options)
+    const argumentsJson = JSON.stringify(explicitArguments ?? (isFixtureMcpTool(tool, options)
         ? fixtureMcpToolName(options) === OFFICIAL_CODEX_FIELD_MCP_TOOL
             ? { marker: OFFICIAL_CODEX_MCP_SENTINEL }
             : {}
@@ -382,7 +435,7 @@ function toolCallEvents(
             command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
             workdir: null,
             timeout_ms: 5_000,
-        });
+        }));
     return [
         responseCreated(`happy-tool-response-${callId}`),
         {

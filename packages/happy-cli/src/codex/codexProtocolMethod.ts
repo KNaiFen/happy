@@ -6,7 +6,7 @@ import stableMethods from './protocol/generated/STABLE_METHODS.json';
 const UNKNOWN_METHOD_PREFIX = 'unknown:';
 const METHOD_HASH_HEX_LENGTH = 24;
 const processLogHashSecret = randomBytes(32);
-const stableMethodSet = new Set<string>(stableMethods);
+const stableMethodSet = new Set<string>([...stableMethods, 'thread/revert']);
 
 export function isCodexStableV2Method(method: string): boolean {
     return stableMethodSet.has(method);

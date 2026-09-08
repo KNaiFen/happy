@@ -185,6 +185,7 @@ vi.mock('../codexAppServerClient', () => {
     class MockCodexRpcOutcomeUnknownError extends Error {}
     return {
     CodexRpcOutcomeUnknownError: MockCodexRpcOutcomeUnknownError,
+    codexRpcErrorDiagnostic: () => null,
     classifyCodexRpcFailure: (error: unknown) => (
         error instanceof MockCodexRpcOutcomeUnknownError
         || (error && typeof error === 'object' && 'rpcOutcomeUnknown' in error)

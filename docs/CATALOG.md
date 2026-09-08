@@ -105,6 +105,7 @@
 - [Agent Testing Layers](./plans/archive/agent-testing-layers.md)
 - [App 排队消息连续堆叠与锚定菜单实施计划](./plans/archive/app-queue-dock-and-anchored-menu.md)
 - [App 排队消息堆栈与会话恢复资格实施计划](./plans/archive/app-queue-stack-and-resume-eligibility.md)
+- [CI 覆盖、稳定性与交付成本优化实施记录](./plans/archive/ci-optimization-2026-09-08.md)
 - [CLI V3 Messages API Migration (happy-cli)](./plans/archive/cli-v3-messages-api.md)
 - [Codex Agent 指令与 Claude 遗留清理计划](./plans/archive/codex-agent-instructions-migration.md)
 - [Codex App 语义时间线去重与 Resume 焦点修复](./plans/archive/codex-app-semantic-timeline-dedup.md)

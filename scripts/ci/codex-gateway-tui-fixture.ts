@@ -315,7 +315,7 @@ async function fixtureStatus(options: {
         ?? descriptors[0]
         ?? null;
     const session = descriptor
-        ? await findGatewaySession(descriptor.gatewayId).catch(() => null)
+        ? await findGatewaySession(descriptor).catch(() => null)
         : null;
     const runtime = session
         ? await getOrCreateAppRuntime(session).catch(() => null)
@@ -405,12 +405,14 @@ async function waitForAppRuntime(): Promise<AppRuntime> {
             && candidate.current?.sessionId
         ));
         if (!descriptor) return false;
-        const session = await findGatewaySession(descriptor.gatewayId);
+        const session = await findGatewaySession(descriptor);
         if (!session) return false;
         runtime = await getOrCreateAppRuntime(session);
         await runtime.client.pullChangesOnce();
         const projection = runtime.projection();
-        return projection.runtime?.syncState === 'ready' && Boolean(projection.thread?.threadId);
+        return projection.runtime?.syncState === 'ready'
+            && projection.thread?.threadId === descriptor.current?.threadId
+            && projection.runtime.gateway?.generation === descriptor.current?.generation;
     }, 60_000, 'Gateway App projection');
     assert(runtime);
     return runtime;
@@ -496,13 +498,19 @@ async function getOrCreateAppRuntime(session: RelaySession): Promise<AppRuntime>
     return runtime;
 }
 
-async function findGatewaySession(gatewayId: string): Promise<RelaySession | null> {
+async function findGatewaySession(descriptor: GatewayDescriptorShape): Promise<RelaySession | null> {
+    const sessionId = descriptor.current?.sessionId ?? (descriptor.state === 'stopped'
+        ? [...appRuntimes.values()].find((runtime) => (
+            runtime.projection().runtime?.gateway?.gatewayId === descriptor.gatewayId
+        ))?.session.id
+        : null);
     const response = await fetch(`${relayServerUrl}/v1/sessions`, {
         headers: appHeaders(),
     });
     if (!response.ok) throw new Error(`Session list failed with HTTP ${response.status}`);
     const body = await response.json() as { sessions?: RelaySession[] };
     for (const session of body.sessions ?? []) {
+        if (session.id !== sessionId) continue;
         if (session.originMachineId !== machineId || !session.dataEncryptionKey) continue;
         try {
             const key = await decryptSessionKey(session.dataEncryptionKey);
@@ -511,7 +519,7 @@ async function findGatewaySession(gatewayId: string): Promise<RelaySession | nul
                 metadata
                 && typeof metadata === 'object'
                 && !Array.isArray(metadata)
-                && metadata.codexGatewayBinding?.gatewayId === gatewayId
+                && metadata.codexGatewayBinding?.gatewayId === descriptor.gatewayId
             ) return session;
         } catch {
             continue;

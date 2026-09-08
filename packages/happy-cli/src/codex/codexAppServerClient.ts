@@ -126,6 +126,17 @@ class CodexRpcResponseError extends Error {
 
 export type CodexRpcFailureKind = 'response' | 'outcomeUnknown' | 'operationFailed';
 
+export function codexRpcErrorDiagnostic(error: unknown): string | null {
+    if (!(error instanceof CodexRpcResponseError)) return null;
+    const code = typeof error.code === 'number' && Number.isSafeInteger(error.code) ? error.code : 'unknown';
+    const reason = error.method === 'thread/goal/get' && error.code === -32600
+        ? error.providerMessage === 'goals feature is disabled' ? ':goalsDisabled'
+            : error.providerMessage?.startsWith('ephemeral thread does not support goals: ') ? ':ephemeralThread'
+                : error.providerMessage?.startsWith('thread not found: ') ? ':threadNotFound' : ''
+        : '';
+    return `rpc:${redactCodexProtocolMethod(error.method)}:${code}${reason}`;
+}
+
 export function classifyCodexRpcFailure(error: unknown): CodexRpcFailureKind {
     if (error instanceof CodexRpcOutcomeUnknownError) return 'outcomeUnknown';
     if (error instanceof CodexRpcResponseError) return 'response';
@@ -1838,7 +1849,29 @@ export class CodexAppServerClient {
             threadId: opts.threadId,
             numTurns: opts.numTurns,
         };
-        const result = await this.request('thread/rollback', params) as ThreadRollbackResponse;
+        let result: ThreadRollbackResponse;
+        try {
+            result = await this.request('thread/rollback', params) as ThreadRollbackResponse;
+        } catch (error) {
+            if (!(error instanceof CodexRpcResponseError)
+                || error.method !== 'thread/rollback'
+                || error.code !== -32600
+                || error.providerMessage !== 'paginated threads do not support thread/rollback'
+                || !isCodexCliVersionAtLeast(this.readCodexCliVersionOnce(), { major: 0, minor: 151, patch: 0 })) {
+                throw error;
+            }
+            const snapshot = await this.readThreadComplete({ threadId: opts.threadId, emitSnapshot: false });
+            const turns = snapshot.thread.turns;
+            const firstRemovedTurn = turns[Math.max(0, turns.length - opts.numTurns)];
+            if (firstRemovedTurn) {
+                await this.request('thread/revert', {
+                    threadId: opts.threadId,
+                    beforeTurnId: firstRemovedTurn.id,
+                });
+            }
+            // Revert returns metadata with empty turns, even when history remains.
+            return await this.readThreadComplete(opts);
+        }
         const thread = this.registerThreadSnapshot(
             result.thread,
             'snapshot',
@@ -1878,7 +1911,17 @@ export class CodexAppServerClient {
         threadId: string;
     }): Promise<ThreadGoalGetResponse> {
         const params: ThreadGoalGetParams = { threadId: opts.threadId };
-        return await this.request('thread/goal/get', params) as ThreadGoalGetResponse;
+        try {
+            return await this.request('thread/goal/get', params) as ThreadGoalGetResponse;
+        } catch (error) {
+            if (error instanceof CodexRpcResponseError
+                && error.method === 'thread/goal/get'
+                && error.code === -32600
+                && error.providerMessage === `ephemeral thread does not support goals: ${opts.threadId}`) {
+                return { goal: null };
+            }
+            throw error;
+        }
     }
 
     async clearGoal(opts: {

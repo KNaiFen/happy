@@ -19,6 +19,10 @@ const now = new Date('2026-08-14T12:00:00Z');
 function run(overrides = {}) {
     const candidate = {
         created_at: '2026-08-14T11:45:00Z',
+        event: 'push',
+        head_branch: 'main',
+        head_repository: { id: 1 },
+        pull_requests: [{ id: 10 }],
         head_sha: 'a'.repeat(40),
         id: 1,
         path: '.github/workflows/ci.yml',
@@ -71,6 +75,33 @@ test('only supersedes older queued runs for the same workflow and source SHA', (
     const differentSha = run({ id: 12, head_sha: 'b'.repeat(40), created_at: '2026-08-14T11:57:00Z' });
     const decisions = decideCancellations([older, newer, differentSha], now);
     assert.deepEqual(decisions.map(({ rule, run: candidate }) => [candidate.id, rule]), [[10, 'superseded-same-sha']]);
+});
+
+test('does not deduplicate indirect, parameterized, scheduled, or unknown events', () => {
+    for (const event of ['workflow_run', 'workflow_dispatch', 'schedule', undefined]) {
+        const older = run({ event, created_at: '2026-08-14T11:55:00Z' });
+        const newer = run({ event, id: 2, created_at: '2026-08-14T11:56:00Z' });
+        assert.deepEqual(decideCancellations([older, newer], now), [], String(event));
+        const expired = { ...older, created_at: '2026-08-14T11:00:00Z' };
+        assert.deepEqual(decideCancellations([expired, newer], now).map(({ rule }) => rule), ['queue-sla']);
+    }
+});
+
+test('keeps different events, branches, workflow paths, and running validations separate', () => {
+    const older = run({ event: 'pull_request', head_branch: 'topic', created_at: '2026-08-14T11:55:00Z' });
+    const newer = run({ event: 'pull_request', head_branch: 'topic', id: 2, created_at: '2026-08-14T11:56:00Z' });
+    assert.equal(decideCancellations([older, newer], now)[0].rule, 'superseded-same-sha');
+    for (const mismatch of [
+        { event: 'push' }, { head_branch: 'another-topic' }, { head_branch: null },
+        { path: '.github/workflows/cli-smoke-test.yml' }, { workflow_id: 100 },
+        { head_repository: { id: 2 } }, { head_repository: null },
+        { pull_requests: [{ id: 11 }] }, { pull_requests: [] },
+    ]) {
+        assert.deepEqual(decideCancellations([older, { ...newer, ...mismatch }], now), []);
+    }
+    assert.deepEqual(decideCancellations([
+        { ...older, status: 'in_progress', run_started_at: older.created_at }, newer,
+    ], now), []);
 });
 
 test('fails safe for unknown workflows and malformed runs', () => {
