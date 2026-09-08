@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -84,7 +86,12 @@ describe('official Codex Responses fixture', () => {
         const call = events.find((event) => event.item?.type === 'function_call').item;
         expect(call.name).toBe('exec_command');
         expect(call.namespace).toBe(namespace);
-        expect(JSON.parse(call.arguments)).toEqual({ cmd: 'IFS= read -r marker; printf \'%s\\n\' "$marker"', tty: true, yield_time_ms: 250 });
+        const args = JSON.parse(call.arguments);
+        expect(args.tty).toBeUndefined();
+        expect(args.yield_time_ms).toBe(250);
+        expect(args.cmd).toContain('while ! test -f ');
+        expect(args.cmd).toContain(OFFICIAL_CODEX_TOOL_SENTINEL);
+        const shellOutput = promisify(execFile)('/bin/sh', ['-c', args.cmd], { timeout: 5_000 });
         const stdinTool = { type: 'function', name: 'write_stdin' };
         const continued = await postResponses(fixture.baseUrl, {
             tools: namespace ? [{ type: 'namespace', name: namespace, tools: [stdinTool] }] : [stdinTool],
@@ -94,7 +101,8 @@ describe('official Codex Responses fixture', () => {
             .find((event) => event.item?.type === 'function_call').item;
         expect(stdinCall.name).toBe('write_stdin');
         expect(stdinCall.namespace).toBe(namespace);
-        expect(JSON.parse(stdinCall.arguments)).toEqual({ session_id: 42, chars: `${OFFICIAL_CODEX_TOOL_SENTINEL}\n`, yield_time_ms: 1_000 });
+        expect(JSON.parse(stdinCall.arguments)).toEqual({ session_id: 42, chars: '', yield_time_ms: 1_000 });
+        expect((await shellOutput).stdout.trim()).toBe(OFFICIAL_CODEX_TOOL_SENTINEL);
         const rejected = await fetch(`${fixture.baseUrl}/v1/responses`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
