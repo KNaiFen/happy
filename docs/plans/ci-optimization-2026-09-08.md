@@ -2,14 +2,14 @@
 
 ## 状态
 
-状态：进行中；PR #73 首轮主 CI 失败，正在修复必要兼容与依赖阻塞。
+状态：进行中；PR #73 已通过包、依赖、Smoke、文档和 CodeQL 检查，正在修复官方运行时验收阻塞。
 
 2026-09-08 已完成只读调查及方案编制；本文件不是实施或云端验收完成记录。
 
 - 负责人：当前任务主代理。
 - 当前授权：用户已要求“开始执行PLAN”，随后追加“兼容性修复与必要补丁交付”；覆盖 A1-A5、B1 修复、必要 CI、既定 PR 交付及受影响 CLI 补丁下载与本机更新。
-- 当前分支：`ci/coverage-runtime-optimization-20260908`；A1-A5 为 `d5d6cee2`，B1 为 `f77297a7`；PR #73 首轮 Smoke、Docs、CodeQL 通过，主 CI 失败，交付待完成。
-- 下一步：提交 B1 兼容补丁，按既定 PR/main/Field 门禁验收并交付；复用前次调查，不重新开展全量 CI 优化分析。
+- 当前分支：`ci/coverage-runtime-optimization-20260908`；A1-A5 为 `d5d6cee2`，B1 为 `f77297a7`，后续兼容修复截至 `aa0ddbc0`；PR #73 主 CI 尚未通过，交付待完成。
+- 下一步：验证临时线程 goal 兼容修复并定位官方工具启动失败，按既定 PR/main/Field 门禁验收并交付；复用前次调查，不重新开展全量 CI 优化分析。
 - 独立使用 `gkd-optimize-ci`；不额外建立同义报告、GKD 角色或流程记录。
 
 ## 目标与成功标准
@@ -189,6 +189,13 @@ receipt 命中并跳过真实场景的两分钟成功不能作为完整成功对
 - 同一 CI 的依赖门禁要求 `browserslist 4.28.7`、`fast-uri 3.1.6`、Tauri `h2 0.4.16`。只更新既有 override 与锁文件，不调整门禁/例外、不深入漏洞机制；pnpm lockfile-only 和 cargo update 均不编译。Node 依赖门禁已通过，仍为原有三项临时例外。
 - `fast-uri` 进入 CLI 和 Relay 运行时，因此必要补丁扩展到 Relay `1.1.47`；CLI 保持尚未运行发行的 `1.4.55`。App 的变化仅为构建工具/非正式发行的桌面锁文件，不触发 Android 发行。正式 Relay 成功后沿项目规则验证并部署精确制品。
 - 修复验证：Responses fixture 12 项、CLI client 60 项、Gateway worker 28 项测试通过，CLI 与官方 fixture 类型检查通过。未在本地编译发布制品。最终 PR/main/Field 结果仍待新提交验证。
+
+#### 2026-09-09 验收接续
+
+- `aa0ddbc0` 对应 run `34263797073` attempt 1 的包检查、依赖门禁、Smoke、文档及 CodeQL 通过；官方 app-server 与 Gateway 失败，未重复开展优化调查。
+- Gateway 的明确错误为临时线程拒绝 `thread/goal/get`。仅对方法、错误码 `-32600` 及包含当前 thread ID 的完整官方错误匹配，返回空 goal，使线程同步继续；其他读取错误及所有 set/clear 错误仍传播。补丁仍在未发行的 CLI `1.4.55` 内。
+- observer 的短命 shell 输出可能在官方 streaming watcher 订阅前产生，因此保留标准输入握手和真实 delta 断言。当前工具启动失败的具体原因未证实；失败报告增加有限输出形状类别和权威 turn status，禁止输出原始载荷。
+- 本地 client/router/migration/Gateway 六文件 179 项测试、Responses fixture 12 项测试、CLI 类型检查及官方场景类型检查通过。官方场景沿用既有 TS API 依赖路径映射处理本机根目录缺少 `vitest`/`tweetnacl`，未修改安装状态。云端验收待后续提交。
 
 ### B2 / P2：矩阵、下载与缓存维护
 

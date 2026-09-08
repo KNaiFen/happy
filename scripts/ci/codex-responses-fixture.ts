@@ -45,6 +45,7 @@ export interface CodexResponsesFixtureSnapshot {
     queuedFollowUpObserved: boolean;
     postClearFollowUpObserved: boolean;
     clearPromptObserved: boolean;
+    shellOutputShape: string;
     toolNames: string[];
     instructionSentinelObserved: boolean;
     requestShapes: RequestShape[];
@@ -100,6 +101,7 @@ export async function startCodexResponsesFixture(
         queuedFollowUpObserved: false,
         postClearFollowUpObserved: false,
         clearPromptObserved: false,
+        shellOutputShape: 'none',
         toolNames: [],
         instructionSentinelObserved: false,
         requestShapes: [],
@@ -242,6 +244,9 @@ async function handleRequest(
                         .map((part) => part.text).join('\n')
                     : '';
             const runningSession = /^Process running with session ID (\d+)$/m.exec(outputText);
+            state.shellOutputShape = [typeof completedTool.output, Array.isArray(completedTool.output) ? 'array' : 'scalar',
+                ...['session ID', 'Process exited', 'Output:', 'Error', 'failed', 'not allowed', 'sandbox', 'unsupported', 'stdin', 'Invalid', 'exec_command failed', 'unified exec is unavailable', 'CreateProcess', 'UnknownProcessId', 'PTY', 'Read-only file system', 'Permission denied'].filter((text) => outputText.includes(text)),
+            ].join(':');
             if (runningSession) {
                 const stdin = collectOfferedTools(body).find((tool) => tool.name === 'write_stdin');
                 assert(stdin, 'official runtime omitted write_stdin for a running command');

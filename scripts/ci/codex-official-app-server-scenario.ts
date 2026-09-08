@@ -395,6 +395,7 @@ async function exerciseOfficialUnixWebSocket(options: {
         let snapshotReasoningBytes = 0;
         let snapshotAgentBytes = 0;
         let observerPhase = 'subscribe';
+        let completedTurnStatus = 'none';
         const observedItems = new Set<string>();
         let resolveObservedCompletion!: () => void;
         const observedCompletion = new Promise<void>((resolve) => {
@@ -403,7 +404,10 @@ async function exerciseOfficialUnixWebSocket(options: {
         observer.setStableNotificationHandler((notification) => {
             observedMethods.add(notification.method);
             if (notification.method === 'item/completed') observedItems.add(notification.params.item.type);
-            if (notification.method === 'turn/completed') resolveObservedCompletion();
+            if (notification.method === 'turn/completed') {
+                completedTurnStatus = notification.params.turn.status;
+                resolveObservedCompletion();
+            }
         });
         try {
             // A remote bridge can read a fresh thread before the rollout exists, but
@@ -447,6 +451,8 @@ async function exerciseOfficialUnixWebSocket(options: {
                 observedCompletion,
             ]), 90_000, 'materialized thread observer lifecycle');
             assert.equal(turn.aborted, false, 'fresh thread observer turn was aborted');
+            observerPhase = 'turnCompletion';
+            assert.equal(completedTurnStatus, 'completed', 'fresh thread observer turn did not succeed');
             observerPhase = 'notificationAssertions';
             assert(observedMethods.has('turn/completed'), 'materialized observer omitted turn/completed');
             for (const method of [
@@ -518,6 +524,8 @@ async function exerciseOfficialUnixWebSocket(options: {
                     `phase=${observerPhase}`,
                     `requests=${fixtureState.requestCount}`,
                     `toolOutput=${fixtureState.toolOutputObserved}`,
+                    `shellOutputShape=${fixtureState.shellOutputShape}`,
+                    `turnStatus=${completedTurnStatus}`,
                     `shellTool=${fixtureState.toolNames.some((name) => name.endsWith('exec_command')) ? 'exec_command' : fixtureState.toolNames.some((name) => name.endsWith('shell_command')) ? 'shell_command' : 'none'}`,
                     `completedItemTypes=${[...observedItems].sort().join(',')}`,
                     `subscriptionAttempts=${subscriptionAttempts}`,

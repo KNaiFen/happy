@@ -2388,6 +2388,36 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it.each([
+        [-32600, 'ephemeral thread does not support goals: thread-goal-1', true],
+        [-32603, 'ephemeral thread does not support goals: thread-goal-1', false],
+        [-32600, 'ephemeral thread does not support goals: another-thread', false],
+        [-32600, 'goals feature is disabled', false],
+        [-32600, 'thread not found: thread-goal-1', false],
+    ])('handles goal read rejection %s / %s without masking other failures', async (code, message, unsupported) => {
+        const proc = createMockProcess({
+            pid: 3004,
+            onRequest: (msg, stdout) => {
+                if (msg.method?.startsWith('thread/goal/') && msg.id != null) {
+                    setTimeout(() => pushJsonLine(stdout, {
+                        id: msg.id,
+                        error: { code, message },
+                    }), 0);
+                }
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        const read = client.getGoal({ threadId: 'thread-goal-1' });
+        if (unsupported) await expect(read).resolves.toEqual({ goal: null });
+        else await expect(read).rejects.toThrow('thread/goal/get failed');
+        await expect(client.setGoal({ threadId: 'thread-goal-1', objective: 'finish' })).rejects.toThrow('thread/goal/set failed');
+        await expect(client.clearGoal({ threadId: 'thread-goal-1' })).rejects.toThrow('thread/goal/clear failed');
+        await client.disconnect();
+    });
+
     it('maps raw file change items into legacy patch events', async () => {
         const proc = createMockProcess({
             pid: 3003,

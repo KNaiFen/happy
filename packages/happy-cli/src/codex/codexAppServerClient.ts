@@ -1911,7 +1911,17 @@ export class CodexAppServerClient {
         threadId: string;
     }): Promise<ThreadGoalGetResponse> {
         const params: ThreadGoalGetParams = { threadId: opts.threadId };
-        return await this.request('thread/goal/get', params) as ThreadGoalGetResponse;
+        try {
+            return await this.request('thread/goal/get', params) as ThreadGoalGetResponse;
+        } catch (error) {
+            if (error instanceof CodexRpcResponseError
+                && error.method === 'thread/goal/get'
+                && error.code === -32600
+                && error.providerMessage === `ephemeral thread does not support goals: ${opts.threadId}`) {
+                return { goal: null };
+            }
+            throw error;
+        }
     }
 
     async clearGoal(opts: {
