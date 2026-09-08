@@ -201,6 +201,7 @@ function main() {
 }
 
 module.exports = {
+    activeDocs,
     isForbiddenInstructionPath,
     isProductFile,
     scanCodexOnlyBoundary,

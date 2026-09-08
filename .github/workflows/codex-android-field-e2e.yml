@@ -172,6 +172,8 @@ jobs:
 
       - name: Install APK build dependencies
         if: steps.reuse.outputs.selected != 'true'
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: timeout 5m pnpm install --frozen-lockfile
 
       - name: Build Wire dependency for APK
@@ -269,6 +271,8 @@ jobs:
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: timeout 5m pnpm install --frozen-lockfile
 
       - name: Build Wire and CLI

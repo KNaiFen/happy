@@ -51,7 +51,14 @@ function validRun(run) {
 }
 
 function laterRun(run, candidate) {
+    if (run.event !== 'push' && run.event !== 'pull_request') return false;
+    if (run.event !== candidate.event || !run.head_branch || run.head_branch !== candidate.head_branch) return false;
+    if (!run.head_repository?.id || run.head_repository.id !== candidate.head_repository?.id) return false;
+    if (run.event === 'pull_request'
+        && (run.pull_requests?.length !== 1 || candidate.pull_requests?.length !== 1
+            || !run.pull_requests[0].id || run.pull_requests[0].id !== candidate.pull_requests[0].id)) return false;
     if (run.workflow_id !== candidate.workflow_id || run.head_sha !== candidate.head_sha) return false;
+    if (run.path !== candidate.path) return false;
     const runCreated = Date.parse(run.created_at);
     const candidateCreated = Date.parse(candidate.created_at);
     if (Number.isNaN(runCreated) || Number.isNaN(candidateCreated)) return false;

@@ -10,6 +10,7 @@ on:
       - "packages/happy-server/**"
       - "packages/happy-cli/**"
       - "packages/happy-app/**"
+      - "packages/happy-app-logs/package.json"
       - ".dockerignore"
       - "Dockerfile.server"
       - "scripts/ci/**"
@@ -22,6 +23,10 @@ on:
       - ".github/workflows/**"
       - "!**/*.md"
       - "!**/*.mdx"
+      # The classifier selects activeDocs; archives stay outside these entry paths.
+      - "*.md"
+      - "docs/*.md"
+      - "packages/*/README.md"
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -70,7 +75,7 @@ jobs:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           FORCE_ALL: ${{ github.event_name == 'workflow_dispatch' }}
-        run: node scripts/ci/classify-workflow-changes.cjs "$BASE_SHA" "$HEAD_SHA" "$FORCE_ALL"
+        run: node scripts/ci/classify-workflow-changes.cjs "$BASE_SHA" "$HEAD_SHA" "$FORCE_ALL" "$GITHUB_EVENT_NAME"
 
       - name: Test path classifier
         run: node --test scripts/ci/classify-workflow-changes.test.cjs
@@ -142,6 +147,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Test Wire source
@@ -174,6 +181,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Build Wire dependency
@@ -284,6 +293,8 @@ jobs:
           bun-version: 1.2.20
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Build Wire dependency
@@ -384,6 +395,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Build Wire dependency
@@ -423,6 +436,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Build Wire dependency
@@ -613,6 +628,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies with a bounded lifecycle
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: |
           set -euo pipefail
           install_status=0
@@ -682,6 +699,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Build Wire dependency
@@ -772,6 +791,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Build Wire and CLI runtime

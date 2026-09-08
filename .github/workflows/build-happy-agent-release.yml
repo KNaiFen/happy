@@ -62,6 +62,8 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        env:
+          SKIP_HAPPY_WIRE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck packed-agent smoke fixture

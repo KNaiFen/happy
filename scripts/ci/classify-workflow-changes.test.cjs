@@ -1,8 +1,14 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { execFileSync } = require('node:child_process');
+const { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const path = require('node:path');
+const { activeDocs } = require('./assert-codex-only-provider.cjs');
 
 const {
     classifyPaths,
+    changedPathsBetween,
     outputKeys,
     standaloneDockerDirectoryInputs,
     standaloneDockerFileInputs,
@@ -15,12 +21,92 @@ function selected(paths, options) {
         .sort();
 }
 
-test('keeps Markdown-only changes on lightweight gates', () => {
+test('keeps ordinary Markdown and archives on lightweight gates', () => {
     assert.deepEqual(selected([
-        'docs/README.md',
-        'packages/happy-cli/README.md',
+        'docs/plans/archive/finished.md',
+        'docs/research/provider-history.md',
         'packages/happy-app/guide.mdx',
     ]), []);
+});
+
+test('checks every active document without selecting package builds', () => {
+    for (const document of activeDocs) {
+        assert.deepEqual(selected([document]), ['codex_provider_boundary'], document);
+    }
+    assert.deepEqual(selected(['README.md', 'packages/happy-agent/src/index.ts']), [
+        'agent', 'codex_provider_boundary',
+    ]);
+});
+
+test('main entry patterns cover active docs and standalone manifest inputs', () => {
+    const workflow = readFileSync(path.join(__dirname, '../../.github/workflows/ci.yml'), 'utf8');
+    const push = workflow.split('  push:\n')[1].split('  pull_request:')[0];
+    const patterns = [...push.matchAll(/^      - "(.+)"$/gm)].map((match) => match[1]);
+    const matches = (file) => patterns.reduce((included, pattern) => {
+        const excluded = pattern.startsWith('!');
+        const glob = excluded ? pattern.slice(1) : pattern;
+        return path.matchesGlob(file, glob) ? !excluded : included;
+    }, false);
+    for (const file of [...activeDocs, ...standaloneDockerFileInputs]) {
+        assert.equal(matches(file), true, file);
+    }
+    assert.equal(matches('docs/plans/archive/finished.md'), false);
+});
+
+test('Git scope preserves rename sources, deletions, PR merge-base, and push differences', (t) => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'happy-ci-scope-'));
+    t.after(() => rmSync(cwd, { recursive: true, force: true }));
+    const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const write = (file, content) => {
+        mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+        writeFileSync(path.join(cwd, file), content);
+    };
+    const commit = () => {
+        git('add', '.');
+        git('-c', 'user.name=CI test', '-c', 'user.email=ci@example.test', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
+        return git('rev-parse', 'HEAD');
+    };
+    git('init', '-q', '-b', 'main');
+    write('packages/happy-cli/move.ts', 'export const value = 1;\n');
+    write('packages/happy-cli/document.ts', 'export const document = 1;\n');
+    write('packages/happy-server/remove.ts', 'export const removed = 1;\n');
+    write('docs/guide.md', 'base\n');
+    const base = commit();
+    write('packages/happy-app/main-only.ts', 'export const main = 1;\n');
+    const main = commit();
+    git('checkout', '-qb', 'topic', base);
+    write('docs/guide.md', 'topic\n');
+    const docsHead = commit();
+    const prPaths = changedPathsBetween(main, docsHead, { cwd, eventName: 'pull_request' });
+    assert.deepEqual(prPaths, ['docs/guide.md']);
+    assert.deepEqual(selected(prPaths), []);
+    assert.ok(changedPathsBetween(main, docsHead, { cwd, eventName: 'push' }).includes('packages/happy-app/main-only.ts'));
+
+    mkdirSync(path.join(cwd, 'packages/happy-agent'), { recursive: true });
+    renameSync(path.join(cwd, 'packages/happy-cli/move.ts'), path.join(cwd, 'packages/happy-agent/move.ts'));
+    renameSync(path.join(cwd, 'packages/happy-cli/document.ts'), path.join(cwd, 'docs/document.md'));
+    rmSync(path.join(cwd, 'packages/happy-server/remove.ts'));
+    const moved = commit();
+    const paths = changedPathsBetween(main, moved, { cwd, eventName: 'pull_request' });
+    assert.deepEqual(paths, [
+        'docs/document.md', 'docs/guide.md', 'packages/happy-agent/move.ts',
+        'packages/happy-cli/document.ts', 'packages/happy-cli/move.ts', 'packages/happy-server/remove.ts',
+    ]);
+    const scope = classifyPaths(paths);
+    assert.equal(scope.cli, true);
+    assert.equal(scope.agent, true);
+    assert.equal(scope.server, true);
+    const codeql = require('./codeql-change-classifier.cjs');
+    assert.equal(codeql.changedPathsBetween, changedPathsBetween);
+    assert.equal(codeql.shouldAnalyzePaths(paths), true);
+    assert.equal(codeql.shouldAnalyzePaths(prPaths), false);
+
+    git('-c', 'user.name=CI test', '-c', 'user.email=ci@example.test', '-c', 'commit.gpgsign=false', 'merge', '--no-edit', 'main');
+    assert.deepEqual(changedPathsBetween(main, git('rev-parse', 'HEAD'), { cwd, eventName: 'pull_request' }), paths);
+    git('-c', 'user.name=CI test', '-c', 'user.email=ci@example.test', '-c', 'commit.gpgsign=false', 'revert', '--no-edit', moved);
+    assert.deepEqual(changedPathsBetween(main, git('rev-parse', 'HEAD'), { cwd, eventName: 'pull_request' }), ['docs/guide.md']);
+    assert.equal(changedPathsBetween('0'.repeat(40), moved, { cwd }), null);
+    assert.throws(() => changedPathsBetween('f'.repeat(40), moved, { cwd }));
 });
 
 test('propagates Wire changes to every retained consumer and Codex integration', () => {

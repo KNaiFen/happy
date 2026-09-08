@@ -2,6 +2,7 @@
 
 const { execFileSync } = require('node:child_process');
 const { appendFileSync } = require('node:fs');
+const { activeDocs } = require('./assert-codex-only-provider.cjs');
 
 const monorepoOutputKeys = [
     'wire',
@@ -218,9 +219,11 @@ function classifyPaths(paths, { forceAll = false } = {}) {
     }
 
     const files = [...new Set(paths.map(normalizePath).filter(Boolean))];
-    const sourceFiles = files.filter((file) => !isMarkdown(file));
-
-    for (const file of sourceFiles) {
+    for (const file of files) {
+        if (isMarkdown(file)) {
+            if (activeDocs.has(file)) classification.codex_provider_boundary = true;
+            continue;
+        }
         if (isRootInstallInput(file)) {
             selectAll(classification);
             continue;
@@ -295,13 +298,14 @@ function classifyPaths(paths, { forceAll = false } = {}) {
     return classification;
 }
 
-function changedPathsBetween(baseSha, headSha) {
+function changedPathsBetween(baseSha, headSha, { eventName = '', cwd } = {}) {
     if (!shaPattern.test(baseSha) || /^0+$/.test(baseSha)) return null;
     if (!shaPattern.test(headSha) || /^0+$/.test(headSha)) return null;
     return execFileSync(
         'git',
-        ['diff', '--name-only', '-z', baseSha, headSha],
-        { encoding: 'utf8' },
+        ['diff', '--no-renames', '--name-only', '-z',
+            ...(eventName === 'pull_request' ? ['--merge-base'] : []), baseSha, headSha],
+        { cwd, encoding: 'utf8' },
     ).split('\0').filter(Boolean);
 }
 
@@ -319,9 +323,9 @@ function writeOutputs(classification) {
 }
 
 function main() {
-    const [baseSha = '', headSha = '', forceAllValue = 'false'] = process.argv.slice(2);
+    const [baseSha = '', headSha = '', forceAllValue = 'false', eventName = ''] = process.argv.slice(2);
     const forceAll = forceAllValue === 'true';
-    const changedPaths = forceAll ? [] : changedPathsBetween(baseSha, headSha);
+    const changedPaths = forceAll ? [] : changedPathsBetween(baseSha, headSha, { eventName });
     writeOutputs(classifyPaths(changedPaths ?? [], {
         forceAll: forceAll || changedPaths === null,
     }));
@@ -330,6 +334,7 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+    changedPathsBetween,
     classifyPaths,
     monorepoOutputKeys,
     outputKeys,
