@@ -427,30 +427,27 @@ async function exerciseOfficialUnixWebSocket(options: {
             assert.equal(live.thread.id, started.threadId);
             assert.equal(live.thread.turns.length, 0);
 
-            const creatorTurn = creator.sendTurnAndWait(
+            await creator.startTurnOnThread(
+                started.threadId,
                 'verify a materialized stable-v2 observer receives the first turn',
                 { clientUserMessageId: 'official-fresh-thread-observer-command' },
             );
             let subscribed: Awaited<ReturnType<typeof observer.subscribeThreadIfMaterialized>> = null;
             const subscriptionDeadline = Date.now() + 15_000;
-            while (!subscribed && Date.now() < subscriptionDeadline) {
+            while (!subscribed?.thread.turns.length && Date.now() < subscriptionDeadline) {
                 subscriptionAttempts += 1;
                 subscribed = await observer.subscribeThreadIfMaterialized(started.threadId);
-                if (!subscribed) await new Promise((resolve) => setTimeout(resolve, 10));
+                if (!subscribed?.thread.turns.length) await new Promise((resolve) => setTimeout(resolve, 10));
             }
             assert(subscribed, 'observer could not resume the thread after its first turn materialized');
             subscribedTurnCount = subscribed.thread.turns.length;
-            options.onObserverSubscribed();
             assert(
                 subscribed.thread.turns.length >= 1,
                 'materialized resume omitted the active first turn',
             );
+            options.onObserverSubscribed();
 
-            const [turn] = await withTimeout(Promise.all([
-                creatorTurn,
-                observedCompletion,
-            ]), 90_000, 'materialized thread observer lifecycle');
-            assert.equal(turn.aborted, false, 'fresh thread observer turn was aborted');
+            await withTimeout(observedCompletion, 90_000, 'materialized thread observer lifecycle');
             observerPhase = 'turnCompletion';
             assert.equal(completedTurnStatus, 'completed', 'fresh thread observer turn did not succeed');
             observerPhase = 'notificationAssertions';
