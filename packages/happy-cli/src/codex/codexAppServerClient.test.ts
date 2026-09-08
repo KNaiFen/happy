@@ -1730,7 +1730,11 @@ describe('CodexAppServerClient sandbox integration', () => {
         const client = new CodexAppServerClient();
         await client.connect();
         try {
-            await expect(client.rollbackThread({ threadId: 'thread-rejected', numTurns: 1 })).rejects.toThrow();
+            const { codexRpcErrorDiagnostic } = await import('./codexAppServerClient');
+            const error = await client.rollbackThread({ threadId: 'thread-rejected', numTurns: 1 }).catch((failure: unknown) => failure);
+            expect(error).toBeInstanceOf(Error);
+            expect(codexRpcErrorDiagnostic(error)).toBe('rpc:thread/rollback:-32600');
+            expect(codexRpcErrorDiagnostic(new Error(message))).toBeNull();
             expect(requests.filter((request) => request.method?.startsWith('thread/')).map((request) => request.method))
                 .toEqual(['thread/rollback']);
         } finally {

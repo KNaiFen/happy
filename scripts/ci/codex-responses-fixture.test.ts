@@ -49,6 +49,7 @@ describe('official Codex Responses fixture', () => {
             model: 'mock-model',
             instructions: `Apply ${instructionSentinel} before responding.`,
             input: [{ type: 'message', role: 'user' }],
+            tools: [{ type: 'function', name: 'shell_command' }],
         });
         expect(first).toContain('"name":"shell_command"');
         expect(first).toContain(OFFICIAL_CODEX_TOOL_SENTINEL);
@@ -70,6 +71,28 @@ describe('official Codex Responses fixture', () => {
         assert.equal(snapshot.toolOutputObserved, true);
         assert.equal(snapshot.instructionSentinelObserved, true);
         assert.deepEqual(snapshot.requestShapes[1]?.inputTypes, ['function_call_output']);
+    });
+
+    it.each([undefined, 'functions'])('uses the offered exec_command namespace %s and rejects unsuccessful output', async (namespace) => {
+        fixture = await startCodexResponsesFixture();
+        const tool = { type: 'function', name: 'exec_command', parameters: { type: 'object', required: ['cmd'] } };
+        const first = await postResponses(fixture.baseUrl, {
+            input: [{ type: 'message', role: 'user' }],
+            tools: namespace ? [{ type: 'namespace', name: namespace, tools: [tool] }] : [tool],
+        });
+        const events = first.split('\n').filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)));
+        const call = events.find((event) => event.item?.type === 'function_call').item;
+        expect(call.name).toBe('exec_command');
+        expect(call.namespace).toBe(namespace);
+        expect(JSON.parse(call.arguments)).toEqual({ cmd: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`, yield_time_ms: 1_000 });
+        const rejected = await fetch(`${fixture.baseUrl}/v1/responses`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ input: [{ type: 'function_call_output', call_id: call.call_id, output: 'unsupported call' }] }),
+        });
+        expect(rejected.status).toBe(500);
+        expect(await rejected.text()).not.toContain(OFFICIAL_CODEX_RESPONSE_SENTINEL);
+        expect(fixture.snapshot().toolOutputObserved).toBe(false);
     });
 
     it('writes the test-only field MCP into the temporary Codex config', async () => {
@@ -409,6 +432,7 @@ async function warmFixture(
         model: 'mock-model',
         input: [{ type: 'message', role: 'user' }],
         ...input,
+        tools: [{ type: 'function', name: 'shell_command' }, ...(Array.isArray(input.tools) ? input.tools : [])],
     });
     expect(first).toContain('"name":"shell_command"');
     const second = await postResponses(fixture.baseUrl, {

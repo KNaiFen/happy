@@ -59,6 +59,7 @@ export interface CodexResponsesFixtureOptions {
     expectedQueuedFollowUpText?: string;
     expectedPostClearText?: string;
     mcpFollowupDelayMs?: number;
+    beforeSeedTool?: () => Promise<void>;
 }
 
 export interface CodexResponsesFixtureMcpConfig {
@@ -233,6 +234,9 @@ async function handleRequest(
 
     const completedTool = findMatchingToolOutput(body, pendingTools);
     if (completedTool) {
+        if (!completedTool.isFixtureMcp) {
+            assert(containsString(completedTool.output, OFFICIAL_CODEX_TOOL_SENTINEL), 'shell tool output omitted the verification sentinel');
+        }
         pendingTools.delete(completedTool.callId);
         state.toolOutputObserved = true;
         state.toolOutputCount += 1;
@@ -327,9 +331,14 @@ async function handleRequest(
     // Keep the seed history turn on the deterministic shell path. Tool search is
     // reserved for the later App-driven turn, after that warm-up has completed.
     if (state.toolNames.length === 0) {
+        const offered = collectOfferedTools(body);
+        const shell = offered.find((tool) => tool.name === 'exec_command')
+            ?? offered.find((tool) => tool.name === 'shell_command');
+        assert(shell, 'official runtime offered no supported shell tool');
+        await options.beforeSeedTool?.();
         pendingTools.set(toolCallId, { isFixtureMcp: false, expectsChoice: false });
-        state.toolNames.push('shell_command');
-        writeEvents(response, toolCallEvents(toolCallId, { name: 'shell_command' }));
+        state.toolNames.push(canonicalToolName(shell));
+        writeEvents(response, toolCallEvents(toolCallId, shell));
         response.end();
         return;
     }
@@ -378,7 +387,10 @@ function toolCallEvents(
         ? fixtureMcpToolName(options) === OFFICIAL_CODEX_FIELD_MCP_TOOL
             ? { marker: OFFICIAL_CODEX_MCP_SENTINEL }
             : {}
-        : {
+        : tool.name === 'exec_command' ? {
+            cmd: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
+            yield_time_ms: 1_000,
+        } : {
             command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
             workdir: null,
             timeout_ms: 5_000,

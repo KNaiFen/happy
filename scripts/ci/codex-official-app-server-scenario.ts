@@ -62,8 +62,11 @@ async function main(): Promise<void> {
                 `generated lab-rat project retained ${legacyName}`,
             );
         }
+        let releaseObserverTool!: () => void;
+        const observerSubscribed = new Promise<void>((resolve) => { releaseObserverTool = resolve; });
         websocketFixture = await startCodexResponsesFixture({
             expectedInstructionSentinel: LAB_RAT_AGENT_INSTRUCTION_SENTINEL,
+            beforeSeedTool: () => observerSubscribed,
         });
         await writeCodexResponsesConfig(codexHome, websocketFixture.baseUrl);
         process.env.CODEX_HOME = codexHome;
@@ -81,6 +84,7 @@ async function main(): Promise<void> {
             version: officialVersion,
             cwd: projectRoot,
             socketPath: join(root, 'official-provider.sock'),
+            onObserverSubscribed: releaseObserverTool,
         });
         await websocketFixture.close();
         websocketFixture = null;
@@ -242,9 +246,8 @@ async function main(): Promise<void> {
                 listed.data.some((thread) => thread.id === startedThread.threadId),
                 'official thread/list omitted the completed root thread',
             );
-            const read = await codex.readThread({
+            const read = await codex.readThreadComplete({
                 threadId: startedThread.threadId,
-                includeTurns: true,
                 emitSnapshot: false,
             });
             assert.equal(read.thread.id, startedThread.threadId);
@@ -345,6 +348,7 @@ async function exerciseOfficialUnixWebSocket(options: {
     version: string;
     cwd: string;
     socketPath: string;
+    onObserverSubscribed: () => void;
 }): Promise<void> {
     await runOfficialUnixWebSocketProbe(options, 'rfc6455Handshake', async (socketPath) => {
         await waitForRfc6455WebSocketUpgrade(socketPath);
@@ -427,6 +431,7 @@ async function exerciseOfficialUnixWebSocket(options: {
             }
             assert(subscribed, 'observer could not resume the thread after its first turn materialized');
             subscribedTurnCount = subscribed.thread.turns.length;
+            options.onObserverSubscribed();
             assert(
                 subscribed.thread.turns.length >= 1,
                 'materialized resume omitted the active first turn',
@@ -512,6 +517,7 @@ async function exerciseOfficialUnixWebSocket(options: {
             );
             throw error;
         } finally {
+            options.onObserverSubscribed();
             await Promise.allSettled([
                 observer.disconnect(),
                 creator.disconnect(),

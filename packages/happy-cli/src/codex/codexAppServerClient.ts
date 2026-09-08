@@ -126,6 +126,12 @@ class CodexRpcResponseError extends Error {
 
 export type CodexRpcFailureKind = 'response' | 'outcomeUnknown' | 'operationFailed';
 
+export function codexRpcErrorDiagnostic(error: unknown): string | null {
+    if (!(error instanceof CodexRpcResponseError)) return null;
+    const code = typeof error.code === 'number' && Number.isSafeInteger(error.code) ? error.code : 'unknown';
+    return `rpc:${redactCodexProtocolMethod(error.method)}:${code}`;
+}
+
 export function classifyCodexRpcFailure(error: unknown): CodexRpcFailureKind {
     if (error instanceof CodexRpcOutcomeUnknownError) return 'outcomeUnknown';
     if (error instanceof CodexRpcResponseError) return 'response';
