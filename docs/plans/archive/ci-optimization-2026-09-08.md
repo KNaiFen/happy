@@ -1,15 +1,15 @@
-# CI 覆盖、稳定性与交付成本优化 PLAN
+# CI 覆盖、稳定性与交付成本优化实施记录
 
 ## 状态
 
-状态：进行中；PR #73 已通过包、依赖、Smoke、文档和 CodeQL 检查，正在修复官方运行时验收阻塞。
+状态：实施完成，交付中；PR #73 的实现提交已通过全部必要门禁及真实官方 Gateway 验收，合并后 main、Android Field 和正式补丁交付待执行。
 
 2026-09-08 已完成只读调查及方案编制；本文件不是实施或云端验收完成记录。
 
 - 负责人：当前任务主代理。
 - 当前授权：用户已要求“开始执行PLAN”，随后追加“兼容性修复与必要补丁交付”；覆盖 A1-A5、B1 修复、必要 CI、既定 PR 交付及受影响 CLI 补丁下载与本机更新。
 - 当前分支：`ci/coverage-runtime-optimization-20260908`；A1-A5 为 `d5d6cee2`，B1 为 `f77297a7`，后续兼容修复截至 `aa0ddbc0`；PR #73 主 CI 尚未通过，交付待完成。
-- 下一步：验证官方系统标题线程不再替换 Gateway 用户根，按既定 PR/main/Field 门禁验收并交付；复用前次调查，不重新开展全量 CI 优化分析。
+- 下一步：完成最终 PR 门禁后合并，核对精确 main、Android Field 与正式补丁交付；最终结果写本机记忆，不为补记本次 CI 再提交。
 - 独立使用 `gkd-optimize-ci`；不额外建立同义报告、GKD 角色或流程记录。
 
 ## 目标与成功标准
@@ -42,12 +42,12 @@
 
 主要证据入口：
 
-- [主 CI](../../.github/workflows/ci.yml)：基线第 4-35 行为触发和并发，第 67-76 行为比较输入，第 898-987 行为聚合门禁。
-- [影响分类器](../../scripts/ci/classify-workflow-changes.cjs)：`classifyPaths` 第 213 行、Markdown 排除第 221 行、`changedPathsBetween` 第 298 行。
-- [provider 检查](../../scripts/ci/assert-codex-only-provider.cjs)：`activeDocs` 第 18 行；[postinstall](../../scripts/postinstall.cjs)第 11-18 行为 Wire 构建开关。
-- [watchdog](../../scripts/ci/actions-sla-watchdog.cjs)：`WORKFLOW_SLA` 第 6 行、`laterRun` 第 53 行、`decideCancellations` 第 61 行。
-- [官方源码构建](../../.github/workflows/build-official-codex-source.yml)：第 158 行为 Linux 依赖安装，第 319 行起查找可信产物。
-- [发布来源验证](../../scripts/ci/verify-release-source-gate.cjs)：`validateSourceRun`、`validateRequiredGate`、`validateMergedPullRequest`。
+- [主 CI](../../../.github/workflows/ci.yml)：基线第 4-35 行为触发和并发，第 67-76 行为比较输入，第 898-987 行为聚合门禁。
+- [影响分类器](../../../scripts/ci/classify-workflow-changes.cjs)：`classifyPaths` 第 213 行、Markdown 排除第 221 行、`changedPathsBetween` 第 298 行。
+- [provider 检查](../../../scripts/ci/assert-codex-only-provider.cjs)：`activeDocs` 第 18 行；[postinstall](../../../scripts/postinstall.cjs)第 11-18 行为 Wire 构建开关。
+- [watchdog](../../../scripts/ci/actions-sla-watchdog.cjs)：`WORKFLOW_SLA` 第 6 行、`laterRun` 第 53 行、`decideCancellations` 第 61 行。
+- [官方源码构建](../../../.github/workflows/build-official-codex-source.yml)：第 158 行为 Linux 依赖安装，第 319 行起查找可信产物。
+- [发布来源验证](../../../scripts/ci/verify-release-source-gate.cjs)：`validateSourceRun`、`validateRequiredGate`、`validateMergedPullRequest`。
 
 只读取证命令包括 `gh api repos/KNaiFen/happy/rulesets/20624143`、按 workflow 查询
 `actions/workflows/<workflow>/runs?per_page=15`、选定 run 的 `/jobs` 和 `/attempts/<n>/jobs`、
@@ -198,6 +198,9 @@ receipt 命中并跳过真实场景的两分钟成功不能作为完整成功对
 - 本地 client/router/migration/Gateway 六文件 179 项测试、Responses fixture 12 项测试、CLI 类型检查及官方场景类型检查通过。官方场景沿用既有 TS API 依赖路径映射处理本机根目录缺少 `vitest`/`tweetnacl`，未修改安装状态。云端验收待后续提交。
 - `44710051` / run `34270694923` 的安全分类确认 shell 在沙盒创建进程阶段失败；`cfcc0819` 改用临时文件释放输出，避免 PTY 依赖，同时保留真实 delta。run `34272052380` attempt 1 的官方 app-server 完整生命周期已通过，Gateway 仍在 App 回合与 attach 失败。
 - 官方 0.153.4 TUI 的自动标题功能发送 `thread/start(ephemeral=true, threadSource="system")`；Proxy 将它误当用户根并替换 current。最小修复透明转发系统线程但不预留/绑定为根，保留普通用户 ephemeral 行为；夹具按 descriptor.current.sessionId 选择 App 会话，并核对 thread/generation。代理、worker、coordinator/router 共 127 项测试、CLI 与 TUI 类型检查通过，真实 Gateway 云验收待下一提交。
+- `71aea20c` / run `34274184130` 的终端/App、11 分钟存活和异常断开通过，正常退出后的 Gateway/provider 也已停止；唯一失败为夹具失去 current 后使用旧 session.active。`fd9286b3` 修正为按原会话身份查询 Relay 最新状态。
+- `fd9286b3` / run `34276234102` attempt 1 的所有主 CI jobs 通过，包括官方 app-server、完整 Gateway PTY/attach/正常停止；Smoke、文档、Required CodeQL 通过。最终独立增量审查未发现必要 findings。自动评论指出本地测试执行 HTTP 回传命令文本，故移除这段冗余辅助执行；真实官方云端验证和协议断言保留。
+- 本文件的实施记录已完成并随同一 PR 归档；归档不声称尚未产生的最终 PR/main/Field、制品或部署结果成功。剩余交付由既有授权继续执行并记录于本机记忆，B2 候选未实施。
 
 ### B2 / P2：矩阵、下载与缓存维护
 
