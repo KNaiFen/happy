@@ -235,6 +235,24 @@ async function handleRequest(
     const completedTool = findMatchingToolOutput(body, pendingTools);
     if (completedTool) {
         if (!completedTool.isFixtureMcp) {
+            const runningSession = typeof completedTool.output === 'string'
+                ? /^Process running with session ID (\d+)$/m.exec(completedTool.output)
+                : null;
+            if (runningSession) {
+                const stdin = collectOfferedTools(body).find((tool) => tool.name === 'write_stdin');
+                assert(stdin, 'official runtime omitted write_stdin for a running command');
+                pendingTools.delete(completedTool.callId);
+                const callId = `${completedTool.callId}-stdin`;
+                pendingTools.set(callId, { isFixtureMcp: false, expectsChoice: false });
+                response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+                writeEvents(response, toolCallEvents(callId, stdin, options, {
+                    session_id: Number(runningSession[1]),
+                    chars: `${OFFICIAL_CODEX_TOOL_SENTINEL}\n`,
+                    yield_time_ms: 1_000,
+                }));
+                response.end();
+                return;
+            }
             assert(
                 typeof completedTool.output === 'string'
                     && completedTool.output.split(/\r?\n/).some((line) => line.trim() === OFFICIAL_CODEX_TOOL_SENTINEL),
@@ -386,19 +404,21 @@ function toolCallEvents(
     callId: string,
     tool: OfferedTool,
     options: CodexResponsesFixtureOptions = {},
+    explicitArguments?: Record<string, unknown>,
 ): Array<Record<string, unknown>> {
-    const argumentsJson = JSON.stringify(isFixtureMcpTool(tool, options)
+    const argumentsJson = JSON.stringify(explicitArguments ?? (isFixtureMcpTool(tool, options)
         ? fixtureMcpToolName(options) === OFFICIAL_CODEX_FIELD_MCP_TOOL
             ? { marker: OFFICIAL_CODEX_MCP_SENTINEL }
             : {}
         : tool.name === 'exec_command' ? {
-            cmd: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
-            yield_time_ms: 1_000,
+            cmd: 'IFS= read -r marker; printf \'%s\\n\' "$marker"',
+            tty: true,
+            yield_time_ms: 250,
         } : {
             command: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`,
             workdir: null,
             timeout_ms: 5_000,
-        });
+        }));
     return [
         responseCreated(`happy-tool-response-${callId}`),
         {

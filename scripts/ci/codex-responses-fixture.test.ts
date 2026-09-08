@@ -84,11 +84,21 @@ describe('official Codex Responses fixture', () => {
         const call = events.find((event) => event.item?.type === 'function_call').item;
         expect(call.name).toBe('exec_command');
         expect(call.namespace).toBe(namespace);
-        expect(JSON.parse(call.arguments)).toEqual({ cmd: `printf '%s\\n' ${OFFICIAL_CODEX_TOOL_SENTINEL}`, yield_time_ms: 1_000 });
+        expect(JSON.parse(call.arguments)).toEqual({ cmd: 'IFS= read -r marker; printf \'%s\\n\' "$marker"', tty: true, yield_time_ms: 250 });
+        const stdinTool = { type: 'function', name: 'write_stdin' };
+        const continued = await postResponses(fixture.baseUrl, {
+            tools: namespace ? [{ type: 'namespace', name: namespace, tools: [stdinTool] }] : [stdinTool],
+            input: [{ type: 'function_call_output', call_id: call.call_id, output: 'Process running with session ID 42\nOutput:\n' }],
+        });
+        const stdinCall = continued.split('\n').filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)))
+            .find((event) => event.item?.type === 'function_call').item;
+        expect(stdinCall.name).toBe('write_stdin');
+        expect(stdinCall.namespace).toBe(namespace);
+        expect(JSON.parse(stdinCall.arguments)).toEqual({ session_id: 42, chars: `${OFFICIAL_CODEX_TOOL_SENTINEL}\n`, yield_time_ms: 1_000 });
         const rejected = await fetch(`${fixture.baseUrl}/v1/responses`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input: [{ type: 'function_call_output', call_id: call.call_id, output: 'unsupported call' }] }),
+            body: JSON.stringify({ input: [{ type: 'function_call_output', call_id: stdinCall.call_id, output: 'unsupported call' }] }),
         });
         expect(rejected.status).toBe(500);
         expect(await rejected.text()).not.toContain(OFFICIAL_CODEX_RESPONSE_SENTINEL);
