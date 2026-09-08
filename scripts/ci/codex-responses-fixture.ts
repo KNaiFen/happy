@@ -235,9 +235,13 @@ async function handleRequest(
     const completedTool = findMatchingToolOutput(body, pendingTools);
     if (completedTool) {
         if (!completedTool.isFixtureMcp) {
-            const runningSession = typeof completedTool.output === 'string'
-                ? /^Process running with session ID (\d+)$/m.exec(completedTool.output)
-                : null;
+            const outputText = typeof completedTool.output === 'string'
+                ? completedTool.output
+                : Array.isArray(completedTool.output)
+                    ? completedTool.output.filter((part) => isRecord(part) && part.type === 'input_text' && typeof part.text === 'string')
+                        .map((part) => part.text).join('\n')
+                    : '';
+            const runningSession = /^Process running with session ID (\d+)$/m.exec(outputText);
             if (runningSession) {
                 const stdin = collectOfferedTools(body).find((tool) => tool.name === 'write_stdin');
                 assert(stdin, 'official runtime omitted write_stdin for a running command');
@@ -254,8 +258,7 @@ async function handleRequest(
                 return;
             }
             assert(
-                typeof completedTool.output === 'string'
-                    && completedTool.output.split(/\r?\n/).some((line) => line.trim() === OFFICIAL_CODEX_TOOL_SENTINEL),
+                outputText.split(/\r?\n/).some((line) => line.trim() === OFFICIAL_CODEX_TOOL_SENTINEL),
                 'shell tool output omitted the verification sentinel',
             );
         }

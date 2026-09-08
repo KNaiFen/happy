@@ -88,7 +88,7 @@ describe('official Codex Responses fixture', () => {
         const stdinTool = { type: 'function', name: 'write_stdin' };
         const continued = await postResponses(fixture.baseUrl, {
             tools: namespace ? [{ type: 'namespace', name: namespace, tools: [stdinTool] }] : [stdinTool],
-            input: [{ type: 'function_call_output', call_id: call.call_id, output: 'Process running with session ID 42\nOutput:\n' }],
+            input: [{ type: 'function_call_output', call_id: call.call_id, output: [{ type: 'input_text', text: 'Process running with session ID 42\nOutput:\n' }] }],
         });
         const stdinCall = continued.split('\n').filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)))
             .find((event) => event.item?.type === 'function_call').item;
@@ -103,6 +103,11 @@ describe('official Codex Responses fixture', () => {
         expect(rejected.status).toBe(500);
         expect(await rejected.text()).not.toContain(OFFICIAL_CODEX_RESPONSE_SENTINEL);
         expect(fixture.snapshot().toolOutputObserved).toBe(false);
+        const finished = await postResponses(fixture.baseUrl, {
+            input: [{ type: 'function_call_output', call_id: stdinCall.call_id, output: [{ type: 'input_text', text: `Process exited with code 0\nOutput:\n${OFFICIAL_CODEX_TOOL_SENTINEL}\n` }] }],
+        });
+        expect(finished).toContain(OFFICIAL_CODEX_RESPONSE_SENTINEL);
+        expect(fixture.snapshot().toolOutputObserved).toBe(true);
     });
 
     it('writes the test-only field MCP into the temporary Codex config', async () => {

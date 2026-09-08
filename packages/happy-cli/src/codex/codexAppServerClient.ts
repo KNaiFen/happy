@@ -129,7 +129,12 @@ export type CodexRpcFailureKind = 'response' | 'outcomeUnknown' | 'operationFail
 export function codexRpcErrorDiagnostic(error: unknown): string | null {
     if (!(error instanceof CodexRpcResponseError)) return null;
     const code = typeof error.code === 'number' && Number.isSafeInteger(error.code) ? error.code : 'unknown';
-    return `rpc:${redactCodexProtocolMethod(error.method)}:${code}`;
+    const reason = error.method === 'thread/goal/get' && error.code === -32600
+        ? error.providerMessage === 'goals feature is disabled' ? ':goalsDisabled'
+            : error.providerMessage?.startsWith('ephemeral thread does not support goals: ') ? ':ephemeralThread'
+                : error.providerMessage?.startsWith('thread not found: ') ? ':threadNotFound' : ''
+        : '';
+    return `rpc:${redactCodexProtocolMethod(error.method)}:${code}${reason}`;
 }
 
 export function classifyCodexRpcFailure(error: unknown): CodexRpcFailureKind {
