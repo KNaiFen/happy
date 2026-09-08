@@ -201,6 +201,8 @@ receipt 命中并跳过真实场景的两分钟成功不能作为完整成功对
 - `71aea20c` / run `34274184130` 的终端/App、11 分钟存活和异常断开通过，正常退出后的 Gateway/provider 也已停止；唯一失败为夹具失去 current 后使用旧 session.active。`fd9286b3` 修正为按原会话身份查询 Relay 最新状态。
 - `fd9286b3` / run `34276234102` attempt 1 的所有主 CI jobs 通过，包括官方 app-server、完整 Gateway PTY/attach/正常停止；Smoke、文档、Required CodeQL 通过。最终独立增量审查未发现必要 findings。自动评论指出本地测试执行 HTTP 回传命令文本，故移除这段冗余辅助执行；真实官方云端验证和协议断言保留。
 - 本文件的实施记录已完成并随同一 PR 归档；归档不声称尚未产生的最终 PR/main/Field、制品或部署结果成功。剩余交付由既有授权继续执行并记录于本机记忆，B2 候选未实施。
+- 合并 `d8537821` 后 main run `34280282122` 首次验收暴露 observer 订阅早于首轮启动的竞态：首次 resume 返回空 turns，夹具提前断言并在清理时遗留未处理的 turn Promise。后续修复先等待 `turn/start` 确认，再等待含首轮的订阅快照；由 observer 的权威完成通知验收，保留所有 delta/回退/清空断言。
+- 该 main 的发布 router 已跳过，尚无正式 `1.4.55`/`1.1.47` 产物。后续交付采用 CLI `1.4.56`、Relay `1.1.48`，让新合并 SHA 的版本差异触发完整首次发布链；这次后续 PR 用于修复实际 main 失败，不是单纯补记归档。
 
 ### B2 / P2：矩阵、下载与缓存维护
 
