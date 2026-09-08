@@ -85,6 +85,7 @@ async function main(): Promise<void> {
             cwd: projectRoot,
             socketPath: join(root, 'official-provider.sock'),
             onObserverSubscribed: releaseObserverTool,
+            fixtureSnapshot: () => websocketFixture!.snapshot(),
         });
         await websocketFixture.close();
         websocketFixture = null;
@@ -349,6 +350,7 @@ async function exerciseOfficialUnixWebSocket(options: {
     cwd: string;
     socketPath: string;
     onObserverSubscribed: () => void;
+    fixtureSnapshot: CodexResponsesFixture['snapshot'];
 }): Promise<void> {
     await runOfficialUnixWebSocketProbe(options, 'rfc6455Handshake', async (socketPath) => {
         await waitForRfc6455WebSocketUpgrade(socketPath);
@@ -392,12 +394,15 @@ async function exerciseOfficialUnixWebSocket(options: {
         let snapshotCommandBytes = 0;
         let snapshotReasoningBytes = 0;
         let snapshotAgentBytes = 0;
+        let observerPhase = 'subscribe';
+        const observedItems = new Set<string>();
         let resolveObservedCompletion!: () => void;
         const observedCompletion = new Promise<void>((resolve) => {
             resolveObservedCompletion = resolve;
         });
         observer.setStableNotificationHandler((notification) => {
             observedMethods.add(notification.method);
+            if (notification.method === 'item/completed') observedItems.add(notification.params.item.type);
             if (notification.method === 'turn/completed') resolveObservedCompletion();
         });
         try {
@@ -442,6 +447,7 @@ async function exerciseOfficialUnixWebSocket(options: {
                 observedCompletion,
             ]), 90_000, 'materialized thread observer lifecycle');
             assert.equal(turn.aborted, false, 'fresh thread observer turn was aborted');
+            observerPhase = 'notificationAssertions';
             assert(observedMethods.has('turn/completed'), 'materialized observer omitted turn/completed');
             for (const method of [
                 'item/commandExecution/outputDelta',
@@ -454,6 +460,7 @@ async function exerciseOfficialUnixWebSocket(options: {
                 );
             }
 
+            observerPhase = 'snapshot';
             const finalSnapshot = await observer.readThreadComplete({
                 threadId: started.threadId,
                 emitSnapshot: false,
@@ -479,6 +486,7 @@ async function exerciseOfficialUnixWebSocket(options: {
                 'materialized observer snapshot omitted the assistant response',
             );
 
+            observerPhase = 'rollbackLifecycle';
             await withTimeout(creator.sendTurnAndWait(
                 'verify history remains usable before partial rollback',
                 { clientUserMessageId: 'official-before-rollback-command' },
@@ -503,9 +511,15 @@ async function exerciseOfficialUnixWebSocket(options: {
             assert.equal(afterClear.thread.turns.length, 1, 'post-clear snapshot did not contain exactly the new turn');
             assert(!beforeRollback.thread.turns.some((turn) => turn.id === afterClear.thread.turns[0].id), 'clear restored an old turn');
         } catch (error) {
+            const fixtureState = options.fixtureSnapshot();
             console.error(
                 [
                     'Fresh observer diagnostics:',
+                    `phase=${observerPhase}`,
+                    `requests=${fixtureState.requestCount}`,
+                    `toolOutput=${fixtureState.toolOutputObserved}`,
+                    `shellTool=${fixtureState.toolNames.some((name) => name.endsWith('exec_command')) ? 'exec_command' : fixtureState.toolNames.some((name) => name.endsWith('shell_command')) ? 'shell_command' : 'none'}`,
+                    `completedItemTypes=${[...observedItems].sort().join(',')}`,
                     `subscriptionAttempts=${subscriptionAttempts}`,
                     `subscribedTurns=${subscribedTurnCount}`,
                     `methods=${[...observedMethods].sort().join(',')}`,

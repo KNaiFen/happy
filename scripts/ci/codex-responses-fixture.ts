@@ -235,7 +235,11 @@ async function handleRequest(
     const completedTool = findMatchingToolOutput(body, pendingTools);
     if (completedTool) {
         if (!completedTool.isFixtureMcp) {
-            assert(containsString(completedTool.output, OFFICIAL_CODEX_TOOL_SENTINEL), 'shell tool output omitted the verification sentinel');
+            assert(
+                typeof completedTool.output === 'string'
+                    && completedTool.output.split(/\r?\n/).some((line) => line.trim() === OFFICIAL_CODEX_TOOL_SENTINEL),
+                'shell tool output omitted the verification sentinel',
+            );
         }
         pendingTools.delete(completedTool.callId);
         state.toolOutputObserved = true;
