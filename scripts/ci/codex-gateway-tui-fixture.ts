@@ -499,13 +499,18 @@ async function getOrCreateAppRuntime(session: RelaySession): Promise<AppRuntime>
 }
 
 async function findGatewaySession(descriptor: GatewayDescriptorShape): Promise<RelaySession | null> {
+    const sessionId = descriptor.current?.sessionId ?? (descriptor.state === 'stopped'
+        ? [...appRuntimes.values()].find((runtime) => (
+            runtime.projection().runtime?.gateway?.gatewayId === descriptor.gatewayId
+        ))?.session.id
+        : null);
     const response = await fetch(`${relayServerUrl}/v1/sessions`, {
         headers: appHeaders(),
     });
     if (!response.ok) throw new Error(`Session list failed with HTTP ${response.status}`);
     const body = await response.json() as { sessions?: RelaySession[] };
     for (const session of body.sessions ?? []) {
-        if (session.id !== descriptor.current?.sessionId) continue;
+        if (session.id !== sessionId) continue;
         if (session.originMachineId !== machineId || !session.dataEncryptionKey) continue;
         try {
             const key = await decryptSessionKey(session.dataEncryptionKey);
