@@ -1662,6 +1662,82 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.disconnect();
     });
 
+    it.each([
+        { numTurns: 1, initialTurns: ['turn-1', 'turn-2', 'turn-3'], remainingTurns: ['turn-1', 'turn-2'], beforeTurnId: 'turn-3' },
+        { numTurns: 3, initialTurns: ['turn-1', 'turn-2', 'turn-3'], remainingTurns: [], beforeTurnId: 'turn-1' },
+        { numTurns: 10, initialTurns: ['turn-1', 'turn-2', 'turn-3'], remainingTurns: [], beforeTurnId: 'turn-1' },
+        { numTurns: 1, initialTurns: [], remainingTurns: [], beforeTurnId: undefined },
+    ])('reverts paginated history and hydrates retained turns: $numTurns / $initialTurns', async ({
+        numTurns, initialTurns, remainingTurns, beforeTurnId,
+    }) => {
+        mockExecFileSync.mockReturnValue('codex-cli 0.151.0');
+        const requests: MockRpcMessage[] = [];
+        let reverted = false;
+        const proc = createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                let response: MockRpcMessage | undefined;
+                if (msg.method === 'thread/rollback') {
+                    response = { error: { code: -32600, message: 'paginated threads do not support thread/rollback' } };
+                } else if (msg.method === 'thread/read') {
+                    response = { error: { code: -32600, message: 'paginated threads do not support thread/read(includeTurns=true)' } };
+                } else if (msg.method === 'thread/resume') {
+                    response = { result: { thread: {
+                        id: 'thread-paginated',
+                        status: { type: 'idle' },
+                        turns: (reverted ? remainingTurns : initialTurns).map((id) => ({ id, items: [], status: 'completed', error: null })),
+                    } } };
+                } else if (msg.method === 'thread/revert') {
+                    reverted = true;
+                    response = { result: { thread: { id: 'thread-paginated', turns: [] } } };
+                }
+                if (response) setTimeout(() => pushJsonLine(stdout, { id: msg.id, ...response }), 0);
+            },
+        });
+        mockSpawn.mockImplementation(() => proc);
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        const notifications = vi.fn();
+        client.setStableNotificationHandler(notifications);
+        await client.connect();
+        try {
+            const result = await client.rollbackThread({ threadId: 'thread-paginated', numTurns, emitSnapshot: false });
+            expect(result.thread.turns.map((turn) => turn.id)).toEqual(remainingTurns);
+            expect(requests.filter((request) => request.method === 'thread/revert').map((request) => request.params))
+                .toEqual(beforeTurnId ? [{ threadId: 'thread-paginated', beforeTurnId }] : []);
+            expect(client.threadId).toBeNull();
+            expect(notifications).not.toHaveBeenCalled();
+        } finally {
+            await client.disconnect();
+        }
+    });
+
+    it.each([
+        { version: '0.150.1', message: 'paginated threads do not support thread/rollback' },
+        { version: '0.151.0', message: 'rollback already in progress for this thread' },
+    ])('propagates rollback rejection without an unsupported retry: $version / $message', async ({ version, message }) => {
+        mockExecFileSync.mockReturnValue(`codex-cli ${version}`);
+        const requests: MockRpcMessage[] = [];
+        mockSpawn.mockImplementation(() => createMockProcess({
+            onRequest: (msg, stdout) => {
+                requests.push(msg);
+                if (msg.method === 'thread/rollback') {
+                    setTimeout(() => pushJsonLine(stdout, { id: msg.id, error: { code: -32600, message } }), 0);
+                }
+            },
+        }));
+        const { CodexAppServerClient } = await import('./codexAppServerClient');
+        const client = new CodexAppServerClient();
+        await client.connect();
+        try {
+            await expect(client.rollbackThread({ threadId: 'thread-rejected', numTurns: 1 })).rejects.toThrow();
+            expect(requests.filter((request) => request.method?.startsWith('thread/')).map((request) => request.method))
+                .toEqual(['thread/rollback']);
+        } finally {
+            await client.disconnect();
+        }
+    });
+
     it('clears active thread state so the next prompt starts a fresh thread', async () => {
         const requests: MockRpcMessage[] = [];
         let nextThreadNumber = 1;

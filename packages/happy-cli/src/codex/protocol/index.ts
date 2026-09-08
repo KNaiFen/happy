@@ -1,5 +1,14 @@
 export type { ClientNotification } from './generated/ClientNotification';
-export type { ClientRequest } from './generated/ClientRequest';
+import type { ClientRequest as BaselineClientRequest } from './generated/ClientRequest';
+
+// Stable since Codex 0.151.0; keep the generated minimum-version schema intact.
+// https://github.com/openai/codex/blob/rust-v0.151.0/codex-rs/app-server-protocol/schema/typescript/v2/ThreadRevertParams.ts
+export type ThreadRevertParams = { threadId: string; beforeTurnId: string };
+export type ClientRequest = BaselineClientRequest | {
+    method: 'thread/revert';
+    id: BaselineClientRequest['id'];
+    params: ThreadRevertParams;
+};
 export type { InitializeParams } from './generated/InitializeParams';
 export type { InitializeResponse } from './generated/InitializeResponse';
 export type { JsonValue } from './generated/serde_json/JsonValue';

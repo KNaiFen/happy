@@ -1838,7 +1838,29 @@ export class CodexAppServerClient {
             threadId: opts.threadId,
             numTurns: opts.numTurns,
         };
-        const result = await this.request('thread/rollback', params) as ThreadRollbackResponse;
+        let result: ThreadRollbackResponse;
+        try {
+            result = await this.request('thread/rollback', params) as ThreadRollbackResponse;
+        } catch (error) {
+            if (!(error instanceof CodexRpcResponseError)
+                || error.method !== 'thread/rollback'
+                || error.code !== -32600
+                || error.providerMessage !== 'paginated threads do not support thread/rollback'
+                || !isCodexCliVersionAtLeast(this.readCodexCliVersionOnce(), { major: 0, minor: 151, patch: 0 })) {
+                throw error;
+            }
+            const snapshot = await this.readThreadComplete({ threadId: opts.threadId, emitSnapshot: false });
+            const turns = snapshot.thread.turns;
+            const firstRemovedTurn = turns[Math.max(0, turns.length - opts.numTurns)];
+            if (firstRemovedTurn) {
+                await this.request('thread/revert', {
+                    threadId: opts.threadId,
+                    beforeTurnId: firstRemovedTurn.id,
+                });
+            }
+            // Revert returns metadata with empty turns, even when history remains.
+            return await this.readThreadComplete(opts);
+        }
         const thread = this.registerThreadSnapshot(
             result.thread,
             'snapshot',

@@ -473,6 +473,30 @@ async function exerciseOfficialUnixWebSocket(options: {
                 serializedSnapshot.includes(OFFICIAL_CODEX_RESPONSE_SENTINEL),
                 'materialized observer snapshot omitted the assistant response',
             );
+
+            await withTimeout(creator.sendTurnAndWait(
+                'verify history remains usable before partial rollback',
+                { clientUserMessageId: 'official-before-rollback-command' },
+            ), 90_000, 'official second turn before rollback');
+            const beforeRollback = await creator.readThreadComplete({ threadId: started.threadId, emitSnapshot: false });
+            assert(beforeRollback.thread.turns.length >= 2, 'official rollback requires two completed turns');
+            const retainedIds = beforeRollback.thread.turns.slice(0, -1).map((turn) => turn.id);
+            const partial = await creator.rollbackThread({ threadId: started.threadId, numTurns: 1, emitSnapshot: false });
+            assert.deepEqual(partial.thread.turns.map((turn) => turn.id), retainedIds, 'partial rollback lost retained history');
+            const cleared = await creator.rollbackThread({
+                threadId: started.threadId,
+                numTurns: retainedIds.length,
+                emitSnapshot: false,
+            });
+            assert.equal(cleared.thread.turns.length, 0, 'official clear retained turns');
+            const followUp = await withTimeout(creator.sendTurnAndWait(
+                'verify a cleared thread accepts and completes a new turn',
+                { clientUserMessageId: 'official-after-clear-command' },
+            ), 90_000, 'official post-clear lifecycle');
+            assert.equal(followUp.aborted, false, 'official post-clear turn was aborted');
+            const afterClear = await creator.readThreadComplete({ threadId: started.threadId, emitSnapshot: false });
+            assert.equal(afterClear.thread.turns.length, 1, 'post-clear snapshot did not contain exactly the new turn');
+            assert(!beforeRollback.thread.turns.some((turn) => turn.id === afterClear.thread.turns[0].id), 'clear restored an old turn');
         } catch (error) {
             console.error(
                 [
