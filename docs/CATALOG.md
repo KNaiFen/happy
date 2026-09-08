@@ -41,6 +41,10 @@
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 - [ADR-006: Actions supply-chain controls and production dependency gates](./decisions/ADR-006-actions-security-and-production-dependency-gates.md)
 
+## 活动计划
+
+- [CI 覆盖、稳定性与交付成本优化 PLAN](./plans/ci-optimization-2026-09-08.md)
+
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
