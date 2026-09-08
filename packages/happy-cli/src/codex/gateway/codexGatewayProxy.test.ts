@@ -75,6 +75,45 @@ describe('Codex Gateway JSON-RPC proxy', () => {
         ]);
     });
 
+    it('forwards official system threads without reserving or replacing the user root', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
+        const upstreamPath = join(root, 'upstream.sock');
+        const downstreamPath = join(root, 'downstream.sock');
+        const requests: string[] = [];
+        const upstream = await startWebSocketServer(upstreamPath, (socket) => {
+            socket.on('message', (data) => {
+                requests.push(data.toString());
+                const request = JSON.parse(data.toString());
+                socket.send(JSON.stringify({ id: request.id, result: {
+                    thread: { id: request.params.threadSource === 'system' ? 'title-thread' : 'user-thread' },
+                } }));
+            });
+        });
+        const beforeRootRequest = vi.fn();
+        const rootBound = vi.fn();
+        const proxy = new CodexGatewayProxy(
+            { socketPath: downstreamPath }, { socketPath: upstreamPath },
+            { beforeRootRequest, rootBound },
+        );
+        await proxy.start();
+        cleanups.push(async () => { await proxy.close(); await upstream.close(); await rm(root, { recursive: true, force: true }); });
+        const client = connectCodexGatewayWebSocket({ socketPath: downstreamPath });
+        cleanups.push(async () => { client.close(); });
+        await opened(client);
+        client.send(JSON.stringify({ id: 1, method: 'thread/start', params: {} }));
+        await nextMessage(client);
+        const systemRequest = JSON.stringify({ id: 2, method: 'thread/start', params: { ephemeral: true, threadSource: 'system' } });
+        client.send(systemRequest);
+        expect(JSON.parse(await nextMessage(client))).toMatchObject({ result: { thread: { id: 'title-thread' } } });
+        expect(requests[1]).toBe(systemRequest);
+        expect(beforeRootRequest).toHaveBeenCalledTimes(1);
+        expect(rootBound).toHaveBeenCalledTimes(1);
+        expect(rootBound).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: 'user-thread' }));
+        client.send(JSON.stringify({ id: 3, method: 'thread/start', params: { ephemeral: true } }));
+        await nextMessage(client);
+        expect(rootBound).toHaveBeenCalledTimes(2);
+    });
+
     it('reports thread activity that arrives before a new-root response', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happy-gateway-proxy-'));
         const upstreamPath = join(root, 'upstream.sock');

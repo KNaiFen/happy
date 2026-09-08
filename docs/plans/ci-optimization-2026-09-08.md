@@ -9,7 +9,7 @@
 - 负责人：当前任务主代理。
 - 当前授权：用户已要求“开始执行PLAN”，随后追加“兼容性修复与必要补丁交付”；覆盖 A1-A5、B1 修复、必要 CI、既定 PR 交付及受影响 CLI 补丁下载与本机更新。
 - 当前分支：`ci/coverage-runtime-optimization-20260908`；A1-A5 为 `d5d6cee2`，B1 为 `f77297a7`，后续兼容修复截至 `aa0ddbc0`；PR #73 主 CI 尚未通过，交付待完成。
-- 下一步：验证临时线程 goal 兼容修复并定位官方工具启动失败，按既定 PR/main/Field 门禁验收并交付；复用前次调查，不重新开展全量 CI 优化分析。
+- 下一步：验证官方系统标题线程不再替换 Gateway 用户根，按既定 PR/main/Field 门禁验收并交付；复用前次调查，不重新开展全量 CI 优化分析。
 - 独立使用 `gkd-optimize-ci`；不额外建立同义报告、GKD 角色或流程记录。
 
 ## 目标与成功标准
@@ -196,6 +196,8 @@ receipt 命中并跳过真实场景的两分钟成功不能作为完整成功对
 - Gateway 的明确错误为临时线程拒绝 `thread/goal/get`。仅对方法、错误码 `-32600` 及包含当前 thread ID 的完整官方错误匹配，返回空 goal，使线程同步继续；其他读取错误及所有 set/clear 错误仍传播。补丁仍在未发行的 CLI `1.4.55` 内。
 - observer 的短命 shell 输出可能在官方 streaming watcher 订阅前产生，因此保留标准输入握手和真实 delta 断言。当前工具启动失败的具体原因未证实；失败报告增加有限输出形状类别和权威 turn status，禁止输出原始载荷。
 - 本地 client/router/migration/Gateway 六文件 179 项测试、Responses fixture 12 项测试、CLI 类型检查及官方场景类型检查通过。官方场景沿用既有 TS API 依赖路径映射处理本机根目录缺少 `vitest`/`tweetnacl`，未修改安装状态。云端验收待后续提交。
+- `44710051` / run `34270694923` 的安全分类确认 shell 在沙盒创建进程阶段失败；`cfcc0819` 改用临时文件释放输出，避免 PTY 依赖，同时保留真实 delta。run `34272052380` attempt 1 的官方 app-server 完整生命周期已通过，Gateway 仍在 App 回合与 attach 失败。
+- 官方 0.153.4 TUI 的自动标题功能发送 `thread/start(ephemeral=true, threadSource="system")`；Proxy 将它误当用户根并替换 current。最小修复透明转发系统线程但不预留/绑定为根，保留普通用户 ephemeral 行为；夹具按 descriptor.current.sessionId 选择 App 会话，并核对 thread/generation。代理、worker、coordinator/router 共 127 项测试、CLI 与 TUI 类型检查通过，真实 Gateway 云验收待下一提交。
 
 ### B2 / P2：矩阵、下载与缓存维护
 
