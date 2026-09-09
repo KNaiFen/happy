@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { dbMock } = vi.hoisted(() => {
+const { dbMock, pgliteMock, statusMock } = vi.hoisted(() => {
     const dbMock = {
         account: { count: vi.fn() },
         session: { count: vi.fn() },
@@ -9,11 +9,13 @@ const { dbMock } = vi.hoisted(() => {
         $queryRaw: vi.fn()
     };
 
-    return { dbMock };
+    return { dbMock, pgliteMock: vi.fn(), statusMock: vi.fn() };
 });
 
 vi.mock("@/storage/db", () => ({
-    db: dbMock
+    db: dbMock,
+    getPGlite: pgliteMock,
+    getDatabaseMaintenanceStatus: statusMock,
 }));
 
 import {
@@ -57,6 +59,7 @@ describe("metric client labels", () => {
 describe("updateDatabaseMetrics", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        pgliteMock.mockReturnValue(null);
         dbMock.account.count.mockResolvedValue(10);
         dbMock.session.count.mockResolvedValue(20);
         dbMock.sessionMessage.count.mockResolvedValue(30);
@@ -75,5 +78,12 @@ describe("updateDatabaseMetrics", () => {
 
         const queriedTables = dbMock.$queryRaw.mock.calls.map((call) => call[1]);
         expect(queriedTables).toEqual(['"Account"', '"Session"', '"SessionMessage"', '"Machine"']);
+    });
+
+    it('reuses PGlite maintenance samples without another database scan', async () => {
+        pgliteMock.mockReturnValue({});
+        statusMock.mockReturnValue({ tables: [{ name: 'Account', liveRows: 3 }], relationBytes: 1024, walBytes: 2048, availableBytes: 4096 });
+        await updateDatabaseMetrics();
+        expect(dbMock.$queryRaw).not.toHaveBeenCalled();
     });
 });

@@ -36,6 +36,57 @@ container_node() {
     compose exec -T happy-relay /nodejs/bin/node "$@"
 }
 
+assert_storage_health() {
+    container_node -e '
+        const fs = require("node:fs");
+        const previousStart = Number(process.argv[1]);
+        async function main() {
+            for (let attempt = 0; attempt < 90; attempt++) {
+                const file = "/data/pglite-maintenance.json";
+                if (fs.existsSync(file)) {
+                    const status = JSON.parse(fs.readFileSync(file, "utf8"));
+                    if (status.startedAt > previousStart && status.tables.some(table => table.successes > 0)) return;
+                }
+                const response = await fetch("http://127.0.0.1:3005/health", { signal: AbortSignal.timeout(5000) });
+                if (!response.ok) throw new Error("health failed while waiting for maintenance");
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            throw new Error("maintenance status did not become ready");
+        }
+        main().catch(error => { console.error(error); process.exit(1); });
+    ' "${1:-0}"
+    "$bundle_root/relayctl.sh" storage-health
+}
+
+assert_storage_health_failures() {
+    for state in missing corrupt unsupported stale disabled warning critical; do
+        container_node -e '
+            const fs = require("node:fs");
+            const file = "/data/pglite-maintenance.json";
+            if (!fs.existsSync(file + ".ci-original")) fs.copyFileSync(file, file + ".ci-original");
+            const status = JSON.parse(fs.readFileSync(file + ".ci-original", "utf8"));
+            const state = process.argv[1];
+            if (state === "missing") { fs.rmSync(file); process.exit(0); }
+            if (state === "corrupt") { fs.writeFileSync(file, "{"); process.exit(0); }
+            if (state === "unsupported") status.version = 999;
+            if (state === "stale") status.sampledAt = Date.now() - 180001;
+            if (state === "disabled") status.enabled = false;
+            if (state === "warning") { status.severity = "warning"; status.reasons = ["sql-failed"]; }
+            if (state === "critical") { status.severity = "critical"; status.reasons = ["disk-critical"]; }
+            fs.writeFileSync(file, JSON.stringify(status));
+        ' "$state"
+        case "$state" in disabled|warning) expected=1 ;; *) expected=2 ;; esac
+        actual=0
+        "$bundle_root/relayctl.sh" storage-health >/dev/null 2>&1 || actual=$?
+        [[ "$actual" == "$expected" ]] || die "storage-health $state exited $actual instead of $expected"
+    done
+    container_node -e '
+        const fs = require("node:fs");
+        fs.renameSync("/data/pglite-maintenance.json.ci-original", "/data/pglite-maintenance.json");
+    '
+    "$bundle_root/relayctl.sh" storage-health
+}
+
 cleanup() {
     if [[ -f "$bundle_root/.env" && -f "$bundle_root/compose.yaml" ]]; then
         compose down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -374,6 +425,8 @@ container_node -e '
 '
 assert_codex_v4_capability
 business_state="$(create_encrypted_business_state)"
+assert_storage_health
+maintenance_started="$(container_node -e 'console.log(JSON.parse(require("node:fs").readFileSync("/data/pglite-maintenance.json", "utf8")).startedAt)')"
 
 container_node -e '
     const fs = require("node:fs");
@@ -398,6 +451,8 @@ container_node -e '
 '
 assert_codex_v4_capability
 assert_encrypted_business_state "$business_state"
+assert_storage_health "$maintenance_started"
+assert_storage_health_failures
 
 container_id="$(compose ps --quiet happy-relay)"
 [[ "$(docker inspect "$container_id" --format '{{.HostConfig.ReadonlyRootfs}}')" == "true" ]] \

@@ -12,6 +12,7 @@ services:
       NODE_ENV: production
       DATA_DIR: /data
       PGLITE_DIR: /data/pglite
+      PGLITE_MAINTENANCE_ENABLED: "${PGLITE_MAINTENANCE_ENABLED:-true}"
       HOST: 0.0.0.0
       PORT: "3005"
       PUBLIC_URL: "${HAPPY_RELAY_PUBLIC_URL:-http://localhost:3005}"

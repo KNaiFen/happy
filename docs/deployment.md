@@ -114,6 +114,25 @@ Monorepo CI 必须从根 Dockerfile 构建真实镜像，并验证 migration、h
 secret ownership、SBOM 与 Critical vulnerability gate。语音日志脱敏由 App/Server
 源码 canary 和 monorepo CI 验收；Relay workflow 不单独复跑该测试。成功前不得把产物称为已发布。
 
+## 数据库容量与维护
+
+PGlite 模式默认开启 `PGLITE_MAINTENANCE_ENABLED`。唯一服务实例每次完成后至少等一分钟，
+轮转维护一张普通持久表，Account/Session 十分钟优先维护，每小时单独 CHECKPOINT。
+维护不删除业务记录、不自动 FULL、不启动第二个数据库进程，也不定时重启服务。
+Postgres 模式继续由部署者管理其原生维护。
+
+Debian Relay 使用 `./relayctl.sh storage-health` 查看最新聚合快照，退出码 `0/1/2`
+分别表示健康、告警、严重或观测失效。文件位于 `PGLITE_DIR` 的父目录，通常为
+`/data/pglite-maintenance.json`；只保留最新状态，重启重新建立本进程的维护进度。
+快照超过三分钟未更新必须检查维护采样和文件写入错误，不能沿用旧成功状态。
+
+可用空间不足 20% 或 5 GiB 告警，不足 10% 或 2 GiB 为严重告警。256 MiB 以上的表
+自动跳过并告警；耗时超过两秒或连续三次 SQL 失败降到每小时重试。热表三十分钟、
+其他表两小时无成功也告警。阈值只观测，不假定可以取消 PGlite SQL。
+每小时增长提示使用 `max(256 MiB, 上次大小的 25%)`，应区分新数据、可复用表空间、WAL
+与失败维护；统计行数可能滞后，普通 VACUUM 也不保证文件缩小。完整操作和临时停用方式见
+[Relay 运维说明](../packages/happy-server/deploy/debian13-amd64/README.md#数据库维护与容量)。
+
 ## 升级
 
 升级现有 Relay 时保留 `.env`、`secrets/master-secret` 和数据 volume，不清库、不重建

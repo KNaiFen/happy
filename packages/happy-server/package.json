@@ -1,6 +1,6 @@
 {
   "name": "happy-server-self-host",
-    "version": "1.1.48",
+  "version": "1.1.49",
   "description": "Happy self-host server and bundled web app",
   "repository": {
     "type": "git",
@@ -41,6 +41,7 @@
     "dev": "lsof -ti tcp:3005 | xargs kill -9 && tsx --env-file=.env --env-file=.env.dev ./sources/main.ts",
     "test": "vitest run",
     "test:stress": "HAPPY_RUN_STRESS_TESTS=1 vitest run sources/app/api/routes/syncV4MutationClassifier.spec.ts",
+    "test:pglite-maintenance:stress": "HAPPY_PGLITE_MAINTENANCE_STRESS=1 vitest run sources/storage/pgliteMaintenance.stress.spec.ts --maxWorkers=1 --no-file-parallelism",
     "test:migration:sync-v4": "node scripts/verify-sync-v4-migration.mjs",
     "prepublishOnly": "pnpm run build && pnpm run bundle:webapp && pnpm test",
     "migrate": "dotenv -e .env.dev -- prisma migrate dev",

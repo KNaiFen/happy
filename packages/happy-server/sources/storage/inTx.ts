@@ -49,7 +49,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, transactionHost: Trans
             return result.result;
         } catch (e) {
             if (e instanceof Prisma.PrismaClientKnownRequestError) {
-                if (e.code === 'P2034' && counter < 3) {
+                if ((e.code === 'P2034' || (e.code === 'P2010' && e.meta?.code === '40001')) && counter < 3) {
                     counter++;
                     await delay(counter * 100);
                     continue;

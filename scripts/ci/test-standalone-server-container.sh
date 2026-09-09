@@ -66,6 +66,7 @@ start_container() {
     docker run --detach \
         --name "$container_name" \
         --init \
+        --cpus=2 --memory=2g --memory-swap=2g \
         --publish 127.0.0.1:3005:3005 \
         --volume "$volume_name:/data" \
         --mount "type=bind,src=$secret_file,dst=/run/secrets/happy_master_secret,readonly" \
@@ -130,6 +131,32 @@ assert_host_health() {
             process.exit(1);
         });
     '
+}
+
+assert_maintenance() {
+    container_node -e '
+        const fs = require("node:fs");
+        const startedAfter = Number(process.argv[1]);
+        async function main() {
+            for (let attempt = 0; attempt < 90; attempt++) {
+                const file = "/data/pglite-maintenance.json";
+                if (fs.existsSync(file)) {
+                    const status = JSON.parse(fs.readFileSync(file, "utf8"));
+                    if (status.startedAt > startedAfter && status.tables.some(table => table.successes > 0)) {
+                        if (status.version !== 1 || !status.enabled || Date.now() - status.sampledAt > 180000) throw new Error("maintenance status is invalid");
+                        if (status.tables.some(table => table.problem || table.oversize)) throw new Error("maintenance did not pass");
+                        console.log(status.startedAt);
+                        return;
+                    }
+                }
+                const response = await fetch("http://127.0.0.1:3005/health", { signal: AbortSignal.timeout(5000) });
+                if (!response.ok) throw new Error("health failed while waiting for maintenance");
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            throw new Error("maintenance did not resume");
+        }
+        main().catch(error => { console.error(error); process.exit(1); });
+    ' "${1:-0}"
 }
 
 assert_host_attachment() {
@@ -350,6 +377,7 @@ assert_container_security
 assert_host_health
 create_persistent_state
 assert_host_attachment before-restart
+maintenance_started="$(assert_maintenance)"
 
 docker stop "$container_name" >/dev/null
 docker rm "$container_name" >/dev/null
@@ -359,5 +387,6 @@ assert_container_security
 assert_host_health
 refresh_persistent_state_token
 assert_host_attachment after-restart
+assert_maintenance "$maintenance_started"
 
 echo "Verified standalone host health, PGlite migration, attachment persistence, restart, and container security"
