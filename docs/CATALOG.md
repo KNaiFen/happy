@@ -41,6 +41,10 @@
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 - [ADR-006: Actions supply-chain controls and production dependency gates](./decisions/ADR-006-actions-security-and-production-dependency-gates.md)
 
+## 活动计划
+
+- [PGlite 数据库异常膨胀预防 PLAN](./plans/pglite-bloat-prevention-2026-09-09.md)
+
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
