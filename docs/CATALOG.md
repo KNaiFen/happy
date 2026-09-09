@@ -41,10 +41,6 @@
 - [ADR-005: 由 daemon 执行同源只读恢复资格预检](./decisions/ADR-005-daemon-resume-eligibility-preflight.md)
 - [ADR-006: Actions supply-chain controls and production dependency gates](./decisions/ADR-006-actions-security-and-production-dependency-gates.md)
 
-## 活动计划
-
-- [PGlite 数据库异常膨胀预防 PLAN](./plans/pglite-bloat-prevention-2026-09-09.md)
-
 ## 审查记录
 
 - [审查记录](./reviews/README.md)
@@ -156,6 +152,7 @@
 - [Codex 历史会话只读保留计划](./plans/archive/legacy-codex-readonly-retention.md)
 - [Minimal Fix Plan for Happy-CLI Bugs with TDD](./plans/archive/legacy/bug-fix-plan-2025-01-15-athundt.md)
 - [Metadata-Driven Model and Mode Selection on Client](./plans/archive/metadata-driven-model-mode-selection.md)
+- [PGlite 数据库异常膨胀预防 PLAN](./plans/archive/pglite-bloat-prevention-2026-09-09.md)
 - [pnpm Migration [Draft]](./plans/archive/pnpm-migration.md)
 - [Portable Single-Binary Distribution](./plans/archive/portable-binary.md)
 - [Provider Envelope Redesign](./plans/archive/provider-envelope-redesign.md)

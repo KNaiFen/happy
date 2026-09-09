@@ -57,6 +57,7 @@
 - [Codex 历史会话只读保留计划](./legacy-codex-readonly-retention.md)
 - [Minimal Fix Plan for Happy-CLI Bugs with TDD](./legacy/bug-fix-plan-2025-01-15-athundt.md)
 - [Metadata-Driven Model and Mode Selection on Client](./metadata-driven-model-mode-selection.md)
+- [PGlite 数据库异常膨胀预防 PLAN](./pglite-bloat-prevention-2026-09-09.md)
 - [pnpm Migration [Draft]](./pnpm-migration.md)
 - [Portable Single-Binary Distribution](./portable-binary.md)
 - [Provider Envelope Redesign](./provider-envelope-redesign.md)
