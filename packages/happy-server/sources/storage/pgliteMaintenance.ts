@@ -22,6 +22,7 @@ type MaintenanceResult = {
     durationMs: number | null;
     successes: number;
     failures: number;
+    backedOff: boolean;
     nextAttemptAt: number;
     problem: 'failed' | 'slow' | null;
 };
@@ -46,7 +47,7 @@ export type PGliteMaintenanceStatus = {
 
 function emptyResult(): MaintenanceResult {
     return { lastAttemptAt: null, lastSuccessAt: null, durationMs: null, successes: 0,
-        failures: 0, nextAttemptAt: 0, problem: null };
+        failures: 0, backedOff: false, nextAttemptAt: 0, problem: null };
 }
 
 /** Owns scheduling only; all SQL uses the existing PGlite connection queue. */
@@ -139,12 +140,14 @@ export class PGliteMaintenance {
             result.successes++;
             result.failures = 0;
             result.problem = result.durationMs > SLOW_OPERATION_MS ? 'slow' : null;
+            result.backedOff = result.problem === 'slow';
         } catch {
             result.durationMs = performance.now() - start;
             result.failures++;
             result.problem = 'failed';
+            result.backedOff ||= result.failures >= 3;
         }
-        result.nextAttemptAt = this.now() + (result.problem === 'slow' || result.failures >= 3 ? HOUR : MINUTE);
+        result.nextAttemptAt = this.now() + (result.backedOff ? HOUR : MINUTE);
     }
 
     private async tick(): Promise<void> {

@@ -209,4 +209,79 @@ describe('PGlite maintenance and account admission', () => {
             await pg.close();
         }
     }, 30_000);
+
+    it('retains hourly backoff through a failure until a normal successful operation', async () => {
+        const { pg, client, directory } = await fixture();
+        let now = Date.now();
+        const maintenance = new PGliteMaintenance(pg, directory, true, () => now);
+        const exec = pg.exec.bind(pg);
+        let mode: 'slow' | 'failed' | 'normal' = 'slow';
+        vi.spyOn(pg, 'exec').mockImplementation(async (sql, options) => {
+            if (sql.includes('public."Account"')) {
+                if (mode === 'failed') throw new Error('injected');
+                if (mode === 'slow') vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 2001);
+            }
+            return exec(sql, options);
+        });
+        const accountResult = () => maintenance.status!.tables.find(table => table.name === 'Account')!;
+        try {
+            await maintenance.runOnce();
+            expect(accountResult().problem).toBe('slow');
+            vi.mocked(performance.now).mockRestore();
+            mode = 'failed';
+            now += 60 * 60_000;
+            await maintenance.runOnce(); // Hourly checkpoint has its own tick.
+            for (let i = 0; i < 3 && accountResult().problem !== 'failed'; i++) {
+                now += 60_001;
+                await maintenance.runOnce();
+            }
+            expect(accountResult().problem).toBe('failed');
+            expect(accountResult().failures).toBe(1);
+            expect(accountResult().nextAttemptAt).toBe(now + 60 * 60_000);
+            mode = 'normal';
+            now += 60 * 60_000;
+            await maintenance.runOnce();
+            for (let i = 0; i < 3 && accountResult().problem !== null; i++) {
+                now += 60_001;
+                await maintenance.runOnce();
+            }
+            expect(accountResult().problem).toBeNull();
+            expect(accountResult().backedOff).toBe(false);
+            expect(accountResult().failures).toBe(0);
+        } finally {
+            await maintenance.stop();
+            await client.$disconnect();
+            await pg.close();
+        }
+    }, 30_000);
+
+    it('queues two real Prisma transactions on the same PGlite owner', async () => {
+        const { pg, client, account } = await fixture();
+        let release!: () => void;
+        let entered!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const ready = new Promise<void>(resolve => { entered = resolve; });
+        let firstCommitted = false;
+        try {
+            const first = client.$transaction(async tx => {
+                expect(await acquireAccountWrite(tx, account.id)).toBe(true);
+                entered();
+                await held;
+                await tx.account.update({ where: { id: account.id }, data: { deletionRequestedAt: new Date() } });
+            }, { isolationLevel: 'Serializable' }).then(() => { firstCommitted = true; });
+            await ready;
+            const second = client.$transaction(async tx => {
+                const admitted = await acquireAccountRead(tx, account.id);
+                expect(firstCommitted).toBe(true);
+                return admitted;
+            }, { isolationLevel: 'Serializable' });
+            release();
+            await expect(second).resolves.toBe(false);
+            await first;
+        } finally {
+            release();
+            await client.$disconnect();
+            await pg.close();
+        }
+    }, 30_000);
 });

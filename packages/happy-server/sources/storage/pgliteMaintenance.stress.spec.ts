@@ -137,6 +137,8 @@ stress('PGlite growth and constrained maintenance acceptance', () => {
         const maintenance = new PGliteMaintenance(f.pg, f.directory, true, () => now);
         const app = fastify();
         const latencies: number[][] = [[], []];
+        const operations: { table: string; durationMs: number | null; problem: string | null }[] = [];
+        report.boundaryOperations = operations;
         try {
             // EXTERNAL storage makes the boundary reflect real incompressible TOAST work.
             await f.pg.exec('CREATE TABLE public."MaintenanceBoundary" (id int PRIMARY KEY, payload text); ALTER TABLE public."MaintenanceBoundary" ALTER COLUMN payload SET STORAGE EXTERNAL');
@@ -172,7 +174,19 @@ stress('PGlite growth and constrained maintenance acceptance', () => {
             for (let phase = 0; phase < 2; phase++) {
                 const requests = (async () => { for (let i = 0; i < 600; i++) await request(phase, i); })();
                 const ticks = phase === 0 ? Promise.resolve() : (async () => {
-                    for (let i = 0; i < 65; i++) { now += 60_001; await maintenance.runOnce(); }
+                    for (let i = 0; i < 65; i++) {
+                        now += 60_001;
+                        await maintenance.runOnce();
+                        const status = maintenance.status!;
+                        const completed = [...status.tables.map(table => ({ ...table, table: table.name })), { ...status.checkpoint, table: 'CHECKPOINT' }]
+                            .filter(operation => operation.lastAttemptAt === now);
+                        operations.push(...completed.map(({ table, durationMs, problem }) => ({ table, durationMs, problem })));
+                        await saveReport();
+                        for (const operation of completed) {
+                            expect(operation.problem).toBeNull();
+                            expect(operation.durationMs).toBeLessThanOrEqual(2000);
+                        }
+                    }
                 })();
                 await Promise.all([requests, ticks]);
             }
@@ -183,7 +197,7 @@ stress('PGlite growth and constrained maintenance acceptance', () => {
             expect(status.checkpoint.successes).toBeGreaterThan(0);
             expect(status.checkpoint.problem).toBeNull();
             const p99 = latencies.map(values => values.sort((a, b) => a - b)[Math.ceil(values.length * 0.99) - 1]);
-            report.availability = { boundaryBytes, p99, requests: latencies.map(values => values.length), maxMaintenanceMs: Math.max(...status.tables.map(table => table.durationMs ?? 0), status.checkpoint.durationMs ?? 0) };
+            report.availability = { boundaryBytes, p99, requests: latencies.map(values => values.length), maxMaintenanceMs: Math.max(...operations.map(operation => operation.durationMs ?? 0)), firstBoundary: operations.find(operation => operation.table === 'MaintenanceBoundary') };
             expect(p99[1]).toBeLessThanOrEqual(p99[0] * 2 + 100);
             expect((await f.client.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(400);
             expect(boundary.durationMs).toBeLessThanOrEqual(2000);
