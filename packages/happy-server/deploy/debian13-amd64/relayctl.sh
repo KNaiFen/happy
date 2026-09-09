@@ -119,6 +119,8 @@ case "$command_name" in
         ;;
     storage-health)
         [ "$#" -eq 0 ] || die "storage-health does not accept additional arguments"
+        # JavaScript template literals must not be expanded by the shell.
+        # shellcheck disable=SC2016
         compose exec -T happy-relay /nodejs/bin/node -e '
             const fs = require("node:fs");
             const path = require("node:path");
