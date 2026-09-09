@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import fastify from 'fastify';
+import axios from 'axios';
 import { describe, expect, it } from 'vitest';
 import { runMigrations } from '../standalone';
 import { acquireAccountRead, acquireAccountWrite } from '../app/account/accountWriteGate';
@@ -166,8 +167,7 @@ stress('PGlite growth and constrained maintenance acceptance', () => {
             const address = app.server.address() as { port: number };
             const request = async (phase: number, i: number) => {
                 const start = performance.now();
-                const response = await fetch(`http://127.0.0.1:${address.port}${i % 3 ? '/account' : '/health'}`, { method: i % 3 === 2 ? 'POST' : 'GET', signal: AbortSignal.timeout(5000) });
-                await response.arrayBuffer();
+                const response = await axios.request({ url: `http://127.0.0.1:${address.port}${i % 3 ? '/account' : '/health'}`, method: i % 3 === 2 ? 'POST' : 'GET', timeout: 5000, responseType: 'arraybuffer' });
                 expect(response.status).toBe(200);
                 latencies[phase].push(performance.now() - start);
             };

@@ -1,6 +1,7 @@
 import type { PGlite } from '@electric-sql/pglite';
 import { rename, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { error, log, warn } from '@/utils/log';
 
 const MINUTE = 60_000;
