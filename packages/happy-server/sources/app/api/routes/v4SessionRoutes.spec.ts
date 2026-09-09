@@ -347,6 +347,7 @@ const {
 
     const accountUpdateMany = vi.fn(async () => ({ count: state.accountWritable ? 1 : 0 }));
     const txClient = {
+        $queryRaw: vi.fn(async () => state.accountWritable ? [{ admitted: 1 }] : []),
         account: {
             updateMany: accountUpdateMany,
         },
@@ -367,6 +368,7 @@ const {
     };
 
     const dbMock = {
+        $queryRaw: vi.fn(async () => state.accountWritable ? [{ admitted: 1 }] : []),
         account: {
             updateMany: accountUpdateMany,
         },

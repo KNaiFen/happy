@@ -3,8 +3,10 @@ import { PGlite } from "@electric-sql/pglite";
 import { PrismaPGlite } from "pglite-prisma-adapter";
 import * as fs from "fs";
 import * as path from "path";
+import { PGliteMaintenance } from './pgliteMaintenance';
 
 let pgliteInstance: PGlite | null = null;
+let maintenance: PGliteMaintenance | null = null;
 
 type WebAssemblyModuleCtor = new (bytes: Buffer) => WebAssembly.Module;
 
@@ -58,4 +60,20 @@ export const db = createClient();
 
 export function getPGlite(): PGlite | null {
     return pgliteInstance;
+}
+
+export function getDatabaseMaintenanceStatus() {
+    return maintenance?.status ?? null;
+}
+
+export function startDatabaseMaintenance(): void {
+    if (!pgliteInstance || maintenance) return;
+    maintenance = new PGliteMaintenance(pgliteInstance, process.env.PGLITE_DIR || './data/pglite', process.env.PGLITE_MAINTENANCE_ENABLED !== 'false');
+    maintenance.start();
+}
+
+export async function closeDatabase(): Promise<void> {
+    await maintenance?.stop();
+    await db.$disconnect();
+    await pgliteInstance?.close();
 }

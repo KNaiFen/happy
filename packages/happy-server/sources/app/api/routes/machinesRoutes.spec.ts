@@ -213,6 +213,7 @@ const {
     });
 
     const dbMock = {
+        $queryRaw: vi.fn(async () => [{ admitted: 1 }]),
         account: {
             updateMany: vi.fn(async () => ({ count: 1 })),
         },

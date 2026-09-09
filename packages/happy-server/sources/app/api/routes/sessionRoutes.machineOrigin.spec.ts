@@ -51,6 +51,7 @@ const {
         ),
     });
     const dbMock = {
+        $queryRaw: vi.fn(async () => state.accountWritable ? [{ admitted: 1 }] : []),
         account: {
             updateMany: vi.fn(async () => ({ count: state.accountWritable ? 1 : 0 })),
         },

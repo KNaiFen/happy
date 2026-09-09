@@ -1,5 +1,5 @@
 import { register, Counter, Gauge, Histogram } from 'prom-client';
-import { db } from '@/storage/db';
+import { db, getDatabaseMaintenanceStatus, getPGlite } from '@/storage/db';
 import { forever } from '@/utils/forever';
 import { delay } from '@/utils/delay';
 import { shutdownSignal } from '@/utils/shutdown';
@@ -176,6 +176,13 @@ type EstimatedCountRow = {
     estimated_count: bigint | number | null;
 };
 
+export const databaseStorageBytesGauge = new Gauge({
+    name: 'database_storage_bytes',
+    help: 'Latest PGlite maintenance capacity sample',
+    labelNames: ['kind'] as const,
+    registers: [register],
+});
+
 async function getEstimatedRecordCount(tableName: string): Promise<number> {
     const rows = await db.$queryRaw<EstimatedCountRow[]>`
         SELECT GREATEST(reltuples, 0)::bigint AS estimated_count
@@ -188,6 +195,18 @@ async function getEstimatedRecordCount(tableName: string): Promise<number> {
 
 // Database metrics updater
 export async function updateDatabaseMetrics(): Promise<void> {
+    if (getPGlite()) {
+        const status = getDatabaseMaintenanceStatus();
+        if (!status) return;
+        const labels: Record<string, string> = { Account: 'accounts', Session: 'sessions', SessionMessage: 'messages', Machine: 'machines' };
+        for (const table of status.tables) {
+            if (labels[table.name]) databaseRecordCountGauge.set({ table: labels[table.name] }, table.liveRows);
+        }
+        databaseStorageBytesGauge.set({ kind: 'relations' }, status.relationBytes);
+        databaseStorageBytesGauge.set({ kind: 'wal' }, status.walBytes);
+        databaseStorageBytesGauge.set({ kind: 'available' }, status.availableBytes);
+        return;
+    }
     // Use catalog estimates instead of exact COUNT(*). Exact counts are full
     // scans in Postgres and this updater runs once a minute.
     const [accountCount, sessionCount, messageCount, machineCount] = await Promise.all([

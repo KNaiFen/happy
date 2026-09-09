@@ -78,6 +78,7 @@ const {
     const accountUpdateMany = vi.fn(async () => ({ count: state.accountWritable ? 1 : 0 }));
     const accountCreateMany = vi.fn(async () => ({ count: 1 }));
     const dbMock = {
+        $queryRaw: vi.fn(async () => state.accountWritable ? [{ admitted: 1 }] : []),
         terminalAuthRequest: {
             upsert: upsertAuthRequest,
             findUnique: terminalAuthFindUnique,

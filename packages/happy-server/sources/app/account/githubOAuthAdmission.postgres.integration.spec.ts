@@ -30,6 +30,9 @@ import {
     type GithubOAuthAdmission,
 } from './githubOAuthAdmission';
 import { connectRoutes } from '@/app/api/routes/connectRoutes';
+import { acquireAccountRead, acquireAccountWrite, requireAccountWrites } from './accountWriteGate';
+import { inTx } from '@/storage/inTx';
+import { getPGlite, getDatabaseMaintenanceStatus, startDatabaseMaintenance } from '@/storage/db';
 
 const enabled = process.env.HAPPY_POSTGRES_INTEGRATION_TEST === '1';
 const integrationDescribe = enabled ? describe.sequential : describe.skip;
@@ -47,6 +50,9 @@ integrationDescribe('GitHub OAuth and account deletion PostgreSQL ordering', () 
 
     beforeAll(() => {
         assertLocalTestDatabase();
+        startDatabaseMaintenance();
+        expect(getPGlite()).toBeNull();
+        expect(getDatabaseMaintenanceStatus()).toBeNull();
         first = new PrismaClient();
         second = new PrismaClient();
         clients.push(first, second);
@@ -71,6 +77,81 @@ integrationDescribe('GitHub OAuth and account deletion PostgreSQL ordering', () 
         restoreEnv('GITHUB_CLIENT_ID', originalEnv.clientId);
         restoreEnv('GITHUB_CLIENT_SECRET', originalEnv.clientSecret);
         restoreEnv('GITHUB_REDIRECT_URL', originalEnv.redirectUrl);
+    });
+
+    it.each([acquireAccountRead, acquireAccountWrite])('holds deletion behind admitted transaction (%#)', async (admit) => {
+        const fixture = await createFixture(first);
+        const locked = deferred<void>();
+        const release = deferred<void>();
+        let backend = 0;
+        const admitted = inTx(async tx => {
+            expect(await admit(tx, fixture.accountId)).toBe(true);
+            locked.resolve();
+            await release.promise;
+        }, first);
+        await locked.promise;
+        let deletion: Promise<unknown> | undefined;
+        try {
+            const started = deferred<void>();
+            deletion = inTx(async tx => {
+                backend = (await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`)[0].pid;
+                started.resolve();
+                return tx.account.update({ where: { id: fixture.accountId }, data: { deletionRequestedAt: new Date() } });
+            }, second);
+            await started.promise;
+            await vi.waitFor(async () => {
+                const rows = await first.$queryRaw<{ blocked: boolean }[]>`
+                    SELECT cardinality(pg_blocking_pids(${backend}::int)) > 0 AS blocked`;
+                expect(rows[0].blocked).toBe(true);
+            }, { timeout: 3000, interval: 20 });
+        } finally {
+            release.resolve();
+            await Promise.all([admitted, deletion]);
+        }
+        await expect(inTx(tx => admit(tx, fixture.accountId), second)).resolves.toBe(false);
+    });
+
+    it('maps stale raw-query snapshots precisely and retries with a fresh snapshot', async () => {
+        const fixture = await createFixture(first);
+        const snapshot = deferred<void>();
+        const changed = deferred<void>();
+        const stale = first.$transaction(async tx => {
+            await tx.account.findUniqueOrThrow({ where: { id: fixture.accountId } });
+            snapshot.resolve();
+            await changed.promise;
+            return acquireAccountRead(tx, fixture.accountId);
+        }, serializableOptions);
+        const rejected = expect(stale).rejects.toMatchObject({ code: 'P2010', meta: { code: '40001' } });
+        await snapshot.promise;
+        await second.account.update({ where: { id: fixture.accountId }, data: { seq: { increment: 1 } } });
+        changed.resolve();
+        await rejected;
+
+        let attempts = 0;
+        await expect(inTx(async tx => {
+            attempts++;
+            await tx.account.findUniqueOrThrow({ where: { id: fixture.accountId } });
+            if (attempts === 1) {
+                await second.account.update({ where: { id: fixture.accountId }, data: { deletionRequestedAt: new Date() } });
+            }
+            return acquireAccountWrite(tx, fixture.accountId);
+        }, first)).resolves.toBe(false);
+        expect(attempts).toBe(2);
+        let invalidAttempts = 0;
+        await expect(inTx(async tx => {
+            invalidAttempts++;
+            return tx.$queryRaw`SELECT * FROM definitely_missing_maintenance_relation`;
+        }, first)).rejects.toMatchObject({ code: 'P2010', meta: { code: '42P01' } });
+        expect(invalidAttempts).toBe(1);
+    });
+
+    it('orders and deduplicates multi-account admission under opposing callers', async () => {
+        const a = await createFixture(first);
+        const b = await createFixture(first);
+        await Promise.all([
+            inTx(tx => requireAccountWrites(tx, [a.accountId, b.accountId, a.accountId]), first),
+            inTx(tx => requireAccountWrites(tx, [b.accountId, a.accountId]), second),
+        ]);
     });
 
     it('keeps deletion pending when a callback claim commits first', async () => {
@@ -210,18 +291,7 @@ async function withSerializableRetry<T>(
     client: PrismaClient,
     callback: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
-    for (let attempt = 0; ; attempt += 1) {
-        try {
-            return await client.$transaction(callback, serializableOptions);
-        } catch (error) {
-            if (
-                error instanceof Prisma.PrismaClientKnownRequestError
-                && error.code === 'P2034'
-                && attempt < 3
-            ) continue;
-            throw error;
-        }
-    }
+    return inTx(callback, client);
 }
 
 function deferred<T>() {

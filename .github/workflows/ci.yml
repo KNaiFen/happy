@@ -306,6 +306,27 @@ jobs:
       - name: Test Server
         run: pnpm --filter happy-server-self-host test
 
+      - name: Verify PGlite growth and maintenance with production resource limits
+        timeout-minutes: 35
+        run: |
+          mkdir -p "$RUNNER_TEMP/pglite-maintenance"
+          docker run --rm --cpus=2 --memory=2g --memory-swap=2g \
+            --volume "$PWD:$PWD" --volume "$RUNNER_TEMP/pglite-maintenance:/reports" \
+            --workdir "$PWD/packages/happy-server" \
+            --env HAPPY_PGLITE_MAINTENANCE_STRESS=1 \
+            --env HAPPY_MAINTENANCE_REPORT_DIR=/reports \
+            node:24-bookworm \
+            node node_modules/vitest/vitest.mjs run sources/storage/pgliteMaintenance.stress.spec.ts --maxWorkers=1 --no-file-parallelism
+
+      - name: Upload bounded PGlite acceptance summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pglite-maintenance-${{ github.sha }}
+          path: ${{ runner.temp }}/pglite-maintenance/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Build Server runtime
         run: pnpm --filter happy-server-self-host build
 

@@ -1,6 +1,6 @@
 import "reflect-metadata";
 
-import { db } from "./storage/db";
+import { db, closeDatabase, startDatabaseMaintenance } from "./storage/db";
 import { initEncrypt } from "./modules/encrypt";
 import { initGithub } from "./modules/github";
 import { loadFiles } from "./storage/files";
@@ -27,9 +27,7 @@ export async function startServer(opts: StartServerOptions): Promise<{ port: num
     process.env.HANDY_MASTER_SECRET = opts.masterSecret;
 
     await db.$connect();
-    onShutdown("db", async () => {
-        await db.$disconnect();
-    });
+    onShutdown("db", closeDatabase);
     onShutdown("activity-cache", async () => {
         activityCache.shutdown();
     });
@@ -47,6 +45,7 @@ export async function startServer(opts: StartServerOptions): Promise<{ port: num
         injectHtmlConfig: opts.injectHtmlConfig,
     });
     startAccountDeletionProcessor();
+    startDatabaseMaintenance();
     startDatabaseMetricsUpdater();
     startTimeout();
 

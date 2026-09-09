@@ -38,9 +38,33 @@ cd happy-relay
 ```bash
 ./relayctl.sh status
 ./relayctl.sh health
+./relayctl.sh storage-health
 ./relayctl.sh logs --tail 100
 ./relayctl.sh restart
 ```
+
+## 数据库维护与容量
+
+Relay 默认在唯一的 PGlite 实例中运行普通 VACUUM，每次完成后等待至少一分钟再维护
+下一张表；Account、Session 每十分钟优先维护，其余表轮转，每小时独立 CHECKPOINT。
+普通 VACUUM 让旧行空间可复用，不保证文件立即缩小；例行维护不会重启服务、执行
+VACUUM FULL 或删除有效数据、数据库文件和 WAL。
+
+`./relayctl.sh storage-health` 读取 `/data/pglite-maintenance.json` 的最新原子快照，
+输出容量、维护进度和告警。它不打开第二个 PGlite 实例。退出码：`0` 健康、`1` 告警、
+`2` 严重容量问题或快照缺失、损坏、不支持、超过三分钟未更新。首次启动约一分钟生成快照。
+
+- 可用空间不足 20% 或 5 GiB 告警，不足 10% 或 2 GiB 为严重告警。
+- 单表总量包含 heap、TOAST 和索引，超过 256 MiB 时跳过并告警；需要人工评估。
+- SQL 失败、热表三十分钟或普通表两小时无成功、维护总耗时超过两秒都会告警。
+  慢表或连续失败三次的表每小时重试，其他表继续轮转。两秒是观测阈值，不是 SQL 取消期限。
+- 每小时关系或 WAL 增长超过 `max(256 MiB, 上次大小的 25%)` 提示检查，首次无对比样本为未知。
+
+出现告警时先对照新消息/附件量、表实际大小、最近成功和失败信息。WAL 保留供复用、
+估计废弃行数为零均不能独立证明没有膨胀；不要删除 WAL 或用数据清空处理容量问题。
+超限或持续失败应安排明确的维护方案。维护影响请求时，可在 `.env` 设置
+`PGLITE_MAINTENANCE_ENABLED=false` 后运行 `./relayctl.sh start` 临时停用；状态持续告警，
+恢复为 `true` 后同样运行 `start`。该开关不会停用容量采样，也不会阻止正常业务写入。
 
 ## 局域网 HTTP
 

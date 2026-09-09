@@ -59,6 +59,7 @@ function uniqueConflictThenRecoveryHost(options: {
 }): TransactionHost {
     let transactionNumber = 0;
     const tx = {
+        $queryRaw: vi.fn(async () => options.gate ? [{ admitted: 1 }] : []),
         account: {
             updateMany: vi.fn(async () => ({ count: options.gate ? 1 : 0 })),
         },

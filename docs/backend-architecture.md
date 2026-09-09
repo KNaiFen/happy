@@ -28,6 +28,13 @@ Happy Server 是认证、加密数据中继、同步日志、设备/会话目录
 Redis 不是服务启动前置条件。它只在多副本实时通知和 RPC 路由需要跨进程传播时启用；
 没有 Redis 时，数据库同步与单进程 Socket.IO 仍可工作。
 
+PGlite 只有服务进程内一个数据库 owner。存储与 API 初始化后启动单个自调度维护循环，
+通过同一实例队列逐表执行事务外普通 VACUUM，并每小时独立 CHECKPOINT；关闭时先等
+正在执行的维护完成，再断开 Prisma、关闭 PGlite。迁移和外部 Postgres 不启动该循环。
+表预算包括 heap、TOAST、索引，超限、慢操作、SQL 失败可见并退避。维护不是硬实时操作，
+请求可能短暂排队。容量和最近进度写入数据目录的一个原子快照；Prometheus 复用该采样，
+Relay 的 `storage-health` 直接读快照。具体阈值和处置见 [部署说明](deployment.md#数据库容量与维护)。
+
 ## HTTP 与同步面
 
 `/v1`、`/v2` 保留账户、设备、会话目录、共享更新、资产、KV 和兼容基础设施。
@@ -85,6 +92,10 @@ presence 等会产生外部或长期状态的路径在最终写入处另有账�
 成功后才返回 state；callback 必须先原子 claim，claim 失败或重放不会交换 code、读取 profile 或上传
 头像。删除器等待所有已 claim callback 通过 `completedAt` 明确结算；token POST 的传输或解析结果未知时
 admission 不按 state TTL 自动释放。
+
+普通账户读写准入在现有 Serializable 事务中使用参数化 `FOR NO KEY UPDATE`，保持与
+删除标记更新互斥；准入本身不更新 `Account.updatedAt`，不产生额外的 MVCC 行版本。
+真实业务及序号更新仍保留，原始 SQL 的 `P2010/40001` 序列化冲突复用现有有限事务重试。
 
 App 在删除 proof 离开客户端前同步结束 token-bound outbound generation，停止全部 Sync 队列、Sync v4
 client 与 git status sync，卸载 AppState/Web listener，并 reset user-scoped Socket；随后才持久化

@@ -54,6 +54,7 @@ Commands:
   status      Show container status
   logs        Show relay logs (extra docker compose logs flags are accepted)
   health      Query the deep database health endpoint
+  storage-health  Read database maintenance and capacity status
 EOF
 }
 
@@ -115,6 +116,51 @@ case "$command_name" in
                     });
             '
         printf '\n'
+        ;;
+    storage-health)
+        [ "$#" -eq 0 ] || die "storage-health does not accept additional arguments"
+        compose exec -T happy-relay /nodejs/bin/node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            try {
+                const status = JSON.parse(fs.readFileSync(path.join(path.dirname(process.env.PGLITE_DIR), "pglite-maintenance.json"), "utf8"));
+                const reasons = new Set(["disabled", "disk-low", "disk-critical", "oversize", "slow", "sql-failed", "maintenance-overdue", "checkpoint-overdue", "growth"]);
+                const validNumber = value => Number.isFinite(value) && value >= 0;
+                if (status.version !== 1 || typeof status.enabled !== "boolean"
+                    || !Number.isInteger(status.processId) || status.processId <= 0
+                    || !["healthy", "warning", "critical"].includes(status.severity)
+                    || !Array.isArray(status.reasons) || status.reasons.some(reason => !reasons.has(reason))
+                    || !Array.isArray(status.tables) || !status.tables.length
+                    || ![status.startedAt, status.sampledAt, status.relationBytes, status.walBytes, status.availableBytes, status.availableRatio].every(validNumber)
+                    || status.availableRatio > 1 || status.sampledAt < status.startedAt
+                    || status.sampledAt > Date.now() + 1000 || Date.now() - status.sampledAt > 180000
+                    || !status.checkpoint || !validNumber(status.checkpoint.successes)
+                    || status.tables.some(table => !validNumber(table.bytes) || !validNumber(table.successes))) {
+                    throw new Error("invalid status");
+                }
+                const ticksPerSecond = 100;
+                const bootTime = Number(fs.readFileSync("/proc/stat", "utf8").match(/^btime (\d+)$/m)[1]);
+                const processStat = fs.readFileSync(`/proc/${status.processId}/stat`, "utf8");
+                const processStart = bootTime * 1000 + Number(processStat.slice(processStat.lastIndexOf(")") + 2).split(" ")[19]) * 1000 / ticksPerSecond;
+                if (status.startedAt < processStart) throw new Error("status belongs to a previous process");
+                const critical = status.severity === "critical" || status.reasons.includes("disk-critical");
+                const warning = !status.enabled || status.severity === "warning" || status.reasons.length > 0;
+                console.log(JSON.stringify({
+                    severity: critical ? "critical" : warning ? "warning" : "healthy",
+                    enabled: status.enabled, sampledAt: status.sampledAt,
+                    reasons: status.reasons, relationBytes: status.relationBytes,
+                    walBytes: status.walBytes, availableBytes: status.availableBytes,
+                    availableRatio: status.availableRatio, tables: status.tables.length,
+                    maintainedTables: status.tables.filter(table => table.successes > 0).length,
+                    sweepCompletedAt: status.sweepCompletedAt,
+                    checkpointSuccesses: status.checkpoint.successes,
+                }));
+                process.exit(critical ? 2 : warning ? 1 : 0);
+            } catch {
+                console.error("Database maintenance status is missing, invalid, unsupported or stale");
+                process.exit(2);
+            }
+        '
         ;;
     -h|--help|help|"")
         usage

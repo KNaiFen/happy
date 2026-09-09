@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { dbMock } = vi.hoisted(() => ({
     dbMock: {
+        $queryRaw: vi.fn(),
         machine: {
             findFirst: vi.fn(),
             updateMany: vi.fn(),
@@ -29,6 +30,7 @@ describe("authorizeSocketScope", () => {
         vi.clearAllMocks();
         dbMock.account.findFirst.mockResolvedValue({ id: "user-1" });
         dbMock.account.updateMany.mockResolvedValue({ count: 1 });
+        dbMock.$queryRaw.mockResolvedValue([{ admitted: 1 }]);
     });
 
     it("allows account tokens but rejects terminal credentials in user scope", async () => {
@@ -85,14 +87,13 @@ describe("authorizeSocketScope", () => {
     });
 
     it("rejects user-scoped authorization while account deletion is pending", async () => {
-        dbMock.account.updateMany.mockResolvedValueOnce({ count: 0 });
+        dbMock.$queryRaw.mockResolvedValueOnce([]);
 
         await expect(authorizeSocketScope({
             userId: "user-1",
             clientType: "user-scoped",
         })).resolves.toBe(false);
-        expect(dbMock.account.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-            where: { id: "user-1", deletionRequestedAt: null },
-        }));
+        expect(dbMock.$queryRaw).toHaveBeenCalledWith(expect.any(Array), "user-1");
+        expect(dbMock.account.updateMany).not.toHaveBeenCalled();
     });
 });
