@@ -167,7 +167,7 @@ stress('PGlite growth and constrained maintenance acceptance', () => {
             const address = app.server.address() as { port: number };
             const request = async (phase: number, i: number) => {
                 const start = performance.now();
-                const response = await axios.request({ url: `http://127.0.0.1:${address.port}${i % 3 ? '/account' : '/health'}`, method: i % 3 === 2 ? 'POST' : 'GET', timeout: 5000, responseType: 'arraybuffer' });
+                const response = await axios.request({ url: `http://127.0.0.1:${address.port}${i % 3 ? '/account' : '/health'}`, method: i % 3 === 2 ? 'POST' : 'GET', data: i % 3 === 2 ? {} : undefined, timeout: 5000, responseType: 'arraybuffer' });
                 expect(response.status).toBe(200);
                 latencies[phase].push(performance.now() - start);
             };
