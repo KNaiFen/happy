@@ -90,7 +90,6 @@ export class PGliteMaintenance {
             this.timer = null;
             void this.runOnce().finally(() => this.schedule());
         }, MINUTE);
-        this.timer.unref();
     }
 
     async stop(): Promise<void> {
