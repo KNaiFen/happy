@@ -61,10 +61,6 @@ function selectOfficialCodexScenarios(classification) {
     classification.codex_gateway_tui = true;
 }
 
-function selectWorkflowContracts(classification) {
-    classification.workflow_contracts = true;
-}
-
 function normalizePath(file) {
     return file.replaceAll('\\', '/').replace(/^\.\//, '');
 }
@@ -110,7 +106,7 @@ function selectSharedCodexIntegration(classification) {
 }
 
 function classifyWorkflowInput(file, classification) {
-    selectWorkflowContracts(classification);
+    classification.workflow_contracts = true;
 
     if (file === '.github/workflows/ci.yml') {
         selectAll(classification);
@@ -228,8 +224,8 @@ function classifyPaths(paths, { forceAll = false } = {}) {
             selectAll(classification);
             continue;
         }
-        if (file === 'pnpm-lock.yaml' || file.endsWith('/package.json')) {
-            selectWorkflowContracts(classification);
+        if (file.endsWith('/package.json')) {
+            classification.workflow_contracts = true;
             classification.dependency_audit = true;
         }
         if (file.startsWith('.github/workflows/') || file.startsWith('scripts/ci/')) {

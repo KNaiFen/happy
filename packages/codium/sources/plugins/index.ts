@@ -9,7 +9,6 @@ export type {
 } from './types'
 export {
     pluginHost,
-    pluginsAtom,
     usePlugin,
     usePlugins,
 } from './host'

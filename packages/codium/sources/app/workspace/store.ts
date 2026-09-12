@@ -60,9 +60,6 @@ export const projectListAtom = atom((get) => {
 export const workspaceByIdAtomFamily = (id: string) =>
     atom((get) => get(workspacesAtom)[id])
 
-export const projectByIdAtomFamily = (id: string) =>
-    atom((get) => get(projectsAtom)[id])
-
 export const activeWorkspaceTabsAtomFamily = (workspaceId: string) =>
     atom((get) => {
         const workspace = get(workspacesAtom)[workspaceId]
