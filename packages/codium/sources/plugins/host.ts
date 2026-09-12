@@ -1,4 +1,3 @@
-import { atom } from 'jotai'
 import { useEffect, useState } from 'react'
 import type { Plugin, PluginContext } from './types'
 
@@ -60,14 +59,6 @@ export const pluginHost = {
         emit()
     },
 }
-
-const baseAtom = atom(0)
-baseAtom.onMount = (set) => subscribe(() => set((revision) => revision + 1))
-
-export const pluginsAtom = atom((get) => {
-    get(baseAtom)
-    return state.plugins
-})
 
 export function usePlugins(): readonly Plugin[] {
     const [, force] = useState(0)

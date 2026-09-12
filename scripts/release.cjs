@@ -39,7 +39,6 @@ function getReleaseTargets() {
       id: path.basename(workspacePath),
       workspaceName: workspacePackageJson.name,
       workspacePath,
-      releaseScript,
       requiresReleaseIt: /\brelease-it\b/.test(releaseScript),
     });
   }

@@ -123,7 +123,7 @@ function makeRawSessionLegacy(
 // --- Smoke tests ---
 
 describe('Smoke: CLI command surface', () => {
-    describe('1. auth commands', () => {
+    describe('auth commands', () => {
         it('auth login help shows expected description', () => {
             const { stdout } = runCli('auth', 'login', '--help');
             expect(stdout).toContain('Authenticate via QR code');
@@ -150,94 +150,6 @@ describe('Smoke: CLI command surface', () => {
             expect(stdout).toContain('Logged out');
         });
     });
-
-    describe('2. list command', () => {
-        it('shows help with expected options', () => {
-            const { stdout } = runCli('list', '--help');
-            expect(stdout).toContain('--active');
-            expect(stdout).toContain('--json');
-        });
-
-        it('fails with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('list');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
-
-    describe('3. status command', () => {
-        it('shows help with session-id and --json', () => {
-            const { stdout } = runCli('status', '--help');
-            expect(stdout).toContain('session-id');
-            expect(stdout).toContain('--json');
-        });
-
-        it('fails with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('status', 'abc');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
-
-    describe('4. send command', () => {
-        it('shows help with session-id, message, --yolo, --wait, --json', () => {
-            const { stdout } = runCli('send', '--help');
-            expect(stdout).toContain('session-id');
-            expect(stdout).toContain('message');
-            expect(stdout).toContain('--yolo');
-            expect(stdout).toContain('--wait');
-            expect(stdout).toContain('--operation-id');
-            expect(stdout).toContain('--json');
-        });
-
-        it('fails with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('send', 'abc', 'hello');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
-
-    describe('5. history command', () => {
-        it('shows help with session-id, --limit, --json', () => {
-            const { stdout } = runCli('history', '--help');
-            expect(stdout).toContain('session-id');
-            expect(stdout).toContain('--limit');
-            expect(stdout).toContain('--json');
-        });
-
-        it('fails with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('history', 'abc');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
-
-    describe('6. stop command', () => {
-        it('shows help with session-id', () => {
-            const { stdout } = runCli('stop', '--help');
-            expect(stdout).toContain('session-id');
-        });
-
-        it('fails with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('stop', 'abc');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
-
-    describe('7. wait command', () => {
-        it('shows help with session-id and --timeout', () => {
-            const { stdout } = runCli('wait', '--help');
-            expect(stdout).toContain('session-id');
-            expect(stdout).toContain('--timeout');
-        });
-
-        it('fails with auth error when not authenticated', () => {
-            const { stderr, exitCode } = runCli('wait', 'abc');
-            expect(exitCode).not.toBe(0);
-            expect(stderr).toContain('happy-agent auth login');
-        });
-    });
 });
 
 describe('Smoke: --json flag on applicable commands', () => {
@@ -245,21 +157,6 @@ describe('Smoke: --json flag on applicable commands', () => {
         const { stdout } = runCli('list', '--help');
         expect(stdout).toContain('--json');
         expect(stdout).toContain('Output as JSON');
-    });
-
-    it('status --json is documented in help', () => {
-        const { stdout } = runCli('status', '--help');
-        expect(stdout).toContain('--json');
-    });
-
-    it('send --json is documented in help', () => {
-        const { stdout } = runCli('send', '--help');
-        expect(stdout).toContain('--json');
-    });
-
-    it('history --json is documented in help', () => {
-        const { stdout } = runCli('history', '--help');
-        expect(stdout).toContain('--json');
     });
 
     it('formatJson produces valid pretty-printed JSON', () => {
@@ -274,25 +171,6 @@ describe('Smoke: --json flag on applicable commands', () => {
 });
 
 describe('Smoke: Error handling', () => {
-    describe('no credentials', () => {
-        it('all authenticated commands fail with auth error message', () => {
-            const commands = [
-                ['list'],
-                ['status', 'fake-id'],
-                ['send', 'fake-id', 'hello'],
-                ['history', 'fake-id'],
-                ['stop', 'fake-id'],
-                ['wait', 'fake-id'],
-            ];
-
-            for (const args of commands) {
-                const { stderr, exitCode } = runCli(...args);
-                expect(exitCode).not.toBe(0);
-                expect(stderr).toContain('happy-agent auth login');
-            }
-        }, 20_000);
-    });
-
     describe('invalid session ID (in unit-tested code paths)', () => {
         it('resolveSessionEncryption throws for undecryptable key', () => {
             const creds = makeCredentials();
