@@ -417,7 +417,6 @@ export class ApiSessionClient extends EventEmitter {
                 return;
             }
             if (!shouldReconnect()) {
-                logger.debug('[API] Still not ready to reconnect');
                 return;
             }
             logger.debug('[API] Attempting reconnect');
