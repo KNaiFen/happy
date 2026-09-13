@@ -42,6 +42,9 @@ export function createBackoff(
 
 export let backoff = createBackoff({
     onError: (e, failuresCount) => {
-        logger.debug(`[BACKOFF] retry ${failuresCount}:`, (e as Error)?.message || e);
+        // Preserve the failure trend without logging every retry forever.
+        if ((failuresCount & (failuresCount - 1)) === 0) {
+            logger.debug(`[BACKOFF] retry ${failuresCount}:`, (e as Error)?.message || e);
+        }
     }
 });

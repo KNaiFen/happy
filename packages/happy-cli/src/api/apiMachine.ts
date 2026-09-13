@@ -730,7 +730,6 @@ export class ApiMachineClient {
                 return;
             }
             if (!shouldReconnect()) {
-                logger.debug('[API MACHINE] Still not ready to reconnect');
                 return;
             }
             logger.debug('[API MACHINE] Attempting reconnect');

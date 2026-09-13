@@ -6,11 +6,10 @@
  */
 
 import chalk from 'chalk'
-import { appendFileSync } from 'fs'
 import { inspect } from 'node:util'
 import { configuration } from '@/configuration'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { appendFileSync, existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { join, basename, dirname } from 'node:path'
 // Note: readDaemonState is imported lazily inside listDaemonLogFiles() to avoid
 // circular dependency: logger.ts ↔ persistence.ts
 
@@ -46,8 +45,49 @@ function getSessionLogPath(): string {
   return join(configuration.logsDir, filename)
 }
 
-class Logger {
+const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024
+const LOG_DIRECTORY_TARGET_BYTES = 100 * 1024 * 1024
+const LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000
+const LOG_CLEANUP_INTERVAL_BYTES = 1024 * 1024
+const HAPPY_LOG_FILENAME = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-pid-(\d+)(?:-daemon)?\.log$/
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+function pruneLogDirectory(logsDir: string, protectedPath: string): void {
+  const cutoff = Date.now() - LOG_RETENTION_MS
+  const files = readdirSync(logsDir)
+    .flatMap(file => {
+      const match = HAPPY_LOG_FILENAME.exec(file)
+      if (!match) return []
+      const path = join(logsDir, file)
+      const stats = statSync(path, { throwIfNoEntry: false })
+      return stats ? [{ path, modified: stats.mtimeMs, size: stats.size, pid: Number(match[1]) }] : []
+    })
+    .sort((left, right) => left.modified - right.modified)
+
+  let totalBytes = files.reduce((total, file) => total + file.size, 0)
+  const currentSize = files.find(file => file.path === protectedPath)?.size ?? 0
+  const targetBytes = LOG_DIRECTORY_TARGET_BYTES - Math.max(0, MAX_LOG_FILE_BYTES - currentSize)
+
+  for (const file of files) {
+    if (file.path === protectedPath || isProcessAlive(file.pid)) continue
+    if (file.modified >= cutoff && totalBytes <= targetBytes) break
+    rmSync(file.path, { force: true })
+    totalBytes -= file.size
+  }
+}
+
+export class Logger {
   private dangerouslyUnencryptedServerLoggingUrl: string | undefined
+  private currentFileBytes: number | undefined
+  private bytesSinceCleanup = LOG_CLEANUP_INTERVAL_BYTES
 
   constructor(
     public readonly logFilePath = getSessionLogPath()
@@ -219,9 +259,34 @@ class Logger {
       })
     }
     
-    // Handle async file path
     try {
-      appendFileSync(this.logFilePath, logLine)
+      if (this.currentFileBytes === undefined) {
+        this.currentFileBytes = existsSync(this.logFilePath) ? statSync(this.logFilePath).size : 0
+      }
+      if (this.bytesSinceCleanup >= LOG_CLEANUP_INTERVAL_BYTES) {
+        pruneLogDirectory(dirname(this.logFilePath), this.logFilePath)
+        this.bytesSinceCleanup = 0
+      }
+
+      const logLineBytes = Buffer.byteLength(logLine)
+      if (this.currentFileBytes + logLineBytes > MAX_LOG_FILE_BYTES) {
+        const rolloverNotice = `[${this.localTimezoneTimestamp()}] [LOGGER] Previous entries discarded after reaching the 10 MiB file limit.\n`
+        const truncatedNotice = '\n[LOGGER] Entry truncated at the 10 MiB file limit.\n'
+        const rolloverBytes = Buffer.byteLength(rolloverNotice)
+        const truncatedNoticeBytes = Buffer.byteLength(truncatedNotice)
+        const availableEntryBytes = MAX_LOG_FILE_BYTES - rolloverBytes
+        const nextContent = logLineBytes <= availableEntryBytes
+          ? rolloverNotice + logLine
+          : rolloverNotice
+            + Buffer.from(logLine).subarray(0, availableEntryBytes - truncatedNoticeBytes - 3).toString('utf8')
+            + truncatedNotice
+        writeFileSync(this.logFilePath, nextContent)
+        this.currentFileBytes = Buffer.byteLength(nextContent)
+      } else {
+        appendFileSync(this.logFilePath, logLine)
+        this.currentFileBytes += logLineBytes
+      }
+      this.bytesSinceCleanup += logLineBytes
     } catch (appendError) {
       if (process.env.DEBUG) {
         console.error('[DEV MODE ONLY THROWING] Failed to append to log file:', appendError)
